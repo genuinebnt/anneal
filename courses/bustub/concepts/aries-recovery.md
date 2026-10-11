@@ -15,6 +15,53 @@ Redo must be **idempotent**: applying a record to a page that already has the ch
 
 **3. Undo the losers.** Now roll back every loser, newest change first, by restoring each change's *before* state. Because redo repeated history, the pages hold every loser change, so undoing them is well defined.
 
+```svg
+caption: Recovery after a crash, on a seven-record log (a sharp checkpoint at LSN 4, the crash after LSN 7). Green records belong to winners (T1, T3), red ones to the loser T2. Analysis reads forward from the checkpoint to find the loser; redo repeats history after the checkpoint, the loser's changes included; undo walks T2's changes backwards, newest first, and logs every undo. (Animated: the three passes in turn.)
+<svg viewBox="0 0 760 350" role="img" aria-label="A log of seven records and the three recovery passes over it: analysis forward from the checkpoint, redo forward, undo backward over the loser's changes">
+<style>
+@keyframes ar-1{0%,28%{opacity:1}34%,100%{opacity:.18}}
+@keyframes ar-2{0%,30%{opacity:.18}36%,60%{opacity:1}66%,100%{opacity:.18}}
+@keyframes ar-3{0%,62%{opacity:.18}68%,94%{opacity:1}100%{opacity:.18}}
+.ar-1{animation:ar-1 12s ease-in-out infinite}.ar-2{animation:ar-2 12s ease-in-out infinite}.ar-3{animation:ar-3 12s ease-in-out infinite}
+</style>
+<defs>
+<marker id="ar-ab" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--fn)"/></marker>
+<marker id="ar-ag" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--grn)"/></marker>
+<marker id="ar-ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--bad)"/></marker>
+</defs>
+<rect class="live" x="30" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="75" y="46">LSN 1</text><text class="mid fg" x="75" y="64">T1 set A</text>
+<rect class="bad" x="130" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="175" y="46">LSN 2</text><text class="mid fg" x="175" y="64">T2 set B</text>
+<rect class="live" x="230" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="275" y="46">LSN 3</text><text class="mid fg" x="275" y="64">T1 commit</text>
+<rect class="blue" x="330" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="375" y="46">LSN 4</text><text class="mid fg" x="375" y="64">checkpoint</text>
+<rect class="live" x="430" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="475" y="46">LSN 5</text><text class="mid fg" x="475" y="64">T3 set D</text>
+<rect class="bad" x="530" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="575" y="46">LSN 6</text><text class="mid fg" x="575" y="64">T2 set C</text>
+<rect class="live" x="630" y="30" width="90" height="44" rx="4"/><text class="mid dim sm" x="675" y="46">LSN 7</text><text class="mid fg" x="675" y="64">T3 commit</text>
+<text class="mid t-r big" x="742" y="58">✗</text><text class="mid t-r sm" x="742" y="74">crash</text>
+<path class="grid dash" d="M375 80 V338"/>
+<g class="ar-1">
+<text class="t-b big" x="30" y="108">1 · ANALYSIS</text><text class="dim sm" x="150" y="108">who was running when it stopped?</text>
+<path class="ln-b" d="M375 124 H664" marker-end="url(#ar-ab)"/>
+<text class="dim sm" x="30" y="142">start at the checkpoint: it lists the active transactions, {T2}. Read to the end of the log.</text>
+<text class="t-g sm" x="30" y="158">T3 commits at LSN 7 and T1 committed at LSN 3: winners.  T2 never commits: the loser.</text>
+</g>
+<g class="ar-2">
+<text class="t-g big" x="30" y="192">2 · REDO</text><text class="dim sm" x="120" y="192">repeat history, whoever the change belonged to</text>
+<path class="ln-g" d="M375 208 H664" marker-end="url(#ar-ag)"/>
+<rect class="live" x="466" y="201" width="18" height="14" rx="2"/><text class="mid fg sm" x="475" y="212">5</text>
+<rect class="live" x="566" y="201" width="18" height="14" rx="2"/><text class="mid fg sm" x="575" y="212">6</text>
+<text class="dim sm" x="30" y="228">re-apply every change after the checkpoint (5 and 6), T2's too. A change already in the page is harmless:</text>
+<text class="dim sm" x="30" y="244">a record says "put the slot in this state", so applying it twice is the same as once.</text>
+</g>
+<g class="ar-3">
+<text class="t-r big" x="30" y="278">3 · UNDO</text><text class="dim sm" x="118" y="278">roll back the losers, newest change first</text>
+<path d="M664 294 H186" style="stroke:var(--bad);stroke-width:1.6;fill:none" marker-end="url(#ar-ar)"/>
+<circle cx="575" cy="294" r="5" class="bad"/><circle cx="175" cy="294" r="5" class="bad"/>
+<text class="mid t-r sm" x="575" y="314">undo C (LSN 6)</text><text class="mid t-r sm" x="175" y="314">undo B (LSN 2)</text>
+<text class="dim sm" x="30" y="338">each undo is logged too, and an abort record ends T2; a crash during recovery loses no progress.</text>
+</g>
+</svg>
+```
+
 ## Undo is logged too
 
 When a transaction is rolled back (at run time or in recovery), each undo step is itself a change to a page, and it must be **logged** like any other: as a change with `before` and `after` swapped (ARIES calls it a *compensation log record*). Three reasons:
@@ -26,6 +73,19 @@ When a transaction is rolled back (at run time or in recovery), each undo step i
 ## Checkpoints
 
 Redo from the start of the log gets slower as the log grows. A **checkpoint** bounds it: write every dirty page to disk (a *sharp* checkpoint, which this course uses), then log a `Checkpoint` record that lists the transactions active at that moment. Everything before it is already in the pages, so redo starts at the checkpoint. Losers that were active at the checkpoint still have changes before it; to undo them, recovery must read back as far as their first record (or, as ARIES does, follow a chain of previous LSNs per transaction). Real systems use *fuzzy* checkpoints that do not stop the world, recording which pages were dirty instead of forcing them.
+
+## Invariants: what must always be true
+
+Recovery is correct when these hold. Each one is something a test can check, and each one fails in a recognisable way when it is broken.
+
+- **Write-ahead.** A data page reaches the disk only after every log record that describes a change to it has been flushed. Break it, and a crash can leave a change on the disk with no record of how to undo it.
+- **Commit means flushed.** A transaction is reported committed only after its `Commit` record is on the disk. Break it, and a crash forgets a transaction the client was told had succeeded.
+- **After redo, the pages are the state at the crash.** Whatever mixture of written and unwritten pages the crash left, redo makes every logged change present, in log order. Redo is idempotent: applying a record twice leaves what applying it once leaves.
+- **Every loser is undone once, newest change first,** and every undo step is logged. Break the logging, and a crash during recovery repeats or skips undo work.
+- **Recovery can be run again.** Run it twice, or crash in the middle and run it again, and the result is the same as running it once and finishing.
+- **Winner or loser, never both.** Every transaction in the log has a `Commit` (winner), an `Abort` with its undo done (finished) or neither (loser).
+
+The crash-at-every-step test of the boss stage checks the first four together: whatever step the crash falls on, the accounts add up to the same total.
 
 ## What you can and cannot prove with a test
 

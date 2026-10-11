@@ -28,6 +28,27 @@ Two details save a lot of grief. The first is that `fdatasync` can skip updating
 
 `fsync` is also slow, on the order of milliseconds on a spinning disk, and between tens and hundreds of microseconds on an SSD, depending on the drive. That cost has shaped every storage engine. If every commit paid for its own `fsync`, a database could commit at most a few thousand transactions per second. The answer is **group commit**: while one `fsync` is in flight, the commits that arrive queue up, and the next `fsync` makes all of them durable at once. Each client still waits for a sync that covers its change, but the cost is shared.
 
+```svg
+caption: The journey of one write. Only the last box survives a power failure. `write_all` stops in the kernel's page cache and `BufWriter::flush` in the kernel's too; `sync_data` and `sync_all` push the bytes on to the drive and ask it to flush its cache (on macOS that needs `F_FULLFSYNC`, which Rust's `sync_all` issues). (Animated: a byte travelling to stable storage.)
+<svg viewBox="0 0 760 270" role="img" aria-label="Four stages a written byte passes through: the program's buffer, the kernel page cache, the drive cache and stable storage">
+<style>
+@keyframes fs-mv{0%,10%{transform:translateX(-576px)}22%,38%{transform:translateX(-384px)}50%,66%{transform:translateX(-192px)}80%,100%{transform:translateX(0)}}
+.fs-dot{animation:fs-mv 12s ease-in-out infinite}
+</style>
+<defs><marker id="fs-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--dim)"/></marker></defs>
+<rect class="bad" x="20" y="60" width="150" height="80" rx="4"/><text class="mid t-r" x="95" y="86">your buffer</text><text class="mid fg sm" x="95" y="106">BufWriter</text><text class="mid dim sm" x="95" y="124">lost on a crash</text>
+<rect class="bad" x="212" y="60" width="150" height="80" rx="4"/><text class="mid t-r" x="287" y="86">kernel page cache</text><text class="mid fg sm" x="287" y="106">RAM, marked dirty</text><text class="mid dim sm" x="287" y="124">lost on power loss</text>
+<rect class="bad" x="404" y="60" width="150" height="80" rx="4"/><text class="mid t-r" x="479" y="86">drive cache</text><text class="mid fg sm" x="479" y="106">volatile buffer</text><text class="mid dim sm" x="479" y="124">lost on power loss</text>
+<rect class="live" x="596" y="60" width="150" height="80" rx="4"/><text class="mid t-g" x="671" y="86">stable storage</text><text class="mid fg sm" x="671" y="106">flash or platter</text><text class="mid t-g sm" x="671" y="124">survives</text>
+<path class="ln" d="M170 100 H210" marker-end="url(#fs-a)"/><path class="ln" d="M362 100 H402" marker-end="url(#fs-a)"/><path class="ln" d="M554 100 H594" marker-end="url(#fs-a)"/>
+<text class="mid dim sm" x="190" y="164">flush()</text><text class="mid dim sm" x="382" y="164">sync_data / sync_all</text><text class="mid dim sm" x="574" y="164">cache flush</text>
+<text class="mid dim sm" x="190" y="180">or write_all</text><text class="mid dim sm" x="382" y="180">(else: the kernel,</text><text class="mid dim sm" x="574" y="180">(F_FULLFSYNC on macOS)</text>
+<text class="mid dim sm" x="382" y="196">on its own schedule)</text>
+<circle class="fs-dot hot" cx="671" cy="42" r="7"/>
+<text class="t-a sm" x="20" y="240">A write that has returned Ok has only reached the second box. Acknowledge a commit after the sync, never before it.</text>
+</svg>
+```
+
 ## A failure `fsync` can report, and what to do with it
 
 `fsync` can return an error: the disk is full, the device is gone, a write failed. What the error *means* has been a source of real data loss. In 2018 PostgreSQL developers found that on Linux, after a failed `fsync`, the kernel could drop the dirty pages it had been unable to write and clear the error, so that a **retry** of `fsync` returned success although the data was gone. Databases that had retried quietly lost data. The lesson, which PostgreSQL and others adopted, is that a failed `fsync` is not a transient condition to retry: the only safe response is to treat the file's contents as unknown and stop, usually by crashing and recovering from the log. Your code should never write "if sync fails, try again."
@@ -47,6 +68,13 @@ You can already guess the structure of the defences. A storage engine uses three
 ## Where a bug hides
 
 The bugs in this area do not announce themselves, because a crash is needed to find them. Forgetting the directory sync after creating a file means the file disappears after a power cut though every write "succeeded". Syncing the data page but not the log means a commit is acknowledged that recovery cannot replay. Syncing the log in the wrong order with respect to the page write means a page can reach disk with changes the log has no record of, and recovery cannot undo them. Calling `fsync` inside a lock that every thread needs turns one slow disk into a stalled server. The defence is to write the *crash test* first: stop the program at every write boundary, restart, and check the state against a model. A simulated disk that silently drops every write after a chosen point is the usual tool for it, and you can build a small one in a test.
+
+## Invariants: what must always be true
+
+- **Acknowledge after the sync.** A change is reported as done only after `sync_data` or `sync_all` has returned success for it. `write_all`, `BufWriter::flush` and closing the file promise nothing about the disk.
+- **A new file needs its directory synced too.** A created or renamed file is durable only when the directory entry is, so atomic replace is: write a temporary file, sync it, rename it, sync the directory.
+- **A failed `fsync` is not retried as if nothing happened.** The kernel may have dropped the pages it could not write, so a later success proves nothing. Treat the failure as fatal for that data.
+- **A reader can tell a torn write from a whole one.** Records carry a length and a checksum, so recovery stops at the first record that fails them.
 
 ## C++ comparison
 

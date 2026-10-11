@@ -19,6 +19,41 @@ The second half is about commits. A transaction is **committed** when its `Commi
 
 Data pages are scattered: updating a hundred records may touch a hundred pages, each a random write. The log is **sequential**: appending is the cheapest disk operation there is. A database that wrote every changed page at commit would spend its time seeking; with a log it appends a few hundred bytes, syncs once, tells the client "done", and writes the pages later, in whatever order is convenient, in the background. Many commits can share one sync (**group commit**): the throughput of a database is largely the number of commits per log sync.
 
+```svg
+caption: One committed change, step by step. The log is the only thing that must reach the disk before the client hears "committed" (step 2); the data page can follow at any time (step 3), but never before the log has been flushed through that page's LSN. (Animated: the three steps in turn.)
+<svg viewBox="0 0 760 322" role="img" aria-label="A log buffer and a buffer pool in memory, the log and the data file on disk, and the three steps of a write-ahead commit">
+<style>
+@keyframes wl-1{0%,28%{opacity:1}34%,100%{opacity:.2}}
+@keyframes wl-2{0%,30%{opacity:.2}36%,60%{opacity:1}66%,100%{opacity:.2}}
+@keyframes wl-3{0%,62%{opacity:.2}68%,94%{opacity:1}100%{opacity:.2}}
+.wl-1{animation:wl-1 12s ease-in-out infinite}.wl-2{animation:wl-2 12s ease-in-out infinite}.wl-3{animation:wl-3 12s ease-in-out infinite}
+</style>
+<defs><marker id="wl-ag" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--grn)"/></marker></defs>
+<text class="dim sm" x="40" y="26">MEMORY</text><text class="dim sm" x="430" y="26">DISK</text>
+<rect class="blue" x="40" y="40" width="290" height="62" rx="4"/><text class="t-b sm" x="52" y="58">log buffer</text>
+<rect class="hot" x="52" y="66" width="150" height="26" rx="3"/><text class="fg sm" x="60" y="83">LSN 6 · T1 set A</text>
+<rect class="blue" x="40" y="150" width="290" height="62" rx="4"/><text class="t-b sm" x="52" y="168">buffer pool</text>
+<rect class="hot" x="52" y="176" width="170" height="26" rx="3"/><text class="fg sm" x="60" y="193">page 17 · LSN 6 · dirty</text>
+<rect class="box" x="430" y="40" width="300" height="62" rx="4"/><text class="dim sm" x="442" y="58">log on disk: append only</text>
+<rect class="live" x="442" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="459" y="83">1</text>
+<rect class="live" x="482" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="499" y="83">2</text>
+<rect class="live" x="522" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="539" y="83">3</text>
+<rect class="live" x="562" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="579" y="83">4</text>
+<rect class="live" x="602" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="619" y="83">5</text>
+<g class="wl-2"><rect class="live" x="642" y="66" width="34" height="26" rx="3"/><text class="mid fg sm" x="659" y="83">6</text>
+<text class="mid t-g sm" x="384" y="68">fsync</text></g>
+<rect class="box" x="430" y="150" width="300" height="62" rx="4"/><text class="dim sm" x="442" y="168">data file: pages in any order</text>
+<rect class="never" x="442" y="176" width="150" height="26" rx="3"/><text class="dim sm" x="450" y="193">page 17 · LSN 5 (old)</text>
+<g class="wl-3"><rect class="live" x="602" y="176" width="116" height="26" rx="3"/><text class="fg sm" x="610" y="193">page 17 · LSN 6</text><text class="mid t-g sm" x="384" y="182">write</text></g>
+<path class="ln-g wl-2" d="M330 87 H430" marker-end="url(#wl-ag)"/>
+<path class="ln-g wl-3" d="M330 189 H430" marker-end="url(#wl-ag)"/>
+<text class="t-b sm wl-1" x="40" y="250">1 · update: change page 17 in the pool (page LSN 6, dirty) and append the record to the log buffer.</text>
+<text class="t-g sm wl-2" x="40" y="270">2 · commit: flush the log through LSN 6 (fsync), and only then tell the client "committed".</text>
+<text class="t-g sm wl-3" x="40" y="290">3 · later, in any order: write page 17. Allowed because the log is flushed through its page LSN (6).</text>
+<text class="t-r sm" x="40" y="312">✗ never: write page 17 while the log is flushed only through LSN 5, below the page's LSN 6.</text>
+</svg>
+```
+
 ## What a record holds
 
 To go forward (**redo**) a record needs the new value; to go backward (**undo**) it needs the old one. A record that holds both, `before` and `after`, can do either. It also needs enough to find the place it applies to (a page and a slot), and the transaction it belongs to, so that recovery can tell which changes to keep.
@@ -30,6 +65,16 @@ A log record gets its position, the **LSN** (log sequence number), when it is ap
 - **A torn record.** The machine can die in the middle of writing a log record. The log must be readable up to the last whole record; a record carries a length and a checksum so that a half-written or damaged one is recognised as the end.
 - **A lie by the disk.** A write that "succeeded" may only have reached the drive's cache. Real systems call `fsync` (or write with `O_DSYNC`) and check that the drive honours it; see the durability concept.
 - **Forgetting the rule under pressure.** A buffer pool that evicts a dirty page to make room is writing a page behind the log's back. It must flush the log first, or ask the log manager to. A WAL bug of this kind shows only after a crash at exactly the wrong moment, which is why you test it by crashing at every moment.
+
+## Invariants: what must always be true
+
+- **Write-ahead.** Before a page is written to the data file, the log has been flushed through that page's LSN. The buffer pool enforces it on every eviction of a dirty page, not only in the commit path.
+- **Commit means flushed.** The `Commit` record is on stable storage before the client is told "committed". With group commit, every acknowledgement still waits for a sync that covers its own commit record.
+- **The log only grows, in LSN order.** Records are appended, never rewritten, and a larger position is a larger LSN. Recovery relies on reading the log front to back as the history.
+- **The log is readable up to its last whole record.** A length and a checksum on every record let recovery treat a torn tail as the end of the log, instead of reading garbage.
+- **A record can go both ways.** It holds the place it applies to, the transaction, the `before` value (to undo) and the `after` value (to redo).
+
+When one of these is false, the symptom appears only after a crash at the wrong moment, so test it by crashing at every step of a script.
 
 ## C++ comparison
 

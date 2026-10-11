@@ -17,6 +17,38 @@ For every tuple in the transaction's write set:
 
 One log per tuple per transaction (module 4a) is what makes this a single step: the log already covers every column the transaction changed, so applying it once undoes all of the changes.
 
+```svg
+caption: Abort of transaction T7, which had updated one tuple in place. Before: the table holds T7's new bytes with T7's temporary timestamp, and the head link leads to T7's undo log, then to the older one. Abort applies T7's log to the table's tuple (its value and timestamp come back) and moves the head link to the log's `prev_version`. Readers who needed the old version already read it through the log, so nothing changes for them. (Animated: before, then after.)
+<svg viewBox="0 0 760 300" role="img" aria-label="A table tuple and a chain of undo logs before and after the abort of a transaction">
+<style>
+@keyframes ul-b{0%,42%{opacity:1}52%,94%{opacity:0}100%{opacity:1}}
+@keyframes ul-a{0%,42%{opacity:0}52%,94%{opacity:1}100%{opacity:0}}
+.ul-b{opacity:0;animation:ul-b 10s ease-in-out infinite}.ul-a{opacity:1;animation:ul-a 10s ease-in-out infinite}
+</style>
+<defs><marker id="ul-ad" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--dim)"/></marker>
+<marker id="ul-ag" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--grn)"/></marker></defs>
+<text class="dim sm" x="40" y="22">the table (updated in place)</text><text class="dim sm" x="300" y="22">undo logs, newest first</text>
+<g class="ul-b">
+<text class="t-a big" x="40" y="258">before the abort</text>
+<rect class="hot" x="40" y="50" width="190" height="84" rx="4"/><text class="t-a" x="54" y="74">tuple</text><text class="fg sm" x="54" y="96">value 30</text><text class="fg sm" x="54" y="114">ts T7 (temporary)</text>
+<rect class="blue" x="300" y="50" width="190" height="84" rx="4"/><text class="t-b" x="314" y="74">T7's undo log</text><text class="fg sm" x="314" y="96">value 10</text><text class="fg sm" x="314" y="114">ts 4</text>
+<rect class="blue" x="550" y="50" width="190" height="84" rx="4"/><text class="t-b" x="564" y="74">older undo log</text><text class="fg sm" x="564" y="96">value 5</text><text class="fg sm" x="564" y="114">ts 2</text>
+<path class="ln" d="M230 92 H298" marker-end="url(#ul-ad)"/><path class="ln" d="M490 92 H548" marker-end="url(#ul-ad)"/>
+<text class="dim sm" x="40" y="160">head link → T7's log; the log's prev_version → the older log</text>
+</g>
+<g class="ul-a">
+<text class="t-g big" x="40" y="258">after the abort</text>
+<rect class="live" x="40" y="50" width="190" height="84" rx="4"/><text class="t-g" x="54" y="74">tuple</text><text class="fg sm" x="54" y="96">value 10</text><text class="fg sm" x="54" y="114">ts 4</text>
+<rect class="never" x="300" y="50" width="190" height="84" rx="4"/><text class="dim" x="314" y="74">T7's undo log</text><text class="dim sm" x="314" y="96">unreachable; stays in the</text><text class="dim sm" x="314" y="114">transaction map until GC</text>
+<rect class="blue" x="550" y="50" width="190" height="84" rx="4"/><text class="t-b" x="564" y="74">older undo log</text><text class="fg sm" x="564" y="96">value 5</text><text class="fg sm" x="564" y="114">ts 2</text>
+<path class="ln-g" d="M230 72 C 330 40 450 40 548 72" marker-end="url(#ul-ag)"/>
+<text class="t-g sm" x="40" y="160">head link → the older log (T7's prev_version)</text>
+</g>
+<text class="dim sm" x="40" y="190">abort = apply T7's log to the tuple: value := log.value, ts := log.ts, head link := log.prev_version,</text>
+<text class="dim sm" x="40" y="206">all under the page's write latch, so the tuple and the link change together.</text>
+</svg>
+```
+
 ## Why nobody is disturbed
 
 While the transaction ran, its tuples carried its temporary timestamp, which every other transaction sees as "uncommitted, invisible". Readers that needed an older version already walked past the table's tuple into the log. Restoring the table's tuple to the old version leaves their view unchanged, and a new reader sees exactly what the old readers saw. The only thing that must happen *atomically* is the tuple + link pair: do it under the page's write latch, like any other write.
@@ -24,6 +56,14 @@ While the transaction ran, its tuples carried its temporary timestamp, which eve
 ## What is not undone
 
 Index entries. A tombstone keeps its entry in a primary-key index (that is what lets the next insert of the key find and reuse the rid), so abort leaves the entry and the restored tombstone or old tuple stays reachable through it. The transaction's undo logs also stay in the transaction map until garbage collection, but nothing links to them any more.
+
+## Invariants: what must always be true
+
+- **One log per tuple per transaction.** The log covers every column the transaction changed, so applying it once undoes all of the changes. Abort is one step per tuple, not one per update.
+- **After an abort the tuple is as it was.** Its value, its timestamp and its head link equal what they were before the transaction touched it. No tuple still carries the aborted transaction's temporary timestamp.
+- **The tuple and its link change together,** under the page's write latch. A reader never sees the restored bytes with the old link, or the reverse.
+- **Readers with older snapshots see no change.** They already read the old version through the log chain; restoring the table's tuple gives the same answer.
+- **Index entries stay.** An aborted insert leaves a tombstone, and the primary-key entry that finds it is what lets the next insert of the key reuse the rid.
 
 ## C++ comparison
 
