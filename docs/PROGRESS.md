@@ -7,7 +7,7 @@ this file says where the work stands today.
 **Keep it current.** At the end of every batch: add a line to "Done" (newest first, with the commit), update "Now" and "Next", and set
 the date below. Do not let it drift: a wrong line here costs the next agent more than a missing one.
 
-Last updated: **2026-10-11** (after the code-comments commit; see section 2).
+Last updated: **2026-10-11** (after `21e3bd1d`; see section 2).
 
 ## 1. Now (unfinished or waiting)
 
@@ -23,7 +23,7 @@ Last updated: **2026-10-11** (after the code-comments commit; see section 2).
 
 | Commit | What |
 |---|---|
-| code-comments commit | **Doc comments of the exercise code** (owner asked): every `///` and `//!` in `courses/bustub/reference/src` that a learner keeps is now timeless Rust-std-style prose about behaviour and invariants: no stage or module ids, no "the tests", "yours", "given", no BusTub or C++ history. 575 comments rewritten or added (every stub outside a trait impl has one); the nine fix-it files lost "this code has a bug" from the module header and carry a `//~ // TODO(<id>)` line at the bug site instead. New rules in COURSE_STANDARDS.md ("Code comments"); `python3 tools/check_code_comments.py` checks the regenerated template (0 hits). Docs only: reference and template `cargo check --all-targets` pass; no tests were run. |
+| `21e3bd1d` | **Doc comments of the exercise code** (owner asked): every `///` and `//!` in `courses/bustub/reference/src` that a learner keeps is now timeless Rust-std-style prose about behaviour and invariants: no stage or module ids, no "the tests", "yours", "given", no BusTub or C++ history. 575 comments rewritten or added (every stub outside a trait impl has one); the nine fix-it files lost "this code has a bug" from the module header and carry a `//~ // TODO(<id>)` line at the bug site instead. New rules in COURSE_STANDARDS.md ("Code comments"); `python3 tools/check_code_comments.py` checks the regenerated template (0 hits). Docs only: reference and template `cargo check --all-targets` pass; no tests were run. |
 | `996e46b3` | Focus timer moved: off the course page, onto the DSA problem page (card under Log it) and the Rust workspace (bottom of the Tests panel). |
 | time-limit commit | **Time limit exceeded** (owner asked): the CLI no longer discards what a test binary printed when it is stopped (180 s, 300 s for regression): finished tests keep their results and each unfinished one fails with "Time limit exceeded ..." (`run_until`, `mark_unfinished`, `test_fn_names` in `course.rs`); the stage page's toast, bottom bar and "Last run" say "time limit exceeded" and show the hung test first (`hitLimit` in `CourseStagePage.tsx`). Needs the owner to `anneal self-update` (a CLI change). Tests: 3 CLI unit tests, 1 Playwright test. |
 | 3k commit (this session) | **BusTub module 3k, "Errors worth returning"** (`courses/bustub/modules/15b-errors-worth-returning`, code `3k`, placed after 3d, mid-course): one `DbError` for the whole database; the learner designs it, 32 tests check only the contract (From, `?`, Display, `source()`, `context`, `report()`, SQLSTATE-style `code()`, `client_message()`, Send+Sync, threads, a proptest model). Reference `src/common/db_error.rs`, tests `tests/stages_3k.rs`, concept `errors-that-carry-their-cause`. Pass counts after each stage: 0, 7, 13, 21, 32 (checked with `/tmp/c2/work_3k/check.sh`, one render folder). Also new animated figures and Invariants sections for two-phase locking, waits-for graphs, logical clocks and MVCC. Later modules needed no change. |
