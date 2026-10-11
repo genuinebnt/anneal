@@ -3,7 +3,7 @@
 Personal Rust interview-prep platform: axum API (`crates/api`), sandboxed runner (`crates/runner`), file-based
 content (`content/tracks`), React SPA (`web`).
 
-**Start with [docs/HANDOFF.md](docs/HANDOFF.md).** It covers the current state, how to run and check the work,
+**Start with [docs/PROGRESS.md](docs/PROGRESS.md)**, the one live record of what is done, in flight and next (update it at the end of every batch). Then [docs/HANDOFF.md](docs/HANDOFF.md): it covers the current state, how to run and check the work,
 the owner's working rules, and the pending work in order. **§6.0 is the pick-up point**: what's unfinished per track,
 a checklist of every problem not yet written, and the agent instructions in [docs/authoring/](docs/authoring/).
 

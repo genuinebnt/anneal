@@ -1,5 +1,7 @@
 # anneal · handoff
 
+> **The current state, the log of what was done and the next steps live in [PROGRESS.md](PROGRESS.md).** This file is background (how to run it, how the owner works, content authoring) and its "where things stand" sections date from 2026-09-27.
+
 Last updated 2026-09-27 (evening). Read this first if you're picking the project up, whether you're working locally or
 in a cloud session. It covers where things stand, how to run and check the work, how the owner likes to work,
 and what's next, in order.
