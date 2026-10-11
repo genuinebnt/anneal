@@ -16,7 +16,7 @@ Last updated: **2026-10-11** (after the 3k commit; see section 2).
 | Deploy of the latest pushes (3k, figures, interview removal) | pushed to master; CI was still running at the last look (`gh run list`). When "Deploy to production" is green the owner runs `anneal self-update` to get the new CLI screens (the installed build predates them). |
 | Learner journey | **done 2026-10-11**: `tools/course-journey.sh` (already existed) passed, 42 steps, 0 failures, against a throwaway app. |
 | Full `anneal course verify` | **no complete green run since the 2c-05 fix** (the last was killed by an IDE crash at 4c-08). Passed alone: 3d-07, 3h-04, 2c-05. Module 3k was checked per stage (pass counts 0, 7, 13, 21, 32) and by `verify --stage unlock` (317 stages, 0 problems), **not** by the official full verify. Run it in the background, one build at a time. |
-| Mutation experiment on the stage tests | **paused** after 10 mutants (the run, and the IDE, were killed by memory pressure). Harness: `/tmp/c2/mut/mutate.py` (ephemeral). Rerun later with one build at a time. |
+| Exercise assessment (owner asked 2026-10-11) | **done**: `docs/EXERCISE_ASSESSMENT.md`. Mutation check of 40 mutants over 7 files: 28 caught, 1 caught only as a hang, 11 survived (3 equivalent, 1 file-size only, 7 pointing at 5 untested behaviours). The 5 missing tests and a 2b timeout wrapper are **proposed, not made** (section 4). Harness: `tools/course_mutation.py` (run in a scratch copy, one build at a time). |
 | Owner decisions waiting | see section 4 |
 
 ## 2. Done (newest first)
@@ -65,7 +65,7 @@ check questions = `> [!CHECK]` callouts in `modules/*/stages/*/stage.md`; concep
 
 ## 4. Next, in order (owner decisions marked)
 
-1. **Push module 3k** once `anneal course verify --stage unlock` is green; watch CI; update this file.
+1. **Close the test gaps** found by the mutation check (docs/EXERCISE_ASSESSMENT.md section 3 and 5): tests for text-to-decimal casting and the decimal boundary (3a-02), exact page fit and in-place delete counting (3b-03), a read guard staying clean (1g-01), and a `within(..)` timeout wrapper on the 2b tests. Then regenerate the template and run `course verify --stage` on those stages. Proposed to the owner; do it on their go.
 2. **Visual and invariants pass** (the owner said "fill all thin areas"). Done: ARIES, WAL, undo logs, fsync, 2PL, waits-for, logical clocks (figures + Invariants), MVCC (Invariants). Still to do, database-core concepts with no figure: outer joins and null padding, access paths (index vs seq scan), hash functions, LIKE matching, conjunctive predicates; with a figure but no Invariants: the catalog, HyperLogLog, maintaining indexes (external merge sort, join algorithms with a new hash-join animation, LRU-K and the clock algorithm got theirs 2026-10-11). Then the Rust-language concepts without a figure, lower priority. Format: animated SVG whose base state shows everything (see `concepts/aries-recovery.md`); check by restarting the API and screenshotting `/courses/bustub/concept/<slug>`.
 3. ~~Interview layer~~ dropped (owner, 2026-10-11).
 4. **Rewrite the dozen thinnest boss openings.** Also proposed, waiting for the owner: a short "Fixed by the tests" line beside "Your freedom" on every stage (tests pin exact tree shapes, depths, latch counts and pin counts in several modules); an optional 4d challenge making `LockError` a real `Error` with lock codes (`40P01`, `55P03`) for `DbError`; a 4e stage where the SQL session returns `DbError` and the client sees `client_message()`.
