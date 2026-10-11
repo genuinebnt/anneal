@@ -49,7 +49,7 @@ impl<'e> UpdateExecutor<'e> {
             values.push(expr.evaluate(old, self.child.output_schema())?);
         }
         Ok(Tuple::new(&values, &self.table_info.schema))
-        //~ todo!("3e-03: evaluate each target expression on the old tuple (with the child's output schema) and build a tuple of those values with the table's schema")
+        //~ todo!("3e-03: each target expression evaluated on the old tuple, laid out with the table's schema")
         // @end
     }
 
@@ -150,7 +150,7 @@ impl Executor for UpdateExecutor<'_> {
         tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-03: once: for every tuple of the child build the new tuple (make_new_tuple), mark the old heap tuple deleted and delete its index entries, insert the new tuple into the heap and its index entries under the new rid, count; answer with one tuple holding the count; later calls return false")
+        //~ todo!("3e-03: once: every tuple of the child is replaced by its new version (the old marked deleted, the new stored, the indexes following); answers with how many, then false")
         // @end
     }
 

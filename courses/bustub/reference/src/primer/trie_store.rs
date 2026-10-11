@@ -52,7 +52,7 @@ impl TrieStore {
         let current = self.root.lock().unwrap().clone();
         let next = current.put(key, value);
         *self.root.lock().unwrap() = next;
-        //~ todo!("0a-03: take the write lock for the whole operation; clone the current root; build the new trie without the root lock held; then take the root lock only to publish it")
+        //~ todo!("0a-03: a writer builds the next trie from a snapshot while readers go on, and publishes it by swapping the root; one writer at a time")
         // @end
     }
 

@@ -1,10 +1,10 @@
-//! Extras over your skip list, written against its public view.
+//! Extras over a skip list, written against its public view.
 
 use crate::primer::skiplist::SkipList;
 
 /// The views `check_levels` works on: for every level, the keys linked there; the (key, height) list of level 0; the size.
 pub fn check_levels(levels: &[Vec<i32>], nodes: &[(i32, usize)], size: usize) -> Result<(), String> {
-    todo!("0b-c2: level 0 holds every key in order; each higher level is an ordered subsequence of the one below; heights match the number of levels a key is on")
+    todo!("0b-c2: level 0 holds every key in order; each higher level is an ordered subsequence of the one below; heights match the levels a key is on")
 }
 
 /// Checks `list` through its public view.

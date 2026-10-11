@@ -55,7 +55,7 @@ impl ArithmeticExpression {
         };
         // `i32::MIN` is the stored encoding of the INTEGER NULL (module 3a), so it is not a usable result either
         Ok(Some(result.filter(|v| *v != i32::MIN).ok_or_else(out_of_range)?))
-        //~ todo!("3d-02: None if either side is NULL; otherwise the sum or difference as a checked i32 operation; an overflow, or the result i32::MIN (the NULL encoding), is an OutOfRange error")
+        //~ todo!("3d-02: None if either side is NULL; otherwise the sum or difference; an overflow, or a result equal to the NULL encoding, is an OutOfRange error")
         // @end
     }
 
@@ -73,7 +73,7 @@ impl Expression for ArithmeticExpression {
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         self.result(&lhs, &rhs)
-        //~ todo!("3d-02: evaluate both children and combine them with perform_computation; None is the INTEGER NULL (Value::null(TypeId::Integer))")
+        //~ todo!("3d-02: evaluates both children and combines them; a None result is the INTEGER NULL")
         // @end
     }
 

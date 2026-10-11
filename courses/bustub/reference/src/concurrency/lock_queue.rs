@@ -39,7 +39,7 @@ impl LockQueue {
             None => self.holders.push((txn, mode)),
         }
         Ok(true)
-        //~ todo!("4d-02: grant when no other holder is incompatible; re-asking for the same mode is fine; asking for another mode is an upgrade only if it is one")
+        //~ todo!("4d-02: granted when no other holder conflicts; the same mode again is fine; another mode only if it is an upgrade")
         // @end
     }
 

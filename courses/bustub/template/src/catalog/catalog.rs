@@ -50,7 +50,7 @@ impl<'a> Catalog<'a> {
 
     /// Creates a table: a new heap, the next table oid. `None` if a table of that name exists.
     pub fn create_table(&mut self, table_name: &str, schema: &Schema) -> Option<Arc<TableInfo<'a>>> {
-        todo!("3c-04: None for a name in use; otherwise the next oid, a TableInfo with a new heap, remembered by oid and by name, with an (empty) set of indexes for the table")
+        todo!("3c-04: None if the name is taken; otherwise a table with a new heap and the next oid, found by oid and by name")
     }
 
     /// The table named `table_name`, if there is one.
@@ -77,7 +77,7 @@ impl<'a> Catalog<'a> {
     /// the table does not exist or the table already has an index of that name; an error if the key is not made of INTEGER columns or is
     /// bigger than 64 bytes. Tuples whose key is already in the index are ignored (the tree keeps unique keys).
     pub fn create_index(&mut self, index_name: &str, table_name: &str, key_attrs: Vec<u32>, is_primary_key: bool) -> Result<Option<Arc<IndexInfo<'a>>>> {
-        todo!("3c-04: Ok(None) for a missing table or a name in use; an error unless every key column is an INTEGER (and the key is 1 to 64 bytes); build the index with a key size of 4, 8, 16, 32 or 64 bytes; insert every live tuple's key (key_from_tuple) with its rid; the next index oid; remember it by oid and by (table, name)")
+        todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns; the index holds every live tuple")
     }
 
     /// The index `index_name` on `table_name`, if there is one.

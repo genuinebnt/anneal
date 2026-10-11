@@ -44,7 +44,7 @@ impl StringExpression {
 
     /// The lower- or upper-case form of `val`.
     pub fn compute(&self, val: &str) -> String {
-        todo!("3d-03: str::to_lowercase / to_uppercase, chosen by self.expr_type")
+        todo!("3d-03: lower case or upper case, as the expression asks")
     }
 
     /// The transformed string as a VARCHAR value; the VARCHAR NULL stays NULL.

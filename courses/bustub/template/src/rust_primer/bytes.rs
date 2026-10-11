@@ -28,7 +28,7 @@ impl Header {
 
     /// The inverse of `to_bytes`: `None` if `bytes` is not exactly 16 bytes long.
     pub fn from_bytes(bytes: &[u8]) -> Option<Header> {
-        todo!("r-01: None unless there are exactly 16 bytes; else the fields read back from their ranges (u32::from_le_bytes of a slice converted with try_into)")
+        todo!("r-01: None unless there are exactly 16 bytes; otherwise the fields are read back in the order to_bytes wrote them")
     }
 }
 
@@ -63,7 +63,7 @@ impl PageFile {
 
     /// Reads page number `index`; zeros where the file has nothing.
     pub fn read_page(&self, index: u64) -> io::Result<[u8; PAGE]> {
-        todo!("r-01: read_at the page's offset into a zeroed page, again and again until the page is full or a read returns 0 (the end of the file); the rest stays zero")
+        todo!("r-01: the page's bytes, reading until the page is full or the file ends; what the file lacks is zero")
     }
 
     /// The number of pages the file holds, counting a last partly written page.

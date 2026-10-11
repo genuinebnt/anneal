@@ -1,4 +1,4 @@
-//! Extra queries over your persistent trie, written against its public node type only.
+//! Extra queries over a persistent trie, written against its public node type only.
 
 use std::sync::Arc;
 

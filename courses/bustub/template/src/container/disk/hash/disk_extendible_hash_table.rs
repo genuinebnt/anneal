@@ -66,19 +66,19 @@ where
 
 
     /// The global depth of the directory that serves `key`'s header slot (its number of slots is `2^depth`), or `None` if that slot has
-    /// no directory yet. A read-only observer so that growth and shrinking can be checked without looking inside your pages.
+    /// no directory yet. A read-only observer so that growth and shrinking can be checked without looking inside the pages.
     pub fn global_depth(&self, key: &K) -> Option<u32> {
         todo!("2b-02: follow the header to the key's directory, if there is one, and report its global depth")
     }
 
     /// The value stored for `key`: empty or one element, since keys are unique.
     pub fn get_value(&self, key: &K) -> Vec<V> {
-        todo!("2b-02: hash the key, follow the header to a directory and the directory to a bucket (read-latching each), and look the key up; an empty slot means no value")
+        todo!("2b-02: the key's bucket is found through the header and the directory, read-latched on the way; an empty slot means no value")
     }
 
     /// Adds the pair. `false` if the key is already there, or the table can't grow any further to make room.
     pub fn insert(&self, key: &K, value: &V) -> bool {
-        todo!("2b-02: hash the key; follow the header to a directory and the directory to a bucket (write-latching each), creating the directory and bucket if there are none; insert if the key is new and there is room")
+        todo!("2b-02: the key's bucket is found through the header and the directory (write-latched, created when missing); inserted if the key is new and there is room")
     }
 
 

@@ -75,7 +75,7 @@ impl Trie {
         let chars: Vec<char> = key.chars().collect();
         let value: Value = Arc::new(value);
         Trie { root: Some(Self::put_at(self.root.as_ref(), &chars, value)) }
-        //~ todo!("0a-02: copy the path: a recursive helper that, given the old node (if any) and the rest of the key, returns a new node: a clone of the old one (or an empty node), with the child for the next character replaced by the result of the recursion, and the value set at the end of the key")
+        //~ todo!("0a-02: a new trie that copies only the path to the key and shares the rest; the empty key sets the root's value")
         // @end
     }
 
@@ -103,7 +103,7 @@ impl Trie {
             Removal::Missing => self.clone(),
             Removal::Replaced(node) => Trie { root: node },
         }
-        //~ todo!("0a-02: a recursive helper that returns the node for the new trie (or none if it became empty), or reports the key is missing; copy the nodes on the path, clear the value at the end, and drop children that became empty")
+        //~ todo!("0a-02: a new trie without the key's value, pruning nodes left with no value and no children; a missing key leaves the trie equal")
         // @end
     }
 

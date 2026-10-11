@@ -80,7 +80,7 @@ impl DbIo {
 // @end
 
 /// Reads and writes pages to a database file, and a log to a log file. All methods take `&self`: the disk manager is
-/// shared between threads, so whatever mutable state you keep must be protected (a `Mutex` is the usual way).
+/// shared between threads, so whatever mutable state it keeps must be protected (a `Mutex` is the usual way).
 pub struct DiskManager {
     // @begin 1a-01
     db_file_name: PathBuf,

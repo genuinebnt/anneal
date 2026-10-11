@@ -31,7 +31,7 @@ impl<'a> TableHeap<'a> {
     /// after it (and becomes the last page). A tuple that does not fit even an empty page is an error ("tuple is too large, cannot
     /// insert"). Inserts are serialised by the heap's lock.
     pub fn insert_tuple(&self, meta: &TupleMeta, tuple: &Tuple) -> Result<Rid> {
-        todo!("3c-01: hold the heap's lock; write-latch the last page; while the tuple does not fit: (an empty page means too large: Err) allocate and init a new page, link it after this one, make it the last; then insert into the page and return its rid")
+        todo!("3c-01: under the heap's lock the tuple goes into the last page; when it has no room a new page is linked after it; a tuple too large for an empty page is an error")
     }
 
     /// Replaces the metadata of the tuple at `rid` (for instance to mark it deleted).
@@ -52,7 +52,7 @@ impl<'a> TableHeap<'a> {
     /// Overwrites the tuple at `rid` and its metadata with a tuple of the same length, if `check` (when present) approves the old tuple. Returns
     /// whether it did. The check runs under the page's write latch, so nothing can change between the check and the write.
     pub fn update_tuple_in_place(&self, meta: &TupleMeta, tuple: &Tuple, rid: Rid, check: Option<&dyn Fn(&TupleMeta, &Tuple, Rid) -> bool>) -> Result<bool> {
-        todo!("3c-01: write-latch the page; read the old tuple; if there is no check or the check approves, overwrite in place and say true; otherwise false")
+        todo!("3c-01: under the page's write latch: overwrites tuple and metadata if there is no check or the check approves the old tuple; says whether it did")
     }
 
     /// Runs `f` on the table page of `rid` while holding its **read** latch, so a tuple and its version link are read together.

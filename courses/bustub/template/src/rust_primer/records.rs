@@ -55,12 +55,12 @@ impl std::error::Error for LoadError {
 
 /// The bytes of the records, one after the other. Errors for a key or a value that does not fit its length field.
 pub fn encode_records(records: &[Record]) -> Result<Vec<u8>, FormatError> {
-    todo!("r-02: for each record: the lengths (u8::try_from / u16::try_from turned into FormatError with map_err and ?), then the key and the value bytes")
+    todo!("r-02: each record is its lengths, then its key and value bytes; a length that does not fit its field is an error")
 }
 
 /// Reads every record of `bytes`; an error names the byte where the trouble starts. Never panics, whatever the bytes are.
 pub fn parse_records(bytes: &[u8]) -> Result<Vec<Record>, FormatError> {
-    todo!("r-02: loop over the records: a header of 3 bytes, then the key and the value; Truncated (with the offset, the bytes needed and the bytes left) when they do not fit; BadKey when the key is not UTF-8")
+    todo!("r-02: records are read one after another; one that does not fit gives Truncated (with the offset, the bytes needed and the bytes left), a key that is not UTF-8 gives BadKey")
 }
 
 /// Reads the file and parses it: an I/O error and a format error are different errors of one type.

@@ -99,7 +99,7 @@ impl Executor for SeqScanExecutor<'_> {
             }
         }
         Ok(!tuple_batch.is_empty())
-        //~ todo!("3e-01: fill the batch from the iterator: skip deleted tuples, keep those for which passes_filter(..) is true, stop at batch_size or the end; true if the batch is not empty")
+        //~ todo!("3e-01: the batch holds the next live tuples that pass the filter, up to its size; true if it is not empty")
         // @end
     }
 

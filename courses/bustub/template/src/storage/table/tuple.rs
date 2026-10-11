@@ -45,7 +45,7 @@ impl Tuple {
     /// for a VARCHAR, the offset where its bytes will be), then each VARCHAR's bytes in column order. Panics if there is not one value
     /// of the right type per column.
     pub fn new(values: &[Value], schema: &Schema) -> Tuple {
-        todo!("3b-02: size = the fixed part + each VARCHAR's storage_size; write inlined values at their column's offset; for a VARCHAR write the offset of its bytes (u32, little-endian) in the column's slot and the value's bytes there, advancing the offset")
+        todo!("3b-02: the fixed part holds each inlined value at its column's offset and, for a VARCHAR, the offset of its bytes; the VARCHAR bytes follow in column order")
     }
 
     pub fn get_rid(&self) -> Rid {
@@ -72,7 +72,7 @@ impl Tuple {
 
     /// The value of column `column_idx`. An inlined column is read where it is; a VARCHAR through the offset stored in its slot.
     pub fn get_value(&self, schema: &Schema, column_idx: u32) -> Value {
-        todo!("3b-02: the position of the column's bytes (the column's offset; for a VARCHAR the u32 stored there), then Value::deserialize_from the column's type")
+        todo!("3b-02: an inlined column is read at its offset; a VARCHAR through the offset stored in its slot")
     }
 
     /// Whether the column's value is NULL.

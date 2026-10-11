@@ -109,7 +109,7 @@ impl<const N: usize> SchemaComparator<N> {
 
 impl<const N: usize> KeyComparator<GenericKey<N>> for SchemaComparator<N> {
     fn compare(&self, lhs: &GenericKey<N>, rhs: &GenericKey<N>) -> Ordering {
-        todo!("3c-03: compare column by column (key_to_value for each side): a NULL is smaller than any value and equal to a NULL; otherwise the first column that differs decides; all equal is Equal")
+        todo!("3c-03: column by column: a NULL is smaller than any value and equal to a NULL; the first column that differs decides; all equal is Equal")
     }
 }
 

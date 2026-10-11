@@ -46,7 +46,7 @@ impl Header {
             flags: u16::from_le_bytes(bytes[6..8].try_into().ok()?),
             len: u64::from_le_bytes(bytes[8..16].try_into().ok()?),
         })
-        //~ todo!("r-01: None unless there are exactly 16 bytes; else the fields read back from their ranges (u32::from_le_bytes of a slice converted with try_into)")
+        //~ todo!("r-01: None unless there are exactly 16 bytes; otherwise the fields are read back in the order to_bytes wrote them")
         // @end
     }
 }
@@ -109,7 +109,7 @@ impl PageFile {
             filled += n;
         }
         Ok(page)
-        //~ todo!("r-01: read_at the page's offset into a zeroed page, again and again until the page is full or a read returns 0 (the end of the file); the rest stays zero")
+        //~ todo!("r-01: the page's bytes, reading until the page is full or the file ends; what the file lacks is zero")
         // @end
     }
 

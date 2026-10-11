@@ -125,7 +125,7 @@ impl Executor for OuterJoinExecutor<'_> {
             }
         }
         Ok(!tuple_batch.is_empty())
-        //~ todo!("3j-01: until the batch is full: hand out pending output; take the next left tuple and compare it with every right tuple (predicate.evaluate_join), queueing the pairs and flagging the right tuples; a FULL join also queues a left tuple that matched nothing with NULLs on the right; when the left side ends, queue every unflagged right tuple with NULLs on the left")
+        //~ todo!("3j-01: every left tuple against every right tuple, flagging the matched right tuples; an unmatched left tuple (FULL) gets NULLs on the right, and at the end unmatched right tuples get NULLs on the left")
         // @end
     }
 

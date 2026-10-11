@@ -68,7 +68,7 @@ impl ComparisonExpression {
             ComparisonType::GreaterThan => lhs.compare_greater_than(rhs),
             ComparisonType::GreaterThanOrEqual => lhs.compare_greater_than_equals(rhs),
         }
-        //~ todo!("3d-02: dispatch on self.comp_type to the Value comparison of module 3a (compare_equals, ...)")
+        //~ todo!("3d-02: the Value comparison for this expression's operator")
         // @end
     }
 }
@@ -79,7 +79,7 @@ impl Expression for ComparisonExpression {
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         Ok(cmp_to_value(self.perform_comparison(&lhs, &rhs)?))
-        //~ todo!("3d-02: evaluate both children, compare, and answer with cmp_to_value(..) (NULL if either side is NULL)")
+        //~ todo!("3d-02: evaluates both children and compares them; NULL if either side is NULL")
         // @end
     }
 

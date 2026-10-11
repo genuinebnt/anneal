@@ -52,13 +52,13 @@ impl LogicExpression {
 
     /// The truth table. FALSE AND anything is FALSE and TRUE OR anything is TRUE, even when the other side is NULL.
     fn perform_computation(&self, lhs: &Value, rhs: &Value) -> CmpBool {
-        todo!("3d-03: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: the mirror image (TRUE if either side is TRUE, FALSE if both are FALSE, else NULL)")
+        todo!("3d-03: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: TRUE if either side is TRUE, FALSE if both are FALSE, else NULL")
     }
 }
 
 impl Expression for LogicExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        todo!("3d-03: evaluate both sides and answer with cmp_to_value(perform_computation(..))")
+        todo!("3d-03: evaluates both sides and answers with the truth table's result as a BOOLEAN")
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {

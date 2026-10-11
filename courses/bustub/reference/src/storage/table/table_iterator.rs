@@ -83,7 +83,7 @@ impl<'a> TableIterator<'a> {
             // the next page's first tuple, or the end if there is no next page
             self.rid = Rid::new(page.get_next_page_id().unwrap_or(PageId::INVALID), 0);
         }
-        //~ todo!("3c-02: at the end do nothing; slot + 1; stop (the end) if that is the stopping rid; if the page has more tuples stay; otherwise go to slot 0 of the next page, or the end")
+        //~ todo!("3c-02: moves to the next slot, or slot 0 of the next page, or the end; the stopping rid is the end")
         // @end
     }
 }

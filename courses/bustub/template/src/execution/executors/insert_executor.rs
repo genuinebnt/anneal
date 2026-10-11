@@ -50,7 +50,7 @@ impl Executor for InsertExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4b-01: when self.txn is Some: as below, but insert each tuple with insert_mvcc (in execution_common.rs) instead of the heap and the indexes directly
-        todo!("3e-02: once: pull every batch from the child, insert each tuple into the heap (a TupleMeta with ts 0 and is_deleted false), call insert_into_indexes with the new rid, count them; answer with one tuple holding the count; every later call returns false")
+        todo!("3e-02: once: inserts every tuple of the child into the table and its indexes; answers with how many, then false")
     }
 
     fn output_schema(&self) -> &Schema {

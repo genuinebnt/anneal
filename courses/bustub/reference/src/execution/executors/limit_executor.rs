@@ -48,7 +48,7 @@ impl Executor for LimitExecutor<'_> {
         rid_batch.truncate(wanted);
         self.emitted += tuple_batch.len();
         Ok(!tuple_batch.is_empty())
-        //~ todo!("3g-04: false once `limit` tuples were passed on; otherwise pull a batch from the child asking for no more than are still needed, truncate it to that (a child may return more), count what is passed on")
+        //~ todo!("3g-04: false once `limit` tuples were passed on; never asks the child for, or passes on, more than are still needed")
         // @end
     }
 

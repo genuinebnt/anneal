@@ -44,7 +44,7 @@ impl ArithmeticExpression {
 
     /// `None` (a NULL result) if either side is NULL. An overflow is an `OutOfRange` error.
     fn perform_computation(&self, lhs: &Value, rhs: &Value) -> Result<Option<i32>> {
-        todo!("3d-02: None if either side is NULL; otherwise the sum or difference as a checked i32 operation; an overflow, or the result i32::MIN (the NULL encoding), is an OutOfRange error")
+        todo!("3d-02: None if either side is NULL; otherwise the sum or difference; an overflow, or a result equal to the NULL encoding, is an OutOfRange error")
     }
 
     fn result(&self, lhs: &Value, rhs: &Value) -> Result<Value> {
@@ -57,7 +57,7 @@ impl ArithmeticExpression {
 
 impl Expression for ArithmeticExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        todo!("3d-02: evaluate both children and combine them with perform_computation; None is the INTEGER NULL (Value::null(TypeId::Integer))")
+        todo!("3d-02: evaluates both children and combines them; a None result is the INTEGER NULL")
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {

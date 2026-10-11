@@ -36,7 +36,7 @@ impl<'a> TableIterator<'a> {
 
     /// Moves to the next tuple: the next slot of the page, or slot 0 of the next page, or the end; and the end if it reaches the stopping rid.
     pub fn advance(&mut self) {
-        todo!("3c-02: at the end do nothing; slot + 1; stop (the end) if that is the stopping rid; if the page has more tuples stay; otherwise go to slot 0 of the next page, or the end")
+        todo!("3c-02: moves to the next slot, or slot 0 of the next page, or the end; the stopping rid is the end")
     }
 }
 

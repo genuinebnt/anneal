@@ -18,7 +18,7 @@ impl LockQueue {
     /// `txn` asks for `mode`. `Ok(true)`: it holds it now (a new lock, the same lock again, or an upgrade of the one it had). `Ok(false)`: some other
     /// holder is in the way, and nothing changed. `Err(IncompatibleUpgrade)`: it holds a mode that `mode` is not an upgrade of.
     pub fn try_acquire(&mut self, txn: TxnId, mode: LockMode) -> Result<bool, LockErrorKind> {
-        todo!("4d-02: grant when no other holder is incompatible; re-asking for the same mode is fine; asking for another mode is an upgrade only if it is one")
+        todo!("4d-02: granted when no other holder conflicts; the same mode again is fine; another mode only if it is an upgrade")
     }
 
     /// `txn` lets go. False when it held nothing.

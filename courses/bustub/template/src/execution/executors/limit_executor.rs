@@ -31,7 +31,7 @@ impl Executor for LimitExecutor<'_> {
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        todo!("3g-04: false once `limit` tuples were passed on; otherwise pull a batch from the child asking for no more than are still needed, truncate it to that (a child may return more), count what is passed on")
+        todo!("3g-04: false once `limit` tuples were passed on; never asks the child for, or passes on, more than are still needed")
     }
 
     fn output_schema(&self) -> &Schema {

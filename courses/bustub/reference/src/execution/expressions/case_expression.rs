@@ -86,7 +86,7 @@ impl Expression for CaseExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
         // @begin 3i-03
         self.pick(|e| e.evaluate(tuple, schema))
-        //~ todo!("3i-03: the result of the first branch whose condition is TRUE; the ELSE (or a NULL of the result type) if none; evaluate only what you return")
+        //~ todo!("3i-03: the result of the first branch whose condition is TRUE, else the ELSE (or a NULL of the result type); only the chosen result is evaluated")
         // @end
     }
 

@@ -123,7 +123,7 @@ impl Executor for IndexScanExecutor<'_> {
             rid_batch.push(rid);
         }
         Ok(!tuple_batch.is_empty())
-        //~ todo!("3e-04: fill the batch from the rids: fetch each tuple from the heap (get_tuple), skip deleted ones and those for which the filter predicate (if any) is not TRUE; true if the batch is not empty")
+        //~ todo!("3e-04: the batch holds the live tuples of the rids that satisfy the filter; true if it is not empty")
         // @end
     }
 

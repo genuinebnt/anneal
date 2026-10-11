@@ -17,7 +17,7 @@ SRC = Path(sys.argv[sys.argv.index("--src") + 1] if "--src" in sys.argv else "co
 ID = re.compile(r"\b(?:r|0[a-d]|[1-4][a-k])-(?:\d\d|c\d)\b")
 COURSE = re.compile(
     r"\b(?:modules? [0-9]|modules [0-9]|stages?\b|this course|the course|this exercise|the exercise|exercises?\b|learners?\b|the tests?\b|for tests\b|"
-    r"is yours|are yours|yours\b|given code|\(given\)|\bGiven\.|hints?\b|your design|your way|you write|you implement)",
+    r"is yours|are yours|yours\b|given code|\(given\)|\bGiven\.|hints?\b|\byou(?:r|'re|'ll)?\b)",
     re.I,
 )
 HISTORY = re.compile(

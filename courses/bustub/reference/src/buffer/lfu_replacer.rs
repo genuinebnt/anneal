@@ -1,4 +1,4 @@
-//! A replacement policy of your own: evict the frame that has been used the fewest times.
+//! A replacement policy: evict the frame that has been used the fewest times.
 
 use crate::buffer::replacer::FrameReplacer;
 use crate::common::config::{FrameId, PageId};

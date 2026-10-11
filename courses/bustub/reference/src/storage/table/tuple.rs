@@ -69,7 +69,7 @@ impl Tuple {
             }
         }
         Tuple { rid: Rid::default(), data }
-        //~ todo!("3b-02: size = the fixed part + each VARCHAR's storage_size; write inlined values at their column's offset; for a VARCHAR write the offset of its bytes (u32, little-endian) in the column's slot and the value's bytes there, advancing the offset")
+        //~ todo!("3b-02: the fixed part holds each inlined value at its column's offset and, for a VARCHAR, the offset of its bytes; the VARCHAR bytes follow in column order")
         // @end
     }
 
@@ -106,7 +106,7 @@ impl Tuple {
             u32::from_le_bytes(self.data[slot..slot + 4].try_into().unwrap()) as usize
         };
         Value::deserialize_from(&self.data[at..], column.type_id()).expect("a column has a valid type")
-        //~ todo!("3b-02: the position of the column's bytes (the column's offset; for a VARCHAR the u32 stored there), then Value::deserialize_from the column's type")
+        //~ todo!("3b-02: an inlined column is read at its offset; a VARCHAR through the offset stored in its slot")
         // @end
     }
 

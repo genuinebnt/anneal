@@ -52,7 +52,7 @@ impl Executor for SeqScanExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4a-05: when self.txn is Some, scan with versions: for each rid, read the tuple, its meta and its undo link together (get_tuple_and_undo_link), collect_undo_logs for the transaction, reconstruct_tuple, skip the rids that are None, then filter and push as below
-        todo!("3e-01: fill the batch from the iterator: skip deleted tuples, keep those for which passes_filter(..) is true, stop at batch_size or the end; true if the batch is not empty")
+        todo!("3e-01: the batch holds the next live tuples that pass the filter, up to its size; true if it is not empty")
     }
 
     fn output_schema(&self) -> &Schema {

@@ -46,12 +46,12 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
 
     /// Adds `key`. Returns `false`, changing nothing, if an equivalent key is already there (neither is before the other).
     pub fn insert(&self, key: &K) -> bool {
-        todo!("0b-01: write lock; search with the update vector (the last node before the key on every level); an equal key: false; draw a height; if taller than the list raise it; allocate the node; on each level 0..height link it between update[level] and its next; size + 1")
+        todo!("0b-01: false if an equivalent key is there; otherwise the node gets a random height and is linked in order on every level it reaches")
     }
 
     /// Removes `key`. Returns `false` if it is not there.
     pub fn erase(&self, key: &K) -> bool {
-        todo!("0b-02: write lock; search; not found: false; on each level of the node make update[level] skip it; free the slot; lower the list's height while the top level is empty; size - 1")
+        todo!("0b-02: false if not found; the node is unlinked on every level and empty top levels are dropped")
     }
 
     /// Is an equivalent key in the list? Neither `compare(a, b)` nor `compare(b, a)` for an equivalent key.

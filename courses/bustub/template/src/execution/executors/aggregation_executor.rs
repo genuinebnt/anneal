@@ -37,7 +37,7 @@ fn canonical(v: &Value) -> (u8, i64, u64, &str) {
 
 impl PartialEq for AggregateKey {
     fn eq(&self, other: &AggregateKey) -> bool {
-        todo!("3f-01: the same number of values, and every pair 'the same group' (two NULLs are the same; equal integers of any width are the same; use canonical(..) on each side)")
+        todo!("3f-01: the same number of values, each pair in the same group (two NULLs are the same; equal integers of any width are the same)")
     }
 }
 
@@ -81,7 +81,7 @@ impl SimpleAggregationHashTable {
 
     /// Folds one input row (the values of the aggregate expressions) into the running values.
     pub fn combine_aggregate_values(&self, result: &mut AggregateValue, input: &AggregateValue) -> Result<()> {
-        todo!("3f-01: for each aggregate: count(*) adds 1 for every row; for the others a NULL input changes nothing; count(x): 1 if nothing seen yet else +1; sum: x if nothing seen yet else running + x; min/max likewise with Value::min / Value::max")
+        todo!("3f-01: count(*) counts rows; the others ignore a NULL input: count counts, sum adds, min and max keep the extreme")
     }
 
     /// Finds (or creates) the group of `key` and folds `value` into it.
@@ -144,7 +144,7 @@ impl<'e> AggregationExecutor<'e> {
 
 impl Executor for AggregationExecutor<'_> {
     fn init(&mut self) -> Result<()> {
-        todo!("3f-02: initialise the child; empty the table; fold every child tuple into the table (make_aggregate_key / make_aggregate_value / insert_combine); if the table is still empty and there is no GROUP BY add the group of the empty key with insert_initial; build one output tuple per group (group-by values, then aggregates, with the plan's output schema) into self.results; cursor = 0")
+        todo!("3f-02: one output tuple per group (group-by values, then the aggregates); with no GROUP BY an empty input still gives one group")
     }
 
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {

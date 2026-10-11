@@ -49,7 +49,7 @@ impl StringExpression {
             StringExpressionType::Lower => val.to_lowercase(),
             StringExpressionType::Upper => val.to_uppercase(),
         }
-        //~ todo!("3d-03: str::to_lowercase / to_uppercase, chosen by self.expr_type")
+        //~ todo!("3d-03: lower case or upper case, as the expression asks")
         // @end
     }
 

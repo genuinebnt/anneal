@@ -25,7 +25,7 @@ impl Schema {
     /// Builds the schema of `columns`, read left to right: each column gets its offset (a VARCHAR takes 4 bytes in the fixed part), the
     /// schema's length is the total, and it remembers which columns are not inlined.
     pub fn new(columns: Vec<Column>) -> Schema {
-        todo!("3b-01: walk the columns keeping a running offset: set each column's offset (Column::set_offset), advance by its size (a VARCHAR: 4 bytes), remember the VARCHARs' indexes; the final offset is the fixed length")
+        todo!("3b-01: each column's offset follows the previous column (a VARCHAR takes 4 bytes); the length is the total; remember which columns are VARCHARs")
     }
 
     /// A schema of some of `from`'s columns, in the order of `attrs`.

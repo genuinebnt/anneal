@@ -112,7 +112,7 @@ where
     // @end
 
     /// The global depth of the directory that serves `key`'s header slot (its number of slots is `2^depth`), or `None` if that slot has
-    /// no directory yet. A read-only observer so that growth and shrinking can be checked without looking inside your pages.
+    /// no directory yet. A read-only observer so that growth and shrinking can be checked without looking inside the pages.
     pub fn global_depth(&self, key: &K) -> Option<u32> {
         // @begin 2b-02
         let hash = self.hash(key);
@@ -146,7 +146,7 @@ where
         let bucket_guard = self.bpm.read_page(bucket_page_id);
         drop(directory_guard);
         Bucket::<_, K, V>::new(&bucket_guard[..]).lookup(key, &self.cmp).into_iter().collect()
-        //~ todo!("2b-02: hash the key, follow the header to a directory and the directory to a bucket (read-latching each), and look the key up; an empty slot means no value")
+        //~ todo!("2b-02: the key's bucket is found through the header and the directory, read-latched on the way; an empty slot means no value")
         // @end
     }
 
@@ -194,7 +194,7 @@ where
             //~ return false; // TODO(2b-03): split the full bucket (new bucket page, migrate entries, update the directory), then loop
             // @end
         }
-        //~ todo!("2b-02: hash the key; follow the header to a directory and the directory to a bucket (write-latching each), creating the directory and bucket if there are none; insert if the key is new and there is room")
+        //~ todo!("2b-02: the key's bucket is found through the header and the directory (write-latched, created when missing); inserted if the key is new and there is room")
         // @end
     }
 

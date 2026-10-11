@@ -107,7 +107,7 @@ pub fn undo(store: &Store, log: &LogManager, records: &[(Lsn, LogRecord)], loser
     }
     log.flush().map_err(|e| super::store::refused(e.to_string()))?;
     Ok(n)
-    //~ todo!("4c-06: walk the records backwards; for each change of a loser log the swapped change and apply its `before` state; then log Abort for every loser and flush the log")
+    //~ todo!("4c-06: every loser's changes are undone newest first, each undo logged as the swapped change and applied; then Abort is logged and the log flushed")
     // @end
 }
 

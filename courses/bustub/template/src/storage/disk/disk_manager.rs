@@ -10,7 +10,7 @@ use crate::common::config::{PageData, PageId};
 // methods below; the tests call only those.
 
 /// Reads and writes pages to a database file, and a log to a log file. All methods take `&self`: the disk manager is
-/// shared between threads, so whatever mutable state you keep must be protected (a `Mutex` is the usual way).
+/// shared between threads, so whatever mutable state it keeps must be protected (a `Mutex` is the usual way).
 pub struct DiskManager {
     // TODO(1a-01): the fields are yours to design. You will need at least: where each page lives, the open files, and
     // the counters of 1a-03.

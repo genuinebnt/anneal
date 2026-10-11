@@ -89,7 +89,7 @@ impl TupleComparator {
             }
         }
         Ordering::Equal
-        //~ todo!("3g-01: for each order-by key in turn: both NULL: equal; one NULL: by the NULL rule above; else compare the values (Value::compare_equals / compare_less_than), reversed for DESC; return the first result that is not Equal; Equal if all are")
+        //~ todo!("3g-01: the first key that differs decides: values by the key's direction, a NULL by the NULL rule; all equal is Equal")
         // @end
     }
 }
@@ -148,7 +148,7 @@ pub fn reconstruct_tuple(schema: &Schema, base_tuple: &Tuple, base_meta: &TupleM
     } else {
         Some(Tuple::new(&values, schema))
     }
-    //~ todo!("4a-03: values of the base tuple; deleted = base_meta.is_deleted; for each log in order: a deleting log sets deleted; otherwise (if deleted, restart from null_values) copy the log's partial tuple into the columns it modifies. None if deleted at the end")
+    //~ todo!("4a-03: the base tuple with every log applied in order: a deleting log removes the tuple, another restores its columns; None if deleted at the end")
     // @end
 }
 
@@ -175,7 +175,7 @@ pub fn collect_undo_logs(rid: Rid, base_meta: &TupleMeta, base_tuple: &Tuple, un
         }
     }
     None
-    //~ todo!("4a-03: the table's version is visible if its ts <= read_ts or it is this transaction's own temp ts: no logs; otherwise follow the chain from undo_link, collecting logs until one has ts <= read_ts; None if the chain ends first or a log is gone")
+    //~ todo!("4a-03: the table's version is visible when its timestamp is at or before the read timestamp or it is this transaction's own; otherwise the chain up to the first log at or before it; None if the chain runs out or a log is gone")
     // @end
 }
 
@@ -199,7 +199,7 @@ pub fn generate_new_undo_log(schema: &Schema, base_tuple: Option<&Tuple>, target
     let values: Vec<Value> = (0..n).filter(|&i| modified_fields[i as usize]).map(|i| base.get_value(schema, i)).collect();
     let tuple = Tuple::new(&values, &get_undo_log_schema(schema, &modified_fields));
     UndoLog { is_deleted: false, modified_fields, tuple, ts, prev_version }
-    //~ todo!("4a-04: no base: a deleting log (no fields, empty tuple); no target: every column; else the columns that differ, with the base tuple's values in a tuple under the partial schema")
+    //~ todo!("4a-04: no base: a deleting log; no target: every column; otherwise the columns that differ, with the base tuple's values")
     // @end
 }
 
@@ -235,11 +235,11 @@ pub fn generate_updated_undo_log(schema: &Schema, base_tuple: Option<&Tuple>, ta
     }
     let tuple = Tuple::new(&values, &get_undo_log_schema(schema, &modified_fields));
     UndoLog { is_deleted: false, modified_fields, tuple, ts: log.ts, prev_version: log.prev_version }
-    //~ todo!("4a-04: keep a deleting log, and any log when base is None; else walk the columns: one the log already restores keeps its logged value; another that this change modifies (or all of them, for a delete) is added with the base tuple's value; rebuild the partial tuple")
+    //~ todo!("4a-04: a deleting log (or no base) stays; otherwise the log also restores the columns this change modifies, with their values from before it")
     // @end
 }
 
-/// Prints every tuple of `table` with its version chain to stderr, for finding out why a version is not what you expect:
+/// Prints every tuple of `table` with its version chain to stderr, for finding out why a version is not what is expected:
 ///
 /// ```text
 /// debug_hook: before the scan
@@ -358,7 +358,7 @@ pub fn modify_tuple(txn: &Arc<Transaction>, txn_mgr: &TransactionManager, table:
     }
     txn.append_write_set(table.oid, rid);
     Ok(())
-    //~ todo!("4b-02: read the tuple with its link (above); conflict check (taint and Err); the first change appends generate_new_undo_log (prev = the old head link), a tuple this transaction wrote already keeps its link (4b-03: its log is widened); write the meta (temp ts; deleted if target is None), the new bytes (a delete keeps the old ones) and the link with update_tuple_and_undo_link, whose check repeats the conflict test; then add the rid to the write set")
+    //~ todo!("4b-02: another transaction's write is a write-write conflict that taints this one; the first change leaves an undo log and a later one widens it; the tuple is written in place under the temporary timestamp and joins the write set")
     // @end
 }
 

@@ -50,13 +50,13 @@ impl<'e> HashJoinExecutor<'e> {
 
 impl Executor for HashJoinExecutor<'_> {
     fn init(&mut self) -> Result<()> {
-        todo!("3f-04: initialise both children; empty the table and the pending output; build: for every right tuple with a non-NULL key (join_key with the right keys and the right schema) add it to the table under its key")
+        todo!("3f-04: builds the table from the right child, leaving out tuples with a NULL join key")
     }
 
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        todo!("3f-04: until the batch is full: hand out pending output first; take the next left tuple (none: stop); its key (join_key with the left keys) looks up the table: for every match queue the left values followed by the right values; with no match (or a NULL key) queue unmatched_output(..) if it gives something")
+        todo!("3f-04: for each left tuple: every right match gives a row of left then right values; no match (or a NULL key) gives the join type's unmatched row, if any")
     }
 
     fn output_schema(&self) -> &Schema {

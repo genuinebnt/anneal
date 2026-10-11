@@ -40,7 +40,7 @@ impl Schema {
             placed.push(column);
         }
         Schema { length: offset, tuple_is_inlined: uninlined_columns.is_empty(), columns: placed, uninlined_columns }
-        //~ todo!("3b-01: walk the columns keeping a running offset: set each column's offset (Column::set_offset), advance by its size (a VARCHAR: 4 bytes), remember the VARCHARs' indexes; the final offset is the fixed length")
+        //~ todo!("3b-01: each column's offset follows the previous column (a VARCHAR takes 4 bytes); the length is the total; remember which columns are VARCHARs")
         // @end
     }
 

@@ -1,4 +1,4 @@
-//! Probe-distance statistics over your Robin Hood hash set.
+//! Probe-distance statistics over a Robin Hood hash set.
 
 use crate::primer::robin_hood_hash_set::RobinHoodHashSet;
 

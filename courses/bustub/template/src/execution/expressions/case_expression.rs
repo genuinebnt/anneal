@@ -35,7 +35,7 @@ impl CaseExpression {
 
 impl Expression for CaseExpression {
     fn evaluate(&self, tuple: &Tuple, schema: &Schema) -> Result<Value> {
-        todo!("3i-03: the result of the first branch whose condition is TRUE; the ELSE (or a NULL of the result type) if none; evaluate only what you return")
+        todo!("3i-03: the result of the first branch whose condition is TRUE, else the ELSE (or a NULL of the result type); only the chosen result is evaluated")
     }
 
     fn evaluate_join(&self, left_tuple: &Tuple, left_schema: &Schema, right_tuple: &Tuple, right_schema: &Schema) -> Result<Value> {

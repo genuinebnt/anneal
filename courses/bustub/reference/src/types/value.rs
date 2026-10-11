@@ -267,7 +267,7 @@ impl Value {
             Value::Decimal(d) => cast_decimal(*d, to),
             _ => cast_integer(self.as_i64().unwrap(), to),
         }
-        //~ todo!("3a-02: check the conversion is allowed (the table in the doc comment); a NULL becomes the NULL of the target; a number to VARCHAR is its text; otherwise convert, checking the range of the target")
+        //~ todo!("3a-02: a NULL becomes the NULL of the target; a number converts to VARCHAR as its text; otherwise the conversion must be allowed and the value must fit the target's range")
         // @end
     }
 
@@ -384,7 +384,7 @@ impl Value {
             return Err(err(ExceptionType::Invalid, "type error"));
         }
         Ok(Value::Null(wider(a, b)))
-        //~ todo!("3a-04: the NULL of the result type: DECIMAL if either is DECIMAL, else the wider integer type (a string on the right counts as the left's type); non-numeric operands are an error")
+        //~ todo!("3a-04: the NULL of the result type: DECIMAL if either side is, else the wider integer type; a string on the right takes the left's type; non-numeric operands are an error")
         // @end
     }
 
@@ -582,7 +582,7 @@ impl Value {
                 TypeId::Invalid => {}
             },
         }
-        //~ todo!("3a-05: write the value little-endian at the start of storage; a NULL as its reserved encoding; a VARCHAR as a 4-byte length (text + 1) then the text and a zero byte")
+        //~ todo!("3a-05: little-endian at the start of storage; a NULL as its reserved encoding; a VARCHAR as a 4-byte length (text plus one), the text and a zero byte")
         // @end
     }
 
@@ -613,7 +613,7 @@ impl Value {
             }
             TypeId::Invalid => return Err(err(ExceptionType::UnknownType, "Unknown type.")),
         })
-        //~ todo!("3a-05: read the type's bytes little-endian; the reserved encodings are NULLs (the typed constructors already do that for the numbers); a VARCHAR: a 4-byte length (u32::MAX is NULL), then length - 1 bytes of text")
+        //~ todo!("3a-05: the inverse of serialize_to: reserved encodings are NULLs; a VARCHAR is a 4-byte length (u32::MAX is NULL) then length minus 1 bytes of text")
         // @end
     }
 }

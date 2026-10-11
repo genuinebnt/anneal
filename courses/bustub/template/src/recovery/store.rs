@@ -75,7 +75,7 @@ impl<'a> Store<'a> {
     /// recovery repeat it): `Some(bytes)`: a live record with those bytes; `None`: no live record (a deleted slot). A slot that does not
     /// exist yet is created, but only the next one in its page (`rid.slot_num() == number of slots`); anything else is an error.
     pub fn set_state(&self, rid: Rid, state: &Option<Vec<u8>>) -> StoreResult<()> {
-        todo!("4c-03: under the page's write latch: Some(bytes): overwrite the slot (live) if it exists, or insert it if it is the next one; None: mark the existing slot deleted; every other case is an error")
+        todo!("4c-03: makes the slot hold exactly this state, so that doing it twice is the same as once: Some(bytes) a live record, None a deleted slot; a slot beyond the next free one is an error")
     }
 
     /// Starts a transaction: logs `Begin` and returns its id.
@@ -86,7 +86,7 @@ impl<'a> Store<'a> {
     /// Changes the slot at `rid` from `before` to `after` for `txn`: the **write-ahead rule** says the log record comes first, then the
     /// page changes. Refused (and nothing happens) if another active transaction has written the record.
     fn change(&self, txn: TxnId, rid: Rid, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> StoreResult<()> {
-        todo!("4c-04: refuse a record held by another transaction; append the Change record; then set_state; remember the page's LSN, the hold and the change")
+        todo!("4c-04: refused if another transaction holds the record; otherwise the change is logged first, then applied, and remembered for the transaction and the page")
     }
 
     /// Inserts a record of `RECORD_LEN` bytes into the first page with a free slot, logging the change before the page sees it. Returns the new

@@ -51,7 +51,7 @@ impl Executor for DeleteExecutor<'_> {
         tuple_batch.clear();
         rid_batch.clear();
         // 4b-02: when self.txn is Some: once, for every rid of the child call modify_tuple(.., None) (index entries stay), count, and answer with one tuple holding the count
-        todo!("3e-03: once: for every tuple (and rid) of the child mark the heap tuple deleted (update_tuple_meta with is_deleted: true), remove its index entries (delete_from_indexes) and count it; answer with one tuple holding the count; every later call returns false")
+        todo!("3e-03: marks every tuple of the child deleted and removes its index entries; answers once with how many, then false")
     }
 
     fn output_schema(&self) -> &Schema {

@@ -35,7 +35,7 @@ impl BufferPoolManager {
         todo!("1f-01: the number of frames")
     }
 
-    /// The bytes of a frame, behind its latch. Only meaningful for a frame you have pinned.
+    /// The bytes of a frame, behind its latch. Only meaningful for a frame that is pinned.
     pub fn frame_data(&self, frame: FrameId) -> &RwLock<Box<PageData>> {
         todo!("1f-01: the bytes of the frame, behind a reader-writer latch")
     }

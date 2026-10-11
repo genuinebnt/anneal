@@ -60,7 +60,7 @@ impl<K: Hash> HyperLogLog<K> {
 
     /// Takes `val` into account.
     pub fn add_elem(&self, val: &K) {
-        todo!("0d-02: hash the value; the register is register_index; keep the larger of its value and position_of_leftmost_one (under the lock; do nothing if there are no registers)")
+        todo!("0d-02: the register is the top bits of the hash and keeps the longest run seen; nothing to do without registers")
     }
 
     /// Recomputes the estimate from the registers and stores it.
@@ -119,7 +119,7 @@ impl<K: PrestoHash> HyperLogLogPresto<K> {
     /// Takes `val` into account. The register is the top `n` bits of its hash; the run is the number of trailing zeros of the other bits (all zero:
     /// `64 - n`). A register only grows.
     pub fn add_elem(&self, val: &K) {
-        todo!("0d-03: the register is the top n bits of the hash; its run is the trailing zeros of the other 64 - n bits (all zero: 64 - n); under both locks, held together: if larger than the register's value store the low 4 bits densely and bits 4 to 6 in the overflow map")
+        todo!("0d-03: the register is the top n bits of the hash and keeps the longest run seen (trailing zeros of the rest; all zero: 64 - n), stored as dense and overflow bits")
     }
 
     /// Recomputes the estimate from the registers, dense and overflow parts joined, as [`HyperLogLog`] does, and stores it.

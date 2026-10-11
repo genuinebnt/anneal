@@ -50,20 +50,20 @@ impl<'e> WindowFunctionExecutor<'e> {
     /// Groups the rows by the values of the window function's `partition by` expressions. Returns the rows' indexes, one list per
     /// partition, each in the order of `rows`. Without `partition by` there is one partition holding every row.
     fn partition_rows(&self, wf: &WindowFunction, rows: &[Tuple]) -> Result<Vec<Vec<usize>>> {
-        todo!("3g-05: evaluate the partition-by expressions of each row into an AggregateKey; give each distinct key a partition (a Vec of row indexes), in order of first appearance, and push the row's index onto its partition")
+        todo!("3g-05: one list of row indexes per distinct partition key, in order of first appearance")
     }
 
     /// The value of an aggregate window function for each row when there is **no** `order by`: every row of a partition gets the aggregate
     /// of the whole partition. Returns one value per row of `rows`.
     fn compute_whole_partitions(&self, wf: &WindowFunction, rows: &[Tuple], partitions: &[Vec<usize>]) -> Result<Vec<Value>> {
-        todo!("3g-05: for each partition fold the function's value of each of its rows into one running aggregate (SimpleAggregationHashTable::new(vec![aggregation_of(..)]), generate_initial_aggregate_value, combine_aggregate_values), then give every row of the partition that final value")
+        todo!("3g-05: every row of a partition gets the aggregate of the whole partition")
     }
 
     /// The value of a window function for each row when there is an `order by` (`keys[i]` is row `i`'s sort key; the rows are already
     /// sorted by it): an aggregate over the partition's rows from the first up to the **last peer** of this row, or, for `rank`, the 1-based
     /// position of the row's first peer in the partition (ties share a rank and leave gaps).
     fn compute_ordered(&self, wf: &WindowFunction, rows: &[Tuple], keys: &[SortKey], partitions: &[Vec<usize>], cmp: &TupleComparator) -> Result<Vec<Value>> {
-        todo!("3g-05: walk each partition in order, one group of peers at a time (rows whose keys compare Equal with cmp.compare_keys): for an aggregate fold the whole peer group into the running aggregate and give every row of the group the result; for rank give every row of the group the 1-based index of the group's first row in the partition")
+        todo!("3g-05: rows with equal sort keys are peers: an aggregate covers the partition up to the last peer; rank is the 1-based position of the first peer")
     }
 }
 

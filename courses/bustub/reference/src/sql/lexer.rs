@@ -147,6 +147,6 @@ pub fn tokenize(sql: &str) -> Result<Vec<Token>> {
         }
     }
     Ok(tokens)
-    //~ todo!("3d-04: walk the characters: skip whitespace and comments; words (lower-cased), quoted names, numbers, 'strings' with '' for a quote, two-character symbols before one-character ones; anything else is a parse error")
+    //~ todo!("3d-04: whitespace and comments are skipped; words are lower-cased; quoted names, numbers, 'strings' with '' for a quote, two-character symbols before one-character ones; anything else is a parse error")
     // @end
 }

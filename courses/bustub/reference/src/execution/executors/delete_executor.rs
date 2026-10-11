@@ -98,7 +98,7 @@ impl Executor for DeleteExecutor<'_> {
         tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-03: once: for every tuple (and rid) of the child mark the heap tuple deleted (update_tuple_meta with is_deleted: true), remove its index entries (delete_from_indexes) and count it; answer with one tuple holding the count; every later call returns false")
+        //~ todo!("3e-03: marks every tuple of the child deleted and removes its index entries; answers once with how many, then false")
         // @end
     }
 

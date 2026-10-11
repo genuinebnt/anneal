@@ -27,7 +27,7 @@ impl Watermark {
         }
         *self.current_reads.entry(read_ts).or_insert(0) += 1;
         Ok(())
-        //~ todo!("4a-01: an error if read_ts < self.commit_ts; otherwise count one more transaction reading at read_ts")
+        //~ todo!("4a-01: an error if read_ts is older than the last commit timestamp; otherwise one more transaction is counted at read_ts")
         // @end
     }
 

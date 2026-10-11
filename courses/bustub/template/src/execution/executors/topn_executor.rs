@@ -71,13 +71,13 @@ impl<'e> TopNExecutor<'e> {
 
 impl Executor for TopNExecutor<'_> {
     fn init(&mut self) -> Result<()> {
-        todo!("3g-04: init the child; read all its batches; keep a BinaryHeap<HeapEntry> of at most n entries (push while fewer than n; otherwise replace the greatest entry when the new one is smaller); store the heap's size in self.num_in_heap after each tuple; at the end pop the heap into self.result in output order (best first)")
+        todo!("3g-04: keeps the best n tuples of the child in a bounded heap and produces them best first")
     }
 
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        todo!("3g-04: hand out the next at most batch_size tuples of self.result (and a default rid for each)")
+        todo!("3g-04: hands out the next batch of the result, best first")
     }
 
     fn output_schema(&self) -> &Schema {

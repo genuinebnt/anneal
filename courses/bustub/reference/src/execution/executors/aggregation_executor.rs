@@ -39,7 +39,7 @@ impl PartialEq for AggregateKey {
     fn eq(&self, other: &AggregateKey) -> bool {
         // @begin 3f-01
         self.group_bys.len() == other.group_bys.len() && self.group_bys.iter().zip(&other.group_bys).all(|(a, b)| canonical(a) == canonical(b))
-        //~ todo!("3f-01: the same number of values, and every pair 'the same group' (two NULLs are the same; equal integers of any width are the same; use canonical(..) on each side)")
+        //~ todo!("3f-01: the same number of values, each pair in the same group (two NULLs are the same; equal integers of any width are the same)")
         // @end
     }
 }
@@ -126,7 +126,7 @@ impl SimpleAggregationHashTable {
             };
         }
         Ok(())
-        //~ todo!("3f-01: for each aggregate: count(*) adds 1 for every row; for the others a NULL input changes nothing; count(x): 1 if nothing seen yet else +1; sum: x if nothing seen yet else running + x; min/max likewise with Value::min / Value::max")
+        //~ todo!("3f-01: count(*) counts rows; the others ignore a NULL input: count counts, sum adds, min and max keep the extreme")
         // @end
     }
 
@@ -229,7 +229,7 @@ impl Executor for AggregationExecutor<'_> {
             .collect();
         self.cursor = 0;
         Ok(())
-        //~ todo!("3f-02: initialise the child; empty the table; fold every child tuple into the table (make_aggregate_key / make_aggregate_value / insert_combine); if the table is still empty and there is no GROUP BY add the group of the empty key with insert_initial; build one output tuple per group (group-by values, then aggregates, with the plan's output schema) into self.results; cursor = 0")
+        //~ todo!("3f-02: one output tuple per group (group-by values, then the aggregates); with no GROUP BY an empty input still gives one group")
         // @end
     }
 

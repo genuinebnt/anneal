@@ -170,7 +170,7 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
             bucket = (bucket + 1) % self.capacity;
         }
         unreachable!("with fewer live keys than buckets there is a free bucket on the way")
-        //~ todo!("0c-02: write lock; if the key is already there replace it and say true; if size == capacity say false before touching anything; else probe from the home bucket with `carried` and its home: an empty bucket takes the carried key (size + 1, true); a tombstone is free too; a live resident whose probe distance is smaller than the carried key's is swapped out and becomes the carried key; go to the next bucket (wrapping)")
+        //~ todo!("0c-02: true if added or replaced, false when full (before touching anything); probing from the home bucket, a resident closer to its home is displaced and carries on, and a tombstone is free")
         // @end
     }
 

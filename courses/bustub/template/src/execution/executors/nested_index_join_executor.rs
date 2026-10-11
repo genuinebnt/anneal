@@ -44,7 +44,7 @@ impl<'e> NestedIndexJoinExecutor<'e> {
 
     /// The live inner tuples whose index key equals the key of `outer`.
     fn probe(&self, outer: &Tuple) -> Result<Vec<Tuple>> {
-        todo!("3f-05: evaluate key_predicate on the outer tuple (NULL: no match); make a one-column key tuple with the index's key schema; look it up (scan_key); fetch each rid from the inner table and keep the tuples that are not deleted")
+        todo!("3f-05: the live inner tuples whose key equals the outer tuple's key; a NULL key matches nothing")
     }
 }
 
@@ -56,7 +56,7 @@ impl Executor for NestedIndexJoinExecutor<'_> {
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        todo!("3f-05: until the batch is full: hand out pending output; take the next outer tuple (none: stop); probe(..): for every inner tuple queue the outer values followed by the inner values (with inner_schema); with none, a LEFT join queues the outer values followed by NULLs for the inner columns")
+        todo!("3f-05: for each outer tuple: every inner match gives a row of outer then inner values; with none, a LEFT join gives the outer values and NULLs")
     }
 
     fn output_schema(&self) -> &Schema {

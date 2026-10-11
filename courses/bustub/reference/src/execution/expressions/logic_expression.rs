@@ -74,7 +74,7 @@ impl LogicExpression {
                 }
             }
         }
-        //~ todo!("3d-03: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: the mirror image (TRUE if either side is TRUE, FALSE if both are FALSE, else NULL)")
+        //~ todo!("3d-03: AND: FALSE if either side is FALSE, TRUE if both are TRUE, else NULL. OR: TRUE if either side is TRUE, FALSE if both are FALSE, else NULL")
         // @end
     }
 }
@@ -85,7 +85,7 @@ impl Expression for LogicExpression {
         let lhs = self.children[0].evaluate(tuple, schema)?;
         let rhs = self.children[1].evaluate(tuple, schema)?;
         Ok(cmp_to_value(self.perform_computation(&lhs, &rhs)))
-        //~ todo!("3d-03: evaluate both sides and answer with cmp_to_value(perform_computation(..))")
+        //~ todo!("3d-03: evaluates both sides and answers with the truth table's result as a BOOLEAN")
         // @end
     }
 

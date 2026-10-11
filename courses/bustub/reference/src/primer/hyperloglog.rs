@@ -109,7 +109,7 @@ impl<K: Hash> HyperLogLog<K> {
         if rank > registers[idx] {
             registers[idx] = rank;
         }
-        //~ todo!("0d-02: hash the value; the register is register_index; keep the larger of its value and position_of_leftmost_one (under the lock; do nothing if there are no registers)")
+        //~ todo!("0d-02: the register is the top bits of the hash and keeps the longest run seen; nothing to do without registers")
         // @end
     }
 
@@ -227,7 +227,7 @@ impl<K: PrestoHash> HyperLogLogPresto<K> {
                 overflow.remove(&(idx as u16));
             }
         }
-        //~ todo!("0d-03: the register is the top n bits of the hash; its run is the trailing zeros of the other 64 - n bits (all zero: 64 - n); under both locks, held together: if larger than the register's value store the low 4 bits densely and bits 4 to 6 in the overflow map")
+        //~ todo!("0d-03: the register is the top n bits of the hash and keeps the longest run seen (trailing zeros of the rest; all zero: 64 - n), stored as dense and overflow bits")
         // @end
     }
 

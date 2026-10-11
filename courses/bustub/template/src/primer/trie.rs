@@ -57,14 +57,14 @@ impl Trie {
     /// A new trie with `value` under `key` (replacing what was there, whatever its type). Only the nodes on the path from the root to
     /// the key are copied; every other node is shared with `self`. The empty key puts the value in the root.
     pub fn put<T: Any + Send + Sync>(&self, key: &str, value: T) -> Trie {
-        todo!("0a-02: copy the path: a recursive helper that, given the old node (if any) and the rest of the key, returns a new node: a clone of the old one (or an empty node), with the child for the next character replaced by the result of the recursion, and the value set at the end of the key")
+        todo!("0a-02: a new trie that copies only the path to the key and shares the rest; the empty key sets the root's value")
     }
 
 
     /// A new trie without the value under `key`. A node left with no value and no children is removed, and so on up the path, so an
     /// emptied trie has no root. A key that is not in the trie gives a trie equal to `self`.
     pub fn remove(&self, key: &str) -> Trie {
-        todo!("0a-02: a recursive helper that returns the node for the new trie (or none if it became empty), or reports the key is missing; copy the nodes on the path, clear the value at the end, and drop children that became empty")
+        todo!("0a-02: a new trie without the key's value, pruning nodes left with no value and no children; a missing key leaves the trie equal")
     }
 
 }

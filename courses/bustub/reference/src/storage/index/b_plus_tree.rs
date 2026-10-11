@@ -92,7 +92,7 @@ where
         let bpm = TracedBufferPoolManager::new(bpm);
         Header::new(&mut bpm.write_page(header_page_id)[..]).init();
         BPlusTree { index_name: index_name.to_owned(), bpm, cmp, leaf_max_size, internal_max_size, header_page_id, _entry: PhantomData }
-        //~ todo!("2c-01: check the sizes are usable, remember the parameters (the pool goes in a TracedBufferPoolManager), and format the header page: an empty tree")
+        //~ todo!("2c-01: checks the sizes are usable, remembers the parameters and formats the header page as an empty tree")
         // @end
     }
 
@@ -455,7 +455,7 @@ where
         for page_id in to_delete {
             self.bpm.delete_page(page_id);
         }
-        //~ todo!("2c-02: latch the path (descend_for_write); remove the key from the leaf; if that leaves the root leaf empty the tree is empty; if it leaves a leaf below min_size, rebalance")
+        //~ todo!("2c-02: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
         // @end
     }
 

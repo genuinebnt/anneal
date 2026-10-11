@@ -41,7 +41,7 @@ where
     /// Creates an empty tree whose header page is `header_page_id` (the caller allocated it) and formats that page.
     /// A leaf holds at most `leaf_max_size` pairs (at least 2), an internal page at most `internal_max_size` children (at least 3).
     pub fn new(index_name: &str, header_page_id: PageId, bpm: &'a BufferPoolManager, cmp: C, leaf_max_size: u32, internal_max_size: u32) -> Self {
-        todo!("2c-01: check the sizes are usable, remember the parameters (the pool goes in a TracedBufferPoolManager), and format the header page: an empty tree")
+        todo!("2c-01: checks the sizes are usable, remembers the parameters and formats the header page as an empty tree")
     }
 
     /// As many pairs as fit in a leaf page.
@@ -122,7 +122,7 @@ where
 
     /// Removes the pair with this key, if there is one.
     pub fn remove(&self, key: &K) {
-        todo!("2c-02: latch the path (descend_for_write); remove the key from the leaf; if that leaves the root leaf empty the tree is empty; if it leaves a leaf below min_size, rebalance")
+        todo!("2c-02: removes the key from its leaf; an emptied root leaf makes the tree empty, and a leaf below its minimum size is rebalanced")
     }
 
     // TODO(2c-05): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.

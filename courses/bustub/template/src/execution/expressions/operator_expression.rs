@@ -71,7 +71,7 @@ impl OperatorExpression {
     /// The value of the operator on already evaluated operands. A NULL operand gives a NULL of the result type, except for
     /// `IS [NOT] NULL`, which never gives NULL.
     fn compute(&self, args: &[Value]) -> Result<Value> {
-        todo!("3i-01: a NULL operand gives NULL (except IS [NOT] NULL); arithmetic through Value's add, subtract, multiply, divide and modulo; || concatenates; NOT flips a boolean")
+        todo!("3i-01: a NULL operand gives NULL (except IS [NOT] NULL); arithmetic follows Value's; || concatenates; NOT flips a boolean")
     }
 }
 

@@ -88,7 +88,7 @@ impl BufferPoolManager {
         // @end
     }
 
-    /// The bytes of a frame, behind its latch. Only meaningful for a frame you have pinned.
+    /// The bytes of a frame, behind its latch. Only meaningful for a frame that is pinned.
     pub fn frame_data(&self, frame: FrameId) -> &RwLock<Box<PageData>> {
         // @begin 1f-01
         &self.frames[frame.0]

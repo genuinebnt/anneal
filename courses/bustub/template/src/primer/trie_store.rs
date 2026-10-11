@@ -37,7 +37,7 @@ impl TrieStore {
 
     /// Stores `value` under `key`. Writers are serialised and readers never wait for them: a reader sees the old trie or the new one, never a partial one.
     pub fn put<T: Any + Send + Sync>(&self, key: &str, value: T) {
-        todo!("0a-03: take the write lock for the whole operation; clone the current root; build the new trie without the root lock held; then take the root lock only to publish it")
+        todo!("0a-03: a writer builds the next trie from a snapshot while readers go on, and publishes it by swapping the root; one writer at a time")
     }
 
     /// Removes `key`, with the same guarantees as [`put`](Self::put).

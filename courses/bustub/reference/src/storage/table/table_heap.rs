@@ -68,7 +68,7 @@ impl<'a> TableHeap<'a> {
         }
         let slot = TablePage::new(&mut page_guard[..]).insert_tuple(meta, tuple).expect("the tuple fits: it was checked above");
         Ok(Rid::new(*last_page_id, slot as u32))
-        //~ todo!("3c-01: hold the heap's lock; write-latch the last page; while the tuple does not fit: (an empty page means too large: Err) allocate and init a new page, link it after this one, make it the last; then insert into the page and return its rid")
+        //~ todo!("3c-01: under the heap's lock the tuple goes into the last page; when it has no room a new page is linked after it; a tuple too large for an empty page is an error")
         // @end
     }
 
@@ -111,7 +111,7 @@ impl<'a> TableHeap<'a> {
             return Ok(true);
         }
         Ok(false)
-        //~ todo!("3c-01: write-latch the page; read the old tuple; if there is no check or the check approves, overwrite in place and say true; otherwise false")
+        //~ todo!("3c-01: under the page's write latch: overwrites tuple and metadata if there is no check or the check approves the old tuple; says whether it did")
         // @end
     }
 

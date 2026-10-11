@@ -87,7 +87,7 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
 
     /// Adds `key`. Returns `true` if it was added or an equal key was already there (the key is replaced), `false` if the table is full.
     pub fn insert(&self, key: &K) -> bool {
-        todo!("0c-02: write lock; if the key is already there replace it and say true; if size == capacity say false before touching anything; else probe from the home bucket with `carried` and its home: an empty bucket takes the carried key (size + 1, true); a tombstone is free too; a live resident whose probe distance is smaller than the carried key's is swapped out and becomes the carried key; go to the next bucket (wrapping)")
+        todo!("0c-02: true if added or replaced, false when full (before touching anything); probing from the home bucket, a resident closer to its home is displaced and carries on, and a tombstone is free")
     }
 
     /// Is `key` in the set?

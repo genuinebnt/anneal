@@ -100,7 +100,7 @@ pub fn encode_records(records: &[Record]) -> Result<Vec<u8>, FormatError> {
         out.extend_from_slice(&r.value);
     }
     Ok(out)
-    //~ todo!("r-02: for each record: the lengths (u8::try_from / u16::try_from turned into FormatError with map_err and ?), then the key and the value bytes")
+    //~ todo!("r-02: each record is its lengths, then its key and value bytes; a length that does not fit its field is an error")
     // @end
 }
 
@@ -125,7 +125,7 @@ pub fn parse_records(bytes: &[u8]) -> Result<Vec<Record>, FormatError> {
         at += total;
     }
     Ok(records)
-    //~ todo!("r-02: loop over the records: a header of 3 bytes, then the key and the value; Truncated (with the offset, the bytes needed and the bytes left) when they do not fit; BadKey when the key is not UTF-8")
+    //~ todo!("r-02: records are read one after another; one that does not fit gives Truncated (with the offset, the bytes needed and the bytes left), a key that is not UTF-8 gives BadKey")
     // @end
 }
 

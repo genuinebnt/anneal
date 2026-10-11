@@ -110,7 +110,7 @@ impl TransactionManager {
         self.last_commit_ts.store(commit_ts, Ordering::SeqCst);
         running.remove_txn(txn.read_ts());
         Ok(true)
-        //~ todo!("4a-02: commit_ts = last commit + 1; stamp every tuple in the write set with it (keep is_deleted); set the transaction's commit ts and state; then, under the watermark's lock: tell it the commit, publish last_commit_ts, remove this reader")
+        //~ todo!("4a-02: the next commit timestamp stamps every tuple of the write set; the transaction becomes committed and the watermark moves on")
         // @end
     }
 

@@ -150,7 +150,7 @@ impl Value {
     /// * A boolean converts to itself and to `Varchar`; a timestamp to itself and to `Varchar`. Anything else is an error ("X is not coercable to Y").
     /// * A NULL converts to the NULL of the target type (if the conversion is allowed at all).
     pub fn cast_as(&self, to: TypeId) -> Result<Value> {
-        todo!("3a-02: check the conversion is allowed (the table in the doc comment); a NULL becomes the NULL of the target; a number to VARCHAR is its text; otherwise convert, checking the range of the target")
+        todo!("3a-02: a NULL becomes the NULL of the target; a number converts to VARCHAR as its text; otherwise the conversion must be allowed and the value must fit the target's range")
     }
 
     // ---- 3a-03 · comparing --------------------------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ impl Value {
 
     /// What an arithmetic operation with a NULL gives: the NULL of the result type (the wider integer type, or DECIMAL if either side is a decimal).
     pub fn operate_null(&self, other: &Value) -> Result<Value> {
-        todo!("3a-04: the NULL of the result type: DECIMAL if either is DECIMAL, else the wider integer type (a string on the right counts as the left's type); non-numeric operands are an error")
+        todo!("3a-04: the NULL of the result type: DECIMAL if either side is, else the wider integer type; a string on the right takes the left's type; non-numeric operands are an error")
     }
 
     /// Whether a numeric value is zero; any other type is a `NotImplemented` error.
@@ -263,12 +263,12 @@ impl Value {
     /// Writes the value into `storage` (at least `storage_size()` bytes), little-endian. A NULL is written as its reserved encoding
     /// (`i32::MIN` for an INTEGER, ...; a VARCHAR as the length `u32::MAX`), a boolean as one byte 0 or 1.
     pub fn serialize_to(&self, storage: &mut [u8]) {
-        todo!("3a-05: write the value little-endian at the start of storage; a NULL as its reserved encoding; a VARCHAR as a 4-byte length (text + 1) then the text and a zero byte")
+        todo!("3a-05: little-endian at the start of storage; a NULL as its reserved encoding; a VARCHAR as a 4-byte length (text plus one), the text and a zero byte")
     }
 
     /// Reads a value of `type_id` from the start of `storage`. The inverse of `serialize_to`: a reserved encoding is a NULL.
     pub fn deserialize_from(storage: &[u8], type_id: TypeId) -> Result<Value> {
-        todo!("3a-05: read the type's bytes little-endian; the reserved encodings are NULLs (the typed constructors already do that for the numbers); a VARCHAR: a 4-byte length (u32::MAX is NULL), then length - 1 bytes of text")
+        todo!("3a-05: the inverse of serialize_to: reserved encodings are NULLs; a VARCHAR is a 4-byte length (u32::MAX is NULL) then length minus 1 bytes of text")
     }
 }
 

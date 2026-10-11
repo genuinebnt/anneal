@@ -47,7 +47,7 @@ pub fn redo(store: &Store, records: &[(Lsn, LogRecord)], from: usize) -> StoreRe
 /// Rolls back every loser: their changes, newest first across all losers, each undo logged as a change with the states swapped and applied;
 /// then `Abort` is logged for each, and the log is flushed. Returns how many changes were undone.
 pub fn undo(store: &Store, log: &LogManager, records: &[(Lsn, LogRecord)], losers: &[TxnId]) -> StoreResult<usize> {
-    todo!("4c-06: walk the records backwards; for each change of a loser log the swapped change and apply its `before` state; then log Abort for every loser and flush the log")
+    todo!("4c-06: every loser's changes are undone newest first, each undo logged as the swapped change and applied; then Abort is logged and the log flushed")
 }
 
 /// Brings the store back to the state of the committed transactions: analyse, redo, undo, then write everything to disk.

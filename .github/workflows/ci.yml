@@ -54,6 +54,9 @@ jobs:
       # The published course modules meet the owner's stage standards (docs/COURSE_STANDARDS.md).
       - name: Course standards
         run: cargo run -q --locked -p anneal-cli -- course lint
+      # The doc comments a learner keeps are timeless (docs/COURSE_STANDARDS.md, "Code comments"): no stage ids, course words or history.
+      - name: Course code comments
+        run: python3 tools/check_code_comments.py
       # Every ```rust test example in the course's concept articles compiles and passes.
       - name: Course concept examples
         run: python3 tools/course_snippets.py

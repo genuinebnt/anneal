@@ -46,7 +46,7 @@ impl<B: AsRef<[u8]>> TablePage<B> {
     /// Where a tuple of this size would be stored (the offset of its first byte), or `None` if it does not fit: the new slot and the tuple must not
     /// overlap.
     pub fn get_next_tuple_offset(&self, _meta: &TupleMeta, tuple: &Tuple) -> Option<u16> {
-        todo!("3b-03: the tuples grow down from the end of the page: the new tuple starts below the previous one (the page's end for the first); it fits if that is not below the end of the slot array including the new slot (header + 24 * (tuples + 1))")
+        todo!("3b-03: tuples grow down from the end of the page: the new one starts below the previous one and must not reach the slot array, counting the new slot")
     }
 
     /// The tuple in `rid`'s slot and its metadata. An out-of-range slot is an error.
@@ -77,7 +77,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> TablePage<B> {
 
     /// Stores the tuple in the next slot, at the offset `get_next_tuple_offset` gives; returns the slot number, or `None` if it does not fit.
     pub fn insert_tuple(&mut self, meta: &TupleMeta, tuple: &Tuple) -> Option<u16> {
-        todo!("3b-03: find the offset (None: no room); write the slot (offset, size, meta) and the tuple's bytes there; count one more tuple; return the slot number")
+        todo!("3b-03: stores the tuple in the next slot at the offset it fits at; None if it does not fit; the tuple count grows by one")
     }
 
     /// Replaces the slot's metadata. Marking a live tuple deleted counts it in `num_deleted_tuples`. A slot past the last tuple is an error.

@@ -160,7 +160,7 @@ impl<'a> Store<'a> {
                 page.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, rid)
             }
         }
-        //~ todo!("4c-03: under the page's write latch: Some(bytes): overwrite the slot (live) if it exists, or insert it if it is the next one; None: mark the existing slot deleted; every other case is an error")
+        //~ todo!("4c-03: makes the slot hold exactly this state, so that doing it twice is the same as once: Some(bytes) a live record, None a deleted slot; a slot beyond the next free one is an error")
         // @end
     }
 
@@ -198,7 +198,7 @@ impl<'a> Store<'a> {
         inner.held.insert(rid, txn);
         inner.active.get_mut(&txn).unwrap().push((rid, before, after));
         Ok(())
-        //~ todo!("4c-04: refuse a record held by another transaction; append the Change record; then set_state; remember the page's LSN, the hold and the change")
+        //~ todo!("4c-04: refused if another transaction holds the record; otherwise the change is logged first, then applied, and remembered for the transaction and the page")
         // @end
     }
 

@@ -106,7 +106,7 @@ impl<B: AsRef<[u8]>> TablePage<B> {
         let tuple_offset = slot_end_offset.checked_sub(tuple.get_length() as usize)?;
         let slots_end = TABLE_PAGE_HEADER_SIZE + TUPLE_INFO_SIZE * (n as usize + 1);
         (tuple_offset >= slots_end).then_some(tuple_offset as u16)
-        //~ todo!("3b-03: the tuples grow down from the end of the page: the new tuple starts below the previous one (the page's end for the first); it fits if that is not below the end of the slot array including the new slot (header + 24 * (tuples + 1))")
+        //~ todo!("3b-03: tuples grow down from the end of the page: the new one starts below the previous one and must not reach the slot array, counting the new slot")
         // @end
     }
 
@@ -185,7 +185,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> TablePage<B> {
         self.set_u16(NUM_TUPLES_OFFSET, id as u16 + 1);
         self.page.as_mut()[offset as usize..offset as usize + tuple.data().len()].copy_from_slice(tuple.data());
         Some(id as u16)
-        //~ todo!("3b-03: find the offset (None: no room); write the slot (offset, size, meta) and the tuple's bytes there; count one more tuple; return the slot number")
+        //~ todo!("3b-03: stores the tuple in the next slot at the offset it fits at; None if it does not fit; the tuple count grows by one")
         // @end
     }
 

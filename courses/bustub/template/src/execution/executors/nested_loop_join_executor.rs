@@ -74,7 +74,7 @@ impl Executor for NestedLoopJoinExecutor<'_> {
     fn next(&mut self, tuple_batch: &mut Vec<Tuple>, rid_batch: &mut Vec<Rid>, batch_size: usize) -> Result<bool> {
         tuple_batch.clear();
         rid_batch.clear();
-        todo!("3f-03: until the batch is full: hand out pending output first; if there is no current left tuple take the next one (end: stop) and init the right side; take the next right tuple and, if the predicate (evaluate_join) is TRUE, queue left+right values; when the right side is exhausted queue unmatched_output(..) if it gives something and drop the left tuple")
+        todo!("3f-03: each left tuple against every right tuple: TRUE pairs are output as left then right values; a left tuple with no match gives the join type's unmatched row")
     }
 
     fn output_schema(&self) -> &Schema {

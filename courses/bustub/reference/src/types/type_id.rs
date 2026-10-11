@@ -90,7 +90,7 @@ impl TypeId {
             TypeId::Varchar => Ok(Value::varchar("")),
             TypeId::Invalid => Err(Exception::new(ExceptionType::MismatchType, "Cannot get minimal value.")),
         }
-        //~ todo!("3a-01: the smallest usable value of each type (one above the reserved NULL encoding for the integers); VARCHAR: the empty string; INVALID: a MismatchType error")
+        //~ todo!("3a-01: the smallest usable value of each type (one above the reserved NULL encoding for integers); the empty string for VARCHAR; INVALID is a MismatchType error")
         // @end
     }
 

@@ -96,7 +96,7 @@ impl Executor for InsertExecutor<'_> {
         tuple_batch.push(Tuple::new(&[Value::integer(count)], &self.plan.output_schema));
         rid_batch.push(Rid::default());
         Ok(true)
-        //~ todo!("3e-02: once: pull every batch from the child, insert each tuple into the heap (a TupleMeta with ts 0 and is_deleted false), call insert_into_indexes with the new rid, count them; answer with one tuple holding the count; every later call returns false")
+        //~ todo!("3e-02: once: inserts every tuple of the child into the table and its indexes; answers with how many, then false")
         // @end
     }
 

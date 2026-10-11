@@ -21,7 +21,7 @@ impl Watermark {
 
     /// A transaction with this read timestamp begins. A read timestamp older than the last commit is an error ("read ts < commit ts").
     pub fn add_txn(&mut self, read_ts: Timestamp) -> Result<()> {
-        todo!("4a-01: an error if read_ts < self.commit_ts; otherwise count one more transaction reading at read_ts")
+        todo!("4a-01: an error if read_ts is older than the last commit timestamp; otherwise one more transaction is counted at read_ts")
     }
 
     /// A transaction with this read timestamp commits or aborts.

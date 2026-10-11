@@ -74,7 +74,7 @@ impl<'a> Catalog<'a> {
         self.table_names.insert(table_name.to_owned(), oid);
         self.index_names.insert(table_name.to_owned(), HashMap::new());
         Some(info)
-        //~ todo!("3c-04: None for a name in use; otherwise the next oid, a TableInfo with a new heap, remembered by oid and by name, with an (empty) set of indexes for the table")
+        //~ todo!("3c-04: None if the name is taken; otherwise a table with a new heap and the next oid, found by oid and by name")
         // @end
     }
 
@@ -158,7 +158,7 @@ impl<'a> Catalog<'a> {
         self.indexes.insert(index_oid, info.clone());
         self.index_names.get_mut(table_name).unwrap().insert(index_name.to_owned(), index_oid);
         Ok(Some(info))
-        //~ todo!("3c-04: Ok(None) for a missing table or a name in use; an error unless every key column is an INTEGER (and the key is 1 to 64 bytes); build the index with a key size of 4, 8, 16, 32 or 64 bytes; insert every live tuple's key (key_from_tuple) with its rid; the next index oid; remember it by oid and by (table, name)")
+        //~ todo!("3c-04: Ok(None) for a missing table or a taken name; an error unless the key is 1 to 64 bytes of INTEGER columns; the index holds every live tuple")
         // @end
     }
 

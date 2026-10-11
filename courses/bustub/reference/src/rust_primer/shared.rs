@@ -56,7 +56,7 @@ impl<T> BoundedQueue<T> {
             }
             state = self.not_full.wait(state).unwrap();
         }
-        //~ todo!("r-04: lock; in a loop: closed -> Err(value); room -> push, wake a waiting pop, Ok; else wait on `not_full` (wait gives the guard back: a spurious wake-up is why this is a loop)")
+        //~ todo!("r-04: closed gives Err(value); a full queue makes the caller wait; otherwise the value is added and a waiting pop is woken")
         // @end
     }
 

@@ -66,7 +66,7 @@ impl<'e> WindowFunctionExecutor<'e> {
             partitions[slot].push(i);
         }
         Ok(partitions)
-        //~ todo!("3g-05: evaluate the partition-by expressions of each row into an AggregateKey; give each distinct key a partition (a Vec of row indexes), in order of first appearance, and push the row's index onto its partition")
+        //~ todo!("3g-05: one list of row indexes per distinct partition key, in order of first appearance")
         // @end
     }
 
@@ -89,7 +89,7 @@ impl<'e> WindowFunctionExecutor<'e> {
             }
         }
         Ok(out)
-        //~ todo!("3g-05: for each partition fold the function's value of each of its rows into one running aggregate (SimpleAggregationHashTable::new(vec![aggregation_of(..)]), generate_initial_aggregate_value, combine_aggregate_values), then give every row of the partition that final value")
+        //~ todo!("3g-05: every row of a partition gets the aggregate of the whole partition")
         // @end
     }
 
@@ -127,7 +127,7 @@ impl<'e> WindowFunctionExecutor<'e> {
             }
         }
         Ok(out)
-        //~ todo!("3g-05: walk each partition in order, one group of peers at a time (rows whose keys compare Equal with cmp.compare_keys): for an aggregate fold the whole peer group into the running aggregate and give every row of the group the result; for rank give every row of the group the 1-based index of the group's first row in the partition")
+        //~ todo!("3g-05: rows with equal sort keys are peers: an aggregate covers the partition up to the last peer; rank is the 1-based position of the first peer")
         // @end
     }
 }
