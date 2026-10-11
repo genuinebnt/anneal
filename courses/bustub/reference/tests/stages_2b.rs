@@ -8,8 +8,11 @@
 //! can split them further), and the model computes exactly that with the table's own hash function.
 //! The hash values in the first stage come from running BusTub's MurmurHash3.cpp (compiled with clang) on the same bytes.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use bustub::buffer::buffer_pool_manager::BufferPoolManager;
 use bustub::common::config::PageId;
@@ -30,6 +33,32 @@ impl Lcg {
     fn next(&mut self, n: usize) -> usize {
         self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         ((self.0 >> 33) as usize) % n
+    }
+}
+
+thread_local! {
+    /// Set once a run of this test did not finish: the runs that follow (a property test shrinking a hang) fail at once instead of
+    /// waiting for the timeout again.
+    static HUNG: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `work` on a thread and fails the test if it does not finish in 60 seconds. Without it a split or a merge that never ends would
+/// leave the terminal frozen with no message; with it the test fails and says what to look at.
+fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    if HUNG.with(Cell::get) {
+        panic!("{what}: not run again, because an earlier run of this test did not finish");
+    }
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(v) => v,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            HUNG.with(|h| h.set(true));
+            panic!("timed out: {what} did not finish in 60 seconds (a split or a merge that never ends? a latch that is never released?)")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("{what}: the test body panicked; its message is printed above"),
     }
 }
 
@@ -248,6 +277,11 @@ fn shapes() -> impl Strategy<Value = Shape> {
 }
 
 fn run_model(shape: Shape, ops: &[Op], frames: usize) -> Result<(), TestCaseError> {
+    let ops = ops.to_vec();
+    within("a random run against the model", move || run_model_unwrapped(shape, &ops, frames))
+}
+
+fn run_model_unwrapped(shape: Shape, ops: &[Op], frames: usize) -> Result<(), TestCaseError> {
     let (bpm, _disk) = pool_with(Policy::Fifo, frames);
     let ht = table(&bpm, shape);
     let mut model: HashMap<i32, i32> = HashMap::new();
@@ -280,76 +314,88 @@ fn config() -> ProptestConfig {
 
 #[test]
 fn s2b_02_an_empty_table_has_no_values() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 3, bucket_size: 4 });
-    assert!(ht.get_value(&7).is_empty(), "nothing was inserted");
-    ht.verify_integrity();
-    assert_eq!(ht.index_name(), "test");
-    assert!(ht.get_header_page_id().is_valid());
+    within("s2b_02_an_empty_table_has_no_values", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 3, bucket_size: 4 });
+        assert!(ht.get_value(&7).is_empty(), "nothing was inserted");
+        ht.verify_integrity();
+        assert_eq!(ht.index_name(), "test");
+        assert!(ht.get_header_page_id().is_valid());
+    });
 }
 
 #[test]
 fn s2b_02_an_inserted_key_is_found_with_its_value() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
-    assert!(ht.insert(&5, &50));
-    assert_eq!(ht.get_value(&5), vec![50]);
-    assert!(ht.get_value(&6).is_empty());
-    ht.verify_integrity();
+    within("s2b_02_an_inserted_key_is_found_with_its_value", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
+        assert!(ht.insert(&5, &50));
+        assert_eq!(ht.get_value(&5), vec![50]);
+        assert!(ht.get_value(&6).is_empty());
+        ht.verify_integrity();
+    });
 }
 
 #[test]
 fn s2b_02_a_duplicate_key_is_refused_and_keeps_its_value() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
-    assert!(ht.insert(&5, &50));
-    assert!(!ht.insert(&5, &99), "keys are unique");
-    assert_eq!(ht.get_value(&5), vec![50]);
+    within("s2b_02_a_duplicate_key_is_refused_and_keeps_its_value", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 3, bucket_size: 10 });
+        assert!(ht.insert(&5, &50));
+        assert!(!ht.insert(&5, &99), "keys are unique");
+        assert_eq!(ht.get_value(&5), vec![50]);
+    });
 }
 
 #[test]
 fn s2b_02_keys_in_different_header_slots_do_not_disturb_each_other() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let shape = Shape { header_depth: 2, directory_depth: 2, bucket_size: 8 };
-    let ht = table(&bpm, shape);
-    // find keys that land in each of the four header slots
-    let mut by_slot: HashMap<u32, Vec<i32>> = HashMap::new();
-    for k in 0..400 {
-        by_slot.entry(class_of(shape, k).0).or_default().push(k);
-    }
-    assert_eq!(by_slot.len(), 4, "the test hash spreads keys over all four header slots");
-    for keys in by_slot.values() {
-        for &k in &keys[..3] {
-            assert!(ht.insert(&k, &(k * 2)));
+    within("s2b_02_keys_in_different_header_slots_do_not_disturb_each_other", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let shape = Shape { header_depth: 2, directory_depth: 2, bucket_size: 8 };
+        let ht = table(&bpm, shape);
+        // find keys that land in each of the four header slots
+        let mut by_slot: HashMap<u32, Vec<i32>> = HashMap::new();
+        for k in 0..400 {
+            by_slot.entry(class_of(shape, k).0).or_default().push(k);
         }
-    }
-    for keys in by_slot.values() {
-        for &k in &keys[..3] {
-            assert_eq!(ht.get_value(&k), vec![k * 2]);
+        assert_eq!(by_slot.len(), 4, "the test hash spreads keys over all four header slots");
+        for keys in by_slot.values() {
+            for &k in &keys[..3] {
+                assert!(ht.insert(&k, &(k * 2)));
+            }
         }
-    }
-    ht.verify_integrity();
+        for keys in by_slot.values() {
+            for &k in &keys[..3] {
+                assert_eq!(ht.get_value(&k), vec![k * 2]);
+            }
+        }
+        ht.verify_integrity();
+    });
 }
 
 #[test]
 fn s2b_02_the_default_sizes_describe_what_a_page_holds() {
-    assert_eq!(Table::default_header_max_depth(), 9);
-    assert_eq!(Table::default_directory_max_depth(), 9);
-    let n = Table::default_bucket_max_size();
-    assert!((400..=1100).contains(&n), "a bucket of (i32, i32) pairs holds hundreds in an 8 KiB page, not {n}");
+    within("s2b_02_the_default_sizes_describe_what_a_page_holds", || {
+        assert_eq!(Table::default_header_max_depth(), 9);
+        assert_eq!(Table::default_directory_max_depth(), 9);
+        let n = Table::default_bucket_max_size();
+        assert!((400..=1100).contains(&n), "a bucket of (i32, i32) pairs holds hundreds in an 8 KiB page, not {n}");
+    });
 }
 
 #[test]
 fn s2b_02_a_page_worth_of_keys_fit_without_any_splitting() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = DiskExtendibleHashTable::<i32, i32, IntComparator>::new("big", &bpm, IntComparator, HashFunction::new(), 0, 0, Table::default_bucket_max_size());
-    for k in 0..300 {
-        assert!(ht.insert(&k, &(k + 1)));
-    }
-    for k in 0..300 {
-        assert_eq!(ht.get_value(&k), vec![k + 1]);
-    }
-    assert_nothing_pinned(&bpm);
+    within("s2b_02_a_page_worth_of_keys_fit_without_any_splitting", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = DiskExtendibleHashTable::<i32, i32, IntComparator>::new("big", &bpm, IntComparator, HashFunction::new(), 0, 0, Table::default_bucket_max_size());
+        for k in 0..300 {
+            assert!(ht.insert(&k, &(k + 1)));
+        }
+        for k in 0..300 {
+            assert_eq!(ht.get_value(&k), vec![k + 1]);
+        }
+        assert_nothing_pinned(&bpm);
+    });
 }
 
 proptest! {
@@ -379,88 +425,100 @@ fn colliding_keys(shape: Shape, n: usize) -> Vec<i32> {
 
 #[test]
 fn s2b_03_a_full_bucket_splits_so_every_key_is_still_found() {
-    let (bpm, _) = pool_with(Policy::Fifo, 8);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
-    for k in 0..100 {
-        assert!(ht.insert(&k, &(k * 3)), "key {k} should fit after splitting");
-        ht.verify_integrity();
-    }
-    for k in 0..100 {
-        assert_eq!(ht.get_value(&k), vec![k * 3], "key {k} after all the splits");
-    }
-    assert_nothing_pinned(&bpm);
+    within("s2b_03_a_full_bucket_splits_so_every_key_is_still_found", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 8);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
+        for k in 0..100 {
+            assert!(ht.insert(&k, &(k * 3)), "key {k} should fit after splitting");
+            ht.verify_integrity();
+        }
+        for k in 0..100 {
+            assert_eq!(ht.get_value(&k), vec![k * 3], "key {k} after all the splits");
+        }
+        assert_nothing_pinned(&bpm);
+    });
 }
 
 #[test]
 fn s2b_03_the_directory_doubles_as_buckets_fill() {
-    let (bpm, _) = pool_with(Policy::Fifo, 8);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
-    assert_eq!(ht.global_depth(&0), None, "no directory before the first insert");
-    ht.insert(&0, &0);
-    assert_eq!(ht.global_depth(&0), Some(0), "one bucket needs a directory of one slot");
-    let mut last = 0;
-    for k in 1..100 {
-        ht.insert(&k, &k);
-        let depth = ht.global_depth(&0).unwrap();
-        assert!(depth >= last, "the directory never shrinks while only inserting");
-        last = depth;
-    }
-    assert!(last >= 5, "100 keys in buckets of 2 need at least 50 buckets, so a directory of 64 slots or more (depth >= 6), not depth {last}");
-    assert!(last <= 9);
+    within("s2b_03_the_directory_doubles_as_buckets_fill", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 8);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
+        assert_eq!(ht.global_depth(&0), None, "no directory before the first insert");
+        ht.insert(&0, &0);
+        assert_eq!(ht.global_depth(&0), Some(0), "one bucket needs a directory of one slot");
+        let mut last = 0;
+        for k in 1..100 {
+            ht.insert(&k, &k);
+            let depth = ht.global_depth(&0).unwrap();
+            assert!(depth >= last, "the directory never shrinks while only inserting");
+            last = depth;
+        }
+        assert!(last >= 5, "100 keys in buckets of 2 need at least 50 buckets, so a directory of 64 slots or more (depth >= 6), not depth {last}");
+        assert!(last <= 9);
+    });
 }
 
 #[test]
 fn s2b_03_keys_that_cannot_be_separated_make_the_insert_fail() {
-    let shape = Shape { header_depth: 0, directory_depth: 2, bucket_size: 2 };
-    let keys = colliding_keys(shape, 3);
-    let (bpm, _) = pool_with(Policy::Fifo, 8);
-    let ht = table(&bpm, shape);
-    assert!(ht.insert(&keys[0], &1));
-    assert!(ht.insert(&keys[1], &2));
-    assert!(!ht.insert(&keys[2], &3), "three keys with the same low 2 bits cannot fit in a bucket of 2 at directory depth 2");
-    assert_eq!(ht.get_value(&keys[0]), vec![1]);
-    assert_eq!(ht.get_value(&keys[1]), vec![2]);
-    assert!(ht.get_value(&keys[2]).is_empty());
-    ht.verify_integrity();
+    within("s2b_03_keys_that_cannot_be_separated_make_the_insert_fail", || {
+        let shape = Shape { header_depth: 0, directory_depth: 2, bucket_size: 2 };
+        let keys = colliding_keys(shape, 3);
+        let (bpm, _) = pool_with(Policy::Fifo, 8);
+        let ht = table(&bpm, shape);
+        assert!(ht.insert(&keys[0], &1));
+        assert!(ht.insert(&keys[1], &2));
+        assert!(!ht.insert(&keys[2], &3), "three keys with the same low 2 bits cannot fit in a bucket of 2 at directory depth 2");
+        assert_eq!(ht.get_value(&keys[0]), vec![1]);
+        assert_eq!(ht.get_value(&keys[1]), vec![2]);
+        assert!(ht.get_value(&keys[2]).is_empty());
+        ht.verify_integrity();
+    });
 }
 
 #[test]
 fn s2b_03_a_directory_that_may_not_grow_is_full_when_its_bucket_is() {
-    let shape = Shape { header_depth: 0, directory_depth: 0, bucket_size: 3 };
-    let (bpm, _) = pool_with(Policy::Fifo, 8);
-    let ht = table(&bpm, shape);
-    for k in 0..3 {
-        assert!(ht.insert(&k, &k));
-    }
-    assert!(!ht.insert(&3, &3), "one bucket, three slots, no room to split");
+    within("s2b_03_a_directory_that_may_not_grow_is_full_when_its_bucket_is", || {
+        let shape = Shape { header_depth: 0, directory_depth: 0, bucket_size: 3 };
+        let (bpm, _) = pool_with(Policy::Fifo, 8);
+        let ht = table(&bpm, shape);
+        for k in 0..3 {
+            assert!(ht.insert(&k, &k));
+        }
+        assert!(!ht.insert(&3, &3), "one bucket, three slots, no room to split");
+    });
 }
 
 #[test]
 fn s2b_03_failed_inserts_leave_the_table_as_it_was() {
-    let shape = Shape { header_depth: 1, directory_depth: 3, bucket_size: 2 };
-    let (bpm, _) = pool_with(Policy::Fifo, 8);
-    let ht = table(&bpm, shape);
-    let mut model = HashMap::new();
-    for k in 0..200 {
-        if ht.insert(&k, &k) {
-            model.insert(k, k);
+    within("s2b_03_failed_inserts_leave_the_table_as_it_was", || {
+        let shape = Shape { header_depth: 1, directory_depth: 3, bucket_size: 2 };
+        let (bpm, _) = pool_with(Policy::Fifo, 8);
+        let ht = table(&bpm, shape);
+        let mut model = HashMap::new();
+        for k in 0..200 {
+            if ht.insert(&k, &k) {
+                model.insert(k, k);
+            }
+            ht.verify_integrity();
         }
-        ht.verify_integrity();
-    }
-    assert!(model.len() < 200 && model.len() > 8, "some inserts fail and many succeed: {}", model.len());
-    for k in 0..200 {
-        assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "key {k}");
-    }
+        assert!(model.len() < 200 && model.len() > 8, "some inserts fail and many succeed: {}", model.len());
+        for k in 0..200 {
+            assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "key {k}");
+        }
+    });
 }
 
 #[test]
 fn s2b_03_a_small_pool_is_enough_because_guards_are_released() {
-    let (bpm, _) = pool_with(Policy::Fifo, 4);
-    let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 3 });
-    for k in 0..500 {
-        assert!(ht.insert(&k, &k));
-    }
-    assert_nothing_pinned(&bpm);
+    within("s2b_03_a_small_pool_is_enough_because_guards_are_released", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 4);
+        let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 3 });
+        for k in 0..500 {
+            assert!(ht.insert(&k, &k));
+        }
+        assert_nothing_pinned(&bpm);
+    });
 }
 
 proptest! {
@@ -477,96 +535,108 @@ proptest! {
 
 #[test]
 fn s2b_04_remove_says_whether_the_key_was_there() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 4, bucket_size: 3 });
-    assert!(!ht.remove(&1), "removing from an empty table");
-    ht.insert(&1, &10);
-    ht.insert(&2, &20);
-    assert!(ht.remove(&1));
-    assert!(!ht.remove(&1), "a second remove");
-    assert!(ht.get_value(&1).is_empty());
-    assert_eq!(ht.get_value(&2), vec![20]);
+    within("s2b_04_remove_says_whether_the_key_was_there", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 4, bucket_size: 3 });
+        assert!(!ht.remove(&1), "removing from an empty table");
+        ht.insert(&1, &10);
+        ht.insert(&2, &20);
+        assert!(ht.remove(&1));
+        assert!(!ht.remove(&1), "a second remove");
+        assert!(ht.get_value(&1).is_empty());
+        assert_eq!(ht.get_value(&2), vec![20]);
+    });
 }
 
 #[test]
 fn s2b_04_removing_everything_leaves_a_table_that_still_works() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 2 });
-    for round in 0..3 {
-        for k in 0..150 {
-            assert!(ht.insert(&k, &(k + round)), "round {round}: insert {k}");
+    within("s2b_04_removing_everything_leaves_a_table_that_still_works", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 2 });
+        for round in 0..3 {
+            for k in 0..150 {
+                assert!(ht.insert(&k, &(k + round)), "round {round}: insert {k}");
+            }
+            for k in 0..150 {
+                assert!(ht.remove(&k), "round {round}: remove {k}");
+                ht.verify_integrity();
+            }
+            for k in 0..150 {
+                assert!(ht.get_value(&k).is_empty());
+            }
         }
-        for k in 0..150 {
-            assert!(ht.remove(&k), "round {round}: remove {k}");
-            ht.verify_integrity();
-        }
-        for k in 0..150 {
-            assert!(ht.get_value(&k).is_empty());
-        }
-    }
-    assert_nothing_pinned(&bpm);
+        assert_nothing_pinned(&bpm);
+    });
 }
 
 #[test]
 fn s2b_04_the_directory_shrinks_back_when_the_buckets_are_gone() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
-    for k in 0..100 {
-        ht.insert(&k, &k);
-    }
-    let grown = ht.global_depth(&0).unwrap();
-    assert!(grown >= 5);
-    for k in 0..100 {
-        ht.remove(&k);
-    }
-    assert_eq!(ht.global_depth(&0), Some(0), "an emptied table's directory has shrunk back to one slot (it grew to depth {grown})");
-    for k in 0..40 {
-        assert!(ht.insert(&k, &k), "and it grows again");
-    }
+    within("s2b_04_the_directory_shrinks_back_when_the_buckets_are_gone", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
+        for k in 0..100 {
+            ht.insert(&k, &k);
+        }
+        let grown = ht.global_depth(&0).unwrap();
+        assert!(grown >= 5);
+        for k in 0..100 {
+            ht.remove(&k);
+        }
+        assert_eq!(ht.global_depth(&0), Some(0), "an emptied table's directory has shrunk back to one slot (it grew to depth {grown})");
+        for k in 0..40 {
+            assert!(ht.insert(&k, &k), "and it grows again");
+        }
+    });
 }
 
 #[test]
 fn s2b_04_empty_buckets_are_given_back_to_the_pool() {
-    let (bpm, disk) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
-    for k in 0..100 {
-        ht.insert(&k, &k);
-    }
-    assert!(disk.deletes.lock().unwrap().is_empty(), "nothing is deleted while the table only grows");
-    for k in 0..100 {
-        ht.remove(&k);
-    }
-    assert!(disk.deletes.lock().unwrap().len() >= 20, "after removing every key most of the ~50 bucket pages must have been deleted, only {} were", disk.deletes.lock().unwrap().len());
+    within("s2b_04_empty_buckets_are_given_back_to_the_pool", || {
+        let (bpm, disk) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
+        for k in 0..100 {
+            ht.insert(&k, &k);
+        }
+        assert!(disk.deletes.lock().unwrap().is_empty(), "nothing is deleted while the table only grows");
+        for k in 0..100 {
+            ht.remove(&k);
+        }
+        assert!(disk.deletes.lock().unwrap().len() >= 20, "after removing every key most of the ~50 bucket pages must have been deleted, only {} were", disk.deletes.lock().unwrap().len());
+    });
 }
 
 #[test]
 fn s2b_04_removing_one_key_does_not_disturb_its_neighbours_in_a_merged_bucket() {
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
-    for k in 0..40 {
-        ht.insert(&k, &(k * 7));
-    }
-    for k in (0..40).step_by(2) {
-        assert!(ht.remove(&k));
-    }
-    for k in 0..40 {
-        let want = if k % 2 == 0 { vec![] } else { vec![k * 7] };
-        assert_eq!(ht.get_value(&k), want, "key {k}");
-    }
-    ht.verify_integrity();
+    within("s2b_04_removing_one_key_does_not_disturb_its_neighbours_in_a_merged_bucket", || {
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, Shape { header_depth: 0, directory_depth: 9, bucket_size: 2 });
+        for k in 0..40 {
+            ht.insert(&k, &(k * 7));
+        }
+        for k in (0..40).step_by(2) {
+            assert!(ht.remove(&k));
+        }
+        for k in 0..40 {
+            let want = if k % 2 == 0 { vec![] } else { vec![k * 7] };
+            assert_eq!(ht.get_value(&k), want, "key {k}");
+        }
+        ht.verify_integrity();
+    });
 }
 
 #[test]
 fn s2b_04_merging_makes_room_for_keys_that_could_not_be_inserted_before() {
-    let shape = Shape { header_depth: 0, directory_depth: 2, bucket_size: 2 };
-    let keys = colliding_keys(shape, 3);
-    let (bpm, _) = pool_with(Policy::Fifo, 6);
-    let ht = table(&bpm, shape);
-    ht.insert(&keys[0], &0);
-    ht.insert(&keys[1], &1);
-    assert!(!ht.insert(&keys[2], &2));
-    assert!(ht.remove(&keys[0]));
-    assert!(ht.insert(&keys[2], &2), "a slot freed by a remove can be used");
+    within("s2b_04_merging_makes_room_for_keys_that_could_not_be_inserted_before", || {
+        let shape = Shape { header_depth: 0, directory_depth: 2, bucket_size: 2 };
+        let keys = colliding_keys(shape, 3);
+        let (bpm, _) = pool_with(Policy::Fifo, 6);
+        let ht = table(&bpm, shape);
+        ht.insert(&keys[0], &0);
+        ht.insert(&keys[1], &1);
+        assert!(!ht.insert(&keys[2], &2));
+        assert!(ht.remove(&keys[0]));
+        assert!(ht.insert(&keys[2], &2), "a slot freed by a remove can be used");
+    });
 }
 
 proptest! {
@@ -583,95 +653,101 @@ proptest! {
 
 #[test]
 fn s2b_05_threads_on_disjoint_keys_lose_nothing() {
-    let (bpm, _) = pool_with(Policy::Arc, 40);
-    let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 8 });
-    thread::scope(|scope| {
+    within("s2b_05_threads_on_disjoint_keys_lose_nothing", || {
+        let (bpm, _) = pool_with(Policy::Arc, 40);
+        let ht = table(&bpm, Shape { header_depth: 2, directory_depth: 9, bucket_size: 8 });
+        thread::scope(|scope| {
+            for t in 0..4 {
+                let ht = &ht;
+                scope.spawn(move || {
+                    for i in 0..300 {
+                        let k = t * 1000 + i;
+                        assert!(ht.insert(&k, &(k + 1)), "thread {t}: insert {k}");
+                    }
+                });
+            }
+        });
+        ht.verify_integrity();
         for t in 0..4 {
-            let ht = &ht;
-            scope.spawn(move || {
-                for i in 0..300 {
-                    let k = t * 1000 + i;
-                    assert!(ht.insert(&k, &(k + 1)), "thread {t}: insert {k}");
-                }
-            });
+            for i in 0..300 {
+                let k = t * 1000 + i;
+                assert_eq!(ht.get_value(&k), vec![k + 1], "key {k}");
+            }
         }
+        assert_nothing_pinned(&bpm);
     });
-    ht.verify_integrity();
-    for t in 0..4 {
-        for i in 0..300 {
-            let k = t * 1000 + i;
-            assert_eq!(ht.get_value(&k), vec![k + 1], "key {k}");
-        }
-    }
-    assert_nothing_pinned(&bpm);
 }
 
 #[test]
 fn s2b_05_inserts_removes_and_lookups_at_the_same_time() {
-    let (bpm, _) = pool_with(Policy::Arc, 40);
-    let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 9, bucket_size: 8 });
-    for k in 10_000..10_200 {
-        assert!(ht.insert(&k, &k)); // keys the readers expect to find throughout
-    }
-    thread::scope(|scope| {
-        for t in 0..3 {
-            let ht = &ht;
-            scope.spawn(move || {
-                let mut model = HashMap::new();
-                let mut rng = Lcg(5 + t as u64);
-                for _ in 0..1500 {
-                    let k = t * 1000 + rng.next(200) as i32;
-                    if rng.next(2) == 0 {
-                        assert_eq!(ht.insert(&k, &k), !model.contains_key(&k), "thread {t}: insert {k}");
-                        model.insert(k, k);
-                    } else {
-                        assert_eq!(ht.remove(&k), model.remove(&k).is_some(), "thread {t}: remove {k}");
-                    }
-                }
-                for k in t * 1000..t * 1000 + 200 {
-                    assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "thread {t}: final {k}");
-                }
-            });
+    within("s2b_05_inserts_removes_and_lookups_at_the_same_time", || {
+        let (bpm, _) = pool_with(Policy::Arc, 40);
+        let ht = table(&bpm, Shape { header_depth: 1, directory_depth: 9, bucket_size: 8 });
+        for k in 10_000..10_200 {
+            assert!(ht.insert(&k, &k)); // keys the readers expect to find throughout
         }
-        for _ in 0..2 {
-            let ht = &ht;
-            scope.spawn(move || {
-                for round in 0..20 {
-                    for k in 10_000..10_200 {
-                        assert_eq!(ht.get_value(&k), vec![k], "reader, round {round}: the stable key {k} must always be found");
+        thread::scope(|scope| {
+            for t in 0..3 {
+                let ht = &ht;
+                scope.spawn(move || {
+                    let mut model = HashMap::new();
+                    let mut rng = Lcg(5 + t as u64);
+                    for _ in 0..1500 {
+                        let k = t * 1000 + rng.next(200) as i32;
+                        if rng.next(2) == 0 {
+                            assert_eq!(ht.insert(&k, &k), !model.contains_key(&k), "thread {t}: insert {k}");
+                            model.insert(k, k);
+                        } else {
+                            assert_eq!(ht.remove(&k), model.remove(&k).is_some(), "thread {t}: remove {k}");
+                        }
                     }
-                }
-            });
-        }
+                    for k in t * 1000..t * 1000 + 200 {
+                        assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "thread {t}: final {k}");
+                    }
+                });
+            }
+            for _ in 0..2 {
+                let ht = &ht;
+                scope.spawn(move || {
+                    for round in 0..20 {
+                        for k in 10_000..10_200 {
+                            assert_eq!(ht.get_value(&k), vec![k], "reader, round {round}: the stable key {k} must always be found");
+                        }
+                    }
+                });
+            }
+        });
+        ht.verify_integrity();
+        assert_nothing_pinned(&bpm);
     });
-    ht.verify_integrity();
-    assert_nothing_pinned(&bpm);
 }
 
 #[test]
 fn s2b_05_a_long_single_threaded_run_agrees_with_a_hashmap() {
-    let shape = Shape { header_depth: 2, directory_depth: 6, bucket_size: 4 };
-    let (bpm, _) = pool_with(Policy::Arc, 8);
-    let ht = table(&bpm, shape);
-    let mut model: HashMap<i32, i32> = HashMap::new();
-    let mut rng = Lcg(77);
-    for step in 0..20_000 {
-        let k = rng.next(300) as i32;
-        match rng.next(5) {
-            0 | 1 => {
-                let want = !model.contains_key(&k) && insert_must_succeed(shape, &model, k);
-                assert_eq!(ht.insert(&k, &step), want, "step {step}: insert {k}");
-                if want {
-                    model.insert(k, step);
+    within("s2b_05_a_long_single_threaded_run_agrees_with_a_hashmap", || {
+        let shape = Shape { header_depth: 2, directory_depth: 6, bucket_size: 4 };
+        let (bpm, _) = pool_with(Policy::Arc, 8);
+        let ht = table(&bpm, shape);
+        let mut model: HashMap<i32, i32> = HashMap::new();
+        let mut rng = Lcg(77);
+        for step in 0..20_000 {
+            let k = rng.next(300) as i32;
+            match rng.next(5) {
+                0 | 1 => {
+                    let want = !model.contains_key(&k) && insert_must_succeed(shape, &model, k);
+                    assert_eq!(ht.insert(&k, &step), want, "step {step}: insert {k}");
+                    if want {
+                        model.insert(k, step);
+                    }
                 }
+                2 => assert_eq!(ht.remove(&k), model.remove(&k).is_some(), "step {step}: remove {k}"),
+                _ => assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "step {step}: get {k}"),
             }
-            2 => assert_eq!(ht.remove(&k), model.remove(&k).is_some(), "step {step}: remove {k}"),
-            _ => assert_eq!(ht.get_value(&k), model.get(&k).map(|&v| vec![v]).unwrap_or_default(), "step {step}: get {k}"),
+            if step % 1000 == 0 {
+                ht.verify_integrity();
+            }
         }
-        if step % 1000 == 0 {
-            ht.verify_integrity();
-        }
-    }
+    });
 }
 
 // ---- 2b-c1 and 2b-c2: challenges ------------------------------------------------------------------------------------------------------------
@@ -685,62 +761,72 @@ fn ch_config() -> ProptestConfig {
 
 #[test]
 fn s2b_c1_keys_are_found_after_any_number_of_splits() {
-    let mut s = LinearHashSet::new(2, 2.0);
-    for k in 0..500u64 {
-        assert!(s.insert(k * 7919));
-    }
-    assert_eq!(s.len(), 500);
-    for k in 0..500u64 {
-        assert!(s.contains(k * 7919), "key {} lost after the table grew", k * 7919);
-    }
-    assert!(!s.contains(1));
-    assert!(s.bucket_count() > 2, "500 keys at a load of at most 2 need more than 2 buckets");
+    within("s2b_c1_keys_are_found_after_any_number_of_splits", || {
+        let mut s = LinearHashSet::new(2, 2.0);
+        for k in 0..500u64 {
+            assert!(s.insert(k * 7919));
+        }
+        assert_eq!(s.len(), 500);
+        for k in 0..500u64 {
+            assert!(s.contains(k * 7919), "key {} lost after the table grew", k * 7919);
+        }
+        assert!(!s.contains(1));
+        assert!(s.bucket_count() > 2, "500 keys at a load of at most 2 need more than 2 buckets");
+    });
 }
 
 #[test]
 fn s2b_c1_the_table_grows_one_bucket_at_a_time_and_keeps_its_load() {
-    let mut s = LinearHashSet::new(1, 3.0);
-    let mut last = s.bucket_count();
-    for k in 0..400u64 {
-        s.insert(k);
-        assert!(s.bucket_count() - last <= 1, "one insert may split at most one bucket");
-        last = s.bucket_count();
-        assert!(s.load() <= 3.0 + 1e-9, "load {} after {} keys", s.load(), k + 1);
-    }
+    within("s2b_c1_the_table_grows_one_bucket_at_a_time_and_keeps_its_load", || {
+        let mut s = LinearHashSet::new(1, 3.0);
+        let mut last = s.bucket_count();
+        for k in 0..400u64 {
+            s.insert(k);
+            assert!(s.bucket_count() - last <= 1, "one insert may split at most one bucket");
+            last = s.bucket_count();
+            assert!(s.load() <= 3.0 + 1e-9, "load {} after {} keys", s.load(), k + 1);
+        }
+    });
 }
 
 #[test]
 fn s2b_c1_duplicates_and_removals() {
-    let mut s = LinearHashSet::new(4, 4.0);
-    assert!(s.insert(10));
-    assert!(!s.insert(10));
-    assert_eq!(s.len(), 1);
-    assert!(s.remove(10));
-    assert!(!s.remove(10));
-    assert!(s.is_empty() && !s.contains(10));
+    within("s2b_c1_duplicates_and_removals", || {
+        let mut s = LinearHashSet::new(4, 4.0);
+        assert!(s.insert(10));
+        assert!(!s.insert(10));
+        assert_eq!(s.len(), 1);
+        assert!(s.remove(10));
+        assert!(!s.remove(10));
+        assert!(s.is_empty() && !s.contains(10));
+    });
 }
 
 #[test]
 fn s2b_c1_a_split_moves_only_the_keys_of_one_bucket() {
-    // after every insert, every key is in the bucket the lookup rule names: find them all
-    let mut s = LinearHashSet::new(3, 1.5);
-    let keys: Vec<u64> = (0..300).map(|i| i * 104_729 + 13).collect();
-    for (n, &k) in keys.iter().enumerate() {
-        s.insert(k);
-        if n % 25 == 0 {
-            assert!(keys[..=n].iter().all(|&x| s.contains(x)), "a key went missing in the split after insert {n}");
+    within("s2b_c1_a_split_moves_only_the_keys_of_one_bucket", || {
+        // after every insert, every key is in the bucket the lookup rule names: find them all
+        let mut s = LinearHashSet::new(3, 1.5);
+        let keys: Vec<u64> = (0..300).map(|i| i * 104_729 + 13).collect();
+        for (n, &k) in keys.iter().enumerate() {
+            s.insert(k);
+            if n % 25 == 0 {
+                assert!(keys[..=n].iter().all(|&x| s.contains(x)), "a key went missing in the split after insert {n}");
+            }
         }
-    }
+    });
 }
 
 #[test]
 fn s2b_c1_the_first_bucket_of_a_round_is_split_first() {
-    let mut s = LinearHashSet::new(1, 1.0);
-    assert_eq!(s.bucket_count(), 1);
-    s.insert(1);
-    assert_eq!(s.bucket_count(), 1, "one key in one bucket is a load of 1, not over it");
-    s.insert(2);
-    assert_eq!(s.bucket_count(), 2, "two keys in one bucket is over: the single bucket splits");
+    within("s2b_c1_the_first_bucket_of_a_round_is_split_first", || {
+        let mut s = LinearHashSet::new(1, 1.0);
+        assert_eq!(s.bucket_count(), 1);
+        s.insert(1);
+        assert_eq!(s.bucket_count(), 1, "one key in one bucket is a load of 1, not over it");
+        s.insert(2);
+        assert_eq!(s.bucket_count(), 2, "two keys in one bucket is over: the single bucket splits");
+    });
 }
 
 proptest! {
@@ -768,50 +854,58 @@ proptest! {
 
 #[test]
 fn s2b_c2_a_new_directory_is_one_bucket_in_one_slot() {
-    let d = Directory::new();
-    assert_eq!((d.global_depth(), d.bucket_count(), d.local_depth(0)), (0, 1, 0));
-    assert_eq!(d.bucket_for(0xdead_beef), 0);
+    within("s2b_c2_a_new_directory_is_one_bucket_in_one_slot", || {
+        let d = Directory::new();
+        assert_eq!((d.global_depth(), d.bucket_count(), d.local_depth(0)), (0, 1, 0));
+        assert_eq!(d.bucket_for(0xdead_beef), 0);
+    });
 }
 
 #[test]
 fn s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit() {
-    let mut d = Directory::new();
-    let new = d.split(0);
-    assert_eq!((d.global_depth(), d.bucket_count(), new), (1, 2, 1));
-    assert_eq!((d.local_depth(0), d.local_depth(1)), (1, 1));
-    assert_eq!((d.bucket_for(0b10), d.bucket_for(0b11)), (0, 1), "the low bit decides");
+    within("s2b_c2_the_first_split_doubles_the_directory_and_separates_on_the_low_bit", || {
+        let mut d = Directory::new();
+        let new = d.split(0);
+        assert_eq!((d.global_depth(), d.bucket_count(), new), (1, 2, 1));
+        assert_eq!((d.local_depth(0), d.local_depth(1)), (1, 1));
+        assert_eq!((d.bucket_for(0b10), d.bucket_for(0b11)), (0, 1), "the low bit decides");
+    });
 }
 
 #[test]
 fn s2b_c2_splitting_a_shallow_bucket_does_not_double_the_directory() {
-    let mut d = Directory::new();
-    d.split(0); // depth 1, slots [0, 1]
-    let b = d.split(1); // bucket 1 -> depth 2, the directory doubles to 4 slots
-    assert_eq!(d.global_depth(), 2);
-    assert_eq!(d.slots_of(0), vec![0, 2], "bucket 0 stays at depth 1 and is still reached by both slots ending in 0");
-    assert_eq!((d.slots_of(1), d.slots_of(b)), (vec![1], vec![3]));
-    let before = d.global_depth();
-    d.split(0); // bucket 0 has local depth 1 < 2: no doubling
-    assert_eq!(d.global_depth(), before);
-    assert_eq!(d.local_depth(0), 2);
+    within("s2b_c2_splitting_a_shallow_bucket_does_not_double_the_directory", || {
+        let mut d = Directory::new();
+        d.split(0); // depth 1, slots [0, 1]
+        let b = d.split(1); // bucket 1 -> depth 2, the directory doubles to 4 slots
+        assert_eq!(d.global_depth(), 2);
+        assert_eq!(d.slots_of(0), vec![0, 2], "bucket 0 stays at depth 1 and is still reached by both slots ending in 0");
+        assert_eq!((d.slots_of(1), d.slots_of(b)), (vec![1], vec![3]));
+        let before = d.global_depth();
+        d.split(0); // bucket 0 has local depth 1 < 2: no doubling
+        assert_eq!(d.global_depth(), before);
+        assert_eq!(d.local_depth(0), 2);
+    });
 }
 
 #[test]
 fn s2b_c2_after_a_doubling_every_bucket_is_still_reached_by_the_slots_that_agree_with_it() {
-    let mut d = Directory::new();
-    d.split(0);
-    d.split(0);
-    d.split(1);
-    for h in 0u32..64 {
-        let b = d.bucket_for(h);
-        let depth = d.local_depth(b);
-        let mask = (1u32 << depth) - 1;
-        for h2 in 0u32..64 {
-            if h2 & mask == h & mask {
-                assert_eq!(d.bucket_for(h2), b, "hashes {h} and {h2} agree on their low {depth} bits and must share a bucket");
+    within("s2b_c2_after_a_doubling_every_bucket_is_still_reached_by_the_slots_that_agree_with_it", || {
+        let mut d = Directory::new();
+        d.split(0);
+        d.split(0);
+        d.split(1);
+        for h in 0u32..64 {
+            let b = d.bucket_for(h);
+            let depth = d.local_depth(b);
+            let mask = (1u32 << depth) - 1;
+            for h2 in 0u32..64 {
+                if h2 & mask == h & mask {
+                    assert_eq!(d.bucket_for(h2), b, "hashes {h} and {h2} agree on their low {depth} bits and must share a bucket");
+                }
             }
         }
-    }
+    });
 }
 
 proptest! {

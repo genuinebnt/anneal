@@ -49,7 +49,7 @@ What a guard stores: the pool and page id; the latch guard itself (`RwLockReadGu
 
 - A read guard pins the page and shows its bytes; many readers share a page; no guard when every frame is pinned.
 - Dropping a guard unpins; leaving a scope drops; `release` is idempotent; a released guard gives up the latch; each guard releases only its own pin.
-- A write guard changes the page; `get_data_mut` marks it dirty and looking does not; the change survives eviction; an untouched write guard leaves the page clean.
+- A write guard changes the page; `get_data_mut` marks it dirty and looking does not; the change survives eviction; an untouched write guard, and a read guard, leave the page clean.
 - A writer excludes everyone else until it is dropped.
 - For random sequences of guards taken and dropped in any order, pin counts, data and failures match the model.
 

@@ -438,6 +438,20 @@ fn s3b_04_marking_deleted_counts_once_and_keeps_the_bytes() {
 }
 
 #[test]
+fn s3b_04_marking_deleted_by_an_in_place_update_counts_too() {
+    let mut bytes = [0u8; BUSTUB_PAGE_SIZE];
+    let mut page = TablePage::new(&mut bytes[..]);
+    page.init();
+    let rid = Rid::new(PageId(1), page.insert_tuple(&meta(false), &blob(7, 30)).unwrap() as u32);
+    page.update_tuple_in_place_unsafe(&meta(true), &blob(8, 30), rid).unwrap();
+    assert_eq!(page.get_num_deleted_tuples(), 1, "a live tuple that becomes deleted through an in-place update is counted");
+    page.update_tuple_in_place_unsafe(&meta(true), &blob(9, 30), rid).unwrap();
+    assert_eq!(page.get_num_deleted_tuples(), 1, "an already deleted tuple is not counted again, however it is updated");
+    let (m, t) = page.get_tuple(rid).unwrap();
+    assert!(m.is_deleted && t.data() == &[9u8; 30][..], "the meta and the bytes of the last update are what is stored");
+}
+
+#[test]
 fn s3b_04_a_page_is_nothing_but_its_bytes() {
     let mut bytes = [0u8; BUSTUB_PAGE_SIZE];
     {

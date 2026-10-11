@@ -10,7 +10,7 @@ assertion names the behaviour it checks (0 bare assertions), most stages pair ex
 state a contract and leave the design open, and the stage-by-stage pass counts of the newest module behave exactly as intended
 (0, 7, 13, 21, 32 tests pass as the stages are solved).
 
-Three things need attention: **some tests miss mistakes in the edges of their own stage** (5 untested behaviours found, section 3),
+Three things need attention: **some tests miss mistakes in the edges of their own stage** (4 untested behaviours found, all now covered; section 3),
 **a bug that loops forever in the extendible hash table would hang a learner's run instead of failing** (section 3), and **two stages
 are far larger than the rest** (section 4). None is a reason to rework the course.
 
@@ -59,14 +59,15 @@ written by hand is most likely to have, so it is worth a wrapper.
 
 Every survivor was read by hand. Three are **equivalent** (no behaviour change, so not the tests' fault): a dead branch in
 `LockManager::try_lock`, an argument the function ignores (`get_next_tuple_offset`'s `_meta`), and a read loop that stops on an empty
-read. One changes **only the file size** (the disk manager grows its file one allocation later, using its spare page). That leaves
-**7 surviving mutants, which point at 5 untested behaviours**:
+read. One changes **only the file size** (the disk manager grows its file one allocation later, using its spare page). One is **by
+design** (an exact page fit: stage 3b-03 leaves the page layout to the learner and tests with generous bounds, so no layout-free test
+can demand it; my first reading called this a gap and was wrong). That leaves **6 surviving mutants, which point at 4 untested
+behaviours**:
 
 | behaviour no test pins | mutants that passed | where |
 |---|---|---|
 | **casting a string to a decimal at all**: a numeric string with a fraction, an exponent, or a value beyond the decimal range | 3 (every decimal parse failing; the fraction ignored; the range check off) | `types/value.rs`, stage 3a-02 |
 | a decimal exactly equal to the smallest value of the target type (`-127.0` to TINYINT casts, `-128.0` is the NULL encoding and does not) | 1 | `types/value.rs`, stage 3a-02 |
-| a tuple that would fit **exactly** (the page filled to the last byte) | 1 | `storage/page/table_page.rs`, stage 3b-03 |
 | marking a tuple deleted through the in-place update path counts it as deleted (the tests use that path only with `is_deleted: false`) | 1 | `storage/page/table_page.rs`, stage 3b-03 |
 | releasing a **read** guard must not mark the page dirty | 1 | `storage/page/page_guard.rs`, stage 1g-01 |
 
@@ -88,11 +89,15 @@ Both are deliberate: designing the page types is the lesson, and they are labell
 can stall for hours with only 6 tests of feedback. Size against label is otherwise sane (median 18 lines easy, 37 medium, 48 hard).
 Nine more stages are over 100 lines (3a-01, 2c-04, 3d-04, 0b-01, 3i-01, 3i-03, 3a-02, 4d-05, 4c-01).
 
-## 5. Recommendations, in order
+## 5. What was done, and the recommendations that remain
 
-1. **Add the missing tests** for the 5 behaviours to the owning stages (3a-02, 3b-03, 1g-01), and a timeout wrapper to the 2b tests,
-   as 2c has. Small and additive; each new test fails on its mutant and passes on the reference. Needs the template regenerated and
-   those stages re-verified (`course verify --stage`).
+1. ~~Add the missing tests~~ **Done 2026-10-11.** Seven tests: four in `stages_3a.rs` (text to decimal with fraction and exponent, no
+   digits is not a decimal, text beyond the decimal range, the end points of a type's range), one in `stages_3b.rs` (an in-place update
+   that deletes is counted), one in `stages_1g.rs` (a read guard leaves the page clean), and a `within(60 s)` wrapper on the 30 plain
+   tests and the model runner of `stages_2b.rs`. Checked three ways: all pass on the reference; each of the six mutants above now
+   **fails** the test written for it; and the hang mutant now fails with "timed out: ... a split or a merge that never ends?" in 127 s
+   instead of freezing. `course verify --stage` passes for 3a-02, 3b-04, 1g-01, 2b-02 and 2b-05. The stage pages' test summaries
+   mention the new checks.
 2. **Rerun the mutation check on the files not sampled** (the B+ tree and the buffer pool were only lightly sampled), then
    triage the same way. It is cheap once the scratch copy exists.
 3. **Name what the tests fix** in a short line beside "Your freedom" on the stages that pin shapes, depths, latch counts or pin

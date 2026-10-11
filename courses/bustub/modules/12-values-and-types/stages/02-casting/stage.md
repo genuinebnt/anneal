@@ -48,8 +48,8 @@ How you organise the conversions (one function per source type, one per target),
 ## Tests
 
 - Integer to integer: keeps the number or `OutOfRange` exactly when it does not fit (any widths); integer to decimal keeps it.
-- Decimal to integer truncates toward zero and checks the range.
-- A number survives text; text converts by its leading number; no digits is a `Conversion` error; boolean spellings.
+- Decimal to integer truncates toward zero and checks the range, including the end points of each type.
+- A number survives text; text converts by its leading number (a decimal reads its fraction and exponent and is range-checked); no digits is a `Conversion` error; boolean spellings.
 - NULL and impossible casts.
 
 ## Hints

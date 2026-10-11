@@ -306,6 +306,18 @@ fn s1g_01_an_untouched_write_guard_leaves_the_page_clean() {
 }
 
 #[test]
+fn s1g_01_a_read_guard_leaves_the_page_clean() {
+    let (bpm, disk) = pool(1);
+    let (a, b) = (bpm.new_page(), bpm.new_page());
+    drop(bpm.checked_read_page(a).unwrap());
+    let mut early = bpm.checked_read_page(a).unwrap();
+    early.release();
+    drop(early);
+    drop(bpm.checked_read_page(b).unwrap()); // evicts a
+    assert_eq!(disk.writes().len(), 0, "a read guard only looks: a page it released, by drop or by release, is clean and is not written back");
+}
+
+#[test]
 fn s1g_01_a_writer_excludes_everyone_else_until_it_is_dropped() {
     let (bpm, _) = pool(3);
     let page = bpm.new_page();

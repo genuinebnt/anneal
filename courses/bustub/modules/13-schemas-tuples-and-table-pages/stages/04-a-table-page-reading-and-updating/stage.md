@@ -44,7 +44,7 @@ Your layout (from the last stage), how you share slot-reading code between the t
 ## Tests
 
 - A page behaves like a `Vec` of `(meta, bytes)` under random inserts, reads, deletes, overwrites and refused resizes.
-- Marking deleted twice counts once; a deleted tuple keeps its bytes.
+- Marking deleted twice counts once, also through an in-place update; a deleted tuple keeps its bytes.
 - A page is nothing but its bytes: a copy reads the same.
 - A bad slot's error has kind `Invalid`.
 

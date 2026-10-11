@@ -276,6 +276,47 @@ fn s3a_02_a_null_becomes_the_null_of_the_target_and_impossible_casts_are_errors(
     assert!(Value::integer(5).cast_as(Invalid).is_err());
 }
 
+/// A string to a decimal reads the leading number with its fraction and its exponent (the contract of the stage page).
+#[test]
+fn s3a_02_text_converts_to_a_decimal_with_its_fraction_and_exponent() {
+    let cases: [(&str, f64); 6] = [("12.5", 12.5), ("-0.25", -0.25), ("3", 3.0), ("  7.5xyz", 7.5), ("1e3", 1000.0), ("2.5E-1", 0.25)];
+    for (text, want) in cases {
+        let got = Value::varchar(text).cast_as(Decimal).unwrap_or_else(|e| panic!("{text:?} as a decimal should be {want}, got the error {e}"));
+        assert_eq!(got.as_f64(), Some(want), "{text:?} as a decimal reads its fraction and exponent, not only its integer part");
+    }
+}
+
+/// No digits is a Conversion error for a decimal too: a lone point or sign is not a number, and neither is an exponent alone.
+#[test]
+fn s3a_02_text_with_no_digits_is_not_a_decimal() {
+    for text in [".", "-.", "+", "e5", ""] {
+        assert_eq!(kind(Value::varchar(text).cast_as(Decimal)), ExceptionType::Conversion, "{text:?} has no digits, so it is a Conversion error, not a zero");
+    }
+}
+
+/// A number beyond what a decimal can hold is OutOfRange, not an infinity.
+#[test]
+fn s3a_02_text_beyond_the_decimal_range_is_out_of_range() {
+    for text in ["1e400", "-1e400"] {
+        assert_eq!(kind(Value::varchar(text).cast_as(Decimal)), ExceptionType::OutOfRange, "{text:?} does not fit a decimal");
+    }
+    assert!(Value::varchar("1e300").cast_as(Decimal).is_ok(), "1e300 does fit a decimal");
+}
+
+/// The end points of a type's range are values: the smallest and the largest cast, the number just beyond each does not. (The smallest
+/// is one above the bit pattern kept for NULL.)
+#[test]
+fn s3a_02_a_decimal_at_the_end_of_a_types_range_fits_and_one_beyond_does_not() {
+    for to in [TinyInt, SmallInt, Integer] {
+        let (lo, hi) = range(to);
+        let (lo, hi) = (lo as f64, hi as f64);
+        assert_eq!(Value::decimal(lo).cast_as(to).unwrap().as_i64(), Some(lo as i64), "{lo} is the smallest {to:?} and fits");
+        assert_eq!(Value::decimal(hi).cast_as(to).unwrap().as_i64(), Some(hi as i64), "{hi} is the largest {to:?} and fits");
+        assert_eq!(kind(Value::decimal(lo - 1.0).cast_as(to)), ExceptionType::OutOfRange, "{} is below the smallest {to:?}", lo - 1.0);
+        assert_eq!(kind(Value::decimal(hi + 1.0).cast_as(to)), ExceptionType::OutOfRange, "{} is above the largest {to:?}", hi + 1.0);
+    }
+}
+
 // ---- 3a-03 · Comparing -----------------------------------------------------------------------------------------------------
 
 fn all_six(a: &Value, b: &Value) -> [CmpBool; 6] {
