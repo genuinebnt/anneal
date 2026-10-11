@@ -64,6 +64,14 @@ caption: The hand starts at A. A and B have their bit set, so the hand clears ea
 
 BusTub's classic replacer assignment asks for both so that you meet the trade-off yourself: LRU is simplest to reason about, CLOCK is the one that scales.
 
+## Invariants: what must always be true
+
+- **Only evictable frames are on the ring.** `unpin` adds a frame with its bit set; `pin` takes it off whatever its bit; `unpin` of a frame already on the ring only sets its bit and never adds a second copy.
+- **The hand points at a frame on the ring** (or the ring is empty). After a removal it neither skips the next frame nor points past the end: it moves back by one if the removed frame was before it, and wraps to 0 at the end.
+- **A sweep ends.** Each turn of the hand clears every bit it passes, so a non-empty ring yields a victim within two turns.
+- **An empty ring has no victim:** `victim()` returns `None` instead of looping.
+- **The ring never holds more frames than the replacer was made for.**
+
 ## In real code
 
 ### Using it: a complete, runnable CLOCK replacer

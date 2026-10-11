@@ -72,6 +72,14 @@ Only the **last K** timestamps matter, so each node keeps a `VecDeque<usize>` an
 > [!NOTE] What LRU-K does not fix
 > A page referenced twice by a scan (a join that revisits a block) looks hot. And LRU-K's tuning knob K is fixed: ARC (module 1e) adapts to the workload without one.
 
+## Invariants: what must always be true
+
+- **Fewer than K accesses means infinite distance,** and an infinite-distance frame is evicted before any frame with K or more accesses.
+- **The victim order is total.** Among infinite frames the oldest first access goes first; among finite ones the oldest K-th most recent access; the frame id is the last tie-break. Two runs over the same calls evict the same frames.
+- **Only the last K timestamps are kept,** so memory per frame is O(K), however many accesses it has.
+- **A frame that is not evictable is never chosen.** Pinned frames are outside the competition until they are unpinned.
+- **Timestamps come from a logical clock that only increases,** so "older" is always well defined.
+
 ## In real code
 
 ### Using it: a complete, runnable LRU-K

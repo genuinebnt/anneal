@@ -38,6 +38,13 @@ To merge `K` sorted runs, keep a cursor on each and repeatedly output the smalle
 
 Because databases cannot assume it. A query can sort a result larger than its share of memory; running out is not an option, so the sort spills to disk in a controlled way (and, as a bonus, tests can force it by using a small buffer pool).
 
+## Invariants: what must always be true
+
+- **Every run is sorted,** and merging sorted runs gives a sorted run that holds exactly the tuples of its inputs: nothing lost, nothing duplicated.
+- **Passes are `1 + ⌈log_K N⌉`,** each reading and writing every page once, and the last pass leaves exactly one run: the sorted output.
+- **Memory stays bounded.** A merge holds one input buffer per run being merged plus one output buffer, never the whole input; that is the point of sorting on disk.
+- **A merge ends when every run is exhausted,** and an exhausted run leaves the heap; a run is never read past its end.
+
 ## C++ comparison
 
 | C / C++ | Rust |

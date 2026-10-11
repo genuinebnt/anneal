@@ -29,6 +29,45 @@ caption: A hash join in two phases. Build: hash every right row on the join key 
 </svg>
 ```
 
+```svg
+caption: A hash join in two steps. Build: read the right side once and put each row with a non-NULL key into a table keyed on the join key. Probe: for each left row look its key up; a hit is output, a miss is not, and a NULL key is never looked up, because `NULL = x` is unknown. The cost is one pass over each side. (Animated: build, then probe.)
+<svg viewBox="0 0 760 330" role="img" aria-label="Right-side rows being built into a hash table, then left-side rows probing it, with one miss and one NULL key skipped">
+<style>
+@keyframes hj-b{0%,40%{opacity:1}46%,100%{opacity:.25}}
+@keyframes hj-p{0%,46%{opacity:.25}52%,92%{opacity:1}98%,100%{opacity:.25}}
+.hj-b{animation:hj-b 12s ease-in-out infinite}.hj-p{animation:hj-p 12s ease-in-out infinite}
+</style>
+<defs>
+<marker id="hj-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--dim)"/></marker>
+<marker id="hj-g" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--grn)"/></marker>
+<marker id="hj-r" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--bad)"/></marker>
+</defs>
+<text class="dim sm" x="30" y="28">left: probe side</text><text class="dim sm" x="300" y="28">hash table on the join key</text><text class="end dim sm" x="730" y="28">right: build side</text>
+<g class="hj-p">
+<rect class="blue" x="30" y="42" width="130" height="30" rx="4"/><text class="fg sm" x="42" y="62">dept_id 2</text>
+<rect class="blue" x="30" y="82" width="130" height="30" rx="4"/><text class="fg sm" x="42" y="102">dept_id 7</text>
+<rect class="never" x="30" y="122" width="130" height="30" rx="4"/><text class="dim sm" x="42" y="142">dept_id NULL</text>
+<rect class="blue" x="30" y="162" width="130" height="30" rx="4"/><text class="fg sm" x="42" y="182">dept_id 3</text>
+<path class="ln-g" d="M160 57 L298 57" marker-end="url(#hj-g)"/>
+<path style="stroke:var(--bad);stroke-width:1.6;fill:none;stroke-dasharray:4 3" d="M160 97 L230 97" marker-end="url(#hj-r)"/><text class="t-r sm" x="236" y="101">miss</text>
+<text class="dim sm" x="170" y="142">never probes (NULL)</text>
+<path class="ln-g" d="M160 177 L298 107" marker-end="url(#hj-g)"/>
+</g>
+<rect class="live" x="300" y="42" width="160" height="30" rx="4"/><text class="fg sm" x="312" y="62">2 → (2, eng)</text>
+<rect class="live" x="300" y="92" width="160" height="30" rx="4"/><text class="fg sm" x="312" y="112">3 → (3, ops)</text>
+<rect class="live" x="300" y="142" width="160" height="30" rx="4"/><text class="fg sm" x="312" y="162">5 → (5, hr)</text>
+<g class="hj-b">
+<rect class="hot" x="600" y="42" width="130" height="30" rx="4"/><text class="fg sm" x="612" y="62">(3, ops)</text>
+<rect class="hot" x="600" y="82" width="130" height="30" rx="4"/><text class="fg sm" x="612" y="102">(2, eng)</text>
+<rect class="hot" x="600" y="122" width="130" height="30" rx="4"/><text class="fg sm" x="612" y="142">(5, hr)</text>
+<path class="ln" d="M598 57 L462 107" marker-end="url(#hj-a)"/><path class="ln" d="M598 97 L462 57" marker-end="url(#hj-a)"/><path class="ln" d="M598 137 L462 157" marker-end="url(#hj-a)"/>
+</g>
+<text class="t-a sm hj-b" x="30" y="232">1 · build: read the right side once; every row with a non-NULL key goes into the table.</text>
+<text class="t-g sm hj-p" x="30" y="252">2 · probe: for each left row, look its key up. A hit is output, a miss is not, a NULL key is never looked up.</text>
+<text class="dim sm" x="30" y="292">output: (2, eng) and (3, ops). Work: one pass over each side, not |left| × |right| comparisons.</text>
+</svg>
+```
+
 ## Inner vs left join
 
 An **inner** join outputs only matching pairs. A **left** join outputs every left row: matched ones as above, and a left row with *no* match once, padded with NULLs on the right side. The NULLs have the right side's column types (`integer_null`, `varlen_null`). Right and full joins are the mirror image and need to remember which right rows were matched; BusTub supports inner and left only.
@@ -44,6 +83,14 @@ The predicate of a join is evaluated with SQL's three-valued logic; a pair is ou
 ## Choosing
 
 With no equality predicate (`a.x < b.y`) only nested loop works. With an equality, hash join is almost always faster for large inputs; an index join wins when the left side is small and the right is huge and indexed (a few probes beat building a table of millions). Optimizers choose by cost estimates; BusTub's rules choose by pattern (module 3h).
+
+## Invariants: what must always be true
+
+- **Every output row is a pair whose predicate is true.** Unknown is not true: a pair whose predicate evaluates to NULL is not output.
+- **Every satisfying pair is output exactly once,** whichever algorithm runs: nested loop, hash and index joins return the same rows, as a bag, in possibly different orders.
+- **A NULL key never matches,** not even another NULL. A hash join keeps rows with a NULL key out of its table and never probes with one.
+- **A left join outputs every left row at least once:** matched ones as pairs, an unmatched one once, padded with NULLs of the right side's column types.
+- **The inner side of a nested loop join is restartable.** Initialising it again gives the same rows from the start, once per outer row.
 
 ## C++ comparison
 
