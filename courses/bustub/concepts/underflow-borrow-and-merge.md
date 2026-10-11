@@ -557,4 +557,3 @@ fn random_inserts_and_removes_agree_with_a_btreeset_and_keep_every_rule() {
 - **Databases differ on purpose**: PostgreSQL's B-tree never merges underfull pages; it deletes a leaf only once it is *completely empty* and lets sparse pages be reused by later inserts (and `REINDEX` rebuilds). SQLite rebalances siblings eagerly. InnoDB merges a page with a neighbour when its fill drops below a configurable threshold (`MERGE_THRESHOLD`), a hysteresis that avoids merge/split ping-pong.
 - **Rust's `BTreeMap`** fixes underflow after `remove` by stealing from a sibling or merging (`fix_node_and_affected_ancestors`), the same two moves in memory.
 - **File systems** (Btrfs) keep their B-trees balanced the same way on delete.
-- **Interview classic**: "implement delete in a B-tree" is exactly this: borrow, then merge, then shrink the root.
