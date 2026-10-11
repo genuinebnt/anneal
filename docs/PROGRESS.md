@@ -13,10 +13,9 @@ Last updated: **2026-10-11** (after the 3k commit; see section 2).
 
 | What | State |
 |---|---|
-| Module **3k** (errors) | committed locally, **not pushed** until `anneal course verify --stage unlock` is green (log `/tmp/c2/unlock-verify.log`, scratch `/tmp/c2/work_unlock`). Then push and watch CI. |
-| Deploys of the CLI screens, 2c-06 pilot and concept figures | pushed earlier; check `gh run list`. When "Deploy to production" is green the owner runs `anneal self-update` to get the new CLI screens. |
+| Deploy of the latest pushes (3k, figures, interview removal) | pushed to master; CI was still running at the last look (`gh run list`). When "Deploy to production" is green the owner runs `anneal self-update` to get the new CLI screens (the installed build predates them). |
 | Learner journey | **done 2026-10-11**: `tools/course-journey.sh` (already existed) passed, 42 steps, 0 failures, against a throwaway app. |
-| Full `anneal course verify` after the 2c-05 fix | **not completed.** The last full run was killed by an IDE crash at 4c-08. Until then 3d-07 and 3h-04 each passed alone (164s and 185s) and 2c-05 passed under load (0 failures in 480 runs), but no complete green run exists since `1ccea220`. |
+| Full `anneal course verify` | **no complete green run since the 2c-05 fix** (the last was killed by an IDE crash at 4c-08). Passed alone: 3d-07, 3h-04, 2c-05. Module 3k was checked per stage (pass counts 0, 7, 13, 21, 32) and by `verify --stage unlock` (317 stages, 0 problems), **not** by the official full verify. Run it in the background, one build at a time. |
 | Mutation experiment on the stage tests | **paused** after 10 mutants (the run, and the IDE, were killed by memory pressure). Harness: `/tmp/c2/mut/mutate.py` (ephemeral). Rerun later with one build at a time. |
 | Owner decisions waiting | see section 4 |
 
