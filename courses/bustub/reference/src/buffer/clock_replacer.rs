@@ -1,14 +1,11 @@
-//! Port of `src/buffer/clock_replacer.cpp`: the CLOCK policy, an approximation of LRU that needs one bit per frame.
+//! The CLOCK policy: an approximation of LRU that needs one bit per frame.
 //!
-//! The evictable frames sit on a **ring** with a **hand** pointing at one of them. Each frame has a reference bit, set when the
-//! frame is unpinned.
+//! The evictable frames sit on a **ring** with a **hand** pointing at one of them; each has a reference bit.
 //!
-//! - `unpin(f)`: if `f` is on the ring, its bit is set (it keeps its place). Otherwise it joins the ring just **behind the hand**
-//!   (the last place the hand will reach) with its bit set.
-//! - `pin(f)`: `f` leaves the ring. The hand keeps pointing at the same frame; if `f` was the one under the hand, it moves on to
-//!   the next.
-//! - `victim()`: the hand sweeps. A frame with its bit set gets a second chance: the bit is cleared and the hand moves on. The first
-//!   frame found with its bit clear is removed and returned; the hand then points at the frame after it.
+//! - `unpin(f)` sets `f`'s bit if it is on the ring, otherwise adds it just **behind the hand** with its bit set.
+//! - `pin(f)` removes `f`. The hand keeps pointing at the same frame, or at the next one if `f` was under it.
+//! - `victim()` sweeps the hand, clearing set bits (a second chance), until it finds a frame with its bit clear. That frame is removed
+//!   and returned, and the hand points at the frame after it.
 
 use super::replacer::Replacer;
 use crate::common::config::FrameId;

@@ -1,5 +1,6 @@
-//! A tiny SQL shell, in the spirit of BusTub's `bustub-shell`: type SQL ending in `;`, see the result. `\dt` lists the tables, `\di` the
-//! indexes, `explain <query>;` shows the plan, `\q` quits. Run it with `cargo run --bin bustub_shell`. Given code.
+//! A small SQL shell: type a statement ending in `;` to run it.
+//!
+//! `\dt` lists the tables, `\di` the indexes, `explain <query>;` prints the plan and `\q` quits.
 
 use std::io::{self, BufRead, Write};
 

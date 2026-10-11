@@ -14,6 +14,7 @@ pub struct MirroredDisk {
 }
 
 impl MirroredDisk {
+    /// A mirror over two disks that hold the same pages.
     pub fn new(primary: Arc<dyn DiskIo>, secondary: Arc<dyn DiskIo>) -> MirroredDisk {
         todo!("1a-c1: two disks that keep the same pages")
     }

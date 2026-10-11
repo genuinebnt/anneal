@@ -13,6 +13,7 @@ pub struct PinTable {
 }
 
 impl PinTable {
+    /// A table in which no page is pinned.
     pub fn new() -> PinTable {
         // @begin 1f-c1
         PinTable { counts: BTreeMap::new() }
@@ -20,6 +21,7 @@ impl PinTable {
         // @end
     }
 
+    /// Adds a pin to `page` and returns its new count.
     pub fn pin(&mut self, page: u32) -> usize {
         // @begin 1f-c1
         let c = self.counts.entry(page).or_insert(0);
@@ -29,6 +31,11 @@ impl PinTable {
         // @end
     }
 
+    /// Removes a pin from `page` and returns the count left.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotPinned`] if the page has no pin.
     pub fn unpin(&mut self, page: u32) -> Result<usize, NotPinned> {
         // @begin 1f-c1
         match self.counts.get_mut(&page) {
@@ -46,6 +53,7 @@ impl PinTable {
         // @end
     }
 
+    /// The number of pins on `page`; 0 if it has none.
     pub fn count(&self, page: u32) -> usize {
         // @begin 1f-c1
         self.counts.get(&page).copied().unwrap_or(0)
@@ -57,6 +65,7 @@ impl PinTable {
         self.count(page) > 0
     }
 
+    /// The pages with at least one pin, in increasing order.
     pub fn pinned_pages(&self) -> Vec<u32> {
         // @begin 1f-c1
         self.counts.keys().copied().collect()

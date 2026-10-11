@@ -12,6 +12,7 @@ pub struct TimedLatch {
 }
 
 impl TimedLatch {
+    /// A latch that is free.
     pub fn new() -> TimedLatch {
         // @begin 1g-c4
         TimedLatch { held: Mutex::new(false), free: Condvar::new() }
@@ -19,6 +20,7 @@ impl TimedLatch {
         // @end
     }
 
+    /// Takes the latch if it is free, without waiting; returns whether it did.
     pub fn try_acquire(&self) -> bool {
         // @begin 1g-c4
         let mut held = self.held.lock().unwrap();

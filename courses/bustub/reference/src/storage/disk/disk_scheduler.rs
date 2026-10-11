@@ -1,8 +1,5 @@
-//! Port of `src/storage/disk/disk_scheduler.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database Group).
-//!
-//! The disk scheduler runs disk reads and writes on a background thread. Callers hand it requests and wait on a future when they
-//! need the result, so the buffer pool can start several I/Os and do other work meanwhile. How the scheduler and the requests
-//! are built is yours; the tests use only the public items in this file.
+//! The disk scheduler runs disk reads and writes on a background thread. Callers hand it requests and wait on a future when they need the result,
+//! so the buffer pool can start several I/Os and do other work meanwhile.
 
 use std::io;
 use std::sync::Arc;
@@ -26,9 +23,8 @@ pub type DiskResult = io::Result<Box<PageData>>;
 
 /// One read or write of a page.
 ///
-/// BusTub passes a `char *data` that the worker reads from or fills in, so the buffer is shared between two threads by convention.
-/// Here the request **owns** the buffer: a write carries the page to write; a read carries an empty buffer to fill. Either way the
-/// buffer comes back through the future when the request is done.
+/// The request **owns** its buffer: a write carries the page to write; a read carries an empty buffer to fill. Either way the buffer comes back
+/// through the future when the request is done.
 pub struct DiskRequest {
     // @begin 1b-03
     is_write: bool,
@@ -117,7 +113,7 @@ impl DiskScheduler {
         // @end
     }
 
-    /// A promise and its future, for building a request by hand. (BusTub's `CreatePromise()`.)
+    /// A promise and its future, for building a request by hand.
     pub fn create_promise(&self) -> (Promise<DiskResult>, Future<DiskResult>) {
         // @begin 1b-03
         promise()
@@ -125,7 +121,7 @@ impl DiskScheduler {
         // @end
     }
 
-    /// Frees a page on the disk. (BusTub's `DeallocatePage()`.)
+    /// Frees a page on the disk.
     pub fn deallocate_page(&self, page_id: PageId) {
         // @begin 1b-04
         self.disk.delete_page(page_id)

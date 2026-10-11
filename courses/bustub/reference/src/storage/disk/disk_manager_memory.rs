@@ -1,5 +1,4 @@
-//! Port of `src/storage/disk/disk_manager_memory.cpp`: disks that keep their pages in memory, for tests and for
-//! benchmarking the layers above without the file system in the way.
+//! Disks that keep their pages in memory, so that the layers above can be measured without the file system in the way.
 
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,8 +7,7 @@ use std::sync::Mutex;
 use super::disk_manager::DiskIo;
 use crate::common::config::{PageData, PageId, BUSTUB_PAGE_SIZE};
 
-/// A disk of fixed size: pages `0..capacity`, kept in one buffer. Writing a page id `>= capacity` panics ("ran out of
-/// disk space"), as BusTub's `BUSTUB_ASSERT` does.
+/// A disk of fixed size: pages `0..capacity`, kept in one buffer. Writing a page id `>= capacity` panics ("ran out of disk space").
 pub struct DiskManagerMemory {
     memory: Mutex<Vec<u8>>,
     page_capacity: usize,
@@ -17,6 +15,7 @@ pub struct DiskManagerMemory {
 }
 
 impl DiskManagerMemory {
+    /// A zeroed disk of `capacity` pages.
     pub fn new(capacity: usize) -> DiskManagerMemory {
         // @begin 1a-04
         DiskManagerMemory { memory: Mutex::new(vec![0; capacity * BUSTUB_PAGE_SIZE]), page_capacity: capacity, num_writes: AtomicUsize::new(0) }
@@ -65,8 +64,8 @@ impl DiskManagerMemory {
     }
 }
 
-/// A disk with no size limit, for tests: pages spring into existence, zeroed, when they are first written. Reading a
-/// page that was never written gives zeros. Deleting is a no-op.
+/// A disk with no size limit: pages spring into existence, zeroed, when they are first written. Reading a page that was never written gives zeros.
+/// Deleting is a no-op.
 pub struct DiskManagerUnlimitedMemory {
     pages: Mutex<Vec<Option<Box<PageData>>>>,
     num_writes: AtomicUsize,

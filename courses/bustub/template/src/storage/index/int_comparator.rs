@@ -1,10 +1,10 @@
-//! Port of `src/include/storage/index/int_comparator.h`.
+//! Comparing plain integers as index keys.
 
 use std::cmp::Ordering;
 
 use super::generic_key::KeyComparator;
 
-/// Compares plain integers. BusTub: `class IntComparator { auto operator()(int lhs, int rhs) const -> int { ... -1, 0, 1 } }`.
+/// Compares plain integers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IntComparator;
 

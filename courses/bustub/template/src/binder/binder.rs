@@ -1,6 +1,7 @@
-//! Port of `src/binder/*.cpp`. BusTub's binder walks PostgreSQL's parse tree; this one walks the syntax tree of `crate::sql`. The rules
-//! are BusTub's: names are matched case-insensitively, a column reference becomes a path `[table or alias, column]`, `*` expands to
-//! every column in scope, and a column that fits two tables is *ambiguous*. Given code.
+//! Name resolution: turns the syntax tree into a bound tree.
+//!
+//! Names match case-insensitively. A column reference resolves to the table (or alias) and column it names, `*` expands to every column
+//! in scope, and a column present in two tables is ambiguous.
 
 use super::bound_expression::{BoundExpression, BoundWindow, WindowBoundary};
 use super::bound_order_by::{BoundOrderBy, OrderByNullType, OrderByType};

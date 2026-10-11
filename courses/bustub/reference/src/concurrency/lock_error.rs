@@ -1,4 +1,4 @@
-//! Why a lock request or release was refused. Given code.
+//! Why a lock request or release was refused.
 
 use std::fmt;
 

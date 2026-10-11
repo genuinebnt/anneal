@@ -1,5 +1,4 @@
-//! The part of a B+ tree page that every kind of page shares (BusTub's `BPlusTreePage`). What a page stores and where is yours: the tree module
-//! names these types, so the template only points at where they go.
+//! The part of a B+ tree page that every kind of page shares.
 
 // @begin 2c-01
 use super::page_bytes::*;

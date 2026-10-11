@@ -1,4 +1,4 @@
-//! Port of `projection_executor.cpp`: computes the output expressions for each tuple of the child. Given code.
+//! Computes the output expressions for each tuple of the child.
 
 use super::abstract_executor::{Executor, ExecutorBox};
 use crate::catalog::schema::Schema;

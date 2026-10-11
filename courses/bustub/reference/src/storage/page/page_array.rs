@@ -1,6 +1,5 @@
-//! An array of fixed-size entries stored in a page: the safe Rust version of the C++ "flexible array member" that BusTub's bucket
-//! and B+ tree pages end with (`MappingType array_[0];`). The array doesn't know how many entries are live (the page's header
-//! says), so operations that shift entries take the current length.
+//! An array of fixed-size entries stored in a page. The array does not know how many entries are live (the page's header says), so operations
+//! that shift entries take the current length.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;

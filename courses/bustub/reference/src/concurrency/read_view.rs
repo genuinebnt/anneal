@@ -12,6 +12,7 @@ pub struct ReadView {
 }
 
 impl ReadView {
+    /// A snapshot for transaction `own_id`: `active_ids` are the transactions that were running, `next_id` the next id to be handed out.
     pub fn new(own_id: u64, active_ids: &[u64], next_id: u64) -> ReadView {
         // @begin 4a-c1
         ReadView { own: own_id, active: active_ids.iter().copied().collect(), next_id }

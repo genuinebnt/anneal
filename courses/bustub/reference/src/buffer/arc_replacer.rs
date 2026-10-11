@@ -1,13 +1,12 @@
-//! Port of `src/buffer/arc_replacer.cpp`: the ARC replacement policy (Megiddo and Modha, FAST 2003), as BusTub specifies it.
+//! The ARC replacement policy (Megiddo and Modha, FAST 2003).
 //!
-//! ARC keeps four lists, each ordered from the **oldest** entry to the **newest**.
+//! ARC keeps four lists, each ordered from the **oldest** entry to the **newest**:
 //!
-//! - `mru` holds the live frames that have been seen **once** recently; `mfu` holds the live frames seen **at least twice**.
+//! - `mru` holds the live frames seen **once** recently; `mfu` the live frames seen **at least twice**.
 //! - `mru_ghost` and `mfu_ghost` remember the page ids (not the data) of pages recently evicted from `mru` and `mfu`.
 //!
-//! A hit on a ghost tells ARC which side it evicted too eagerly, and it moves the **target size** `p` of `mru`. So ARC adapts
-//! between recency-heavy and frequency-heavy workloads, and a scan cannot flush the frequently used pages. The rules are written out
-//! in the stage pages and checked by the tests through `record_access`, `set_evictable`, `evict`, `remove` and `size` alone.
+//! A hit on a ghost shows which side was evicted too eagerly and moves the **target size** `p` of `mru`. The policy adapts between
+//! recency-heavy and frequency-heavy workloads, and a scan cannot flush the frequently used pages.
 
 // @begin 1e-01
 use std::collections::HashMap;

@@ -8,6 +8,7 @@ pub struct OpTime {
     pub exclusive_ms: f64,
 }
 
+/// The time each operator spent itself, from the inclusive times of an `EXPLAIN ANALYZE` text: its own time minus its direct children's, never below 0.
 pub fn exclusive_times(analysis: &str) -> Vec<OpTime> {
     todo!("3i-c5: parse each line (indent, text, time); exclusive = inclusive minus the inclusive of the direct children, at least 0")
 }

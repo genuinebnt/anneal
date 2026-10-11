@@ -1,5 +1,6 @@
 //! Combining the row ids of two index scans.
 
+/// The ids in `a` or `b`, in order, an id that is in both once. Both inputs are sorted.
 pub fn union_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     // @begin 3e-c4
     let (mut i, mut j) = (0, 0);
@@ -20,6 +21,7 @@ pub fn union_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     // @end
 }
 
+/// The ids in both `a` and `b`, in order.
 pub fn intersect_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     // @begin 3e-c4
     let (mut i, mut j) = (0, 0);
@@ -40,6 +42,7 @@ pub fn intersect_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     // @end
 }
 
+/// The ids of `a` that `b` does not have, in order.
 pub fn difference_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     // @begin 3e-c4
     let mut j = 0;

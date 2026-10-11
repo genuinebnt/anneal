@@ -13,6 +13,7 @@ pub struct LockQueue {
 }
 
 impl LockQueue {
+    /// A queue with no holder.
     pub fn new() -> LockQueue {
         // @begin 4d-02
         LockQueue { holders: Vec::new() }
@@ -62,6 +63,7 @@ impl LockQueue {
         // @end
     }
 
+    /// The mode `txn` holds, if any.
     pub fn mode_of(&self, txn: TxnId) -> Option<LockMode> {
         // @begin 4d-02
         self.holders.iter().find(|&&(t, _)| t == txn).map(|&(_, m)| m)

@@ -1,9 +1,8 @@
-//! Port of `src/include/storage/index/index.h` and `b_plus_tree_index.cpp`: what the rest of the engine sees of an index. An `Index` maps
-//! a **key tuple** (the indexed columns of a row) to the [`Rid`] of the row. The B+ tree of module 2c stores fixed-size byte keys
-//! ([`GenericKey`]), so this layer converts: a key tuple becomes the bytes of a `GenericKey<N>`, and a comparator that knows the key's
-//! schema orders those bytes by their column values, left to right (BusTub's `GenericComparator`).
+//! What the rest of the engine sees of an index. An `Index` maps a **key tuple** (the indexed columns of a row) to the [`Rid`] of the row. The B+
+//! tree stores fixed-size byte keys ([`GenericKey`]), so this layer converts: a key tuple becomes the bytes of a `GenericKey<N>`, and a comparator
+//! that knows the key's schema orders those bytes by their column values, left to right.
 //!
-//! BusTub only indexes INTEGER columns (the keys are 4 bytes per column), which is what this port supports.
+//! Only INTEGER columns are indexed, at 4 bytes per column.
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -17,7 +16,7 @@ use crate::common::rid::Rid;
 use crate::storage::table::tuple::Tuple;
 use crate::types::value::Value;
 
-/// The kind of index. BusTub also has hash indexes and two in-memory STL ones; this course has the B+ tree.
+/// The kind of index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexType {
     BPlusTreeIndex,
@@ -69,7 +68,7 @@ impl IndexMetadata {
 pub trait Index: Send + Sync {
     fn metadata(&self) -> &IndexMetadata;
 
-    /// Adds `key -> rid`. `false` if the key is already there (the tree keeps unique keys; BusTub's catalog ignores the refusal).
+    /// Adds `key -> rid`. `false` if the key is already there: keys are unique.
     fn insert_entry(&self, key: &Tuple, rid: Rid) -> bool;
 
     /// Removes the entry for `key`, if there is one.
@@ -90,13 +89,13 @@ pub fn generic_key_from_tuple<const N: usize>(tuple: &Tuple) -> GenericKey<N> {
     todo!("3c-03: a zeroed key with the tuple's bytes at the start (panic if the tuple is longer than N)")
 }
 
-/// Reads column `column_idx` of a key as a value, using the key's schema (BusTub's `GenericKey::ToValue`).
+/// Reads column `column_idx` of a key as a value, using the key's schema.
 pub fn key_to_value<const N: usize>(key: &GenericKey<N>, schema: &Schema, column_idx: u32) -> Value {
     let column = schema.column(column_idx);
     Value::deserialize_from(&key.data[column.offset() as usize..], column.type_id()).expect("a key column has a valid type")
 }
 
-/// Orders keys by their columns, left to right, comparing values (BusTub's `GenericComparator<N>(key_schema)`).
+/// Orders keys by their columns, left to right, comparing values.
 #[derive(Clone)]
 pub struct SchemaComparator<const N: usize> {
     key_schema: Arc<Schema>,
@@ -114,7 +113,7 @@ impl<const N: usize> KeyComparator<GenericKey<N>> for SchemaComparator<N> {
     }
 }
 
-/// An index backed by a B+ tree (module 2c) with `N`-byte keys.
+/// An index backed by a B+ tree with `N`-byte keys.
 pub struct BPlusTreeIndex<'a, const N: usize> {
     metadata: IndexMetadata,
     tree: BPlusTree<'a, GenericKey<N>, Rid, SchemaComparator<N>>,

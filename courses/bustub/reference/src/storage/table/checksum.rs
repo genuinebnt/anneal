@@ -6,6 +6,7 @@ pub enum SealError {
     Mismatch,
 }
 
+/// The CRC-32 (IEEE) of `data`: a 256-entry table, then one lookup per byte.
 pub fn crc32(data: &[u8]) -> u32 {
     // @begin 3b-c4
     let mut table = [0u32; 256];
@@ -25,6 +26,7 @@ pub fn crc32(data: &[u8]) -> u32 {
     // @end
 }
 
+/// `payload` followed by its CRC-32 in 4 little-endian bytes.
 pub fn seal(payload: &[u8]) -> Vec<u8> {
     // @begin 3b-c4
     let mut out = payload.to_vec();
@@ -34,6 +36,8 @@ pub fn seal(payload: &[u8]) -> Vec<u8> {
     // @end
 }
 
+/// The payload of a sealed message if its stored CRC matches it. `Err(TooShort)` for fewer than 4 bytes, `Err(Mismatch)` for a payload that was
+/// changed.
 pub fn unseal(bytes: &[u8]) -> Result<&[u8], SealError> {
     // @begin 3b-c4
     if bytes.len() < 4 {

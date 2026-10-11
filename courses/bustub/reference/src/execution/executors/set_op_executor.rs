@@ -1,8 +1,8 @@
-//! `UNION`, `INTERSECT` and `EXCEPT`, each with and without `ALL`. Module 3j.
+//! `UNION`, `INTERSECT` and `EXCEPT`, each with and without `ALL`.
 //!
-//! Rows are compared as *values*, and two NULLs are the same value here (unlike in `WHERE a = b`): `select null union select null` is
-//! one row. Without `ALL` the result has no duplicates; with `ALL` rows are counted: `INTERSECT ALL` keeps a row as often as both sides
-//! have it (the smaller count), `EXCEPT ALL` as often as the left has it more than the right.
+//! Rows are compared as *values*, and two NULLs are the same value here (unlike in `WHERE a = b`): `select null union select null` is one row.
+//! Without `ALL` the result has no duplicates; with `ALL` rows are counted: `INTERSECT ALL` keeps a row as often as both sides have it (the smaller
+//! count), `EXCEPT ALL` as often as the left has it more than the right.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

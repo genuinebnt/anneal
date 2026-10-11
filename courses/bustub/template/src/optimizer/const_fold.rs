@@ -53,6 +53,9 @@ pub fn eval(e: &Expr, row: &[i64]) -> Option<Val> {
     })
 }
 
+/// Simplifies `e` without changing its value: subtrees with no column are evaluated, and the identities `x + 0`, `x * 1`, `x * 0`, `x AND TRUE`,
+/// `x AND FALSE`, `x OR FALSE`, `x OR TRUE` and `NOT NOT x` are applied bottom-up. A subtree whose evaluation fails (a type error, an overflow)
+/// is left as it is.
 pub fn fold(e: &Expr) -> Expr {
     todo!("3h-c1: fold the children, evaluate what has no column, then apply the identities")
 }

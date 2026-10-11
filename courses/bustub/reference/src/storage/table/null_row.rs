@@ -12,6 +12,7 @@ pub enum Ty {
     Text,
 }
 
+/// A row as bytes: a bitmap of the NULL columns (bit `i` set for a NULL column `i`), then each non-NULL value in column order.
 pub fn encode_row(row: &[Option<Cell>]) -> Vec<u8> {
     // @begin 3b-c1
     let mut out = vec![0u8; row.len().div_ceil(8)];
@@ -34,6 +35,7 @@ pub fn encode_row(row: &[Option<Cell>]) -> Vec<u8> {
     // @end
 }
 
+/// The row [`encode_row`] wrote, given the column types; `None` for anything inconsistent.
 pub fn decode_row(bytes: &[u8], types: &[Ty]) -> Option<Vec<Option<Cell>>> {
     // @begin 3b-c1
     let bm = types.len().div_ceil(8);

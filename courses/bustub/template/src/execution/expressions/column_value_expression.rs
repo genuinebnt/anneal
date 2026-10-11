@@ -1,4 +1,4 @@
-//! Port of `column_value_expression.h`: "the `col_idx`th column of the `tuple_idx`th input".
+//! The `col_idx`th column of the `tuple_idx`th input.
 
 use std::any::Any;
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-//! A recursive-descent parser for the SQL that BusTub's shell understands. The expression grammar (3d-05) is yours; the rest is given.
+//! A recursive-descent parser for the SQL that the shell understands.
 
 use super::ast::*;
 use super::lexer::{parse_error, tokenize, Token};
@@ -41,7 +41,7 @@ pub fn parse_expr(sql: &str) -> Result<Expr> {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    /// How many `?` placeholders were read so far (module 3i).
+    /// How many `?` placeholders were read so far.
     params: usize,
 }
 
@@ -660,6 +660,7 @@ impl Parser {
     // ---- expressions --------------------------------------------------------------------------------------------------------
 
     // @begin 3d-05
+    /// Parses an expression with SQL's precedence, loosest first: `OR`, `AND`, `NOT`, comparison and `IS [NOT] NULL`, `+ - ||`, `* / %`, unary minus.
     pub fn expr(&mut self) -> P<Expr> {
         self.or_expr()
     }
@@ -806,6 +807,7 @@ impl Parser {
         }
         self.primary()
     }
+    //~ /// Parses an expression with SQL's precedence, loosest first: `OR`, `AND`, `NOT`, comparison and `IS [NOT] NULL`, `+ - ||`, `* / %`, unary minus.
     //~ pub fn expr(&mut self) -> P<Expr> {
     //~     todo!("3d-05: or, and, not, comparison and IS [NOT] NULL, + - ||, * / %, unary minus; atoms come from self.primary()")
     //~ }

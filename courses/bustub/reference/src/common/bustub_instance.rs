@@ -1,11 +1,10 @@
-//! Port of `src/common/bustub_instance.cpp` and `bustub_ddl.cpp`: a whole database in one object: disk, buffer pool and catalog, and
-//! `execute_sql`, which takes SQL text and writes the result. Given code.
+//! A whole database in one object: disk, buffer pool and catalog, and `execute_sql`, which takes SQL text and writes the result.
 //!
-//! A query goes through the stages of the course: the **parser** (`crate::sql`) makes a syntax tree, the **binder** resolves its names,
-//! the **planner** makes a plan, the **optimizer** rewrites the plan, and the **execution engine** runs it.
+//! A query goes through the **parser** (`crate::sql`), which makes a syntax tree; the **binder**, which resolves its names; the **planner**,
+//! which makes a plan; the **optimizer**, which rewrites it; and the **execution engine**, which runs it.
 //!
-//! The buffer pool is leaked (`Box::leak`) so that the catalog, which borrows it, can live in the same struct: an instance lives as
-//! long as the program, as BusTub's shell does. A test that makes thousands of instances should reuse them.
+//! The buffer pool is leaked (`Box::leak`) so that the catalog, which borrows it, can live in the same struct. Every instance keeps its
+//! pool for the life of the program, so reuse instances.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -85,7 +84,7 @@ impl BusTubInstance {
         self.execute_sql_in(sql, writer, check_options, None)
     }
 
-    /// Runs the SQL inside `txn` (module 4): reads see the versions `txn` can see, writes leave versions behind for the others.
+    /// Runs the SQL inside `txn`: reads see the versions `txn` can see, and writes leave versions behind for the others.
     pub fn execute_sql_txn(&self, sql: &str, writer: &mut dyn ResultWriter, txn: &Arc<Transaction>) -> Result<bool> {
         self.execute_sql_in(sql, writer, None, Some(txn))
     }

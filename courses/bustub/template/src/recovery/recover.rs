@@ -34,7 +34,7 @@ pub struct Analysis {
     pub losers: Vec<TxnId>,
 }
 
-/// Reads the records and decides who finished and who did not (and where redo starts: stage 7 moves it past the last checkpoint).
+/// Reads the records and decides who finished and who did not, and where redo starts: at record 0, or at the last checkpoint.
 pub fn analyse(records: &[(Lsn, LogRecord)]) -> Analysis {
     todo!("4c-05: who appears in the log and never finished (Commit or Abort); redo starts at record 0")
 }

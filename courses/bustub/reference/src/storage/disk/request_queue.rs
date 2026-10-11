@@ -33,6 +33,7 @@ impl<T> Ord for Entry<T> {
 // @end
 
 impl<T> RequestQueue<T> {
+    /// An empty queue.
     pub fn new() -> RequestQueue<T> {
         // @begin 1b-c3
         RequestQueue { items: std::collections::BinaryHeap::new(), arrivals: 0 }
@@ -40,6 +41,7 @@ impl<T> RequestQueue<T> {
         // @end
     }
 
+    /// Adds `item` with `priority`; a larger priority is more urgent.
     pub fn push(&mut self, priority: u8, item: T) {
         // @begin 1b-c3
         self.items.push((priority, std::cmp::Reverse(self.arrivals), Entry(item)));
@@ -48,6 +50,7 @@ impl<T> RequestQueue<T> {
         // @end
     }
 
+    /// Removes and returns the most urgent item, the oldest among equals.
     pub fn pop(&mut self) -> Option<T> {
         // @begin 1b-c3
         self.items.pop().map(|(_, _, Entry(item))| item)
@@ -55,6 +58,7 @@ impl<T> RequestQueue<T> {
         // @end
     }
 
+    /// The priority of the item `pop` would return; `None` when the queue is empty.
     pub fn peek_priority(&self) -> Option<u8> {
         // @begin 1b-c3
         self.items.peek().map(|(p, _, _)| *p)
@@ -62,6 +66,7 @@ impl<T> RequestQueue<T> {
         // @end
     }
 
+    /// The number of items waiting.
     pub fn len(&self) -> usize {
         // @begin 1b-c3
         self.items.len()

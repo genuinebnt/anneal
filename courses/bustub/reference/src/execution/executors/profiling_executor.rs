@@ -1,5 +1,5 @@
-//! A wrapper that measures another executor for `EXPLAIN ANALYZE`: it passes every call through and records, in the node's
-//! [`NodeStats`], how often it was initialised, how many batches and rows it produced and how long the calls took. Module 3i.
+//! A wrapper that measures another executor for `EXPLAIN ANALYZE`: it passes every call through and records, in the node's [`NodeStats`], how often
+//! it was initialised, how many batches and rows it produced and how long the calls took.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

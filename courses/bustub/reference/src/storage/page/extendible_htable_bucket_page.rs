@@ -1,5 +1,4 @@
-//! Port of `src/storage/page/extendible_htable_bucket_page.cpp`: the bottom level. A bucket is a small unsorted array of
-//! `(key, value)` pairs. Keys are unique.
+//! The bottom level of an extendible hash table. A bucket is a small unsorted array of `(key, value)` pairs. Keys are unique.
 //!
 //! ```text
 //! | size u32 | max_size u32 | (key, value) | (key, value) | ... |

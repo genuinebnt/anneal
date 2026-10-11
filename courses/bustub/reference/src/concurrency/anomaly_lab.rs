@@ -111,7 +111,7 @@ pub fn phantom(db: &mut LabDb) -> bool {
     // @end
 }
 
-/// Your prediction: can `anomaly` happen at `level`? The tests compare it with what the scenarios observed.
+/// Whether `anomaly` can occur under `level`.
 pub fn possible(level: Level, anomaly: Anomaly) -> bool {
     // @begin 4d-c7
     use Anomaly::*;

@@ -13,6 +13,7 @@ pub struct ReadOnlySession<'a> {
 }
 
 impl<'a> ReadOnlySession<'a> {
+    /// Wraps `session`.
     pub fn new(session: Session<'a>) -> ReadOnlySession<'a> {
         // @begin 4e-c6
         ReadOnlySession { inner: session }
@@ -20,6 +21,7 @@ impl<'a> ReadOnlySession<'a> {
         // @end
     }
 
+    /// The wrapped session. Statements run through it are not checked.
     pub fn inner(&mut self) -> &mut Session<'a> {
         // @begin 4e-c6
         &mut self.inner
@@ -27,6 +29,11 @@ impl<'a> ReadOnlySession<'a> {
         // @end
     }
 
+    /// Runs `sql` if none of its statements changes data or schema.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the whole text, running nothing, with an `Invalid` exception naming the first kind of statement that would change something.
     pub fn execute(&mut self, sql: &str) -> Result<Vec<String>> {
         // @begin 4e-c6
         for statement in parser::parse(sql)? {

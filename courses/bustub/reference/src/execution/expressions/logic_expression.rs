@@ -1,4 +1,4 @@
-//! Port of `logic_expression.h`: `left AND right` and `left OR right` in three-valued logic.
+//! `left AND right` and `left OR right` in three-valued logic.
 
 use std::any::Any;
 use std::sync::Arc;

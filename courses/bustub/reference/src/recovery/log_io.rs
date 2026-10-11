@@ -1,5 +1,4 @@
-//! Where the log lives: an append-only byte stream that survives a crash once `append` has returned. Given code. The disk manager of
-//! module 1a is one (its log file); the tests have another that can "crash".
+//! Where the log lives: an append-only byte stream that survives a crash once `append` has returned.
 
 use std::fs;
 use std::io;

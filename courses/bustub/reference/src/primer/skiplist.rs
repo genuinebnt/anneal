@@ -1,9 +1,9 @@
-//! Port of `src/include/primer/skiplist.h` and `src/primer/skiplist.cpp`: an ordered set as a **skip list**, a linked list with express
-//! lanes. Every node has a random height; a node of height `h` is linked into the lists of levels `0..h`; searching starts on the top
-//! level and drops down a level whenever the next node is too far. Expected `O(log n)` search, insert and erase, without rebalancing.
+//! An ordered set as a **skip list**, a linked list with express lanes. Every node has a random height; a node of height `h` is linked into the
+//! lists of levels `0..h`; searching starts on the top level and drops down a level whenever the next node is too far. Expected `O(log n)` search,
+//! insert and erase, without rebalancing.
 //!
-//! C++ links nodes with `shared_ptr`. Here the nodes live in a `Vec` (an arena) and a link is the **index** of the next node, which is
-//! how Rust usually builds linked structures without `Rc<RefCell<..>>`. The whole list is behind one reader-writer lock.
+//! The nodes live in a `Vec` (an arena) and a link is the **index** of the next node, which is how Rust usually builds linked structures without
+//! `Rc<RefCell<..>>`. The whole list is behind one reader-writer lock.
 
 use std::sync::RwLock;
 
@@ -120,8 +120,8 @@ impl<K: Clone + Ord + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED
 }
 
 impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, SEED> {
-    /// An empty list ordered by `compare` ("is `a` before `b`?"), like the `Compare` template argument of the C++ class. The random
-    /// generator is `Mt19937::new(SEED)` (module `mt19937`, given).
+    /// An empty list ordered by `compare` ("is `a` before `b`?"). The random generator is a fixed-seed `Mt19937`, so the shape of a list depends only
+    /// on the operations applied to it.
     pub fn with_compare(compare: impl Fn(&K, &K) -> bool + Send + Sync + 'static) -> Self {
         // @begin 0b-01
         let header = SkipNode { key: None, links: vec![None; MAX_HEIGHT] };
@@ -134,6 +134,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
         self.size() == 0
     }
 
+    /// The number of elements.
     pub fn size(&self) -> usize {
         // @begin 0b-01
         self.inner.read().unwrap().size
@@ -210,7 +211,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
         // @end
     }
 
-    /// The keys with their heights, in order (for tests and for printing).
+    /// The keys with their heights, in order.
     pub fn nodes(&self) -> Vec<(K, usize)> {
         // @begin 0b-01
         let inner = self.inner.read().unwrap();
@@ -225,7 +226,7 @@ impl<K: Clone + Send + Sync + 'static, const MAX_HEIGHT: usize, const SEED: u32>
         // @end
     }
 
-    /// The keys linked on `level`, in order (for tests).
+    /// The keys linked on `level`, in order.
     pub fn level(&self, level: usize) -> Vec<K> {
         // @begin 0b-01
         let inner = self.inner.read().unwrap();

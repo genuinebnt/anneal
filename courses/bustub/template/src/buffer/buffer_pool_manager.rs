@@ -1,12 +1,9 @@
-//! Port of `src/buffer/buffer_pool_manager.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database Group).
+//! A fixed number of pages cached in memory.
 //!
-//! The buffer pool keeps a fixed number of pages in memory. A page is read from disk into a **frame** when it is first needed;
-//! callers **pin** a page while they use it, so it can't be taken away; when a frame is needed and none is free, the
-//! replacer picks a page nobody has pinned, which is written back first if it was modified.
+//! A page is read into a **frame** when first needed. Callers **pin** a page while they use it, so it cannot be taken away; when a frame
+//! is needed and none is free, the replacer picks a page nobody has pinned, which is written back first if it was modified.
 //!
-//! This module has the textbook interface (`fetch_page` / `unpin_page`, as in BusTub's earlier years). The next module wraps it in
-//! RAII page guards, the interface BusTub's current tests use. What is inside the pool is yours; the tests use the public methods only,
-//! and a pool works with **any** [`FrameReplacer`]: yours from module 1e or 1d, or one of your own.
+//! The pool works with any [`FrameReplacer`].
 
 use std::sync::{Arc, RwLock};
 
@@ -23,7 +20,7 @@ pub struct BufferPoolManager {
 }
 
 impl BufferPoolManager {
-    /// A pool of `num_frames` frames, all free, on top of `disk`, evicting with the ARC replacer of module 1e.
+    /// A pool of `num_frames` free frames over `disk`, evicting with an ARC replacer.
     pub fn new(num_frames: usize, disk: Arc<dyn DiskIo>) -> BufferPoolManager {
         todo!("1f-01: a pool with the ARC replacer; `with_replacer` does the work")
     }

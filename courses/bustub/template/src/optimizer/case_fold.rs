@@ -24,6 +24,8 @@ pub enum Folded {
     Case(Case),
 }
 
+/// Simplifies a `CASE`: FALSE and NULL branches are dropped, a TRUE branch ends the list and becomes the ELSE, and a `CASE` with no branch left is
+/// its ELSE (NULL without one).
 pub fn fold_case(case: &Case) -> Folded {
     todo!("3i-c3: drop FALSE and NULL branches; a TRUE branch ends the list and becomes the ELSE; nothing left means the ELSE")
 }

@@ -12,6 +12,7 @@ pub struct SessionPool<'a> {
 
 
 impl<'a> SessionPool<'a> {
+    /// An empty pool that may create up to `max` sessions (at least 1).
     pub fn new(db: &'a BusTubInstance, max: usize) -> SessionPool<'a> {
         let _ = (db, max);
         todo!("4e-c5: an empty pool that may create up to `max` sessions")

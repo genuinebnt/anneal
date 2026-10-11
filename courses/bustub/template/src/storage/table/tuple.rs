@@ -1,10 +1,9 @@
-//! Port of `src/include/storage/table/tuple.h` and `src/storage/table/tuple.cpp`: a tuple is a row, stored as bytes, and read back
-//! through the [`Schema`] that describes it.
+//! A tuple is a row, stored as bytes, and read back through the [`Schema`] that describes it.
 //!
 //! ```text
 //! | fixed part: one slot per column (inlined bytes, or a u32 offset for a VARCHAR) | variable part: each VARCHAR as length + text |
 //! ```
-//! (NULLs need no extra bytes: a NULL is a reserved pattern in its column's slot, see module 3a.)
+//! NULLs need no extra bytes: a NULL is a reserved pattern in its column's slot.
 
 use crate::catalog::schema::Schema;
 use crate::common::rid::Rid;
@@ -12,8 +11,7 @@ use crate::types::limits::BUSTUB_VALUE_NULL;
 use crate::types::type_id::TypeId;
 use crate::types::value::Value;
 
-/// What a table keeps beside each tuple: a timestamp (module 4: the transaction that wrote it; module 3 leaves it 0) and whether the
-/// tuple is deleted. BusTub's `TupleMeta`, 16 bytes.
+/// What a table keeps beside each tuple: a timestamp (the transaction that wrote it, or 0 outside transactions) and whether the tuple is deleted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TupleMeta {
     pub ts: i64,
@@ -28,17 +26,17 @@ pub struct Tuple {
 }
 
 impl Tuple {
-    /// An empty tuple with an invalid record id (BusTub's default constructor).
+    /// An empty tuple with an invalid record id.
     pub fn empty() -> Tuple {
         Tuple { rid: Rid::default(), data: Vec::new() }
     }
 
-    /// A tuple that will be filled in by reading a page: BusTub's `Tuple(RID)`.
+    /// A tuple at `rid` whose bytes are to be filled in by reading a page.
     pub fn with_rid(rid: Rid) -> Tuple {
         Tuple { rid, data: Vec::new() }
     }
 
-    /// A tuple that is a copy of `data`, in `rid`. BusTub's `Tuple(RID, const char *, uint32_t)`.
+    /// A tuple at `rid` that is a copy of `data`.
     pub fn from_bytes(rid: Rid, data: &[u8]) -> Tuple {
         Tuple { rid, data: data.to_vec() }
     }
@@ -77,6 +75,7 @@ impl Tuple {
         todo!("3b-02: the position of the column's bytes (the column's offset; for a VARCHAR the u32 stored there), then Value::deserialize_from the column's type")
     }
 
+    /// Whether the column's value is NULL.
     pub fn is_null(&self, schema: &Schema, column_idx: u32) -> bool {
         todo!("3b-02: is the column's value NULL")
     }

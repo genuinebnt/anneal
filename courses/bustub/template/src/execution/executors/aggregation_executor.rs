@@ -1,5 +1,5 @@
-//! Port of `aggregation_executor.h/.cpp`: `GROUP BY` and the aggregate functions `count(*)`, `count(x)`, `sum(x)`, `min(x)`, `max(x)`, by
-//! hashing: one pass over the child folds each row into its group's running values (a *hash aggregation*).
+//! `GROUP BY` and the aggregate functions `count(*)`, `count(x)`, `sum(x)`, `min(x)` and `max(x)`, by hashing: one pass over the child folds
+//! each row into its group's running values.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -14,10 +14,10 @@ use crate::storage::table::tuple::Tuple;
 use crate::types::type_id::TypeId;
 use crate::types::value::Value;
 
-/// The values of a tuple's group-by expressions: which group the tuple belongs to. BusTub's `AggregateKey`.
+/// The values of a tuple's group-by expressions: which group the tuple belongs to.
 ///
 /// **Two keys are equal if their values are "the same group"**: unlike SQL's `=`, two NULLs are the same, and equal numbers are the same
-/// whatever their integer type. `Hash` must agree with `Eq`.
+/// whatever their integer type. `Hash` agrees with `Eq`.
 #[derive(Clone, Debug)]
 pub struct AggregateKey {
     pub group_bys: Vec<Value>,
@@ -49,13 +49,13 @@ impl Hash for AggregateKey {
     }
 }
 
-/// The running aggregate values of one group (one per aggregate). BusTub's `AggregateValue`.
+/// The running aggregate values of one group, one per aggregate.
 #[derive(Clone, Debug)]
 pub struct AggregateValue {
     pub aggregates: Vec<Value>,
 }
 
-/// The hash table of groups. BusTub's `SimpleAggregationHashTable`.
+/// The hash table of groups.
 pub struct SimpleAggregationHashTable {
     ht: HashMap<AggregateKey, AggregateValue>,
     agg_types: Vec<AggregationType>,

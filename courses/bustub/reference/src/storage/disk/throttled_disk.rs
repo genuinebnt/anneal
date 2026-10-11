@@ -30,6 +30,7 @@ pub struct ThrottledDisk {
 const ONE: u128 = 1_000_000_000;
 
 impl ThrottledDisk {
+    /// A throttled disk over `inner` that starts with a full bucket of `burst` tokens and gains `writes_per_second` tokens a second.
     pub fn new(inner: Arc<dyn DiskIo>, clock: Arc<dyn Clock>, writes_per_second: u32, burst: u32) -> ThrottledDisk {
         // @begin 1b-c1
         let start = clock.now();

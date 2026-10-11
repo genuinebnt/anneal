@@ -1,5 +1,4 @@
-//! The access history behind LRU-K: for one page, the times of its last `k` accesses.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
+//! The times of a page's last `k` accesses: the history behind LRU-K.
 
 use std::collections::VecDeque;
 
@@ -19,6 +18,7 @@ impl KHistory {
     /// An access at time `ts` (times never go backwards).
     pub fn record(&mut self, ts: u64) {
         self.times.push_back(ts);
+        // TODO(1d-c2): this looks right and has a bug; find it and fix it
         if self.times.len() > self.k + 1 {
             self.times.pop_front();
         }

@@ -1,6 +1,6 @@
-//! Port of `src/include/concurrency/watermark.h` and `src/concurrency/watermark.cpp`: the **watermark** is the smallest read timestamp of
-//! the running transactions (or the latest commit timestamp when none runs). No transaction can ever need a version older than the
-//! newest version at or below the watermark, so everything older is garbage.
+//! The **watermark**: the smallest read timestamp of the running transactions, or the latest commit timestamp when none runs.
+//!
+//! No transaction can need a version older than the newest one at or below the watermark, so everything older is garbage.
 
 use std::collections::BTreeMap;
 

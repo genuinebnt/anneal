@@ -1,5 +1,4 @@
-//! The directory of an extendible hash table reduced to its bookkeeping: which bucket each directory slot points at, and how deep each bucket is.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
+//! The directory of an extendible hash table reduced to its bookkeeping: which bucket each slot points at, and how deep each bucket is.
 
 /// A directory of `2^global_depth` slots. Slot `i` is reached by the **low `global_depth` bits** of a hash. A bucket of local depth `d` is
 /// pointed at by every slot that agrees with it on its low `d` bits (so by `2^(global_depth - d)` slots).
@@ -43,6 +42,7 @@ impl Directory {
     /// bucket is already as deep as the directory, the directory doubles first (the new half is a copy of the old one).
     pub fn split(&mut self, bucket: usize) -> usize {
         if self.depth[bucket] == self.global_depth {
+            // TODO(2b-c2): this looks right and has a bug; find it and fix it
             let copy: Vec<usize> = self.slots.iter().rev().copied().collect();
             self.slots.extend(copy);
             self.global_depth += 1;

@@ -15,6 +15,7 @@ pub struct WaitsForGraph {
 }
 
 impl WaitsForGraph {
+    /// A graph with no edges.
     pub fn new() -> WaitsForGraph {
         todo!("4d-06: no edges")
     }
@@ -24,6 +25,7 @@ impl WaitsForGraph {
         todo!("4d-06: remember the edge")
     }
 
+    /// Removes the edge `from` → `to`, if present.
     pub fn remove_edge(&mut self, from: TxnId, to: TxnId) {
         todo!("4d-06: forget the edge")
     }
@@ -53,6 +55,7 @@ pub struct DeadlockDetector {
 }
 
 impl DeadlockDetector {
+    /// Starts a thread that runs deadlock detection on `manager` every `every`, until the returned detector is dropped.
     pub fn start(manager: Arc<LockManager>, every: Duration) -> DeadlockDetector {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);

@@ -13,6 +13,7 @@ pub struct ToItem {
 }
 
 impl ToItem {
+    /// An item holding `initial` that nobody has read or written.
     pub fn new(initial: i64) -> ToItem {
         // @begin 4a-c5
         ToItem { value: initial, rts: 0, wts: 0 }
@@ -20,6 +21,11 @@ impl ToItem {
         // @end
     }
 
+    /// Reads at timestamp `ts` and records it as the latest read.
+    ///
+    /// # Errors
+    ///
+    /// [`Abort`] if `ts` is older than the last write.
     pub fn read(&mut self, ts: u64) -> Result<i64, Abort> {
         // @begin 4a-c5
         if ts < self.wts {
@@ -31,6 +37,11 @@ impl ToItem {
         // @end
     }
 
+    /// Writes `value` at timestamp `ts`.
+    ///
+    /// # Errors
+    ///
+    /// [`Abort`] if `ts` is older than the last read or write.
     pub fn write(&mut self, ts: u64, value: i64) -> Result<(), Abort> {
         // @begin 4a-c5
         if ts < self.rts || ts < self.wts {
@@ -43,6 +54,7 @@ impl ToItem {
         // @end
     }
 
+    /// The latest read timestamp and the latest write timestamp.
     pub fn timestamps(&self) -> (u64, u64) {
         // @begin 4a-c5
         (self.rts, self.wts)

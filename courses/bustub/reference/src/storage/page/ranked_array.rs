@@ -10,6 +10,7 @@ pub struct RankedSet {
 }
 
 impl RankedSet {
+    /// An empty set.
     pub fn new() -> RankedSet {
         // @begin 2a-c1
         RankedSet { sorted: Vec::new() }
@@ -45,6 +46,7 @@ impl RankedSet {
         // @end
     }
 
+    /// The number of numbers held.
     pub fn len(&self) -> usize {
         // @begin 2a-c1
         self.sorted.len()

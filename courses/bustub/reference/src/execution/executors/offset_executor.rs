@@ -1,4 +1,4 @@
-//! `OFFSET n`: drops the first `n` tuples of the child and passes on the rest. Module 3i.
+//! `OFFSET n`: drops the first `n` tuples of the child and passes on the rest.
 
 use super::abstract_executor::{Executor, ExecutorBox};
 use crate::catalog::schema::Schema;

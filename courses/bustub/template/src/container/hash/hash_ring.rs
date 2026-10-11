@@ -19,22 +19,27 @@ pub struct HashRing {
 }
 
 impl HashRing {
+    /// An empty ring in which each node gets `vnodes` points (at least 1).
     pub fn new(vnodes: u32) -> HashRing {
         todo!("2b-c3: an empty ring")
     }
 
+    /// Adds node `name` at `vnodes` points on the ring; returns false if it was already there.
     pub fn add_node(&mut self, name: &str) -> bool {
         todo!("2b-c3: put the node on the ring at `vnodes` points")
     }
 
+    /// Takes node `name` and all its points off the ring; returns whether it was there.
     pub fn remove_node(&mut self, name: &str) -> bool {
         todo!("2b-c3: take the node's points off the ring")
     }
 
+    /// The node owning `key`: the node at the first point at or after the key's point, wrapping around the ring. `None` for an empty ring.
     pub fn node_for(&self, key: u64) -> Option<&str> {
         todo!("2b-c3: the node at the first point at or after the key's point, wrapping")
     }
 
+    /// The number of nodes.
     pub fn node_count(&self) -> usize {
         todo!("2b-c3: how many nodes")
     }

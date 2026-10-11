@@ -1,4 +1,4 @@
-//! Port of `arithmetic_expression.h`: `left + right` and `left - right` on INTEGERs ("ONLY SUPPORT INTEGER FOR NOW").
+//! `left + right` and `left - right` on INTEGERs.
 
 use std::any::Any;
 use std::sync::Arc;

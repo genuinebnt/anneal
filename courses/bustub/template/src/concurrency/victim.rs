@@ -15,6 +15,7 @@ pub enum VictimPolicy {
     LeastWork,
 }
 
+/// The index in `cycle` of the transaction to abort under `policy`; ties go to the larger id. `None` for an empty cycle.
 pub fn choose_victim(policy: VictimPolicy, cycle: &[TxnInfo]) -> Option<usize> {
     todo!("4d-c3: the best candidate by the policy's attribute; the larger id on ties")
 }

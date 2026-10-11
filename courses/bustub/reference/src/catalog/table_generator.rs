@@ -1,5 +1,6 @@
-//! Port of `src/catalog/table_generator.cpp`: the `test_*` tables the shell and the tests start with (`test_simple_seq_1` has the
-//! numbers 0 to 9). Unlike the `__mock_*` tables these are real tables in the buffer pool. Given code.
+//! The `test_*` tables a fresh instance starts with (`test_simple_seq_1` holds the numbers 0 to 9).
+//!
+//! Unlike the `__mock_*` tables they are real tables in the buffer pool.
 
 use super::catalog::Catalog;
 use super::column::Column;

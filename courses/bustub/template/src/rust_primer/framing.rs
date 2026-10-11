@@ -11,6 +11,7 @@ pub struct FrameDecoder {
 }
 
 impl FrameDecoder {
+    /// A decoder with nothing buffered. A frame longer than `max_frame` bytes is refused.
     pub fn new(max_frame: usize) -> FrameDecoder {
         todo!("r-c4: a decoder with nothing buffered")
     }

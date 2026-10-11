@@ -1,7 +1,6 @@
-//! BusTub in Rust. The layout mirrors cmu-db/bustub: `src/common`, `src/storage/disk`, ...
-//!
-//! Every function a stage asks you to write is `todo!()` until you get there. The warnings that come with that
-//! (unused variables, unreachable code) are silenced so the output stays about your tests.
+//! A relational database engine. `common` and `types` hold the shared vocabulary; `storage`, `buffer`, `container` and `recovery`
+//! hold data on disk and in memory; `sql`, `binder`, `planner`, `optimizer` and `execution` turn a statement into rows; `catalog` and
+//! `concurrency` tie them together.
 #![allow(unused_variables, unused_mut, unused_imports, unreachable_code, dead_code)]
 
 pub mod binder;

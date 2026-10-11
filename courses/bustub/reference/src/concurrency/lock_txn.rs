@@ -1,4 +1,4 @@
-//! What the lock manager needs to know about a transaction: its id, its isolation level and where it is in two-phase locking. Given code.
+//! What the lock manager needs to know about a transaction: its id, its isolation level and its place in two-phase locking.
 
 use std::sync::{Arc, Mutex};
 

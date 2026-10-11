@@ -1,4 +1,4 @@
-//! Port of `src/include/execution/check_options.h`: extra checks the test runner switches on (`+ensure:nlj_init_check`, ...). Given code.
+//! Extra checks a test run can switch on, such as `+ensure:nlj_init_check`.
 
 use std::collections::HashSet;
 

@@ -31,18 +31,22 @@ impl Decimal {
         todo!("3a-c1: sign, digits, at most two fractional digits")
     }
 
+    /// `self + other`; `None` on overflow.
     pub fn add(self, other: Decimal) -> Option<Decimal> {
         todo!("3a-c1: checked addition of hundredths")
     }
 
+    /// `self - other`; `None` on overflow.
     pub fn sub(self, other: Decimal) -> Option<Decimal> {
         todo!("3a-c1: checked subtraction")
     }
 
+    /// `self * other`, rounded half away from zero; `None` on overflow.
     pub fn mul(self, other: Decimal) -> Option<Decimal> {
         todo!("3a-c1: multiply, then scale back by 100 rounding half away from zero")
     }
 
+    /// `self / other`, rounded half away from zero; `None` for a zero divisor or on overflow.
     pub fn div(self, other: Decimal) -> Option<Decimal> {
         todo!("3a-c1: scale up by 100, divide, rounding half away from zero; zero is None")
     }

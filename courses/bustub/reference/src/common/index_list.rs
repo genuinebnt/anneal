@@ -1,9 +1,6 @@
 //! A list whose elements can be reached, moved and removed by a handle in constant time.
 //!
-//! The replacers need "move this frame to the back" and "remove this frame" to be O(1) given something that names the frame. C++
-//! gets that from `std::list` plus an iterator saved in a map; Rust's `std::collections::LinkedList` has no such handles, and a
-//! linked structure made of references fights the borrow checker. How you build it is yours: indices into a `Vec` (an arena),
-//! a `HashMap` keyed by a counter, `Rc<RefCell<..>>` nodes, or `unsafe` pointers. The tests use only the items in this file.
+//! What a replacer needs to move a frame to the back or remove it without scanning.
 
 // @begin 1c-01
 //~ use std::marker::PhantomData;

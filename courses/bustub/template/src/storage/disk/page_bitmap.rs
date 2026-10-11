@@ -11,6 +11,7 @@ pub struct PageBitmap {
 }
 
 impl PageBitmap {
+    /// A bitmap for `capacity` pages, all free.
     pub fn new(capacity: usize) -> PageBitmap {
         todo!("1a-c3: every page free")
     }
@@ -20,14 +21,17 @@ impl PageBitmap {
         todo!("1a-c3: find the lowest free page")
     }
 
+    /// Gives `page` back. `Err(OutOfRange)` for a page beyond the capacity, `Err(DoubleFree)` for one that is not in use.
     pub fn free(&mut self, page: usize) -> Result<(), FreeError> {
         todo!("1a-c3: give the page back, or say why not")
     }
 
+    /// Whether `page` is in use; `false` past the capacity.
     pub fn is_allocated(&self, page: usize) -> bool {
         todo!("1a-c3: is this page in use")
     }
 
+    /// The number of pages in use.
     pub fn used(&self) -> usize {
         todo!("1a-c3: how many pages are in use")
     }

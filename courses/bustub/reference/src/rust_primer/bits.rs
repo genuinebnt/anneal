@@ -9,6 +9,7 @@ pub struct BitSet {
 }
 
 impl BitSet {
+    /// An empty set for the indexes `0..capacity`.
     pub fn new(capacity: usize) -> BitSet {
         // @begin r-c3
         BitSet { words: vec![0; capacity.div_ceil(64)], capacity }
@@ -16,6 +17,7 @@ impl BitSet {
         // @end
     }
 
+    /// How many indexes fit: `0..capacity`.
     pub fn capacity(&self) -> usize {
         // @begin r-c3
         self.capacity
@@ -51,6 +53,7 @@ impl BitSet {
         // @end
     }
 
+    /// Whether bit `i` is set; `false` past the capacity.
     pub fn test(&self, i: usize) -> bool {
         // @begin r-c3
         i < self.capacity && self.words[i / 64] >> (i % 64) & 1 == 1
@@ -58,6 +61,7 @@ impl BitSet {
         // @end
     }
 
+    /// The number of bits set.
     pub fn count(&self) -> usize {
         // @begin r-c3
         self.words.iter().map(|w| w.count_ones() as usize).sum()
@@ -83,6 +87,7 @@ impl BitSet {
         // @end
     }
 
+    /// Sets every bit that is set in `other`. Bits of `other` past this set's capacity are ignored.
     pub fn union_with(&mut self, other: &BitSet) {
         // @begin r-c3
         for i in other.iter() {

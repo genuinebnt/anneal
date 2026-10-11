@@ -1,4 +1,4 @@
-//! A tiny arithmetic expression language: the tree, a parser (given) and a printer (yours).
+//! A tiny arithmetic expression language: the tree, a parser and a printer.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -38,7 +38,7 @@ pub fn print_expr(e: &Expr) -> String {
     todo!("3d-c2: print children, parenthesising by precedence and associativity")
 }
 
-/// Parses text into a tree (precedence climbing). Given code; the printer above must agree with it.
+/// Parses text into a tree (precedence climbing). [`print_expr`] must agree with it.
 pub fn parse(s: &str) -> Option<Expr> {
     let toks: Vec<String> = {
         let mut v = Vec::new();

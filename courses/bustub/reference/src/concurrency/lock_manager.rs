@@ -1,5 +1,5 @@
-//! A lock manager for a table-and-row hierarchy: blocking locks with a fair queue, upgrades, two-phase locking per isolation level, and
-//! the hooks the deadlock detector needs. Built up over stages 4d-03 to 4d-06.
+//! A lock manager for a table-and-row hierarchy: blocking locks with a fair queue, upgrades, two-phase locking per isolation level,
+//! and the hooks the deadlock detector needs.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex};
@@ -64,6 +64,7 @@ pub struct LockManager {
 }
 
 impl LockManager {
+    /// A lock manager with nothing locked.
     pub fn new() -> LockManager {
         // @begin 4d-03
         LockManager { state: Mutex::new(State::default()), changed: Condvar::new() }
@@ -72,8 +73,9 @@ impl LockManager {
     }
 
     /// Takes the lock, waiting if it is not available: `txn` gets `mode` on `resource` once every other holder is compatible with it and no
-    /// earlier waiter is incompatible with it (so a stream of readers never starves a waiting writer). Asking again for the mode already held
-    /// is a no-op; asking for a stronger one is an upgrade (4d-04).
+    /// earlier waiter is incompatible with it, so a stream of readers never starves a waiting writer.
+    ///
+    /// Asking again for the mode already held is a no-op; asking for a stronger one is an upgrade.
     pub fn lock(&self, txn: TxnId, resource: Resource, mode: LockMode) -> Result<(), LockError> {
         // @begin 4d-03
         let mut st = self.state.lock().unwrap();
@@ -251,6 +253,12 @@ impl LockManager {
         // @end
     }
 
+    /// Takes a table lock for `txn` under the rules of its isolation level, waiting if it is not available.
+    ///
+    /// # Errors
+    ///
+    /// Aborts `txn` and returns the reason when a rule is broken (a lock during the shrinking phase, a mode the isolation level forbids, an
+    /// invalid upgrade) or when `txn` is chosen as a deadlock victim.
     pub fn lock_table(&self, txn: &LockTxn, mode: LockMode, table: TableOid) -> Result<(), LockError> {
         // @begin 4d-05
         Self::allowed(txn, mode)?;
@@ -262,6 +270,11 @@ impl LockManager {
         // @end
     }
 
+    /// Takes a shared or exclusive lock on a row, waiting if it is not available. The table must already be locked in a mode that covers it.
+    ///
+    /// # Errors
+    ///
+    /// Aborts `txn` and returns the reason for an intention lock on a row, a missing or too weak table lock, or a broken isolation rule.
     pub fn lock_row(&self, txn: &LockTxn, mode: LockMode, table: TableOid, rid: Rid) -> Result<(), LockError> {
         use LockMode::*;
         // @begin 4d-05
@@ -304,6 +317,11 @@ impl LockManager {
         // @end
     }
 
+    /// Releases `txn`'s lock on the row. Depending on the isolation level, this may start the shrinking phase.
+    ///
+    /// # Errors
+    ///
+    /// Aborts `txn` and returns `AttemptedUnlockButNoLockHeld` if it holds no such lock.
     pub fn unlock_row(&self, txn: &LockTxn, table: TableOid, rid: Rid) -> Result<(), LockError> {
         // @begin 4d-05
         let mode = self.state.lock().unwrap().held.get(&txn.id()).and_then(|h| h.rows.get(&(table, rid)).copied());
@@ -317,6 +335,11 @@ impl LockManager {
         // @end
     }
 
+    /// Releases `txn`'s lock on the table. Depending on the isolation level, this may start the shrinking phase.
+    ///
+    /// # Errors
+    ///
+    /// Aborts `txn` if it holds no such lock, or still holds row locks on the table.
     pub fn unlock_table(&self, txn: &LockTxn, table: TableOid) -> Result<(), LockError> {
         // @begin 4d-05
         let (mode, rows_left) = {

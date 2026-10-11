@@ -1,6 +1,5 @@
-//! Port of `src/planner/*.cpp`. The planner turns a bound statement into a plan: the logical shape BusTub's executors run (a tree of
-//! scan, filter, projection, aggregation, join, sort and limit nodes), with every column reference resolved to *"column i of child j"*.
-//! The pieces a stage asks you to write are marked; the rest is given.
+//! The planner turns a bound statement into a plan: a tree of scan, filter, projection, aggregation, join, sort and limit nodes, with every column
+//! reference resolved to *"column i of child j"*.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -65,7 +64,7 @@ impl<'c, 'a> Planner<'c, 'a> {
         self.ctx.last_mut().unwrap()
     }
 
-    /// Runs `f` in a fresh context that sees the `WITH` queries of the enclosing one. BusTub's `NewContext()` guard.
+    /// Runs `f` in a fresh context that sees the `WITH` queries of the enclosing one.
     fn with_context<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         let ctes = self.ctx.last().and_then(|c| c.cte_list.clone());
         self.ctx.push(PlannerContext { cte_list: ctes, ..Default::default() });
@@ -400,14 +399,14 @@ impl<'c, 'a> Planner<'c, 'a> {
         }
     }
 
-    /// Builds the expression for a call of the function `func_name`. (BusTub: `Planner::GetFuncCallFromFactory`.)
+    /// Builds the expression for a call of the function `func_name`.
     pub fn get_func_call_from_factory(func_name: &str, mut args: Vec<ExprRef>) -> Result<ExprRef> {
         todo!("3d-06: `lower` and `upper` with exactly one argument become a StringExpression; any other name or argument count is an error")
     }
 
     // ---- aggregation --------------------------------------------------------------------------------------------------------
 
-    /// The aggregate calls of `expr`, in the order the planner will meet them again. (BusTub's `AddAggCallToContext`.)
+    /// The aggregate calls of `expr`, in the order the planner will meet them again.
     fn collect_aggregates(expr: &BoundExpression, out: &mut Vec<BoundExpression>) -> Result<()> {
         match expr {
             BoundExpression::AggCall { .. } => out.push(expr.clone()),

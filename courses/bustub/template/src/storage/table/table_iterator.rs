@@ -1,6 +1,5 @@
-//! Port of `src/storage/table/table_iterator.cpp`: a sequential scan of a table heap. It is a cursor of a [`Rid`] and walks slot by slot
-//! and page by page along the chain. It returns **every** tuple, deleted ones included (with their metadata): skipping the deleted is the
-//! caller's job (the sequential scan executor does it).
+//! A sequential scan of a table heap. It is a cursor of a [`Rid`] and walks slot by slot and page by page along the chain. It returns **every**
+//! tuple, deleted ones included (with their metadata): skipping the deleted is the caller's job.
 
 use super::table_heap::TableHeap;
 use super::tuple::{Tuple, TupleMeta};
@@ -25,10 +24,12 @@ impl<'a> TableIterator<'a> {
         todo!("3c-02: an error at the end; otherwise the heap's tuple at the current rid")
     }
 
+    /// The record id the cursor is at.
     pub fn get_rid(&self) -> Rid {
         todo!("3c-02: the record id the cursor is at")
     }
 
+    /// Whether the cursor is past the last tuple.
     pub fn is_end(&self) -> bool {
         todo!("3c-02: the iterator is at the end when its rid is in no page")
     }

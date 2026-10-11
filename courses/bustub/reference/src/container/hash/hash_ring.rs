@@ -25,6 +25,7 @@ pub struct HashRing {
 }
 
 impl HashRing {
+    /// An empty ring in which each node gets `vnodes` points (at least 1).
     pub fn new(vnodes: u32) -> HashRing {
         // @begin 2b-c3
         HashRing { vnodes: vnodes.max(1), points: BTreeMap::new(), nodes: Default::default() }
@@ -32,6 +33,7 @@ impl HashRing {
         // @end
     }
 
+    /// Adds node `name` at `vnodes` points on the ring; returns false if it was already there.
     pub fn add_node(&mut self, name: &str) -> bool {
         // @begin 2b-c3
         if !self.nodes.insert(name.to_owned()) {
@@ -45,6 +47,7 @@ impl HashRing {
         // @end
     }
 
+    /// Takes node `name` and all its points off the ring; returns whether it was there.
     pub fn remove_node(&mut self, name: &str) -> bool {
         // @begin 2b-c3
         if !self.nodes.remove(name) {
@@ -56,6 +59,7 @@ impl HashRing {
         // @end
     }
 
+    /// The node owning `key`: the node at the first point at or after the key's point, wrapping around the ring. `None` for an empty ring.
     pub fn node_for(&self, key: u64) -> Option<&str> {
         // @begin 2b-c3
         let h = hash64(key, 0xA5A5);
@@ -64,6 +68,7 @@ impl HashRing {
         // @end
     }
 
+    /// The number of nodes.
     pub fn node_count(&self) -> usize {
         // @begin 2b-c3
         self.nodes.len()

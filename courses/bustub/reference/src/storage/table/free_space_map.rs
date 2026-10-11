@@ -11,6 +11,7 @@ pub struct FreeSpaceMap {
 }
 
 impl FreeSpaceMap {
+    /// A map for `pages` pages, none with free space.
     pub fn new(pages: usize) -> FreeSpaceMap {
         // @begin 3c-c1
         let size = pages.next_power_of_two().max(1);
@@ -19,6 +20,7 @@ impl FreeSpaceMap {
         // @end
     }
 
+    /// The number of pages.
     pub fn pages(&self) -> usize {
         // @begin 3c-c1
         self.n
@@ -26,6 +28,7 @@ impl FreeSpaceMap {
         // @end
     }
 
+    /// Records `free` bytes of room for `page`.
     pub fn set(&mut self, page: usize, free: u32) {
         // @begin 3c-c1
         let mut i = self.size + page;
@@ -38,6 +41,7 @@ impl FreeSpaceMap {
         // @end
     }
 
+    /// The room recorded for `page`.
     pub fn get(&self, page: usize) -> u32 {
         // @begin 3c-c1
         self.tree[self.size + page]

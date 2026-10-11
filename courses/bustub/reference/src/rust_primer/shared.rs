@@ -101,6 +101,7 @@ impl<T> BoundedQueue<T> {
         // @end
     }
 
+    /// The number of values waiting.
     pub fn len(&self) -> usize {
         // @begin r-04
         self.state.lock().unwrap().items.len()
@@ -123,6 +124,7 @@ pub struct IdGenerator {
 }
 
 impl IdGenerator {
+    /// A generator whose first number is 0.
     pub fn new() -> IdGenerator {
         // @begin r-04
         IdGenerator { next: AtomicU64::new(0) }

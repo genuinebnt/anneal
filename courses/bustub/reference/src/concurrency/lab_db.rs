@@ -1,7 +1,7 @@
-//! A tiny database that runs at one of five isolation levels, one step at a time. Given code: the apparatus of the anomaly lab.
+//! A tiny database that runs at one of five isolation levels, one step at a time.
 //!
-//! There are no threads. A scenario plays several transactions by calling them in the order it likes. A step that would have to wait
-//! returns `Blocked` instead of waiting, and changes nothing.
+//! There are no threads: a scenario plays several transactions by calling them in the order it likes. A step that would have to wait
+//! returns `Blocked` instead and changes nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 

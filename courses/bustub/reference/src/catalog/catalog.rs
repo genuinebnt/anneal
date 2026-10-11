@@ -1,6 +1,6 @@
-//! Port of `src/include/catalog/catalog.h`: the catalog of the database: which tables and indexes exist and where they are. It is **not
-//! persistent** (BusTub's isn't either): it lives in memory for the life of the instance. Tables and indexes are identified by a name
-//! (tables: unique; indexes: unique per table) and by an **oid**, a number handed out in creation order.
+//! The database's catalog: which tables and indexes exist and where they live. It is held in memory for the life of the instance.
+//!
+//! Tables and indexes have a name (unique among tables; unique per table for indexes) and an **oid**, handed out in creation order.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ pub struct Catalog<'a> {
 }
 
 impl<'a> Catalog<'a> {
+    /// An empty catalog over `bpm`.
     pub fn new(bpm: &'a BufferPoolManager) -> Catalog<'a> {
         // @begin 3c-04
         Catalog { bpm, tables: HashMap::new(), table_names: HashMap::new(), indexes: HashMap::new(), index_names: HashMap::new(), next_table_oid: 0, next_index_oid: 0 }
@@ -77,6 +78,7 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
+    /// The table named `table_name`, if there is one.
     pub fn get_table(&self, table_name: &str) -> Option<Arc<TableInfo<'a>>> {
         // @begin 3c-04
         self.table_names.get(table_name).and_then(|oid| self.tables.get(oid)).cloned()
@@ -84,6 +86,7 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
+    /// The table with this `oid`, if there is one.
     pub fn get_table_by_oid(&self, oid: TableOid) -> Option<Arc<TableInfo<'a>>> {
         // @begin 3c-04
         self.tables.get(&oid).cloned()
@@ -91,8 +94,7 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
-    /// A table by its oid, **borrowed** from the catalog (for an executor that keeps the table for as long as the catalog lives, without
-    /// cloning the `Arc`). BusTub: `GetTable(table_oid_t)` returns a `TableInfo *`.
+    /// The table with this `oid`, borrowed from the catalog: the reference lives as long as the catalog and costs no `Arc` clone.
     pub fn table_info(&self, oid: TableOid) -> Option<&TableInfo<'a>> {
         // @begin 3c-04
         self.tables.get(&oid).map(|t| t.as_ref())
@@ -160,6 +162,7 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
+    /// The index `index_name` on `table_name`, if there is one.
     pub fn get_index(&self, index_name: &str, table_name: &str) -> Option<Arc<IndexInfo<'a>>> {
         // @begin 3c-04
         let oid = self.index_names.get(table_name)?.get(index_name)?;
@@ -168,6 +171,7 @@ impl<'a> Catalog<'a> {
         // @end
     }
 
+    /// The index with this `index_oid`, if there is one.
     pub fn get_index_by_oid(&self, index_oid: IndexOid) -> Option<Arc<IndexInfo<'a>>> {
         // @begin 3c-04
         self.indexes.get(&index_oid).cloned()

@@ -1,6 +1,7 @@
-//! Port of `external_merge_sort_executor.h/.cpp`: `ORDER BY` for inputs that may not fit in memory. **Pass 0** cuts the input into
-//! *runs* (each sorted, each stored on pages of the buffer pool); every later pass **merges** `K` runs into one longer run, until one
-//! run, the sorted output, remains. (`K` is a const generic; the factory uses 2, like BusTub.)
+//! `ORDER BY` for inputs that may not fit in memory.
+//!
+//! **Pass 0** cuts the input into *runs*, each sorted and stored on pages of the buffer pool; every later pass **merges** `K` runs into one
+//! longer run, until one run, the sorted output, remains. `K` is a const generic.
 
 use std::cmp::Ordering;
 
@@ -24,7 +25,7 @@ pub fn serialized_size(tuple: &Tuple) -> usize {
     4 + tuple.data().len()
 }
 
-/// A sorted sequence of tuples stored on pages. BusTub's `MergeSortRun`.
+/// A sorted sequence of tuples stored on pages.
 pub struct MergeSortRun<'e> {
     pages: Vec<PageId>,
     bpm: &'e BufferPoolManager,

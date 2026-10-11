@@ -5,10 +5,12 @@ pub struct BitSet {
 }
 
 impl BitSet {
+    /// An empty set for the indexes `0..capacity`.
     pub fn new(capacity: usize) -> BitSet {
         todo!("r-c3: enough words for `capacity` bits, all clear")
     }
 
+    /// How many indexes fit: `0..capacity`.
     pub fn capacity(&self) -> usize {
         todo!("r-c3: how many indexes fit")
     }
@@ -23,10 +25,12 @@ impl BitSet {
         todo!("r-c3: clear the bit and say whether it changed")
     }
 
+    /// Whether bit `i` is set; `false` past the capacity.
     pub fn test(&self, i: usize) -> bool {
         todo!("r-c3: is the bit set (false past the capacity)")
     }
 
+    /// The number of bits set.
     pub fn count(&self) -> usize {
         todo!("r-c3: how many bits are set")
     }
@@ -41,6 +45,7 @@ impl BitSet {
         todo!("r-c3: the first clear bit, if any")
     }
 
+    /// Sets every bit that is set in `other`. Bits of `other` past this set's capacity are ignored.
     pub fn union_with(&mut self, other: &BitSet) {
         todo!("r-c3: set every bit that is set in `other`")
     }

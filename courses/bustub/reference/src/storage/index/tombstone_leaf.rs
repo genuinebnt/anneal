@@ -9,6 +9,7 @@ pub struct TombstoneLeaf {
 }
 
 impl TombstoneLeaf {
+    /// An empty leaf.
     pub fn new() -> TombstoneLeaf {
         // @begin 2d-c2
         TombstoneLeaf { slots: Vec::new() }
@@ -39,6 +40,7 @@ impl TombstoneLeaf {
         // @end
     }
 
+    /// The live value of `key`; `None` if the key is absent or deleted.
     pub fn get(&self, key: i64) -> Option<u64> {
         // @begin 2d-c2
         let i = self.slots.binary_search_by_key(&key, |s| s.0).ok()?;
@@ -47,6 +49,7 @@ impl TombstoneLeaf {
         // @end
     }
 
+    /// The number of slots, live or dead.
     pub fn slots(&self) -> usize {
         // @begin 2d-c2
         self.slots.len()
@@ -54,6 +57,7 @@ impl TombstoneLeaf {
         // @end
     }
 
+    /// The number of dead slots (tombstones).
     pub fn tombstones(&self) -> usize {
         // @begin 2d-c2
         self.slots.iter().filter(|s| s.1.is_none()).count()

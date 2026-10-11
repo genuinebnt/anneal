@@ -8,6 +8,7 @@ pub struct Defer<F: FnOnce()> {
 }
 
 impl<F: FnOnce()> Defer<F> {
+    /// A guard that runs `f` when it is dropped.
     pub fn new(f: F) -> Defer<F> {
         // @begin 1g-c1
         Defer { f: Some(f) }

@@ -1,10 +1,9 @@
-//! Port of `src/include/primer/orset.h`, `orset.cpp`, `orset_driver.h` and `orset_driver.cpp`: an **observed-remove set**, a CRDT
-//! (conflict-free replicated data type). Replicas of the set on different machines accept adds and removes independently, and
-//! merging any two replicas in any order, any number of times, gives the same set: it converges without a coordinator.
+//! An **observed-remove set**, a CRDT (conflict-free replicated data type). Replicas of the set on different machines accept adds and removes
+//! independently, and merging any two replicas in any order, any number of times, gives the same set: it converges without a coordinator.
 //!
-//! The trick is to name every *add*: `add(elem, uid)` creates the pair `(elem, uid)`. A `remove(elem)` kills the pairs for `elem` that
-//! this replica **has seen**, and remembers them as removed. An element is in the set while it has a pair that is not removed. A
-//! concurrent add elsewhere has a pair this replica never saw, so it survives the merge: **add wins**.
+//! The trick is to name every *add*: `add(elem, uid)` creates the pair `(elem, uid)`. A `remove(elem)` kills the pairs for `elem` that this
+//! replica **has seen**, and remembers them as removed. An element is in the set while it has a pair that is not removed. A concurrent add
+//! elsewhere has a pair this replica never saw, so it survives the merge: **add wins**.
 
 use std::collections::BTreeSet;
 use std::fmt::Display;
@@ -24,6 +23,7 @@ pub struct ORSet<T: Ord + Clone> {
 }
 
 impl<T: Ord + Clone + Display> ORSet<T> {
+    /// An empty set.
     pub fn new() -> ORSet<T> {
         // @begin 0d-04
         ORSet { adds: BTreeSet::new(), removed: BTreeSet::new() }
@@ -31,6 +31,7 @@ impl<T: Ord + Clone + Display> ORSet<T> {
         // @end
     }
 
+    /// Whether `elem` has an add pair that is not removed.
     pub fn contains(&self, elem: &T) -> bool {
         // @begin 0d-04
         self.adds.iter().any(|pair| pair.0 == *elem && !self.removed.contains(pair))
@@ -38,6 +39,7 @@ impl<T: Ord + Clone + Display> ORSet<T> {
         // @end
     }
 
+    /// Adds the pair `(elem, uid)`. A later `remove` only kills pairs it has seen, so an add with a new `uid` brings the element back.
     pub fn add(&mut self, elem: &T, uid: Uid) {
         // @begin 0d-04
         self.adds.insert((elem.clone(), uid));
@@ -73,7 +75,7 @@ impl<T: Ord + Clone + Display> ORSet<T> {
         // @end
     }
 
-    /// `{a, b, c}` with the elements sorted (given).
+    /// `{a, b, c}` with the elements sorted.
     pub fn to_string(&self) -> String {
         let mut elements = self.elements();
         elements.sort();
@@ -81,8 +83,8 @@ impl<T: Ord + Clone + Display> ORSet<T> {
     }
 }
 
-/// A network of replicas in one process (given), like BusTub's `ORSetDriver`: nodes `save` their set to a shared place and `load` the
-/// copies the others saved; `sync` does both for every node. Nodes can also be driven one at a time to simulate a lost network.
+/// A network of replicas in one process: nodes `save` their set to a shared place and `load` the copies the others saved; `sync` does both for
+/// every node. Nodes can also be driven one at a time to simulate a lost network.
 pub struct ORSetDriver<T: Ord + Clone> {
     nodes: Vec<ORSet<T>>,
     saved: Vec<ORSet<T>>,

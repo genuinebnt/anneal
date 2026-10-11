@@ -1,7 +1,4 @@
-//! Port of `src/include/buffer/traced_buffer_pool_manager.h`: a thin wrapper around the buffer pool that counts how many pages
-//! the index latched for reading and for writing. BusTub's B+ tree keeps one (`bpm_`) so tests can check that an insert which does
-//! not split touches the disk-resident tree with a single write latch (an *optimistic* insert). Not part of any stage: nothing here
-//! for you to write.
+//! A buffer pool wrapper that counts the pages latched for reading and for writing, to bound how much an operation latches.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

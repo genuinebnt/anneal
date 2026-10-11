@@ -1,7 +1,7 @@
-//! Port of `src/include/primer/count_min_sketch.h` and `src/primer/count_min_sketch.cpp`: a **count-min sketch** estimates how often each
-//! item occurred in a stream, in a fixed amount of memory. It is a `depth x width` matrix of counters. Every row has its own hash
-//! function; adding an item adds one to the counter its hash selects in each row. An item's count is the **minimum** of its counters:
-//! collisions can only add to a counter, never take away, so the minimum is the least inflated one, and the estimate is never too low.
+//! A **count-min sketch** estimates how often each item occurred in a stream, in a fixed amount of memory. It is a `depth x width` matrix of
+//! counters. Every row has its own hash function; adding an item adds one to the counter its hash selects in each row. An item's count is the
+//! **minimum** of its counters: collisions can only add to a counter, never take away, so the minimum is the least inflated one, and the
+//! estimate is never too low.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -97,8 +97,8 @@ impl<K: Hash> CountMinSketch<K> {
         // @end
     }
 
-    /// The `k` candidates with the highest estimated counts, as `(item, count)` pairs in descending order of count (candidates with equal
-    /// counts keep their order). At most `candidates.len()` pairs. A sketch does not remember items, which is why the candidates are given.
+    /// The `k` candidates with the highest estimated counts, as `(item, count)` pairs in descending order of count (candidates with equal counts keep
+    /// their order). At most `candidates.len()` pairs. A sketch does not remember items, which is why the caller supplies the candidates.
     pub fn top_k(&self, k: u16, candidates: &[K]) -> Vec<(K, u32)>
     where
         K: Clone,

@@ -1,5 +1,4 @@
-//! First in, first out: the frame that has been in the pool longest is evicted first, however often it was used since.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
+//! First in, first out: the frame that entered the pool earliest is evicted first, however often it was used since.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -43,6 +42,7 @@ impl FrameReplacer for FifoReplacer {
                 self.evictable_count += 1;
             }
         } else {
+            // TODO(1c-c2): this looks right and has a bug; find it and fix it
             self.evictable.remove(&frame);
         }
     }

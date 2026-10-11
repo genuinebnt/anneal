@@ -1,11 +1,10 @@
-//! Port of `window_function_executor.cpp`: window functions (`count(*) over (...)`, `sum(x) over (partition by ... order by ...)`,
-//! `rank() over (...)`). Unlike `GROUP BY` a window function keeps every row and adds a column: the aggregate over the row's
-//! *partition* (rows with equal `partition by` values), and, with an `order by`, over the rows of the partition up to the current row
-//! and its **peers** (rows equal to it in the order-by key); that is the default frame. Without `order by` the frame is the whole
-//! partition.
+//! Window functions (`count(*) over (...)`, `sum(x) over (partition by ... order by ...)`, `rank() over (...)`). Unlike `GROUP BY` a window function
+//! keeps every row and adds a column: the aggregate over the row's *partition* (rows with equal `partition by` values), and, with an `order by`,
+//! over the rows of the partition up to the current row and its **peers** (rows equal to it in the order-by key); that is the default frame.
+//! Without `order by` the frame is the whole partition.
 //!
-//! Output: all rows. If any window function has an `order by` the rows come out in that order (the planner guarantees that all window
-//! functions of one query order alike), otherwise in input order.
+//! Output: all rows. If any window function has an `order by` the rows come out in that order (the planner guarantees that all window functions of
+//! one query order alike), otherwise in input order.
 
 use std::collections::{BTreeMap, HashMap};
 

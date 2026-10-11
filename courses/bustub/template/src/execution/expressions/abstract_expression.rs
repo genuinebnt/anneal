@@ -1,6 +1,5 @@
-//! Port of `src/include/execution/expressions/abstract_expression.h`. An expression is a tree: every node has children and, given a
-//! tuple, computes a [`Value`]. BusTub's `AbstractExpression` is a C++ base class with virtual methods; here it is a trait, and
-//! expressions are shared as `Arc<dyn Expression>` (BusTub's `std::shared_ptr<AbstractExpression>`). Given code.
+//! An expression is a tree: every node has children and, given a tuple, computes a [`Value`]. Expressions are a trait and are shared as
+//! `Arc<dyn Expression>`.
 
 use std::any::Any;
 use std::fmt;

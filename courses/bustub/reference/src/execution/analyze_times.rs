@@ -8,6 +8,7 @@ pub struct OpTime {
     pub exclusive_ms: f64,
 }
 
+/// The time each operator spent itself, from the inclusive times of an `EXPLAIN ANALYZE` text: its own time minus its direct children's, never below 0.
 pub fn exclusive_times(analysis: &str) -> Vec<OpTime> {
     // @begin 3i-c5
     let mut ops: Vec<OpTime> = Vec::new();

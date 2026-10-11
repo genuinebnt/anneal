@@ -8,7 +8,7 @@ pub struct LinearHashSet {
     _linear: (),
 }
 
-/// A cheap, deterministic mixing function: the tests choose keys, the table spreads them.
+/// A cheap, deterministic mixing function: callers choose the keys, the table spreads them.
 pub fn hash(key: u64) -> u64 {
     let mut x = key.wrapping_add(0x9E37_79B9_7F4A_7C15);
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -22,10 +22,12 @@ impl LinearHashSet {
         todo!("2b-c1: the starting buckets")
     }
 
+    /// The bucket `key` lives in: its hash modulo the round's size, or modulo twice that size for the buckets already split this round.
     fn bucket_of(&self, key: u64) -> usize {
         todo!("2b-c1: which bucket a key is in: hash mod the round's size, or twice that for buckets already split")
     }
 
+    /// Whether `key` is in the set.
     pub fn contains(&self, key: u64) -> bool {
         todo!("2b-c1: look in the key's bucket")
     }
@@ -37,10 +39,12 @@ impl LinearHashSet {
 
     // TODO(2b-c1): splitting the next bucket (your own helper)
 
+    /// Removes `key`; returns whether it was there. Buckets are never merged.
     pub fn remove(&mut self, key: u64) -> bool {
         todo!("2b-c1: remove it from its bucket (buckets are never merged here)")
     }
 
+    /// The number of keys.
     pub fn len(&self) -> usize {
         todo!("2b-c1: how many keys")
     }
@@ -49,6 +53,7 @@ impl LinearHashSet {
         self.len() == 0
     }
 
+    /// The number of buckets.
     pub fn bucket_count(&self) -> usize {
         todo!("2b-c1: how many buckets")
     }

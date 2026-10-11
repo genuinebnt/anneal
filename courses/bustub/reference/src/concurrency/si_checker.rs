@@ -15,6 +15,12 @@ pub enum Violation {
     LostUpdate { a: u32, b: u32, key: i64 },
 }
 
+/// Checks a history against snapshot isolation: every read sees the snapshot as of its transaction's start, and no two overlapping
+/// transactions wrote the same key.
+///
+/// # Errors
+///
+/// The first [`Violation`] found.
 pub fn check_si(history: &[Txn]) -> Result<(), Violation> {
     // @begin 4b-c2
     let mut order: Vec<&Txn> = history.iter().collect();

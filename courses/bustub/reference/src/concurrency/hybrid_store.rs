@@ -14,7 +14,7 @@ use crate::concurrency::transaction::TxnId;
 
 const TABLE: TableOid = 1;
 
-/// A running transaction (given): its id, the commit timestamp it reads as of, and its handle for the lock manager.
+/// A running transaction: its id, the commit timestamp it reads as of, and its handle for the lock manager.
 pub struct HybridTxn {
     pub id: TxnId,
     pub read_ts: u64,
@@ -45,6 +45,7 @@ pub struct HybridStore {
 }
 
 impl HybridStore {
+    /// An empty store that locks through `locks`.
     pub fn new(locks: Arc<LockManager>) -> HybridStore {
         // @begin 4d-c6
         HybridStore { locks, state: Mutex::new(State { next_id: 1, clock: 0, versions: HashMap::new(), pending: HashMap::new() }) }
@@ -53,6 +54,7 @@ impl HybridStore {
         // @end
     }
 
+    /// Starts a transaction that reads as of the latest commit.
     pub fn begin(&self) -> HybridTxn {
         // @begin 4d-c6
         let mut st = self.state.lock().unwrap();
@@ -85,6 +87,11 @@ impl HybridStore {
         // @end
     }
 
+    /// Locks the row, waiting if needed, then buffers the write until commit.
+    ///
+    /// # Errors
+    ///
+    /// The lock manager's error, for example when the transaction is chosen as a deadlock victim.
     pub fn put(&self, txn: &HybridTxn, key: u32, value: i64) -> Result<(), LockError> {
         // @begin 4d-c6
         self.lock_for_write(txn, key)?;

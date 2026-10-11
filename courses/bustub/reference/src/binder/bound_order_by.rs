@@ -1,5 +1,4 @@
-//! Port of `src/include/binder/bound_order_by.h`: one item of an `ORDER BY`, before (`BoundOrderBy`) and after (`OrderBy`) planning.
-//! Given code.
+//! One item of an `ORDER BY`, before (`BoundOrderBy`) and after (`OrderBy`) planning.
 
 use std::fmt;
 
@@ -58,7 +57,7 @@ impl fmt::Display for BoundOrderBy {
     }
 }
 
-/// BusTub's `OrderBy = std::tuple<OrderByType, OrderByNullType, AbstractExpressionRef>`: how to sort and by what.
+/// A sort key: the direction, where NULLs go, and the expression to sort by.
 #[derive(Clone, Debug)]
 pub struct OrderBy {
     pub order_type: OrderByType,
@@ -73,7 +72,7 @@ impl OrderBy {
 }
 
 impl fmt::Display for OrderBy {
-    /// `(Default, Default, #0.1)`: how fmt prints BusTub's tuple.
+    /// Formats as `(direction, null order, expression)`, for example `(Default, Default, #0.1)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({}, {}, {})", self.order_type, self.null_order, self.expr)
     }

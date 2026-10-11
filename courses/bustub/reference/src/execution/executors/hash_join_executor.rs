@@ -1,6 +1,5 @@
-//! Port of `hash_join_executor.cpp`: an equi-join by hashing. **Build**: read the whole right child and put each tuple in a hash table
-//! under the values of its join keys. **Probe**: for each left tuple, look up its keys and output the pairs. A LEFT join also outputs a
-//! left tuple with no match, once, with NULLs on the right.
+//! An equi-join by hashing. **Build**: reads the whole right child and puts each tuple in a hash table under the values of its join keys.
+//! **Probe**: for each left tuple, looks up its keys and outputs the pairs. A LEFT join also outputs a left tuple with no match, once, with NULLs on the right.
 //!
 //! A NULL key never matches (`NULL = x` is unknown): tuples with a NULL in a key are not put in the table and match nothing when probing.
 

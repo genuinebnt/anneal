@@ -1,6 +1,5 @@
-//! Reading and writing integers inside a page. BusTub casts the page's `char *` to a struct pointer (`reinterpret_cast`) and reads
-//! fields through it. Safe Rust reads the bytes it wants, in a stated byte order, at a stated offset: no alignment requirements,
-//! no padding surprises, the same result on every machine.
+//! Reading and writing integers inside a page. Bytes are read at a stated offset in a stated byte order: no alignment requirements, no padding
+//! surprises, the same result on every machine.
 
 use crate::common::config::PageId;
 

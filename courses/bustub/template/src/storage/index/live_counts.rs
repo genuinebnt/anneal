@@ -5,14 +5,17 @@ pub struct LiveCounts {
 }
 
 impl LiveCounts {
+    /// Counts for `counts.len()` leaves, starting from `counts`.
     pub fn new(counts: &[usize]) -> LiveCounts {
         todo!("2d-c3: build the structure from the counts")
     }
 
+    /// The number of leaves.
     pub fn leaves(&self) -> usize {
         todo!("2d-c3: how many leaves")
     }
 
+    /// The number of live keys of `leaf`.
     pub fn count(&self, leaf: usize) -> usize {
         todo!("2d-c3: the live keys of one leaf")
     }

@@ -1,11 +1,11 @@
-//! Port of `src/buffer/lru_k_replacer.cpp`: the LRU-K policy (O'Neil, O'Neil, Weikum, SIGMOD 1993).
+//! The LRU-K policy (O'Neil, O'Neil and Weikum, SIGMOD 1993).
 //!
-//! LRU-K evicts the frame whose **backward k-distance** is largest: the time since its k-th most recent access. A frame with fewer
-//! than k recorded accesses has an infinite distance, and among those the one whose *first* access is oldest goes first (plain LRU).
-//! One long scan can't flush the pool, because scanned pages have been touched once and are evicted before pages touched twice.
+//! Evicts the frame whose **backward k-distance** is largest: the time since its k-th most recent access. A frame with fewer than `k`
+//! recorded accesses has an infinite distance, and among those the one whose *first* access is oldest goes first. A long scan cannot
+//! flush the pool: scanned pages have been touched once, so they leave before pages touched twice.
 //!
-//! The replacer keeps a logical clock that advances by one on every recorded access. A frame is **tracked** from its first
-//! recorded access until it is evicted or removed (which forget it, history included). Tracked frames start out not evictable.
+//! A logical clock advances by one on every recorded access. A frame is **tracked** from its first recorded access until it is evicted
+//! or removed, which forget it, history included. Tracked frames start out not evictable.
 
 // TODO(1d-01): your imports go here.
 

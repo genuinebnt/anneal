@@ -7,7 +7,7 @@ this file says where the work stands today.
 **Keep it current.** At the end of every batch: add a line to "Done" (newest first, with the commit), update "Now" and "Next", and set
 the date below. Do not let it drift: a wrong line here costs the next agent more than a missing one.
 
-Last updated: **2026-10-11** (after the 3k commit; see section 2).
+Last updated: **2026-10-11** (after the code-comments commit; see section 2).
 
 ## 1. Now (unfinished or waiting)
 
@@ -23,6 +23,8 @@ Last updated: **2026-10-11** (after the 3k commit; see section 2).
 
 | Commit | What |
 |---|---|
+| code-comments commit | **Doc comments of the exercise code** (owner asked): every `///` and `//!` in `courses/bustub/reference/src` that a learner keeps is now timeless Rust-std-style prose about behaviour and invariants: no stage or module ids, no "the tests", "yours", "given", no BusTub or C++ history. 575 comments rewritten or added (every stub outside a trait impl has one); the nine fix-it files lost "this code has a bug" from the module header and carry a `//~ // TODO(<id>)` line at the bug site instead. New rules in COURSE_STANDARDS.md ("Code comments"); `python3 tools/check_code_comments.py` checks the regenerated template (0 hits). Docs only: reference and template `cargo check --all-targets` pass; no tests were run. |
+| `996e46b3` | Focus timer moved: off the course page, onto the DSA problem page (card under Log it) and the Rust workspace (bottom of the Tests panel). |
 | time-limit commit | **Time limit exceeded** (owner asked): the CLI no longer discards what a test binary printed when it is stopped (180 s, 300 s for regression): finished tests keep their results and each unfinished one fails with "Time limit exceeded ..." (`run_until`, `mark_unfinished`, `test_fn_names` in `course.rs`); the stage page's toast, bottom bar and "Last run" say "time limit exceeded" and show the hung test first (`hitLimit` in `CourseStagePage.tsx`). Needs the owner to `anneal self-update` (a CLI change). Tests: 3 CLI unit tests, 1 Playwright test. |
 | 3k commit (this session) | **BusTub module 3k, "Errors worth returning"** (`courses/bustub/modules/15b-errors-worth-returning`, code `3k`, placed after 3d, mid-course): one `DbError` for the whole database; the learner designs it, 32 tests check only the contract (From, `?`, Display, `source()`, `context`, `report()`, SQLSTATE-style `code()`, `client_message()`, Send+Sync, threads, a proptest model). Reference `src/common/db_error.rs`, tests `tests/stages_3k.rs`, concept `errors-that-carry-their-cause`. Pass counts after each stage: 0, 7, 13, 21, 32 (checked with `/tmp/c2/work_3k/check.sh`, one render folder). Also new animated figures and Invariants sections for two-phase locking, waits-for graphs, logical clocks and MVCC. Later modules needed no change. |
 | `fc510812` | Animated figures and Invariants sections for ARIES, write-ahead logging, undo logs and fsync. |
@@ -67,6 +69,7 @@ check questions = `> [!CHECK]` callouts in `modules/*/stages/*/stage.md`; concep
 ## 4. Next, in order (owner decisions marked)
 
 1. ~~Time limit exceeded~~ shipped 2026-10-11; see the Done table.
+1a. **Code-comment follow-ups (proposed, not done)**: about 85 `todo!("...")` messages still read as implementation steps (they vanish once a stage is solved; tighten to behaviour only); wire `tools/check_code_comments.py` into `anneal course lint` or CI; `courses/bustub/reference/src/lib.rs` no longer says why unused-variable warnings are silenced (the `#![allow]` line stays).
 2. **Visual and invariants pass** (the owner said "fill all thin areas"). Done: ARIES, WAL, undo logs, fsync, 2PL, waits-for, logical clocks (figures + Invariants), MVCC (Invariants). Still to do, database-core concepts with no figure: outer joins and null padding, access paths (index vs seq scan), hash functions, LIKE matching, conjunctive predicates; with a figure but no Invariants: the catalog, HyperLogLog, maintaining indexes (external merge sort, join algorithms with a new hash-join animation, LRU-K and the clock algorithm got theirs 2026-10-11). Then the Rust-language concepts without a figure, lower priority. Format: animated SVG whose base state shows everything (see `concepts/aries-recovery.md`); check by restarting the API and screenshotting `/courses/bustub/concept/<slug>`.
 3. ~~Interview layer~~ dropped (owner, 2026-10-11).
 4. **Rewrite the dozen thinnest boss openings.** Also proposed, waiting for the owner: a short "Fixed by the tests" line beside "Your freedom" on every stage (tests pin exact tree shapes, depths, latch counts and pin counts in several modules); an optional 4d challenge making `LockError` a real `Error` with lock codes (`40P01`, `55P03`) for `DbError`; a 4e stage where the SQL session returns `DbError` and the client sees `client_message()`.
@@ -80,7 +83,7 @@ check questions = `> [!CHECK]` callouts in `modules/*/stages/*/stage.md`; concep
 
 **Checks before a commit** (what CI runs): `cargo clippy --workspace --all-targets --locked -- -D warnings`;
 `cargo test -q -p anneal-content -p anneal-api -p anneal-cli` (the API tests need Postgres on 5435); `cargo run -q -p anneal-cli --
-validate` (0 issues); `cargo run -q -p anneal-cli -- course lint` (0 problems). Web: `cd web && pnpm exec tsc --noEmit -p .`; e2e
+validate` (0 issues); `cargo run -q -p anneal-cli -- course lint` (0 problems). After touching comments in `courses/bustub/reference`: `anneal course template`, then `python3 tools/check_code_comments.py` (0 hits). Web: `cd web && pnpm exec tsc --noEmit -p .`; e2e
 `E2E_CHROME=1 pnpm exec playwright test` (about 2.5 minutes; **the e2e server serves `web/dist`, so run `pnpm build` after a web
 change**). The e2e API is on 127.0.0.1:8791 against `postgres://anneal:anneal@localhost:5435/anneal_e2e` (a throwaway DB: never point
 experiments at the dev DB).

@@ -1,5 +1,5 @@
-//! Binary search in a sorted slice that may hold duplicates: the first position a key could be inserted at and the first position after
-//! all copies of it. This code is complete and looks right, but it has a bug: find it with the tests and fix it.
+//! Binary search in a sorted slice that may hold duplicates: the first position a key could be inserted at and the first position after all
+//! copies of it.
 
 /// The first index `i` with `slice[i] >= key` (or `slice.len()` if there is none): the number of elements smaller than `key`.
 pub fn lower_bound(slice: &[i64], key: i64) -> usize {
@@ -26,6 +26,7 @@ pub fn upper_bound(slice: &[i64], key: i64) -> usize {
         } else {
             hi = mid;
         }
+        //~ // TODO(2a-c2): this looks right and has a bug; find it and fix it
         //~ if slice[mid] < key {
         //~     lo = mid + 1;
         //~ } else {

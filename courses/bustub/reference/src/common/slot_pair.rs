@@ -16,6 +16,7 @@ pub struct Slots {
 }
 
 impl Slots {
+    /// One slot per balance, each behind its own lock.
     pub fn new(balances: &[i64]) -> Slots {
         // @begin 1g-c5
         Slots { slots: balances.iter().map(|&b| Mutex::new(b)).collect() }
@@ -23,6 +24,7 @@ impl Slots {
         // @end
     }
 
+    /// The balance of slot `i`; `None` if there is no such slot.
     pub fn balance(&self, i: usize) -> Option<i64> {
         // @begin 1g-c5
         self.slots.get(i).map(|m| *m.lock().unwrap())
@@ -30,6 +32,7 @@ impl Slots {
         // @end
     }
 
+    /// The sum of every balance at one instant: no transfer is half done in it.
     pub fn total(&self) -> i64 {
         // @begin 1g-c5
         let guards: Vec<_> = self.slots.iter().map(|m| m.lock().unwrap()).collect();
@@ -38,6 +41,12 @@ impl Slots {
         // @end
     }
 
+    /// Moves `amount` from slot `from` to slot `to` atomically: no thread sees the money in neither slot or in both, and two opposite
+    /// transfers cannot deadlock.
+    ///
+    /// # Errors
+    ///
+    /// [`TransferError::NoSuchSlot`] if a slot does not exist, [`TransferError::Insufficient`] if `from` holds less than `amount`.
     pub fn transfer(&self, from: usize, to: usize, amount: i64) -> Result<(), TransferError> {
         // @begin 1g-c5
         let n = self.slots.len();

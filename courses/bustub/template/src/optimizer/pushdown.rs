@@ -45,6 +45,7 @@ pub fn columns(p: &Pred) -> Vec<usize> {
     }
 }
 
+/// The conjuncts of `p`: nested ANDs are flattened, anything else is one conjunct.
 pub fn conjuncts(p: &Pred) -> Vec<Pred> {
     todo!("3h-c2: flatten nested ANDs; anything else is one conjunct")
 }

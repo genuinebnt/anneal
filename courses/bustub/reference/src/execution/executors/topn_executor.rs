@@ -1,5 +1,5 @@
-//! Port of `topn_executor.cpp`: `ORDER BY ... LIMIT n` without sorting everything. The executor reads its child once and keeps only the
-//! best `n` tuples seen so far in a **bounded heap**; at the end it outputs them in order.
+//! `ORDER BY ... LIMIT n` without sorting everything: the child is read once, only the best `n` tuples seen so far are kept in a **bounded heap**,
+//! and they are output in order at the end.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -126,8 +126,8 @@ impl Executor for TopNExecutor<'_> {
     }
 }
 
-/// Wraps the child of a TopN executor when `+ensure:topn` is on and asserts, every time the TopN pulls a batch, that its heap holds no
-/// more than `n` tuples: a sort followed by a limit would fail it. (BusTub's `TopNCheckExecutor`.) Given code.
+/// Wraps the child of a TopN executor when `+ensure:topn` is on and asserts, each time the TopN pulls a batch, that its heap holds no more than `n`
+/// tuples: a sort followed by a limit would fail.
 pub struct TopNCheckExecutor<'e> {
     plan: PlanRef,
     child: ExecutorBox<'e>,

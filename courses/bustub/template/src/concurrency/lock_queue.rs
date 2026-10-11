@@ -10,6 +10,7 @@ pub struct LockQueue {
 }
 
 impl LockQueue {
+    /// A queue with no holder.
     pub fn new() -> LockQueue {
         todo!("4d-02: nobody holds anything")
     }
@@ -30,6 +31,7 @@ impl LockQueue {
         todo!("4d-02: the holders, by transaction id")
     }
 
+    /// The mode `txn` holds, if any.
     pub fn mode_of(&self, txn: TxnId) -> Option<LockMode> {
         todo!("4d-02: the mode this transaction holds, if any")
     }

@@ -10,6 +10,7 @@ pub struct LiveCounts {
 }
 
 impl LiveCounts {
+    /// Counts for `counts.len()` leaves, starting from `counts`.
     pub fn new(counts: &[usize]) -> LiveCounts {
         // @begin 2d-c3
         let mut c = LiveCounts { tree: vec![0; counts.len() + 1], counts: vec![0; counts.len()] };
@@ -21,6 +22,7 @@ impl LiveCounts {
         // @end
     }
 
+    /// The number of leaves.
     pub fn leaves(&self) -> usize {
         // @begin 2d-c3
         self.counts.len()
@@ -28,6 +30,7 @@ impl LiveCounts {
         // @end
     }
 
+    /// The number of live keys of `leaf`.
     pub fn count(&self, leaf: usize) -> usize {
         // @begin 2d-c3
         self.counts[leaf] as usize

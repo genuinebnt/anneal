@@ -1,4 +1,4 @@
-//! Port of `src/include/binder/statement/*.h`: the bound statements.
+//! The statements the binder produces.
 
 use std::fmt;
 

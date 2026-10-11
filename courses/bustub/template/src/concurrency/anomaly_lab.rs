@@ -43,7 +43,7 @@ pub fn phantom(db: &mut LabDb) -> bool {
     todo!("4d-c7: scan a range, let another transaction insert into it and commit, scan again")
 }
 
-/// Your prediction: can `anomaly` happen at `level`? The tests compare it with what the scenarios observed.
+/// Whether `anomaly` can occur under `level`.
 pub fn possible(level: Level, anomaly: Anomaly) -> bool {
     let _ = (level, anomaly);
     todo!("4d-c7: from the mechanism of each level, not from memory of a table")

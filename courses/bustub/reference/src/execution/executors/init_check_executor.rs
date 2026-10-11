@@ -1,5 +1,5 @@
-//! Port of `init_check_executor.cpp`: wraps an executor and counts how often it is initialised and asked for tuples. The nested loop
-//! join test (`+ensure:nlj_init_check`) uses it to check that the right child is re-initialised for every left tuple. Given code.
+//! Wraps an executor and counts how often it is initialised and asked for tuples, to check that a nested loop join re-initialises its
+//! right child for every left tuple.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

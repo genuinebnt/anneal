@@ -16,6 +16,7 @@ pub struct LfuReplacer {
 }
 
 impl LfuReplacer {
+    /// A replacer that tracks no frames.
     pub fn new() -> LfuReplacer {
         // @begin 1c-c1
         LfuReplacer { frames: Vec::new(), tick: 0 }

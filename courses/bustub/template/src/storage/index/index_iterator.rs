@@ -1,11 +1,8 @@
-//! Port of `src/storage/index/index_iterator.cpp`: a range scan over the leaves of a B+ tree. It remembers a position (a leaf page
-//! and a slot in it) and, when asked for the next pair, latches the leaf just long enough to copy the pair out. Nothing stays
-//! latched between calls, so a scan never blocks writers for longer than one read (the price: a scan that races with a writer may
-//! see the tree change under it, which BusTub's own iterator allows too).
+//! A range scan over the leaves of a B+ tree. It remembers a position (a leaf page and a slot in it) and, when asked for the next pair, latches
+//! the leaf just long enough to copy the pair out. Nothing stays latched between calls, so a scan never blocks writers for longer than one read;
+//! the price is that a scan that races with a writer may see the tree change under it.
 //!
-//! BusTub's iterator is a C++ iterator (`*it`, `++it`, `it != tree.End()`); Rust's is the `Iterator` trait (`for (k, v) in tree.begin()`),
-//! and [`IndexIterator::is_end`] and `==` are there for the tests that spell it the C++ way. How the iterator is built, and what the tree
-//! hands it, is yours.
+//! It is an `Iterator` (`for (k, v) in tree.begin()`); [`IndexIterator::is_end`] and `==` are there for callers that compare against the end.
 
 use crate::storage::index::fixed_size::FixedSize;
 
@@ -34,7 +31,7 @@ impl<K: FixedSize + Clone, V: FixedSize + Clone, const TOMBS: usize> Iterator fo
     }
 }
 
-/// Two iterators are equal when they are at the same place. (BusTub: `operator==`.)
+/// Two iterators are equal when they are at the same place.
 impl<K, V, const TOMBS: usize> PartialEq for IndexIterator<'_, K, V, TOMBS> {
     fn eq(&self, other: &Self) -> bool {
         todo!("2c-03: the same place in the same leaf, or both at the end")

@@ -15,6 +15,7 @@ pub struct FrameDecoder {
 }
 
 impl FrameDecoder {
+    /// A decoder with nothing buffered. A frame longer than `max_frame` bytes is refused.
     pub fn new(max_frame: usize) -> FrameDecoder {
         // @begin r-c4
         FrameDecoder { buf: Vec::new(), max_frame }

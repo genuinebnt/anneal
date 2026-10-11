@@ -1,9 +1,8 @@
-//! Port of `src/concurrency/transaction_manager.cpp` and `transaction_manager_impl.cpp`: begins, commits and aborts transactions, and keeps
-//! for every tuple the **link to its newest undo log** (the head of its version chain).
+//! Begins, commits and aborts transactions, and keeps for every tuple the **link to its newest undo log**: the head of its version chain.
 //!
-//! Where BusTub keeps the chain heads: not in the tuple (a tuple's bytes and metadata are all the table page stores) but in a side table
-//! owned by the transaction manager: page id, then slot, then [`UndoLink`]. A tuple and its link are always changed together while the
-//! page is write-latched ([`update_tuple_and_undo_link`]), and read together under the read latch ([`get_tuple_and_undo_link`]).
+//! The heads live in a side table owned by the manager (page id, then slot, then [`UndoLink`]), not in the tuple, whose bytes and metadata
+//! are all the table page stores. A tuple and its link are always changed together while the page is write-latched
+//! ([`update_tuple_and_undo_link`]) and read together under the read latch ([`get_tuple_and_undo_link`]).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -85,7 +84,7 @@ impl TransactionManager {
         todo!("4a-02: commit_ts = last commit + 1; stamp every tuple in the write set with it (keep is_deleted); set the transaction's commit ts and state; then, under the watermark's lock: tell it the commit, publish last_commit_ts, remove this reader")
     }
 
-    /// Aborts a running or tainted transaction. (Module 4b adds undoing its writes.)
+    /// Aborts a running or tainted transaction and undoes its writes.
     pub fn abort(&self, txn: &Arc<Transaction>) -> Result<()> {
         if !matches!(txn.state(), TransactionState::Running | TransactionState::Tainted) {
             return Err(Exception::new(ExceptionType::Execution, "txn not in running / tainted state"));
@@ -94,7 +93,7 @@ impl TransactionManager {
         todo!("4a-02: mark the transaction aborted and remove its read timestamp from the watermark")
     }
 
-    /// Serializable validation (module 4b); until then every transaction passes.
+    /// Whether `txn` passes serializable validation and may commit.
     fn verify_txn(&self, txn: &Arc<Transaction>) -> bool {
         true // 4b-07: a transaction with no writes or no scans passes. Otherwise for every transaction that committed after txn.read_ts(), for each tuple in its write set, rebuild the tuple as of commit_ts - 1 and as of commit_ts (a throwaway Transaction with that read ts and collect_undo_logs + reconstruct_tuple); if one of txn's predicates on that table is true for either version, fail
     }
@@ -107,8 +106,9 @@ impl TransactionManager {
 
     // ---- version chains (given) ------------------------------------------------------------------------------------------------
 
-    /// Points the tuple at `rid` to a new newest undo log (`None`: the tuple has no older versions). If `check` is given it sees the
-    /// current link first and can refuse (the function then returns `false` and changes nothing).
+    /// Points the tuple at `rid` to a new newest undo log (`None`: it has no older versions).
+    ///
+    /// If `check` is given it sees the current link first and may refuse, in which case nothing changes and the function returns `false`.
     pub fn update_undo_link(&self, rid: Rid, prev_link: Option<UndoLink>, check: Option<&dyn Fn(Option<UndoLink>) -> bool>) -> bool {
         let mut info = self.version_info.lock().unwrap();
         let page = info.entry(rid.page_id()).or_default();

@@ -18,6 +18,7 @@ impl<I: Iterator> Rewindable<I>
 where
     I::Item: Clone,
 {
+    /// Wraps `inner`; nothing is marked, so nothing is buffered.
     pub fn new(inner: I) -> Rewindable<I> {
         // @begin 3e-c5
         Rewindable { inner, since_mark: Vec::new(), replay: VecDeque::new(), marked: false }
@@ -25,6 +26,8 @@ where
         // @end
     }
 
+    /// Marks the current position: from here on, items read are kept so that [`reset`](Self::reset) can replay them. Items still waiting to be replayed
+    /// come after the mark and stay buffered.
     pub fn mark(&mut self) {
         // @begin 3e-c5
         // what is still waiting to be replayed is "after the mark" too: it stays buffered
@@ -34,6 +37,7 @@ where
         // @end
     }
 
+    /// Goes back to the mark, so the items read since are produced again. Without a mark it does nothing.
     pub fn reset(&mut self) {
         // @begin 3e-c5
         if self.marked {

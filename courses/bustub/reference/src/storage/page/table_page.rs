@@ -1,7 +1,5 @@
-//! Port of `src/include/storage/page/table_page.h` and `src/storage/page/table_page.cpp`: a page that holds tuples. A tuple's address is
-//! its **slot number** in the page: tuples never move, so a record id (page, slot) stays valid; deleting only marks the tuple. How the
-//! page lays its slots and its tuples out is yours: BusTub's design is a **slotted page** (a slot array growing from the front and the
-//! tuples from the back), described in the stage page; the tests only use the methods below.
+//! A page that holds tuples. A tuple's address is its **slot number** in the page: tuples never move, so a record id (page, slot) stays valid;
+//! deleting only marks the tuple. The usual layout is a **slotted page**: a slot array growing from the front and the tuples from the back.
 
 use crate::common::config::PageId;
 use crate::common::exception::Result;
@@ -99,8 +97,8 @@ impl<B: AsRef<[u8]>> TablePage<B> {
     //~ // TODO(3b-03): a private helper of yours.
     // @end
 
-    /// Where a tuple of this size would be stored (the offset of its first byte), or `None` if it does not fit: the new slot and the
-    /// tuple must not overlap. BusTub's `GetNextTupleOffset`.
+    /// Where a tuple of this size would be stored (the offset of its first byte), or `None` if it does not fit: the new slot and the tuple must not
+    /// overlap.
     pub fn get_next_tuple_offset(&self, _meta: &TupleMeta, tuple: &Tuple) -> Option<u16> {
         // @begin 3b-03
         let n = self.get_num_tuples();
@@ -157,6 +155,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> TablePage<B> {
     //~ // TODO(3b-03): a private helper of yours.
     // @end
 
+    /// Sets the next page of the table; `None` ends the chain.
     pub fn set_next_page_id(&mut self, next: Option<PageId>) {
         // @begin 3b-03
         write_optional_page_id(self.page.as_mut(), NEXT_PAGE_ID_OFFSET, next);

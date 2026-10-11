@@ -1,4 +1,4 @@
-//! Port of the `ResultWriter` classes of `src/include/common/bustub_instance.h`: where the rows of a result go. Given code.
+//! Where the rows of a result go.
 
 pub trait ResultWriter {
     fn write_cell(&mut self, cell: &str);
@@ -34,7 +34,7 @@ impl ResultWriter for NoopWriter {
     fn end_table(&mut self) {}
 }
 
-/// Writes rows as text: every cell followed by `separator`, a line per row. The test runner uses it with a space and no header.
+/// Writes rows as text: every cell followed by `separator`, one line per row.
 pub struct SimpleStreamWriter<'w> {
     out: &'w mut String,
     disable_header: bool,

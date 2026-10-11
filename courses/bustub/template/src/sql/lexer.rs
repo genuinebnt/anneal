@@ -21,6 +21,8 @@ pub fn parse_error(msg: impl std::fmt::Display) -> Exception {
     Exception::new(ExceptionType::Invalid, format!("Query failed to parse: {msg}"))
 }
 
+/// Splits `sql` into tokens. Whitespace and comments are skipped, words are lower-cased, `'strings'` use `''` for a quote, and a two-character
+/// symbol wins over its first character. Text that is no token (an unterminated string or quoted identifier, an unknown character) is an error.
 pub fn tokenize(sql: &str) -> Result<Vec<Token>> {
     todo!("3d-04: walk the characters: skip whitespace and comments; words (lower-cased), quoted names, numbers, 'strings' with '' for a quote, two-character symbols before one-character ones; anything else is a parse error")
 }

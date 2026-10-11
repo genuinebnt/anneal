@@ -10,6 +10,7 @@ pub struct PrefixTable<V> {
 }
 
 impl<V> PrefixTable<V> {
+    /// An empty table.
     pub fn new() -> PrefixTable<V> {
         // @begin 0a-c1
         PrefixTable { entries: BTreeMap::new() }
@@ -17,6 +18,7 @@ impl<V> PrefixTable<V> {
         // @end
     }
 
+    /// Stores `value` for `prefix`, returning the value it replaced.
     pub fn insert(&mut self, prefix: &str, value: V) -> Option<V> {
         // @begin 0a-c1
         self.entries.insert(prefix.to_owned(), value)
@@ -24,6 +26,7 @@ impl<V> PrefixTable<V> {
         // @end
     }
 
+    /// Deletes the entry for `prefix`, returning its value.
     pub fn remove(&mut self, prefix: &str) -> Option<V> {
         // @begin 0a-c1
         self.entries.remove(prefix)
@@ -31,6 +34,7 @@ impl<V> PrefixTable<V> {
         // @end
     }
 
+    /// The number of entries.
     pub fn len(&self) -> usize {
         // @begin 0a-c1
         self.entries.len()

@@ -11,10 +11,12 @@ pub struct Stack<T> {
 // TODO(r-03): the node type of your own
 
 impl<T> Stack<T> {
+    /// An empty stack.
     pub fn new() -> Stack<T> {
         todo!("r-03: an empty stack")
     }
 
+    /// The number of values.
     pub fn len(&self) -> usize {
         todo!("r-03: the number of values")
     }
@@ -23,18 +25,22 @@ impl<T> Stack<T> {
         self.len() == 0
     }
 
+    /// Pushes `value` on top.
     pub fn push(&mut self, value: T) {
         todo!("r-03: the new node owns the old head: take it out of self with Option::take")
     }
 
+    /// Removes and returns the top value.
     pub fn pop(&mut self) -> Option<T> {
         todo!("r-03: take the head; the head becomes its next; give back the value")
     }
 
+    /// The top value, without removing it.
     pub fn peek(&self) -> Option<&T> {
         todo!("r-03: a reference to the top value, without moving it (as_ref and map)")
     }
 
+    /// A mutable reference to the top value.
     pub fn peek_mut(&mut self) -> Option<&mut T> {
         todo!("r-03: a mutable reference to the top value (as_mut)")
     }
@@ -83,10 +89,12 @@ pub struct Slab<T> {
 // TODO(r-03): the slot type of your own
 
 impl<T> Slab<T> {
+    /// An empty slab.
     pub fn new() -> Slab<T> {
         todo!("r-03: an empty slab")
     }
 
+    /// The number of values.
     pub fn len(&self) -> usize {
         todo!("r-03: the number of values")
     }
@@ -100,10 +108,12 @@ impl<T> Slab<T> {
         todo!("r-03: reuse a freed slot (its generation was bumped when it was freed) or push a new one; the handle names the slot and its generation")
     }
 
+    /// The value `handle` names. `None` if its slot does not exist, was reused by a newer generation or holds no value.
     pub fn get(&self, handle: Handle) -> Option<&T> {
         todo!("r-03: None for a slot that does not exist, has another generation or holds no value")
     }
 
+    /// As [`get`](Self::get), mutably.
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut T> {
         todo!("r-03: as get, mutably")
     }

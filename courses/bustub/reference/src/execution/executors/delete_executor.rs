@@ -1,5 +1,6 @@
-//! Port of `delete_executor.cpp`: deletes every tuple its child produces (a filter over a scan of the table) and produces one row: how
-//! many it deleted. Deleting is marking the tuple deleted in the heap; its index entries are removed.
+//! Deletes every tuple its child produces and produces one row: how many it deleted.
+//!
+//! Deleting marks the tuple deleted in the heap and removes its index entries.
 
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ pub struct DeleteExecutor<'e> {
     indexes: Vec<Arc<IndexInfo<'e>>>,
     child: ExecutorBox<'e>,
     done: bool,
-    /// The transaction the statement runs in (module 4b), with its manager.
+    /// The transaction the statement runs in, with its manager.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
 }
 

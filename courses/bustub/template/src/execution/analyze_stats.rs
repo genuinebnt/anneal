@@ -1,6 +1,5 @@
 //! What `EXPLAIN ANALYZE` measures: for each node of a plan, how many rows it produced, in how many batches, how many times it was
-//! initialised and how long its calls took (children included). Given code; module 3i uses it. It names no plan type, so it compiles
-//! in every unlock state (the plan types arrive with module 3d).
+//! initialised and how long its calls took, children included.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize};

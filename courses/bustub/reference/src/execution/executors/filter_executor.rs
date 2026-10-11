@@ -1,4 +1,4 @@
-//! Port of `filter_executor.cpp`: passes on the child's tuples for which the predicate is TRUE (FALSE and NULL are dropped). Given code.
+//! Passes on the child's tuples for which the predicate is TRUE; FALSE and NULL are dropped.
 
 use super::abstract_executor::{Executor, ExecutorBox};
 use crate::catalog::schema::Schema;

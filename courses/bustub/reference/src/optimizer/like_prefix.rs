@@ -31,6 +31,8 @@ pub fn successor(prefix: &str) -> Option<String> {
     // @end
 }
 
+/// What `pattern` says about the strings it matches: the literal prefix before the first wildcard (escapes resolved), then `Everything` for no
+/// prefix, `Exact` for no wildcard at all, or a `Range` of strings that start with the prefix.
 pub fn prefix_range(pattern: &str) -> LikeRange {
     // @begin 3i-c4
     let mut prefix = String::new();

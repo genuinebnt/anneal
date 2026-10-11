@@ -1,5 +1,4 @@
 //! Splitting a full node of a B+ tree in two: which keys go where, and which key is pushed up to the parent.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
 
 /// The result of splitting a node: the left node's keys, the separator for the parent, the right node's keys.
 #[derive(Debug, PartialEq, Eq)]
@@ -19,6 +18,7 @@ pub fn split_keys(keys: &[i64], is_leaf: bool) -> Split {
     let separator = keys[mid];
     // @begin 2c-c2
     let right = if is_leaf { keys[mid..].to_vec() } else { keys[mid + 1..].to_vec() };
+    //~ // TODO(2c-c2): this looks right and has a bug; find it and fix it
     //~ let right = keys[mid..].to_vec();
     // @end
     Split { left, separator, right }

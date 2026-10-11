@@ -1,7 +1,6 @@
-//! Port of `src/include/execution/plans/*.h`. A plan is a tree of operators. BusTub has one C++ class per operator behind
-//! `AbstractPlanNode`; here one struct holds what every plan node has (an output schema and children) and an enum, [`PlanKind`], holds
-//! what is particular to the operator. The optimizer builds new trees instead of changing old ones, so nodes are shared as
-//! `Arc<PlanNode>` ([`PlanRef`], BusTub's `shared_ptr<const AbstractPlanNode>`). Given code.
+//! A plan is a tree of operators. One struct holds what every plan node has (an output schema and children) and an enum, [`PlanKind`], holds what
+//! is particular to the operator. The optimizer builds new trees instead of changing old ones, so nodes are shared as `Arc<PlanNode>`
+//! ([`PlanRef`]).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -89,7 +88,7 @@ pub struct WindowFunction {
     pub order_by: Vec<OrderBy>,
 }
 
-/// Which operator a plan node is. BusTub's `PlanType`.
+/// Which operator a plan node is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanType {
     SeqScan,
@@ -207,7 +206,7 @@ impl PlanNode {
         &self.output_schema
     }
 
-    /// The `idx`th child. BusTub: `GetChildAt`.
+    /// The `idx`th child.
     pub fn child_at(&self, idx: usize) -> &PlanRef {
         &self.children[idx]
     }

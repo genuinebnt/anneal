@@ -1,4 +1,4 @@
-//! The text of `EXPLAIN ANALYZE`: the plan tree with what each node did. Module 3i.
+//! The text of `EXPLAIN ANALYZE`: the plan tree with what each node did.
 
 use super::analyze_stats::AnalyzeStats;
 use super::plans::plan_node::PlanRef;

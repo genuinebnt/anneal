@@ -1,4 +1,4 @@
-//! Port of `src/include/binder/bound_expression.h` and `binder/expressions/*.h`: expressions after name resolution.
+//! Expressions after name resolution: every column reference names its table and column.
 
 use std::fmt;
 
@@ -31,7 +31,7 @@ pub struct BoundWindow {
 
 #[derive(Clone, Debug)]
 pub enum BoundExpression {
-    /// "No expression" (a missing WHERE, LIMIT, ...): BusTub's default-constructed `BoundExpression`.
+    /// No expression: a missing `WHERE`, `LIMIT` and so on.
     Invalid,
     Constant(Value),
     /// `[table, column]`, `[alias, column]`, or just `[column]`.

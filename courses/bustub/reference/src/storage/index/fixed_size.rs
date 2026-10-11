@@ -1,5 +1,5 @@
-//! Values that occupy a fixed number of bytes inside a page. In C++ the page code is a template over the key and value types and
-//! uses `sizeof(T)` and `memcpy`; the Rust equivalent states the size and the byte encoding in a trait.
+//! Values that occupy a fixed number of bytes inside a page. A type states its size and its byte encoding through a trait, so that page code can
+//! be generic over the key and value types.
 
 use crate::common::config::PageId;
 use crate::common::rid::Rid;
@@ -115,7 +115,7 @@ impl<A: FixedSize, B: FixedSize> FixedSize for (A, B) {
     }
 }
 
-/// How many entries of `entry_size` bytes fit in a page after `metadata_size` bytes of header. BusTub's `HTableBucketArraySize`.
+/// How many entries of `entry_size` bytes fit in a page after `metadata_size` bytes of header.
 pub const fn array_size(metadata_size: usize, entry_size: usize) -> usize {
     // @begin 2a-02
     (crate::common::config::BUSTUB_PAGE_SIZE - metadata_size) / entry_size

@@ -18,6 +18,7 @@ pub struct SavepointTxn {
 }
 
 impl SavepointTxn {
+    /// A transaction over `initial` with nothing to undo.
     pub fn begin(initial: BTreeMap<i64, i64>) -> SavepointTxn {
         // @begin 4b-c5
         SavepointTxn { data: initial, undo: Vec::new(), marks: Vec::new(), next_id: 1 }
@@ -25,6 +26,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Writes `value` at `key`. The write can be undone.
     pub fn set(&mut self, key: i64, value: i64) {
         // @begin 4b-c5
         let old = self.data.insert(key, value);
@@ -33,6 +35,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Removes `key`. The removal can be undone.
     pub fn delete(&mut self, key: i64) {
         // @begin 4b-c5
         let old = self.data.remove(&key);
@@ -41,6 +44,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// The current value at `key`.
     pub fn get(&self, key: i64) -> Option<i64> {
         // @begin 4b-c5
         self.data.get(&key).copied()
@@ -48,6 +52,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Marks the current state and returns the savepoint's id.
     pub fn savepoint(&mut self) -> u64 {
         // @begin 4b-c5
         let id = self.next_id;
@@ -58,6 +63,11 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Undoes every change made after savepoint `id`, newest first. The savepoint stays; later ones are dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`NoSuchSavepoint`] if `id` was never made or is already gone.
     pub fn rollback_to(&mut self, id: u64) -> Result<(), NoSuchSavepoint> {
         // @begin 4b-c5
         let at = self.marks.iter().position(|m| m.0 == id).ok_or(NoSuchSavepoint)?;
@@ -79,6 +89,11 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Forgets savepoint `id` and every later one, keeping their changes.
+    ///
+    /// # Errors
+    ///
+    /// [`NoSuchSavepoint`] if `id` was never made or is already gone.
     pub fn release(&mut self, id: u64) -> Result<(), NoSuchSavepoint> {
         // @begin 4b-c5
         let at = self.marks.iter().position(|m| m.0 == id).ok_or(NoSuchSavepoint)?;
@@ -88,6 +103,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Undoes every change, newest first.
     pub fn rollback_all(&mut self) {
         // @begin 4b-c5
         while let Some((key, old)) = self.undo.pop() {
@@ -105,6 +121,7 @@ impl SavepointTxn {
         // @end
     }
 
+    /// Ends the transaction and returns the final data.
     pub fn commit(self) -> BTreeMap<i64, i64> {
         // @begin 4b-c5
         self.data

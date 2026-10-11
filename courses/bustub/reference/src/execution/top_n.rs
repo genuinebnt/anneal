@@ -13,6 +13,7 @@ pub struct TopN {
 }
 
 impl TopN {
+    /// A selector of the `n` smallest keys pushed to it; among equal keys the earliest arrival wins.
     pub fn new(n: usize) -> TopN {
         // @begin 3g-c2
         TopN { n, heap: BinaryHeap::new(), arrivals: 0 }
@@ -20,6 +21,7 @@ impl TopN {
         // @end
     }
 
+    /// Offers a row. It is kept if fewer than `n` rows are held or it sorts before the worst one held, which is then dropped.
     pub fn push(&mut self, key: i64, payload: u32) {
         // @begin 3g-c2
         let item = (key, self.arrivals, payload);
@@ -39,6 +41,7 @@ impl TopN {
         // @end
     }
 
+    /// The number of rows held, at most `n`.
     pub fn len(&self) -> usize {
         // @begin 3g-c2
         self.heap.len()
@@ -50,6 +53,7 @@ impl TopN {
         self.len() == 0
     }
 
+    /// The held rows in key order, earlier arrivals first among equal keys.
     pub fn finish(self) -> Vec<(i64, u32)> {
         // @begin 3g-c2
         let mut v = self.heap.into_vec();

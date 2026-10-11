@@ -1,6 +1,7 @@
-//! Port of `index_scan_executor.cpp`: reads a table through one of its indexes. Without `pred_keys` it reads every row **in key order**
-//! (what `ORDER BY` on the indexed column wants); with `pred_keys` it looks each key up (what `WHERE col = constant` wants). Rows that
-//! are deleted, or that fail the plan's `filter_predicate`, are skipped.
+//! Reads a table through one of its indexes.
+//!
+//! Without `pred_keys` it reads every row **in key order**; with `pred_keys` it looks each key up. Rows that are deleted, or that fail the
+//! plan's `filter_predicate`, are skipped.
 
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ pub struct IndexScanExecutor<'e> {
     /// The rids to visit, in the order to visit them; `cursor` is how many were visited.
     rids: Vec<Rid>,
     cursor: usize,
-    /// The transaction to read as, with its manager (module 4b).
+    /// The transaction to read as, with its manager.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
 }
 

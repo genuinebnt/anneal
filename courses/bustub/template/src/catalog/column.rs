@@ -1,5 +1,4 @@
-//! Port of `src/include/catalog/column.h` and `src/catalog/column.cpp`: one column of a table: a name, a type and where its bytes
-//! are in a tuple.
+//! One column of a table: a name, a type and where its bytes are in a tuple.
 
 use crate::types::type_id::TypeId;
 
@@ -7,19 +6,23 @@ use crate::types::type_id::TypeId;
 pub struct Column {
     name: String,
     type_id: TypeId,
-    /// The column's storage size: the type's size, or for a VARCHAR the maximum length given when the column was declared.
+    /// The storage size: the type's size, or for a `VARCHAR` its declared maximum length.
     length: u32,
     /// Where the column's bytes start in a tuple; set by the schema that contains the column.
     offset: u32,
 }
 
 impl Column {
-    /// A column of a fixed-size type. BusTub's `Column(name, type)`. Panics for `Varchar` (use `new_varchar`) and `Invalid`.
+    /// A column of a fixed-size type.
+    ///
+    /// # Panics
+    ///
+    /// Panics for `Varchar` (use [`Column::new_varchar`]) and `Invalid`.
     pub fn new(name: &str, type_id: TypeId) -> Column {
         todo!("3b-01: remember the name and type; the length is the type's size; a VARCHAR here is a bug (panic); offset 0 until a schema sets it")
     }
 
-    /// A VARCHAR column that holds up to `length` bytes. BusTub's `Column(name, VARCHAR, length)`.
+    /// A `VARCHAR` column holding up to `length` bytes.
     pub fn new_varchar(name: &str, length: u32) -> Column {
         todo!("3b-01: a VARCHAR column with that maximum length")
     }

@@ -1,4 +1,4 @@
-//! Port of `values_executor.cpp`: `VALUES (...), (...)`. Given code.
+//! `VALUES (...), (...)`: one row per list of expressions.
 
 use super::abstract_executor::Executor;
 use crate::catalog::schema::Schema;

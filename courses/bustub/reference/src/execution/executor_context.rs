@@ -1,5 +1,4 @@
-//! Port of `src/include/execution/executor_context.h`: what an executor may use while it runs: the catalog, the buffer pool and the
-//! options of this execution. Given code.
+//! What an executor may use while it runs: the catalog, the buffer pool and the options of this execution.
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
@@ -25,10 +24,10 @@ pub struct ExecutorContext<'e> {
     nlj_check_exec_set: Mutex<Vec<(Arc<InitCheckCounters>, Arc<InitCheckCounters>)>>,
     check_options: CheckOptions,
     is_delete: bool,
-    /// The transaction the statement runs in (module 4); `None` runs it without versions, as modules 3e to 3h do.
+    /// The transaction the statement runs in; `None` runs it without versions.
     txn: Option<Arc<Transaction>>,
     txn_mgr: Option<&'e TransactionManager>,
-    /// Set for `EXPLAIN ANALYZE`: every executor is measured into it (module 3i).
+    /// Set for `EXPLAIN ANALYZE`: every executor is measured into it.
     analyze: Option<Arc<AnalyzeStats>>,
 }
 

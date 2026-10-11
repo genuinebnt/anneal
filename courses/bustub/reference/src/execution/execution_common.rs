@@ -1,5 +1,4 @@
-//! Port of `src/execution/execution_common.cpp` (the parts project 3 needs): the **sort key** of a tuple and the comparison of two sort
-//! entries. Sorting, top-N, and window functions all order rows with these.
+//! The **sort key** of a tuple and the comparison of two sort entries. Sorting, top-N and window functions all order rows with these.
 
 use std::cmp::Ordering;
 
@@ -25,7 +24,7 @@ pub fn generate_sort_key(tuple: &Tuple, order_bys: &[OrderBy], schema: &Schema) 
     // @end
 }
 
-/// Orders sort entries by their keys according to the ORDER BY list. BusTub's `TupleComparator`.
+/// Orders sort entries by their keys according to the `ORDER BY` list.
 #[derive(Clone, Debug)]
 pub struct TupleComparator {
     order_bys: Vec<OrderBy>,
@@ -97,13 +96,13 @@ impl TupleComparator {
 
 // ---- Project 4: versions ------------------------------------------------------------------------------------------------------------
 
-/// The schema of an undo log's tuple: only the columns the log modifies, in table order. Given.
+/// The schema of an undo log's tuple: only the columns the log modifies, in table order.
 pub fn get_undo_log_schema(schema: &Schema, modified_fields: &[bool]) -> Schema {
     let attrs: Vec<u32> = (0..schema.column_count()).filter(|&i| modified_fields[i as usize]).collect();
     Schema::copy_schema(schema, &attrs)
 }
 
-/// Are two values the same for versioning purposes? Two NULLs are; a NULL and a value are not. Given.
+/// Whether two values are the same for versioning: two NULLs are, a NULL and a value are not.
 pub fn same_value(a: &Value, b: &Value) -> bool {
     if a.is_null() || b.is_null() {
         return a.is_null() && b.is_null();
@@ -111,7 +110,7 @@ pub fn same_value(a: &Value, b: &Value) -> bool {
     a.compare_equals(b) == Ok(CmpBool::True)
 }
 
-/// A tuple of NULLs, one per column. Given.
+/// A tuple of NULLs, one per column.
 pub fn null_values(schema: &Schema) -> Vec<Value> {
     schema.columns().iter().map(|c| Value::null(c.type_id())).collect()
 }
@@ -240,8 +239,7 @@ pub fn generate_updated_undo_log(schema: &Schema, base_tuple: Option<&Tuple>, ta
     // @end
 }
 
-/// Prints every tuple of `table` with its version chain to stderr, the way BusTub's reference does (given). Use it in a test when a
-/// version is not what you expect:
+/// Prints every tuple of `table` with its version chain to stderr, for finding out why a version is not what you expect:
 ///
 /// ```text
 /// debug_hook: before the scan
@@ -310,7 +308,7 @@ pub fn is_write_write_conflict(meta: &TupleMeta, txn: &Transaction) -> bool {
     // @end
 }
 
-/// Taints `txn` and makes the error to return from the statement. Given.
+/// Taints `txn` and returns the error the statement fails with.
 pub fn write_write_conflict(txn: &Transaction) -> Exception {
     txn.set_tainted();
     Exception::new(ExceptionType::Execution, "write-write conflict")
@@ -364,8 +362,9 @@ pub fn modify_tuple(txn: &Arc<Transaction>, txn_mgr: &TransactionManager, table:
     // @end
 }
 
-/// The version of the tuple at `rid` that `txn` may see, with its metadata; `None` if it did not exist for `txn`. Reads the tuple and
-/// its link together, collects the logs and reconstructs, as the sequential scan does. Given: the index scan uses it.
+/// The version of the tuple at `rid` that `txn` may see, with its metadata; `None` if it did not exist for `txn`.
+///
+/// Reads the tuple and its link together, collects the undo logs and reconstructs, as a sequential scan does.
 pub fn read_visible_version(txn: &Transaction, txn_mgr: &TransactionManager, table: &TableInfo<'_>, rid: Rid) -> Result<Option<Tuple>> {
     let (meta, base_tuple, link) = get_tuple_and_undo_link(txn_mgr, table, rid)?;
     let Some(logs) = collect_undo_logs(rid, &meta, &base_tuple, link, txn, txn_mgr) else { return Ok(None) };
@@ -375,7 +374,7 @@ pub fn read_visible_version(txn: &Transaction, txn_mgr: &TransactionManager, tab
     }))
 }
 
-/// The predicate "true", recorded by a serializable scan that has no filter (it read everything). Given.
+/// The predicate "true": what a serializable scan with no filter records, since it read everything.
 pub fn true_predicate() -> crate::execution::expressions::abstract_expression::ExprRef {
     use crate::execution::expressions::constant_value_expression::ConstantValueExpression;
     Arc::new(ConstantValueExpression::new(Value::boolean(true)))

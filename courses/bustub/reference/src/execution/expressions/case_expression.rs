@@ -1,5 +1,5 @@
-//! `CASE WHEN c1 THEN r1 [WHEN c2 THEN r2 ...] [ELSE e] END`: the first branch whose condition is TRUE decides, and only that branch's
-//! result is evaluated. `COALESCE` and `NULLIF` are CASE expressions. Module 3i.
+//! `CASE WHEN c1 THEN r1 [WHEN c2 THEN r2 ...] [ELSE e] END`: the first branch whose condition is TRUE decides, and only that branch's result is
+//! evaluated. `COALESCE` and `NULLIF` are CASE expressions.
 
 use std::any::Any;
 use std::sync::Arc;

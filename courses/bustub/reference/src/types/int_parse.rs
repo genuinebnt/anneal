@@ -7,6 +7,8 @@ pub enum IntError {
     OutOfRange,
 }
 
+/// Parses a decimal integer: optional surrounding whitespace, an optional sign, then digits. `Err` for empty text, any other character or a value
+/// that does not fit an `i64`.
 pub fn parse_sql_int(s: &str) -> Result<i64, IntError> {
     // @begin 3a-c3
     let t = s.trim_matches(|c: char| c.is_ascii_whitespace());

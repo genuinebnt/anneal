@@ -1,5 +1,4 @@
-//! Port of `src/include/binder/bound_table_ref.h` and `binder/table_ref/*.h`: what a FROM clause refers to, after the names are
-//! resolved.
+//! What a `FROM` clause refers to, once names are resolved.
 
 use std::fmt;
 

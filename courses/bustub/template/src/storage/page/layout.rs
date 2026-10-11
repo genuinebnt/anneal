@@ -1,8 +1,7 @@
-//! Where the fields of BusTub's extendible hash pages live inside a page, written down as constants and checked at compile time.
+//! Where the fields of the extendible hash pages live inside a page, written down as constants and checked at compile time.
 //!
-//! BusTub declares each page as a C++ class (`class ExtendibleHTableDirectoryPage { uint32_t max_depth_; ... }`) and reinterprets
-//! the page's bytes as one. The compiler lays the fields out: this module states the same layout explicitly, so the Rust page
-//! views can read and write by offset, and a mismatch between the two descriptions is a compile error.
+//! The page views read and write by offset. Each layout is also described by a `repr(C)` struct with the same fields, and a mismatch between the
+//! two descriptions is a compile error.
 
 use std::mem::{offset_of, size_of};
 
@@ -16,7 +15,7 @@ pub const HTABLE_HEADER_ARRAY_SIZE: usize = 1 << HTABLE_HEADER_MAX_DEPTH;
 /// A bucket page starts with `size` and `max_size`, 4 bytes each.
 pub const HTABLE_BUCKET_PAGE_METADATA_SIZE: usize = 8;
 
-/// The directory page as the C++ compiler lays it out (`repr(C)` asks Rust for the same: fields in order, padded for alignment).
+/// The directory page as a `repr(C)` struct: fields in order, padded for alignment.
 #[repr(C)]
 struct DirectoryPage {
     max_depth: u32,

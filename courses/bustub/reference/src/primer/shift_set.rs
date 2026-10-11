@@ -19,6 +19,7 @@ pub fn home(key: u64, capacity: usize) -> usize {
 }
 
 impl ShiftSet {
+    /// An empty set of `capacity` slots (at least 1).
     pub fn new(capacity: usize) -> ShiftSet {
         // @begin 0c-c1
         ShiftSet { slots: vec![None; capacity.max(1)], len: 0 }
@@ -26,6 +27,7 @@ impl ShiftSet {
         // @end
     }
 
+    /// The number of slots.
     pub fn capacity(&self) -> usize {
         // @begin 0c-c1
         self.slots.len()
@@ -33,6 +35,7 @@ impl ShiftSet {
         // @end
     }
 
+    /// The number of keys.
     pub fn len(&self) -> usize {
         // @begin 0c-c1
         self.len
@@ -61,6 +64,7 @@ impl ShiftSet {
     //~ // TODO(0c-c1): a probe helper of your own
     // @end
 
+    /// Whether `key` is in the set.
     pub fn contains(&self, key: u64) -> bool {
         // @begin 0c-c1
         self.find(key).is_some()
@@ -68,6 +72,7 @@ impl ShiftSet {
         // @end
     }
 
+    /// How far `key` sits from its home slot; `None` if it is absent.
     pub fn probe_len(&self, key: u64) -> Option<usize> {
         // @begin 0c-c1
         let i = self.find(key)?;
@@ -77,6 +82,7 @@ impl ShiftSet {
         // @end
     }
 
+    /// Adds `key` in the first empty slot at or after its home slot. `Ok(false)` if it was already there, `Err(Full)` when no slot is left.
     pub fn insert(&mut self, key: u64) -> Result<bool, Full> {
         // @begin 0c-c1
         if self.find(key).is_some() {
@@ -97,6 +103,7 @@ impl ShiftSet {
         // @end
     }
 
+    /// Removes `key`; returns whether it was there. Later keys of the run move back into the hole when their home allows it, so no tombstone is left.
     pub fn remove(&mut self, key: u64) -> bool {
         // @begin 0c-c1
         let Some(mut hole) = self.find(key) else { return false };

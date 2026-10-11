@@ -20,6 +20,7 @@ pub struct MirroredDisk {
 }
 
 impl MirroredDisk {
+    /// A mirror over two disks that hold the same pages.
     pub fn new(primary: Arc<dyn DiskIo>, secondary: Arc<dyn DiskIo>) -> MirroredDisk {
         // @begin 1a-c1
         MirroredDisk { primary, secondary, stale: Mutex::new((HashSet::new(), HashSet::new())) }

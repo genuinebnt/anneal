@@ -1,5 +1,5 @@
-//! `text LIKE pattern`: `%` matches any run of characters (including none), `_` matches exactly one character, and a backslash makes
-//! the next character literal. NULL on either side gives NULL. Module 3i.
+//! `text LIKE pattern`: `%` matches any run of characters (including none), `_` matches exactly one character, and a backslash makes the next
+//! character literal. NULL on either side gives NULL.
 
 use std::any::Any;
 use std::sync::Arc;

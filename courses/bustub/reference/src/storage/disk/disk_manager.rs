@@ -1,9 +1,5 @@
-//! Port of `src/storage/disk/disk_manager.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University
-//! Database Group).
-//!
-//! The disk manager reads and writes pages to and from a file, and a log to a second file. Pages are named by
-//! `PageId`; where a page lives in the file is the disk manager's own business. Everything about the layout, the
-//! bookkeeping and the locking is yours to design: the tests only use the public methods in this file.
+//! The disk manager reads and writes pages to and from a file, and a log to a second file. Pages are named by `PageId`; where a page lives in the
+//! file is the disk manager's own business.
 
 use std::io;
 use std::path::Path;
@@ -123,7 +119,7 @@ impl DiskManager {
         // @end
     }
 
-    /// Syncs both files to disk. (BusTub's `ShutDown()`.)
+    /// Syncs both files to disk.
     pub fn shut_down(&self) -> io::Result<()> {
         // @begin 1a-05
         self.db_io.lock().unwrap().file.sync_all()?;
@@ -148,7 +144,7 @@ impl DiskManager {
         // @end
     }
 
-    /// The db file's size in bytes right now. (BusTub's `GetDbFileSize()`.)
+    /// The db file's size in bytes right now.
     pub fn get_db_file_size(&self) -> u64 {
         // @begin 1a-01
         std::fs::metadata(&self.db_file_name).expect("the db file exists").len()
@@ -268,9 +264,8 @@ impl DiskManager {
     }
 }
 
-/// What the rest of BusTub needs from a disk: read, write and delete pages. [`DiskManager`] is the real one;
-/// [`DiskManagerMemory`](super::disk_manager_memory::DiskManagerMemory) and `DiskManagerUnlimitedMemory` keep pages in
-/// memory. In BusTub these are virtual methods of the `DiskManager` base class; in Rust that is a trait.
+/// What the rest of the system needs from a disk: read, write and delete pages. [`DiskManager`] is the real one;
+/// [`DiskManagerMemory`](super::disk_manager_memory::DiskManagerMemory) and `DiskManagerUnlimitedMemory` keep pages in memory.
 pub trait DiskIo: Send + Sync {
     fn read_page(&self, page_id: PageId, buf: &mut PageData) -> io::Result<()>;
     fn write_page(&self, page_id: PageId, data: &PageData) -> io::Result<()>;

@@ -8,6 +8,7 @@ pub struct KMerge {
 }
 
 impl KMerge {
+    /// A merge over sorted `runs`, with a heap that holds the next key of each run.
     pub fn new(runs: Vec<Vec<i64>>) -> KMerge {
         todo!("2c-c4: a heap holding the first key of each run")
     }

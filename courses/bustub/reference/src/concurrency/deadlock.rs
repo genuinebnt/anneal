@@ -18,6 +18,7 @@ pub struct WaitsForGraph {
 }
 
 impl WaitsForGraph {
+    /// A graph with no edges.
     pub fn new() -> WaitsForGraph {
         // @begin 4d-06
         WaitsForGraph { edges: BTreeMap::new() }
@@ -33,6 +34,7 @@ impl WaitsForGraph {
         // @end
     }
 
+    /// Removes the edge `from` → `to`, if present.
     pub fn remove_edge(&mut self, from: TxnId, to: TxnId) {
         // @begin 4d-06
         if let Some(set) = self.edges.get_mut(&from) {
@@ -101,6 +103,7 @@ pub struct DeadlockDetector {
 }
 
 impl DeadlockDetector {
+    /// Starts a thread that runs deadlock detection on `manager` every `every`, until the returned detector is dropped.
     pub fn start(manager: Arc<LockManager>, every: Duration) -> DeadlockDetector {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);

@@ -23,6 +23,7 @@ struct PoolState<'a> {
 // @end
 
 impl<'a> SessionPool<'a> {
+    /// An empty pool that may create up to `max` sessions (at least 1).
     pub fn new(db: &'a BusTubInstance, max: usize) -> SessionPool<'a> {
         // @begin 4e-c5
         SessionPool { db, max: max.max(1), state: Mutex::new(PoolState { idle: Vec::new(), created: 0 }), freed: Condvar::new() }

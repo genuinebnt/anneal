@@ -1,6 +1,5 @@
-//! Port of `src/include/type/limits.h`. BusTub reserves the smallest value of each integer type (`INT_MIN`, ...) as the encoding of
-//! SQL NULL, so the smallest *usable* value is one above it (`BUSTUB_INT32_MIN = INT_MIN + 1`). A value constructed with the reserved
-//! number is a NULL. Given code.
+//! The smallest value of each integer type (`INT_MIN`, ...) is reserved as the encoding of SQL NULL, so the smallest *usable* value is one above
+//! it. A value constructed with the reserved number is a NULL.
 
 pub const DBL_LOWEST: f64 = f64::MIN;
 

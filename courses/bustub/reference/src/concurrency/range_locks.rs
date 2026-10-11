@@ -18,6 +18,7 @@ pub struct RangeLocks {
 }
 
 impl RangeLocks {
+    /// A set of range locks with none held.
     pub fn new() -> RangeLocks {
         // @begin 4d-c2
         RangeLocks { held: Vec::new() }
@@ -25,6 +26,13 @@ impl RangeLocks {
         // @end
     }
 
+    /// Locks the half-open range `lo..hi` for `txn` in `mode`; returns whether it was granted.
+    ///
+    /// A lock is refused when it overlaps an incompatible lock of another transaction; two shared locks are compatible.
+    ///
+    /// # Errors
+    ///
+    /// [`EmptyRange`] if `lo >= hi`.
     pub fn try_lock(&mut self, txn: u32, lo: i64, hi: i64, mode: Mode) -> Result<bool, EmptyRange> {
         // @begin 4d-c2
         if lo >= hi {
@@ -40,6 +48,7 @@ impl RangeLocks {
         // @end
     }
 
+    /// Releases every lock `txn` holds and returns how many there were.
     pub fn unlock_all(&mut self, txn: u32) -> usize {
         // @begin 4d-c2
         let before = self.held.len();
@@ -49,6 +58,7 @@ impl RangeLocks {
         // @end
     }
 
+    /// How many locks `txn` holds.
     pub fn held_by(&self, txn: u32) -> usize {
         // @begin 4d-c2
         self.held.iter().filter(|h| h.0 == txn).count()

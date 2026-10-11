@@ -1,8 +1,7 @@
-//! Port of `src/include/primer/hyperloglog.h` / `hyperloglog_presto.h` and their `.cpp` files: **HyperLogLog** estimates how many
-//! *distinct* items a stream contains, in a few kilobytes. Hash every item to 64 bits. The first `b` bits pick one of `m = 2^b`
-//! registers; in the other bits, the run of zeros ahead of the first (or after the last) 1 bit is rare: a run of `r` happens with
-//! probability `2^-r`, so seeing run length `r` suggests about `2^r` distinct items went by. Each register keeps the longest run it has
-//! seen, and the registers' estimates are combined with a harmonic mean, which resists one lucky register.
+//! **HyperLogLog** estimates how many *distinct* items a stream contains, in a few kilobytes. Hash every item to 64 bits. The first `b` bits pick
+//! one of `m = 2^b` registers; in the other bits, the run of zeros ahead of the first (or after the last) 1 bit is rare: a run of `r` happens with
+//! probability `2^-r`, so seeing run length `r` suggests about `2^r` distinct items went by. Each register keeps the longest run it has seen, and
+//! the registers' estimates are combined with a harmonic mean, which resists one lucky register.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -10,10 +9,10 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::Mutex;
 
-/// The bias correction of the estimator used by the course.
+/// The bias correction of the estimator.
 const CONSTANT: f64 = 0.79402;
 
-/// A 64-bit hash with well-mixed bits (given): `DefaultHasher`, then a final avalanche so that every bit position is usable.
+/// A 64-bit hash with well-mixed bits: `DefaultHasher`, then a final avalanche so that every bit position is usable.
 fn hash64<K: Hash>(val: &K) -> u64 {
     let mut hasher = DefaultHasher::new();
     val.hash(&mut hasher);
@@ -77,7 +76,7 @@ pub struct HyperLogLogPresto<K> {
     // TODO(0d-03): your fields: the dense low bits, the sparse overflow bits, the last estimate
 }
 
-/// The hash Presto's sketch uses for a key (given): integers hash to themselves, so tests can pick the bits; anything else is hashed.
+/// The hash the sketch uses for a key: integers hash to themselves, so a caller can choose the bits; anything else is hashed.
 pub trait PrestoHash {
     fn presto_hash(&self) -> u64;
 }
@@ -95,10 +94,12 @@ impl PrestoHash for String {
 }
 
 impl<K: PrestoHash> HyperLogLogPresto<K> {
+    /// A sketch with `2^n` registers, all zero (none for a negative `n`).
     pub fn new(n_leading_bits: i16) -> HyperLogLogPresto<K> {
         todo!("0d-03: 2^n registers, all zero, no overflow bits (none at all for a negative n)")
     }
 
+    /// The stored estimate, as of the last [`compute_cardinality`](Self::compute_cardinality).
     pub fn cardinality(&self) -> u64 {
         todo!("0d-03: the stored estimate")
     }
@@ -115,10 +116,13 @@ impl<K: PrestoHash> HyperLogLogPresto<K> {
 
     // TODO(0d-03): helpers of your own (the whole value of a register)
 
+    /// Takes `val` into account. The register is the top `n` bits of its hash; the run is the number of trailing zeros of the other bits (all zero:
+    /// `64 - n`). A register only grows.
     pub fn add_elem(&self, val: &K) {
         todo!("0d-03: the register is the top n bits of the hash; its run is the trailing zeros of the other 64 - n bits (all zero: 64 - n); under both locks, held together: if larger than the register's value store the low 4 bits densely and bits 4 to 6 in the overflow map")
     }
 
+    /// Recomputes the estimate from the registers, dense and overflow parts joined, as [`HyperLogLog`] does, and stores it.
     pub fn compute_cardinality(&self) {
         todo!("0d-03: the same estimate as HyperLogLog, over the registers rebuilt from dense and overflow bits")
     }

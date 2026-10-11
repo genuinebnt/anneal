@@ -13,6 +13,7 @@ pub struct EvolvingTable {
 }
 
 impl EvolvingTable {
+    /// An empty table with `columns` columns.
     pub fn new(columns: usize) -> EvolvingTable {
         // @begin 3c-c5
         EvolvingTable { rows: Vec::new(), columns: (0..columns).map(|i| (i, 0)).collect(), stored_width: columns }
@@ -20,6 +21,7 @@ impl EvolvingTable {
         // @end
     }
 
+    /// The number of columns now.
     pub fn columns(&self) -> usize {
         // @begin 3c-c5
         self.columns.len()
@@ -27,6 +29,7 @@ impl EvolvingTable {
         // @end
     }
 
+    /// Appends a row of one value per column and returns its row id; `None` if the row has the wrong number of values.
     pub fn insert(&mut self, row: &[i64]) -> Option<usize> {
         // @begin 3c-c5
         if row.len() != self.columns.len() {
@@ -42,6 +45,7 @@ impl EvolvingTable {
         // @end
     }
 
+    /// Adds a column at the end. Rows stored earlier read it as `default`; no stored row is rewritten.
     pub fn add_column(&mut self, default: i64) {
         // @begin 3c-c5
         self.columns.push((self.stored_width, default));
@@ -50,6 +54,9 @@ impl EvolvingTable {
         // @end
     }
 
+    /// Hides column `i` from every row and shifts the later columns down by one; returns whether there was such a column.
+    ///
+    /// No stored row is rewritten.
     pub fn drop_column(&mut self, i: usize) -> bool {
         // @begin 3c-c5
         if i >= self.columns.len() {
@@ -61,6 +68,7 @@ impl EvolvingTable {
         // @end
     }
 
+    /// Row `rid` as the current schema sees it: dropped columns are gone, added ones read their default. `None` for an unknown row.
     pub fn get(&self, rid: usize) -> Option<Vec<i64>> {
         // @begin 3c-c5
         let stored = self.rows.get(rid)?;

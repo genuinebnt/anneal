@@ -37,6 +37,7 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Passes on the child's rows for which `pred` holds.
     pub fn new(child: Box<dyn Executor>, pred: impl Fn(&Row) -> bool + 'static) -> Filter {
         todo!("3e-c1: remember the child and the predicate")
     }
@@ -53,6 +54,7 @@ pub struct Project {
 }
 
 impl Project {
+    /// Keeps the columns `cols` of the child's rows, in that order.
     pub fn new(child: Box<dyn Executor>, cols: Vec<usize>) -> Project {
         todo!("3e-c1: remember the child and the columns")
     }
@@ -69,6 +71,7 @@ pub struct Limit {
 }
 
 impl Limit {
+    /// Passes on at most `limit` rows after skipping the first `offset`.
     pub fn new(child: Box<dyn Executor>, limit: usize, offset: usize) -> Limit {
         todo!("3e-c1: remember the child, the limit and the offset")
     }
@@ -85,6 +88,7 @@ pub struct Concat {
 }
 
 impl Concat {
+    /// Produces every row of `a`, then every row of `b`.
     pub fn new(a: Box<dyn Executor>, b: Box<dyn Executor>) -> Concat {
         todo!("3e-c1: remember both children")
     }

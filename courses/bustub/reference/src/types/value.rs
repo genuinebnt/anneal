@@ -1,9 +1,7 @@
-//! Port of `src/include/type/value.h` and the per-type files of `src/type/` (`integer_type.cpp`, `varlen_type.cpp`, ...). BusTub has
-//! one `Type` subclass per SQL type and a `Value` holding a tagged union; the Rust spelling is one `enum Value` and `match`.
+//! A `Value` is a SQL value: a number, a boolean, a string or **NULL** (which still has a type).
 //!
-//! A `Value` is a SQL value: a number, a boolean, a string or **NULL** (which still has a type). Like BusTub:
-//! * the smallest number of each integer type is reserved as the stored encoding of NULL, so constructing a `Value` with it
-//!   gives a NULL (`Value::integer(i32::MIN)` is `NULL`), and the smallest usable value is one above it;
+//! * the smallest number of each integer type is reserved as the stored encoding of NULL, so constructing a `Value` with it gives a NULL
+//!   (`Value::integer(i32::MIN)` is `NULL`), and the smallest usable value is one above it;
 //! * comparisons answer with a three-valued [`CmpBool`] (`NULL = 1` is neither true nor false);
 //! * arithmetic with a NULL is NULL; overflow, a bad cast and a division by zero are [`Exception`]s.
 
@@ -13,7 +11,7 @@ use super::limits::*;
 use super::type_id::TypeId;
 use crate::common::exception::{Exception, ExceptionType, Result};
 
-/// A comparison's answer in SQL's three-valued logic. BusTub's `CmpBool`.
+/// A comparison's answer in SQL's three-valued logic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CmpBool {
     False,
@@ -41,7 +39,7 @@ pub enum Value {
     Integer(i32),
     BigInt(i64),
     Decimal(f64),
-    /// A timestamp is carried and compared as a number; this course does not parse or format dates.
+    /// A timestamp is carried and compared as a number; dates are not parsed or formatted.
     Timestamp(u64),
     Varchar(String),
 }
@@ -57,7 +55,7 @@ fn out_of_range() -> Exception {
 impl Value {
     // ---- 3a-01 · constructing values ----------------------------------------------------------------------------------------
 
-    /// NULL of `type_id`. BusTub: `Value(type_id)`.
+    /// NULL of `type_id`.
     pub fn null(type_id: TypeId) -> Value {
         // @begin 3a-01
         Value::Null(type_id)
@@ -65,6 +63,7 @@ impl Value {
         // @end
     }
 
+    /// A BOOLEAN.
     pub fn boolean(b: bool) -> Value {
         // @begin 3a-01
         Value::Boolean(b)
@@ -84,6 +83,7 @@ impl Value {
         // @end
     }
 
+    /// A SMALLINT; as for [`tinyint`](Self::tinyint), the smallest `i16` is the NULL encoding.
     pub fn smallint(v: i16) -> Value {
         // @begin 3a-01
         if v == BUSTUB_INT16_NULL {
@@ -95,6 +95,7 @@ impl Value {
         // @end
     }
 
+    /// An INTEGER; as for [`tinyint`](Self::tinyint), the smallest `i32` is the NULL encoding.
     pub fn integer(v: i32) -> Value {
         // @begin 3a-01
         if v == BUSTUB_INT32_NULL {
@@ -106,6 +107,7 @@ impl Value {
         // @end
     }
 
+    /// A BIGINT; as for [`tinyint`](Self::tinyint), the smallest `i64` is the NULL encoding.
     pub fn bigint(v: i64) -> Value {
         // @begin 3a-01
         if v == BUSTUB_INT64_NULL {
@@ -129,6 +131,7 @@ impl Value {
         // @end
     }
 
+    /// A TIMESTAMP; `u64::MAX` is the TIMESTAMP NULL.
     pub fn timestamp(v: u64) -> Value {
         // @begin 3a-01
         if v == BUSTUB_TIMESTAMP_NULL {
@@ -140,6 +143,7 @@ impl Value {
         // @end
     }
 
+    /// A VARCHAR holding `s`.
     pub fn varchar(s: &str) -> Value {
         // @begin 3a-01
         Value::Varchar(s.to_owned())
@@ -147,6 +151,7 @@ impl Value {
         // @end
     }
 
+    /// The type of the value; a NULL has the type it was made with.
     pub fn type_id(&self) -> TypeId {
         // @begin 3a-01
         match self {
@@ -164,6 +169,7 @@ impl Value {
         // @end
     }
 
+    /// Whether the value is NULL.
     pub fn is_null(&self) -> bool {
         // @begin 3a-01
         matches!(self, Value::Null(_))
@@ -210,8 +216,8 @@ impl Value {
         }
     }
 
-    /// Can `self` be compared with `other`? BusTub's `Value::CheckComparable`: a boolean with a boolean or a string, a number with a
-    /// number or a string, a string with anything, a timestamp with a timestamp.
+    /// Whether `self` can be compared with `other`: a boolean with a boolean or a string, a number with a number or a string, a string with anything, a
+    /// timestamp with a timestamp.
     pub fn check_comparable(&self, other: &Value) -> bool {
         // @begin 3a-01
         use TypeId::*;
@@ -228,13 +234,12 @@ impl Value {
 
     // ---- 3a-02 · casting ----------------------------------------------------------------------------------------------------
 
-    /// Converts the value to another type (BusTub's `CastAs`).
-    /// * Numbers (integers and decimal) convert to each other and to `Varchar` (the number as text). A narrower integer type must be
-    ///   able to hold the number (else `OutOfRange`); a decimal truncates toward zero.
-    /// * A `Varchar` converts to a boolean (`true`/`1`/`t`, `false`/`0`/`f`, any case), a number (the leading number in the text: `"32"`,
-    ///   `" -7"`, `"12abc"` is 12) or itself. No digits is a `Conversion` error.
-    /// * A boolean converts to itself and to `Varchar`; a timestamp to itself and to `Varchar`. Anything else is an error ("X is not
-    ///   coercable to Y").
+    /// Converts the value to another type.
+    /// * Numbers (integers and decimal) convert to each other and to `Varchar` (the number as text). A narrower integer type must be able to hold the
+    ///   number (else `OutOfRange`); a decimal truncates toward zero.
+    /// * A `Varchar` converts to a boolean (`true`/`1`/`t`, `false`/`0`/`f`, any case), a number (the leading number in the text: `"32"`, `" -7"`,
+    ///   `"12abc"` is 12) or itself. No digits is a `Conversion` error.
+    /// * A boolean converts to itself and to `Varchar`; a timestamp to itself and to `Varchar`. Anything else is an error ("X is not coercable to Y").
     /// * A NULL converts to the NULL of the target type (if the conversion is allowed at all).
     pub fn cast_as(&self, to: TypeId) -> Result<Value> {
         // @begin 3a-02
@@ -309,6 +314,7 @@ impl Value {
     //~ // TODO(3a-03): a private helper of yours (its name and shape are your choice).
     // @end
 
+    /// `Null` if either is NULL, else whether `self == other`.
     pub fn compare_equals(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_eq())
@@ -316,6 +322,7 @@ impl Value {
         // @end
     }
 
+    /// `Null` if either is NULL, else whether `self != other`.
     pub fn compare_not_equals(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_ne())
@@ -323,6 +330,7 @@ impl Value {
         // @end
     }
 
+    /// `Null` if either is NULL, else whether `self < other`.
     pub fn compare_less_than(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_lt())
@@ -330,6 +338,7 @@ impl Value {
         // @end
     }
 
+    /// `Null` if either is NULL, else whether `self <= other`.
     pub fn compare_less_than_equals(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_le())
@@ -337,6 +346,7 @@ impl Value {
         // @end
     }
 
+    /// `Null` if either is NULL, else whether `self > other`.
     pub fn compare_greater_than(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_gt())
@@ -344,6 +354,7 @@ impl Value {
         // @end
     }
 
+    /// `Null` if either is NULL, else whether `self >= other`.
     pub fn compare_greater_than_equals(&self, other: &Value) -> Result<CmpBool> {
         // @begin 3a-03
         self.cmp_with(other, |o| o.is_ge())
@@ -351,7 +362,7 @@ impl Value {
         // @end
     }
 
-    /// Equal in the sense of grouping and hashing, not of SQL: two NULLs are equal here (BusTub's `CompareExactlyEquals`).
+    /// Equal in the sense of grouping and hashing, not of SQL: two NULLs are equal here.
     pub fn compare_exactly_equals(&self, other: &Value) -> bool {
         // @begin 3a-03
         if self.is_null() && other.is_null() {
@@ -364,8 +375,7 @@ impl Value {
 
     // ---- 3a-04 · arithmetic -------------------------------------------------------------------------------------------------
 
-    /// What an arithmetic operation with a NULL gives: the NULL of the result type (the wider integer type, or DECIMAL if either side is a
-    /// decimal). BusTub's `OperateNull`.
+    /// What an arithmetic operation with a NULL gives: the NULL of the result type (the wider integer type, or DECIMAL if either side is a decimal).
     pub fn operate_null(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         let (a, b) = (self.type_id(), other.type_id());
@@ -378,6 +388,7 @@ impl Value {
         // @end
     }
 
+    /// Whether a numeric value is zero; any other type is a `NotImplemented` error.
     pub fn is_zero(&self) -> Result<bool> {
         // @begin 3a-04
         match self {
@@ -438,6 +449,7 @@ impl Value {
     //~ // TODO(3a-04): a private helper of yours (its name and shape are your choice).
     // @end
 
+    /// `self + other`.
     pub fn add(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         self.arithmetic(other, Op::Add)
@@ -445,6 +457,7 @@ impl Value {
         // @end
     }
 
+    /// `self - other`.
     pub fn subtract(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         self.arithmetic(other, Op::Subtract)
@@ -452,6 +465,7 @@ impl Value {
         // @end
     }
 
+    /// `self * other`.
     pub fn multiply(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         self.arithmetic(other, Op::Multiply)
@@ -459,6 +473,7 @@ impl Value {
         // @end
     }
 
+    /// `self / other`; integers divide toward zero.
     pub fn divide(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         self.arithmetic(other, Op::Divide)
@@ -466,6 +481,7 @@ impl Value {
         // @end
     }
 
+    /// `self % other`.
     pub fn modulo(&self, other: &Value) -> Result<Value> {
         // @begin 3a-04
         self.arithmetic(other, Op::Modulo)
@@ -524,8 +540,8 @@ impl Value {
 
     // ---- 3a-05 · storage ----------------------------------------------------------------------------------------------------
 
-    /// How many bytes `serialize_to` writes. Fixed-size types: their size. A `Varchar`: a 4-byte length, then the text and a terminating
-    /// zero byte (the length counts that zero byte, like BusTub's `GetStorageSize`); a NULL string is just the 4-byte marker.
+    /// How many bytes `serialize_to` writes. Fixed-size types: their size. A `Varchar`: a 4-byte length, then the text and a terminating zero byte
+    /// (the length counts that zero byte); a NULL string is just the 4-byte marker.
     pub fn storage_size(&self) -> usize {
         // @begin 3a-05
         match self {
@@ -721,8 +737,8 @@ fn leading_number(s: &str, decimal: bool) -> Option<&str> {
 // @end
 
 impl fmt::Display for Value {
-    /// BusTub's `ToString`: booleans `true`/`false`, integers in decimal, decimals with six digits after the point (`3.140000`, C++'s
-    /// `std::to_string`), strings as they are, timestamps as the number; a NULL as `<type>_null` (`integer_null`, `varlen_null`, ...).
+    /// Booleans as `true`/`false`, integers in decimal, decimals with six digits after the point (`3.140000`), strings as they are, timestamps as the
+    /// number; a NULL as `<type>_null` (`integer_null`, `varlen_null`, ...).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // @begin 3a-01
         match self {

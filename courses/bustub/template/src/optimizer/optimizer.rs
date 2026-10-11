@@ -1,8 +1,6 @@
-//! Port of `src/optimizer/*.cpp`. The optimizer rewrites a plan into one that produces the same result faster: each *rule* is a
-//! function from a plan to a plan that looks for a pattern (a filter on a nested loop join, a sort over a scan) and replaces it. Rules
-//! work bottom-up: optimise the children, rebuild the node, then look at the node. Plans are never edited in place.
-//!
-//! The rules the course asks you to write are marked (they return their input until you do); the others are given.
+//! The optimizer rewrites a plan into one that produces the same result faster. Each *rule* is a function from a plan to a plan that looks for a
+//! pattern (a filter on a nested loop join, a sort over a scan) and replaces it. Rules work bottom-up: optimise the children, rebuild the node,
+//! then look at the node. Plans are never edited in place.
 
 use std::sync::Arc;
 
@@ -26,8 +24,8 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         Optimizer { catalog, force_starter_rule }
     }
 
-    /// The rules to apply, in order. `set force_optimizer_starter_rule=yes` selects the rules BusTub gives you (a nested index join
-    /// instead of a hash join, no top-N); otherwise the rules you write are used.
+    /// Applies the rules in order. With `set force_optimizer_starter_rule=yes` a smaller rule set is used (a nested index join instead of a hash
+    /// join, no top-N).
     pub fn optimize(&self, plan: &PlanRef) -> Result<PlanRef> {
         let mut p = plan.clone();
         if self.force_starter_rule {
@@ -49,7 +47,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
         Ok(p)
     }
 
-    /// The number of rows BusTub assumes a table has, from its name (`..._1m`, `..._100k`, ...). For choosing the order of a join.
+    /// The number of rows assumed for a table, from the suffix of its name (`..._1m`, `..._100k`, ...), for choosing the order of a join.
     pub fn estimated_cardinality(table_name: &str) -> Option<usize> {
         [("_1m", 1_000_000), ("_100k", 100_000), ("_50k", 50_000), ("_10k", 10_000), ("_1k", 1_000), ("_100", 100)]
             .iter()
@@ -246,7 +244,7 @@ impl<'c, 'a> Optimizer<'c, 'a> {
     }
 
 
-    // ---- filters and outer joins (module 3j) --------------------------------------------------------------------------------
+    // ---- filters and outer joins --------------------------------------------------------------------------------
 
     /// The `col_idx` of every column the expression reads (all with tuple index 0: this is a filter, before it is merged into a join).
     pub fn columns_read(expr: &ExprRef, out: &mut Vec<u32>) {

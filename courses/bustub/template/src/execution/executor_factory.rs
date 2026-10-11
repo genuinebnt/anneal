@@ -1,5 +1,4 @@
-//! Port of `src/execution/executor_factory.cpp`: the executor for a plan node. Given code. (The executors that the course's modules ask
-//! you to write are created here too, once they exist.)
+//! Creates the executor for a plan node.
 
 use super::executor_context::ExecutorContext;
 use super::executors::abstract_executor::ExecutorBox;

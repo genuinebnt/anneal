@@ -8,10 +8,12 @@ pub struct TimedLatch {
 }
 
 impl TimedLatch {
+    /// A latch that is free.
     pub fn new() -> TimedLatch {
         todo!("1g-c4: a free latch")
     }
 
+    /// Takes the latch if it is free, without waiting; returns whether it did.
     pub fn try_acquire(&self) -> bool {
         todo!("1g-c4: take the latch if it is free")
     }

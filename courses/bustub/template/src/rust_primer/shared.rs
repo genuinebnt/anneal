@@ -41,6 +41,7 @@ impl<T> BoundedQueue<T> {
         todo!("r-04: set the flag under the lock, then wake everybody (notify_all) on both condition variables")
     }
 
+    /// The number of values waiting.
     pub fn len(&self) -> usize {
         todo!("r-04: the number of waiting values")
     }
@@ -57,6 +58,7 @@ pub struct IdGenerator {
 }
 
 impl IdGenerator {
+    /// A generator whose first number is 0.
     pub fn new() -> IdGenerator {
         todo!("r-04: start at 0")
     }

@@ -1,5 +1,4 @@
-//! The syntax tree the parser builds. It is what PostgreSQL's parser would give BusTub's binder (`PGSelectStmt`, `PGAExpr`, ...), in
-//! Rust enums. Identifiers are lower-cased unless they were quoted, as PostgreSQL does. Given code.
+//! The syntax tree the parser builds, as Rust enums. Identifiers are lower-cased unless they were quoted, as PostgreSQL does.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Statement {
@@ -161,9 +160,8 @@ pub enum FrameBound {
 
 // ---- visiting every expression of a statement -------------------------------------------------------------------------------
 
-/// Calls `f` on every expression of the statements (and of each expression's children, after `f` has run on it): select items, WHERE,
-/// GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET, JOIN ... ON, VALUES rows, assignments, filters, window specifications, subqueries and
-/// CTEs. Given code.
+/// Calls `f` on every expression of the statements, and on each expression's children after `f` has run on it: select items, WHERE, GROUP BY,
+/// HAVING, ORDER BY, LIMIT, OFFSET, JOIN ... ON, VALUES rows, assignments, filters, window specifications, subqueries and CTEs.
 pub fn visit_exprs_mut(statements: &mut [Statement], f: &mut dyn FnMut(&mut Expr)) {
     fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         f(e);

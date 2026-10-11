@@ -1,4 +1,4 @@
-//! Port of `limit_executor.cpp`: passes on the first `limit` tuples of the child and then stops (without reading the rest).
+//! Passes on the first `limit` tuples of the child and then stops, without reading the rest.
 
 use super::abstract_executor::{Executor, ExecutorBox};
 use crate::catalog::schema::Schema;

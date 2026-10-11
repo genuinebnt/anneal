@@ -1,6 +1,6 @@
 //! The random height of a skip-list node.
 
-/// A small seeded xorshift generator (given).
+/// A small seeded xorshift generator.
 pub struct XorShift(u64);
 
 impl XorShift {
@@ -28,6 +28,7 @@ pub struct LevelGenerator {
 }
 
 impl LevelGenerator {
+    /// A generator seeded with `seed`: levels are drawn from `1..=max_level`, each one `branching` times rarer than the one below.
     pub fn new(seed: u64, branching: u64, max_level: usize) -> LevelGenerator {
         // @begin 0b-c1
         LevelGenerator { rng: XorShift::new(seed), branching: branching.max(2), max_level: max_level.max(1) }

@@ -1,13 +1,13 @@
-//! Port of `src/include/execution/executors/abstract_executor.h`. BusTub's executors use the **iterator** (Volcano) model with
-//! batches: `init` prepares, then `next` is called until it says there is nothing more; each call fills a batch of up to `batch_size`
-//! tuples (and the rids they came from). A parent pulls from its children the same way. Given code.
+//! Executors pull rows in the iterator (Volcano) model, in batches: `init` prepares, then `next` is called until it reports nothing more.
+//!
+//! Each call fills a batch of up to `batch_size` tuples and the rids they came from; a parent pulls from its children the same way.
 
 use crate::catalog::schema::Schema;
 use crate::common::exception::Result;
 use crate::common::rid::Rid;
 use crate::storage::table::tuple::Tuple;
 
-/// The number of tuples an executor produces per call to `next`. BusTub's `BUSTUB_BATCH_SIZE`.
+/// The number of tuples an executor produces per call to `next`.
 pub const BUSTUB_BATCH_SIZE: usize = 20;
 
 pub trait Executor {
@@ -25,8 +25,9 @@ pub trait Executor {
 /// A boxed executor. The lifetime is the executor context's: executors borrow the catalog.
 pub type ExecutorBox<'e> = Box<dyn Executor + 'e>;
 
-/// One tuple at a time from an executor that produces batches. Executors that combine two inputs (joins) think in single tuples ("the
-/// next left tuple", "the next right tuple"); this wraps a child, keeps its current batch and refills it when it is used up. Given code.
+/// One tuple at a time from an executor that produces batches.
+///
+/// Executors that combine two inputs think in single tuples ("the next left tuple"); this wraps a child, keeps its current batch and refills it when it is used up.
 pub struct TupleStream<'e> {
     child: ExecutorBox<'e>,
     batch: Vec<Tuple>,

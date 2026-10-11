@@ -10,14 +10,18 @@ impl<I: Iterator> Rewindable<I>
 where
     I::Item: Clone,
 {
+    /// Wraps `inner`; nothing is marked, so nothing is buffered.
     pub fn new(inner: I) -> Rewindable<I> {
         todo!("3e-c5: wrap the iterator, nothing marked")
     }
 
+    /// Marks the current position: from here on, items read are kept so that [`reset`](Self::reset) can replay them. Items still waiting to be replayed
+    /// come after the mark and stay buffered.
     pub fn mark(&mut self) {
         todo!("3e-c5: forget what was read before this point, keep what is yet to be replayed")
     }
 
+    /// Goes back to the mark, so the items read since are produced again. Without a mark it does nothing.
     pub fn reset(&mut self) {
         todo!("3e-c5: replay everything since the mark")
     }

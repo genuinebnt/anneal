@@ -1,6 +1,5 @@
-//! Port of `src/include/primer/trie_store.h` and `src/primer/trie_store.cpp`: a thread-safe store over a persistent [`Trie`]. Readers take
-//! a snapshot (a clone of the root pointer, cheap) and read it without holding any lock; one writer at a time builds the next version
-//! and publishes it by swapping the root.
+//! A thread-safe store over a persistent [`Trie`]. Readers take a snapshot (a clone of the root pointer, cheap) and read it without holding any
+//! lock; one writer at a time builds the next version and publishes it by swapping the root.
 
 use std::any::Any;
 use std::ops::Deref;
@@ -36,10 +35,12 @@ impl TrieStore {
         todo!("0a-03: take the root lock only to clone the current trie; read from the clone with get_shared; wrap the value in a guard")
     }
 
+    /// Stores `value` under `key`. Writers are serialised and readers never wait for them: a reader sees the old trie or the new one, never a partial one.
     pub fn put<T: Any + Send + Sync>(&self, key: &str, value: T) {
         todo!("0a-03: take the write lock for the whole operation; clone the current root; build the new trie without the root lock held; then take the root lock only to publish it")
     }
 
+    /// Removes `key`, with the same guarantees as [`put`](Self::put).
     pub fn remove(&self, key: &str) {
         todo!("0a-03: as put, with remove")
     }

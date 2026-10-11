@@ -18,6 +18,7 @@ pub struct PinHandle {
 }
 
 impl Pins {
+    /// A count with no live handle.
     pub fn new() -> Pins {
         // @begin 1g-c2
         Pins { count: Arc::new(AtomicUsize::new(0)) }
@@ -25,6 +26,7 @@ impl Pins {
         // @end
     }
 
+    /// Counts one more pin and returns its handle; the pin ends when the handle is dropped.
     pub fn pin(&self) -> PinHandle {
         // @begin 1g-c2
         self.count.fetch_add(1, Ordering::SeqCst);
@@ -33,6 +35,7 @@ impl Pins {
         // @end
     }
 
+    /// The number of live handles.
     pub fn count(&self) -> usize {
         // @begin 1g-c2
         self.count.load(Ordering::SeqCst)

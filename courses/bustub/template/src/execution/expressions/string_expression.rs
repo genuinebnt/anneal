@@ -1,4 +1,4 @@
-//! Port of `string_expression.h`: `lower(s)` and `upper(s)`.
+//! `lower(s)` and `upper(s)`.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -47,6 +47,7 @@ impl StringExpression {
         todo!("3d-03: str::to_lowercase / to_uppercase, chosen by self.expr_type")
     }
 
+    /// The transformed string as a VARCHAR value; the VARCHAR NULL stays NULL.
     fn result(&self, val: &Value) -> Value {
         todo!("3d-03: the transformed string as a VARCHAR value; the VARCHAR NULL stays NULL")
     }

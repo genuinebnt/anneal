@@ -1,10 +1,6 @@
-//! Port of `src/storage/page/page_guard.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database Group).
-//!
-//! A page guard is an RAII handle on a page in the buffer pool. While it exists the page is **pinned** (it can't be evicted) and
-//! **latched** (shared for a `ReadPageGuard`, exclusive for a `WritePageGuard`). When it is dropped, in that order, the page is
-//! unlatched and then unpinned, so a caller can't forget either, even on an early `return`, `?` or panic.
-//!
-//! The pool makes guards; what a guard holds inside is yours. The tests use only the methods in this file.
+//! A page guard is an RAII handle on a page in the buffer pool. While it exists the page is **pinned** (it can't be evicted) and **latched**
+//! (shared for a `ReadPageGuard`, exclusive for a `WritePageGuard`). When it is dropped, in that order, the page is unlatched and then unpinned, so a
+//! caller can't forget either, even on an early `return`, `?` or panic.
 
 use std::ops::{Deref, DerefMut};
 
@@ -44,6 +40,7 @@ impl<'a> ReadPageGuard<'a> {
 // @end
 
 impl ReadPageGuard<'_> {
+    /// The id of the page this guard holds.
     pub fn get_page_id(&self) -> PageId {
         // @begin 1g-01
         self.page_id
@@ -68,8 +65,7 @@ impl ReadPageGuard<'_> {
         // @end
     }
 
-    /// Unlatches and unpins the page. Does nothing if the guard was already released. (BusTub's `Drop()`; in Rust `drop(guard)`
-    /// also works, but it moves the guard, so there is no "drop it twice"; this is the idempotent form.)
+    /// Unlatches and unpins the page. Does nothing if the guard was already released.
     pub fn release(&mut self) {
         // @begin 1g-01
         if let Some(latch) = self.latch.take() {
@@ -121,6 +117,7 @@ impl<'a> WritePageGuard<'a> {
 // @end
 
 impl WritePageGuard<'_> {
+    /// The id of the page this guard holds.
     pub fn get_page_id(&self) -> PageId {
         // @begin 1g-01
         self.page_id
@@ -128,6 +125,7 @@ impl WritePageGuard<'_> {
         // @end
     }
 
+    /// The page's bytes. Panics if the guard has been released.
     pub fn get_data(&self) -> &PageData {
         // @begin 1g-01
         self.latch.as_ref().expect("this guard has been released")

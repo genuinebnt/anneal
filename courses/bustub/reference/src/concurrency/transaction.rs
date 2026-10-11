@@ -1,9 +1,8 @@
-//! Port of `src/include/concurrency/transaction.h`: a transaction, its timestamps, and the **undo logs** that let other transactions
-//! see older versions of the tuples it changed. Given code.
+//! A transaction, its timestamps, and the **undo logs** that let other transactions see older versions of the tuples it changed.
 //!
-//! Timestamps: a *committed* tuple carries the commit timestamp of the transaction that wrote it (small numbers: 0, 1, 2, ...). A tuple
-//! written by a transaction that has not committed yet carries that transaction's **temporary timestamp**, its transaction id, which is
-//! at least [`TXN_START_ID`] (2^62) so that it can never be mistaken for a commit timestamp.
+//! A *committed* tuple carries the commit timestamp of the transaction that wrote it (small numbers: 0, 1, 2, ...). A tuple written by a
+//! transaction that has not committed yet carries that transaction's **temporary timestamp**, its transaction id, which is at least
+//! [`TXN_START_ID`] (2^62) so that it can never be mistaken for a commit timestamp.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};

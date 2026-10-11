@@ -1,4 +1,4 @@
-//! Port of `string_expression.h`: `lower(s)` and `upper(s)`.
+//! `lower(s)` and `upper(s)`.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ impl StringExpression {
         // @end
     }
 
+    /// The transformed string as a VARCHAR value; the VARCHAR NULL stays NULL.
     fn result(&self, val: &Value) -> Value {
         // @begin 3d-03
         match val.as_str() {

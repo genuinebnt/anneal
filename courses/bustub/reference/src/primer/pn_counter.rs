@@ -12,6 +12,7 @@ pub struct PnCounter {
 }
 
 impl PnCounter {
+    /// A counter nobody has changed.
     pub fn new() -> PnCounter {
         // @begin 0d-c4
         PnCounter::default()
@@ -19,6 +20,7 @@ impl PnCounter {
         // @end
     }
 
+    /// Records that `node` added `n`.
     pub fn inc(&mut self, node: u32, n: u64) {
         // @begin 0d-c4
         *self.added.entry(node).or_insert(0) += n;
@@ -26,6 +28,7 @@ impl PnCounter {
         // @end
     }
 
+    /// Records that `node` took away `n`.
     pub fn dec(&mut self, node: u32, n: u64) {
         // @begin 0d-c4
         *self.removed.entry(node).or_insert(0) += n;
@@ -33,6 +36,7 @@ impl PnCounter {
         // @end
     }
 
+    /// All additions minus all removals, over every node.
     pub fn value(&self) -> i64 {
         // @begin 0d-c4
         self.added.values().sum::<u64>() as i64 - self.removed.values().sum::<u64>() as i64
@@ -40,6 +44,7 @@ impl PnCounter {
         // @end
     }
 
+    /// Takes, for each node, the larger count, separately for additions and removals. Merging is commutative, associative and idempotent.
     pub fn merge(&mut self, other: &PnCounter) {
         // @begin 0d-c4
         for (&n, &v) in &other.added {

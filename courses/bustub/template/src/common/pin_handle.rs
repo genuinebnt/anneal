@@ -12,14 +12,17 @@ pub struct PinHandle {
 }
 
 impl Pins {
+    /// A count with no live handle.
     pub fn new() -> Pins {
         todo!("1g-c2: nothing is pinned")
     }
 
+    /// Counts one more pin and returns its handle; the pin ends when the handle is dropped.
     pub fn pin(&self) -> PinHandle {
         todo!("1g-c2: count one more pin and give out a handle")
     }
 
+    /// The number of live handles.
     pub fn count(&self) -> usize {
         todo!("1g-c2: the live handles")
     }

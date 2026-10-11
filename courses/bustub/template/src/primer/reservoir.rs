@@ -1,6 +1,6 @@
 //! Reservoir sampling (Algorithm R).
 
-/// A small seeded xorshift generator (given).
+/// A small seeded xorshift generator.
 pub struct XorShift(u64);
 
 impl XorShift {
@@ -23,18 +23,23 @@ pub struct Reservoir<T> {
 }
 
 impl<T> Reservoir<T> {
+    /// An empty reservoir that keeps `k` items.
     pub fn new(k: usize, seed: u64) -> Reservoir<T> {
         todo!("0d-c2: an empty reservoir for `k` items")
     }
 
+    /// Offers the next item of the stream. The first `k` are kept; item number `n` after that replaces a random held item with probability `k / n`,
+    /// so every item seen so far is held with the same probability.
     pub fn offer(&mut self, item: T) {
         todo!("0d-c2: fill the reservoir, then replace a random slot with probability k / seen")
     }
 
+    /// The items held.
     pub fn sample(&self) -> &[T] {
         todo!("0d-c2: the items held")
     }
 
+    /// How many items were offered.
     pub fn seen(&self) -> u64 {
         todo!("0d-c2: how many items were offered")
     }

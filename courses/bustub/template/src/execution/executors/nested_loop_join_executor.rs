@@ -1,5 +1,5 @@
-//! Port of `nested_loop_join_executor.cpp`: for every tuple of the left child, scan the whole right child and output the pairs for which
-//! the join predicate is TRUE. A LEFT join also outputs a left tuple that matched nothing, once, with NULLs on the right.
+//! For every tuple of the left child, scans the whole right child and outputs the pairs for which the join predicate is TRUE. A LEFT join also
+//! outputs, once and with NULLs on the right, a left tuple that matched nothing.
 
 use super::abstract_executor::{Executor, ExecutorBox, TupleStream};
 use crate::catalog::schema::Schema;

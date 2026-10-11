@@ -1,8 +1,8 @@
-//! Port of `update_executor.cpp`: replaces every tuple its child produces by a new one made of the plan's `target_expressions`
-//! (evaluated on the old tuple), and produces one row: how many it updated.
+//! Replaces every tuple its child produces by a new one made of the plan's `target_expressions`, evaluated on the old tuple, and produces one row:
+//! how many it updated.
 //!
-//! The update is a **delete followed by an insert**: the old tuple is marked deleted and the new one is stored (a new rid, since the
-//! new tuple may have another size), and the table's indexes follow.
+//! An update is a **delete followed by an insert**: the old tuple is marked deleted and the new one is stored under a new rid (it may have another
+//! size), and the table's indexes follow.
 
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ pub struct UpdateExecutor<'e> {
     target_expressions: Vec<ExprRef>,
     child: ExecutorBox<'e>,
     done: bool,
-    /// The transaction the statement runs in (module 4b), with its manager.
+    /// The transaction the statement runs in, with its manager.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
 }
 

@@ -15,6 +15,7 @@ pub struct PageBitmap {
 }
 
 impl PageBitmap {
+    /// A bitmap for `capacity` pages, all free.
     pub fn new(capacity: usize) -> PageBitmap {
         // @begin 1a-c3
         PageBitmap { used: vec![false; capacity], count: 0 }
@@ -33,6 +34,7 @@ impl PageBitmap {
         // @end
     }
 
+    /// Gives `page` back. `Err(OutOfRange)` for a page beyond the capacity, `Err(DoubleFree)` for one that is not in use.
     pub fn free(&mut self, page: usize) -> Result<(), FreeError> {
         // @begin 1a-c3
         match self.used.get_mut(page) {
@@ -48,6 +50,7 @@ impl PageBitmap {
         // @end
     }
 
+    /// Whether `page` is in use; `false` past the capacity.
     pub fn is_allocated(&self, page: usize) -> bool {
         // @begin 1a-c3
         self.used.get(page).copied().unwrap_or(false)
@@ -55,6 +58,7 @@ impl PageBitmap {
         // @end
     }
 
+    /// The number of pages in use.
     pub fn used(&self) -> usize {
         // @begin 1a-c3
         self.count

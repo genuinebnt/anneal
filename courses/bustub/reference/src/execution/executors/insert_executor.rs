@@ -1,5 +1,4 @@
-//! Port of `insert_executor.cpp`: inserts every tuple of its child into a table (and into the table's indexes) and then produces one
-//! row: how many it inserted.
+//! Inserts every tuple of its child into a table and its indexes, then produces one row: how many it inserted.
 
 use std::sync::Arc;
 
@@ -23,7 +22,7 @@ pub struct InsertExecutor<'e> {
     child: ExecutorBox<'e>,
     /// The count has been produced.
     done: bool,
-    /// The transaction the statement runs in (module 4b), with its manager.
+    /// The transaction the statement runs in, with its manager.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
 }
 
@@ -36,8 +35,7 @@ impl<'e> InsertExecutor<'e> {
         Ok(InsertExecutor { plan, table_info, indexes, child, done: false, txn })
     }
 
-    /// Adds the tuple stored at `rid` to every index of the table. A key that is already in an index is ignored (BusTub's indexes keep
-    /// unique keys and the catalog "silently ignores the error").
+    /// Adds the tuple stored at `rid` to every index of the table. An index that already holds the key keeps its entry.
     fn insert_into_indexes(&self, tuple: &Tuple, rid: Rid) {
         // @begin 3e-02
         for index in &self.indexes {

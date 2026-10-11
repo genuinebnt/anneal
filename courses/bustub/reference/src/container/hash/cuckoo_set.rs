@@ -17,6 +17,7 @@ pub struct CuckooSet {
 }
 
 impl CuckooSet {
+    /// An empty set.
     pub fn new() -> CuckooSet {
         // @begin 2b-c4
         CuckooSet { tables: [vec![None; 8], vec![None; 8]], len: 0, max_kicks: 32 }
@@ -24,6 +25,7 @@ impl CuckooSet {
         // @end
     }
 
+    /// The number of keys.
     pub fn len(&self) -> usize {
         // @begin 2b-c4
         self.len
@@ -56,6 +58,9 @@ impl CuckooSet {
         self.position(key).is_some()
     }
 
+    /// Adds `key`; returns false if it was already there.
+    ///
+    /// If displacing keys takes too long, or the tables are half full, the tables grow and every key is placed again.
     pub fn insert(&mut self, key: u64) -> bool {
         // @begin 2b-c4
         if self.contains(key) {
@@ -124,6 +129,7 @@ impl CuckooSet {
     //~ // TODO(2b-c4): helpers of your own (displacement walk, growing)
     // @end
 
+    /// Removes `key`; returns whether it was there.
     pub fn remove(&mut self, key: u64) -> bool {
         // @begin 2b-c4
         match self.position(key) {

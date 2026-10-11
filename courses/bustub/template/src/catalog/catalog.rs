@@ -1,6 +1,6 @@
-//! Port of `src/include/catalog/catalog.h`: the catalog of the database: which tables and indexes exist and where they are. It is **not
-//! persistent** (BusTub's isn't either): it lives in memory for the life of the instance. Tables and indexes are identified by a name
-//! (tables: unique; indexes: unique per table) and by an **oid**, a number handed out in creation order.
+//! The database's catalog: which tables and indexes exist and where they live. It is held in memory for the life of the instance.
+//!
+//! Tables and indexes have a name (unique among tables; unique per table for indexes) and an **oid**, handed out in creation order.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,6 +43,7 @@ pub struct Catalog<'a> {
 }
 
 impl<'a> Catalog<'a> {
+    /// An empty catalog over `bpm`.
     pub fn new(bpm: &'a BufferPoolManager) -> Catalog<'a> {
         todo!("3c-04: an empty catalog over the buffer pool")
     }
@@ -52,16 +53,17 @@ impl<'a> Catalog<'a> {
         todo!("3c-04: None for a name in use; otherwise the next oid, a TableInfo with a new heap, remembered by oid and by name, with an (empty) set of indexes for the table")
     }
 
+    /// The table named `table_name`, if there is one.
     pub fn get_table(&self, table_name: &str) -> Option<Arc<TableInfo<'a>>> {
         todo!("3c-04: look the name up, then the oid")
     }
 
+    /// The table with this `oid`, if there is one.
     pub fn get_table_by_oid(&self, oid: TableOid) -> Option<Arc<TableInfo<'a>>> {
         todo!("3c-04: look the oid up")
     }
 
-    /// A table by its oid, **borrowed** from the catalog (for an executor that keeps the table for as long as the catalog lives, without
-    /// cloning the `Arc`). BusTub: `GetTable(table_oid_t)` returns a `TableInfo *`.
+    /// The table with this `oid`, borrowed from the catalog: the reference lives as long as the catalog and costs no `Arc` clone.
     pub fn table_info(&self, oid: TableOid) -> Option<&TableInfo<'a>> {
         todo!("3c-04: the table with that oid, borrowed from the catalog")
     }
@@ -78,10 +80,12 @@ impl<'a> Catalog<'a> {
         todo!("3c-04: Ok(None) for a missing table or a name in use; an error unless every key column is an INTEGER (and the key is 1 to 64 bytes); build the index with a key size of 4, 8, 16, 32 or 64 bytes; insert every live tuple's key (key_from_tuple) with its rid; the next index oid; remember it by oid and by (table, name)")
     }
 
+    /// The index `index_name` on `table_name`, if there is one.
     pub fn get_index(&self, index_name: &str, table_name: &str) -> Option<Arc<IndexInfo<'a>>> {
         todo!("3c-04: the table's index of that name, if any")
     }
 
+    /// The index with this `index_oid`, if there is one.
     pub fn get_index_by_oid(&self, index_oid: IndexOid) -> Option<Arc<IndexInfo<'a>>> {
         todo!("3c-04: look the oid up")
     }

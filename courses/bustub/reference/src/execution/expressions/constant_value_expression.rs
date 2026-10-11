@@ -1,4 +1,4 @@
-//! Port of `constant_value_expression.h`: a literal.
+//! A literal.
 
 use std::any::Any;
 use std::sync::Arc;

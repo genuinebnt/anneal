@@ -39,6 +39,7 @@ impl Histogram {
     //~ // TODO(3h-c5): helpers of your own
     // @end
 
+    /// The number of values the histogram was built from.
     pub fn count(&self) -> u64 {
         // @begin 3h-c5
         self.n
@@ -46,6 +47,7 @@ impl Histogram {
         // @end
     }
 
+    /// The number of values in each bucket, lowest bucket first.
     pub fn bucket_counts(&self) -> &[u64] {
         // @begin 3h-c5
         &self.counts

@@ -19,6 +19,7 @@ pub struct Escalator {
 }
 
 impl Escalator {
+    /// An escalator that has locked nothing. More than `threshold` row locks by one transaction on one table become a table lock.
     pub fn new(threshold: usize) -> Escalator {
         // @begin 4d-c5
         Escalator { threshold, rows: BTreeMap::new(), tables: BTreeSet::new() }
@@ -26,6 +27,11 @@ impl Escalator {
         // @end
     }
 
+    /// Records a row lock by `txn` on `table`.
+    ///
+    /// Returns [`RowLockResult::Covered`] if the transaction already holds the table lock, [`RowLockResult::Granted`] for a row lock (asking
+    /// again for a row it holds is granted again), and [`RowLockResult::Escalate`] when this lock would make more than `threshold` row
+    /// locks on the table: those row locks are released and replaced by one table lock.
     pub fn row_lock(&mut self, txn: u32, table: u32, row: u64) -> RowLockResult {
         // @begin 4d-c5
         if self.tables.contains(&(txn, table)) {
@@ -47,6 +53,7 @@ impl Escalator {
         // @end
     }
 
+    /// Whether `txn` holds the table lock on `table`.
     pub fn holds_table(&self, txn: u32, table: u32) -> bool {
         // @begin 4d-c5
         self.tables.contains(&(txn, table))
@@ -54,6 +61,7 @@ impl Escalator {
         // @end
     }
 
+    /// How many row locks `txn` holds on `table`.
     pub fn row_count(&self, txn: u32, table: u32) -> usize {
         // @begin 4d-c5
         self.rows.get(&(txn, table)).map_or(0, BTreeSet::len)
@@ -61,6 +69,7 @@ impl Escalator {
         // @end
     }
 
+    /// Forgets every lock `txn` holds.
     pub fn release_all(&mut self, txn: u32) {
         // @begin 4d-c5
         self.rows.retain(|&(t, _), _| t != txn);

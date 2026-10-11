@@ -1,5 +1,4 @@
 //! Run-length encoding of bytes: `aaab` becomes (3, a) (1, b). A building block of real compression formats.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
 
 /// Why a byte string is not run-length encoded data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +19,7 @@ pub fn rle_encode(data: &[u8]) -> Vec<u8> {
         while i + run < data.len() && data[i + run] == byte {
             run += 1;
         }
+        // TODO(r-c2): this looks right and has a bug; find it and fix it
         out.push(run as u8);
         out.push(byte);
         i += run;

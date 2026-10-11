@@ -16,6 +16,7 @@ pub struct MovingHeap {
 }
 
 impl MovingHeap {
+    /// An empty heap of pages of `page_size` bytes.
     pub fn new(page_size: usize) -> MovingHeap {
         // @begin 3c-c4
         MovingHeap { page_size, rows: BTreeMap::new(), used: Vec::new(), next_rid: 0 }
@@ -37,6 +38,8 @@ impl MovingHeap {
     //~ // TODO(3c-c4): helpers of your own
     // @end
 
+    /// Stores `row` on a page with room and returns its id; `None` if the row is larger than a page. Ids are handed out in increasing order and never
+    /// reused.
     pub fn insert(&mut self, row: &[u8]) -> Option<Rid> {
         // @begin 3c-c4
         if row.len() > self.page_size {
@@ -52,6 +55,7 @@ impl MovingHeap {
         // @end
     }
 
+    /// The bytes of the row; `None` if it does not exist.
     pub fn get(&self, rid: Rid) -> Option<&[u8]> {
         // @begin 3c-c4
         self.rows.get(&rid).map(|(_, r)| r.as_slice())
@@ -59,6 +63,7 @@ impl MovingHeap {
         // @end
     }
 
+    /// Deletes the row and frees its bytes; returns whether it existed.
     pub fn delete(&mut self, rid: Rid) -> bool {
         // @begin 3c-c4
         match self.rows.remove(&rid) {
@@ -72,6 +77,8 @@ impl MovingHeap {
         // @end
     }
 
+    /// Replaces the row. It is rewritten in place if it fits, otherwise it moves to another page; its id stays. Returns false if the row does not exist
+    /// or is larger than a page.
     pub fn update(&mut self, rid: Rid, row: &[u8]) -> bool {
         // @begin 3c-c4
         if row.len() > self.page_size {
@@ -92,6 +99,7 @@ impl MovingHeap {
         // @end
     }
 
+    /// The page that holds the row now.
     pub fn page_of(&self, rid: Rid) -> Option<usize> {
         // @begin 3c-c4
         self.rows.get(&rid).map(|(p, _)| *p)
@@ -99,6 +107,7 @@ impl MovingHeap {
         // @end
     }
 
+    /// The number of bytes of rows in `page`.
     pub fn used(&self, page: usize) -> usize {
         // @begin 3c-c4
         self.used.get(page).copied().unwrap_or(0)
@@ -106,6 +115,7 @@ impl MovingHeap {
         // @end
     }
 
+    /// The number of pages in use.
     pub fn pages(&self) -> usize {
         // @begin 3c-c4
         self.used.len()

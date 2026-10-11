@@ -5,6 +5,7 @@ pub struct SeqDetector {
 }
 
 impl SeqDetector {
+    /// A detector that has seen no access. A run of `trigger` consecutive pages (at least 1) starts read-ahead of `depth` pages.
     pub fn new(trigger: u32, depth: u32) -> SeqDetector {
         todo!("1f-c4: a detector that has seen nothing")
     }

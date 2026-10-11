@@ -24,6 +24,8 @@ pub enum Folded {
     Case(Case),
 }
 
+/// Simplifies a `CASE`: FALSE and NULL branches are dropped, a TRUE branch ends the list and becomes the ELSE, and a `CASE` with no branch left is
+/// its ELSE (NULL without one).
 pub fn fold_case(case: &Case) -> Folded {
     // @begin 3i-c3
     let mut kept: Vec<(Cond, u32)> = Vec::new();

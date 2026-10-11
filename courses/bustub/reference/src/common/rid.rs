@@ -1,4 +1,4 @@
-//! Port of `src/include/common/rid.h`: a record id names a tuple by the page it lives in and its slot on that page.
+//! A record id: names a tuple by the page it lives in and its slot on that page.
 
 use super::config::PageId;
 
@@ -9,7 +9,7 @@ pub struct Rid {
 }
 
 impl Default for Rid {
-    /// BusTub: "The default constructor creates an invalid RID!"
+    /// The invalid rid, naming no page.
     fn default() -> Rid {
         Rid { page_id: PageId::INVALID, slot_num: 0 }
     }
@@ -28,7 +28,7 @@ impl Rid {
         self.slot_num
     }
 
-    /// The whole rid as one `i64`: the page id in the high 32 bits, the slot in the low 32. (BusTub's `Get()`.)
+    /// The whole rid as one `i64`: the page id in the high 32 bits, the slot in the low 32.
     pub fn get(&self) -> i64 {
         // @begin 2a-01
         ((self.page_id.0 as i64) << 32) | self.slot_num as i64
@@ -36,7 +36,7 @@ impl Rid {
         // @end
     }
 
-    /// The inverse of [`Rid::get`]. (BusTub's `RID(int64_t)` constructor.)
+    /// The inverse of [`Rid::get`].
     pub fn from_i64(rid: i64) -> Rid {
         // @begin 2a-01
         Rid { page_id: PageId((rid >> 32) as i32), slot_num: rid as u32 }

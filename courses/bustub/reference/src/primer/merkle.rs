@@ -31,6 +31,8 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
+    /// The tree over `leaves`: the leaves are hashed, then neighbours are paired level by level; an odd one out is paired with itself. An empty tree has
+    /// no levels.
     pub fn new(leaves: &[Vec<u8>]) -> MerkleTree {
         // @begin 0d-c3
         if leaves.is_empty() {
@@ -47,6 +49,7 @@ impl MerkleTree {
         // @end
     }
 
+    /// The hash at the top, which changes if any leaf does; 0 for no leaves.
     pub fn root(&self) -> u64 {
         // @begin 0d-c3
         self.levels.last().map_or(0, |l| l[0])
@@ -54,6 +57,7 @@ impl MerkleTree {
         // @end
     }
 
+    /// The number of leaves.
     pub fn leaves(&self) -> usize {
         // @begin 0d-c3
         self.levels.first().map_or(0, Vec::len)

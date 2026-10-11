@@ -1,8 +1,6 @@
-//! Port of `src/include/common/channel.h` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database Group).
+//! A multi-producer multi-consumer queue: `put` never blocks, `get` waits until there is something to get.
 //!
-//! A multi-producer multi-consumer queue: `put` never blocks, `get` waits until there is something to get. The disk scheduler's
-//! request queue, and the pattern behind every thread pool. The structure inside is yours to design; the tests use only the
-//! methods in this file.
+//! The shape behind a request queue and every thread pool.
 
 // TODO(1b-01): your imports go here.
 
@@ -45,8 +43,9 @@ impl<T> Default for Channel<T> {
     }
 }
 
-/// The worker loop of the disk scheduler: BusTub stops a worker by putting `std::nullopt` in the queue, so the elements are
-/// `Option<T>` and `None` means "stop". Calls `f` on each `Some` element, in order, until it gets a `None`, which it consumes.
+/// The worker loop: elements are `Option<T>`, and `None` means stop.
+///
+/// Calls `f` on each `Some` element, in order, until it receives a `None`, which it consumes.
 pub fn consume<T>(channel: &Channel<Option<T>>, mut f: impl FnMut(T)) {
     todo!("1b-01: get elements and call f on each Some, until a None arrives")
 }

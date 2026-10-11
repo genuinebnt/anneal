@@ -1,10 +1,6 @@
-//! Port of `src/storage/page/page_guard.cpp` (BusTub, MIT, Copyright (c) 2015-2025 Carnegie Mellon University Database Group).
-//!
-//! A page guard is an RAII handle on a page in the buffer pool. While it exists the page is **pinned** (it can't be evicted) and
-//! **latched** (shared for a `ReadPageGuard`, exclusive for a `WritePageGuard`). When it is dropped, in that order, the page is
-//! unlatched and then unpinned, so a caller can't forget either, even on an early `return`, `?` or panic.
-//!
-//! The pool makes guards; what a guard holds inside is yours. The tests use only the methods in this file.
+//! A page guard is an RAII handle on a page in the buffer pool. While it exists the page is **pinned** (it can't be evicted) and **latched**
+//! (shared for a `ReadPageGuard`, exclusive for a `WritePageGuard`). When it is dropped, in that order, the page is unlatched and then unpinned, so a
+//! caller can't forget either, even on an early `return`, `?` or panic.
 
 use std::ops::{Deref, DerefMut};
 
@@ -22,6 +18,7 @@ pub struct ReadPageGuard<'a> {
 // TODO(1g-01): the pool builds a guard when it hands out a page: a constructor of your own goes here.
 
 impl ReadPageGuard<'_> {
+    /// The id of the page this guard holds.
     pub fn get_page_id(&self) -> PageId {
         todo!("1g-01: the id of the page this guard holds")
     }
@@ -36,8 +33,7 @@ impl ReadPageGuard<'_> {
         todo!("1g-02: write the bytes you hold to disk, without taking the frame latch again (you already hold it)")
     }
 
-    /// Unlatches and unpins the page. Does nothing if the guard was already released. (BusTub's `Drop()`; in Rust `drop(guard)`
-    /// also works, but it moves the guard, so there is no "drop it twice"; this is the idempotent form.)
+    /// Unlatches and unpins the page. Does nothing if the guard was already released.
     pub fn release(&mut self) {
         todo!("1g-01: if the guard still holds its latch: release the latch, then unpin the page; a second call does nothing")
     }
@@ -65,10 +61,12 @@ pub struct WritePageGuard<'a> {
 // TODO(1g-01): a constructor of your own goes here.
 
 impl WritePageGuard<'_> {
+    /// The id of the page this guard holds.
     pub fn get_page_id(&self) -> PageId {
         todo!("1g-01: the id of the page this guard holds")
     }
 
+    /// The page's bytes. Panics if the guard has been released.
     pub fn get_data(&self) -> &PageData {
         todo!("1g-01: the bytes behind the write latch")
     }

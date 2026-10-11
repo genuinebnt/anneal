@@ -1,6 +1,5 @@
-//! Port of `src/include/catalog/schema.h` and `src/catalog/schema.cpp`: an ordered list of columns, and with it the **layout** of a
-//! tuple. A tuple has a fixed part holding every column in order (an inlined column's bytes, or for a VARCHAR a 4-byte offset) followed
-//! by the variable part holding the strings.
+//! An ordered list of columns, and with it the **layout** of a tuple: a fixed part holding every column in order (an inlined column's
+//! bytes, or for a `VARCHAR` a 4-byte offset), followed by the variable part holding the strings.
 //!
 //! ```text
 //! | col 0 (fixed size) | col 1 (VARCHAR: u32 offset) | col 2 (fixed size) | ... | string for col 1 | string for another VARCHAR |
@@ -45,7 +44,7 @@ impl Schema {
         // @end
     }
 
-    /// A schema of some of `from`'s columns, in the order of `attrs`. BusTub's `Schema::CopySchema`.
+    /// A schema of some of `from`'s columns, in the order of `attrs`.
     pub fn copy_schema(from: &Schema, attrs: &[u32]) -> Schema {
         // @begin 3b-01
         Schema::new(attrs.iter().map(|&i| from.columns[i as usize].clone()).collect())
@@ -61,7 +60,7 @@ impl Schema {
         &self.columns[col_idx as usize]
     }
 
-    /// The index of the first column called `name`, or `None`. BusTub's `TryGetColIdx`.
+    /// The index of the first column called `name`, if any.
     pub fn try_col_idx(&self, name: &str) -> Option<u32> {
         // @begin 3b-01
         self.columns.iter().position(|c| c.name() == name).map(|i| i as u32)
@@ -69,7 +68,11 @@ impl Schema {
         // @end
     }
 
-    /// Like `try_col_idx`, but a missing column is a bug (panic). BusTub's `GetColIdx`.
+    /// The index of the first column called `name`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is none.
     pub fn col_idx(&self, name: &str) -> u32 {
         // @begin 3b-01
         self.try_col_idx(name).unwrap_or_else(|| panic!("Column does not exist: {name}"))

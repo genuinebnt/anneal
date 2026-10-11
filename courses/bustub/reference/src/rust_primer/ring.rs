@@ -21,6 +21,7 @@ impl<T> RingBuffer<T> {
         // @end
     }
 
+    /// The number of slots, which is the most values the buffer can hold.
     pub fn capacity(&self) -> usize {
         // @begin r-05
         self.slots.len()
@@ -28,6 +29,7 @@ impl<T> RingBuffer<T> {
         // @end
     }
 
+    /// The number of values held.
     pub fn len(&self) -> usize {
         // @begin r-05
         self.len

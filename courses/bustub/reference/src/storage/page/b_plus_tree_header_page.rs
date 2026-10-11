@@ -1,4 +1,4 @@
-//! The header page of a B+ tree: the only page whose id the tree is given, and the one that says where the root is.
+//! The header page of a B+ tree: the one page whose id a tree is created with, and the page that says where the root is.
 
 // @begin 2c-01
 use super::page_bytes::*;

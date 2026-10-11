@@ -1,8 +1,7 @@
-//! Port of `src/buffer/lru_replacer.cpp`: evict the frame that was unpinned longest ago.
+//! Evicts the frame that was unpinned longest ago.
 //!
-//! The policy, in the terms the buffer pool sees: the replacer holds the frames that may be evicted ("unpinned" frames). Unpinning a
-//! frame that is not there adds it as the **most recently used**; unpinning one that is already there changes nothing (it does not
-//! become more recent). Pinning a frame removes it. `victim` removes and returns the **least recently used** frame.
+//! The replacer holds the evictable (unpinned) frames. Unpinning a frame it lacks adds it as the **most recently used**; unpinning one
+//! it holds changes nothing. Pinning removes it. `victim` removes and returns the **least recently used** frame.
 
 use super::replacer::Replacer;
 use crate::common::config::FrameId;

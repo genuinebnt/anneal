@@ -5,6 +5,7 @@ pub struct TombstoneLeaf {
 }
 
 impl TombstoneLeaf {
+    /// An empty leaf.
     pub fn new() -> TombstoneLeaf {
         todo!("2d-c2: an empty leaf")
     }
@@ -19,14 +20,17 @@ impl TombstoneLeaf {
         todo!("2d-c2: leave a tombstone")
     }
 
+    /// The live value of `key`; `None` if the key is absent or deleted.
     pub fn get(&self, key: i64) -> Option<u64> {
         todo!("2d-c2: the live value")
     }
 
+    /// The number of slots, live or dead.
     pub fn slots(&self) -> usize {
         todo!("2d-c2: all slots, live or dead")
     }
 
+    /// The number of dead slots (tombstones).
     pub fn tombstones(&self) -> usize {
         todo!("2d-c2: dead slots")
     }

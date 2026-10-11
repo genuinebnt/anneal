@@ -1,11 +1,10 @@
-//! A tiny transactional record store on table pages: the thing the log protects. Records are fixed-size byte strings living in
-//! slots of a few pre-allocated heap pages; a record is addressed by its [`Rid`]. Transactions write records (insert, update, delete);
-//! every write is described to the log **before** it reaches the page; a commit makes its log records durable; pages go to disk when
-//! somebody calls [`Store::flush_page`], and never otherwise (the tests keep the pool big enough that nothing is evicted behind the
-//! store's back; a real system hooks eviction).
+//! A tiny transactional record store on table pages: the thing the log protects. Records are fixed-size byte strings living in slots of a few
+//! pre-allocated heap pages; a record is addressed by its [`Rid`]. Transactions write records (insert, update, delete); every write is described to
+//! the log **before** it reaches the page; a commit makes its log records durable; pages go to disk when somebody calls [`Store::flush_page`], and
+//! never otherwise. The store assumes the pool is big enough that nothing is evicted behind its back (a real system hooks eviction).
 //!
-//! The store is strict: a record written by an active transaction cannot be written by another until the first ends, so a crash never
-//! leaves a committed change on top of an uncommitted one.
+//! The store is strict: a record written by an active transaction cannot be written by another until the first ends, so a crash never leaves a
+//! committed change on top of an uncommitted one.
 
 use std::collections::HashMap;
 use std::io;
@@ -88,6 +87,7 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    /// The pages the store was opened with.
     pub fn pages(&self) -> &[PageId] {
         // @begin 4c-03
         &self.pages
@@ -202,6 +202,8 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    /// Inserts a record of `RECORD_LEN` bytes into the first page with a free slot, logging the change before the page sees it. Returns the new
+    /// record's [`Rid`].
     pub fn insert(&self, txn: TxnId, data: &[u8]) -> StoreResult<Rid> {
         // @begin 4c-04
         if data.len() != RECORD_LEN {
@@ -225,6 +227,7 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    /// Replaces the live record at `rid`, logging the change first. The record must exist.
     pub fn update(&self, txn: TxnId, rid: Rid, data: &[u8]) -> StoreResult<()> {
         // @begin 4c-04
         let before = self.get(rid).ok_or_else(|| refused("no such record"))?;
@@ -233,6 +236,7 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    /// Deletes the live record at `rid`, logging the change first. The record must exist.
     pub fn delete(&self, txn: TxnId, rid: Rid) -> StoreResult<()> {
         // @begin 4c-04
         let before = self.get(rid).ok_or_else(|| refused("no such record"))?;
@@ -286,6 +290,7 @@ impl<'a> Store<'a> {
         // @end
     }
 
+    /// Writes every page of the store to disk.
     pub fn flush_all_pages(&self) -> io::Result<()> {
         // @begin 4c-04
         for page in self.pages().to_vec() {

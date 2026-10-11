@@ -1,6 +1,6 @@
-//! A session: one client's connection to the database, with the transaction it has open (if any). `BusTubInstance::execute_sql_txn`
-//! runs SQL inside a transaction you give it; a session decides *which* transaction a statement runs in: its own, when none is open
-//! (autocommit), or the one `BEGIN` started. Module 4e.
+//! A session: one client's connection to the database, with the transaction it has open, if any.
+//!
+//! A statement runs in the session's own transaction when none is open (autocommit), or in the one `BEGIN` started.
 
 use std::sync::Arc;
 
@@ -17,6 +17,7 @@ pub struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
+    /// A session with no open transaction.
     pub fn new(db: &'a BusTubInstance) -> Session<'a> {
         let _ = db;
         todo!("4e-01: a session with no open transaction")

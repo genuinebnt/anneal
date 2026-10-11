@@ -1,4 +1,4 @@
-//! Port of `src/include/execution/execution_engine.h`: runs a plan to completion. Given code.
+//! Runs a plan to completion.
 
 use std::sync::atomic::Ordering;
 
@@ -12,9 +12,9 @@ use crate::storage::table::tuple::Tuple;
 pub struct ExecutionEngine;
 
 impl ExecutionEngine {
-    /// Runs `plan` and returns whether it succeeded and the tuples it produced. An `Execution` exception (BusTub's
-    /// `ExecutionException`: a failure of this statement, like a transaction conflict) is a failed execution with no tuples; any other
-    /// exception is passed on.
+    /// Runs `plan` and returns whether it succeeded and the tuples it produced.
+    ///
+    /// An `Execution` exception, a failure of this statement such as a transaction conflict, is a failed execution with no tuples; any other exception is passed on.
     pub fn execute<'e>(plan: &PlanRef, ctx: &'e ExecutorContext<'e>) -> Result<(bool, Vec<Tuple>)> {
         let mut executor = create_executor(ctx, plan)?;
         let mut result_set = vec![];

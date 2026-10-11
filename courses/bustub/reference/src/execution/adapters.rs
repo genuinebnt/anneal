@@ -41,6 +41,7 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Passes on the child's rows for which `pred` holds.
     pub fn new(child: Box<dyn Executor>, pred: impl Fn(&Row) -> bool + 'static) -> Filter {
         // @begin 3e-c1
         Filter { child, pred: Box::new(pred) }
@@ -72,6 +73,7 @@ pub struct Project {
 }
 
 impl Project {
+    /// Keeps the columns `cols` of the child's rows, in that order.
     pub fn new(child: Box<dyn Executor>, cols: Vec<usize>) -> Project {
         // @begin 3e-c1
         Project { child, cols }
@@ -100,6 +102,7 @@ pub struct Limit {
 }
 
 impl Limit {
+    /// Passes on at most `limit` rows after skipping the first `offset`.
     pub fn new(child: Box<dyn Executor>, limit: usize, offset: usize) -> Limit {
         // @begin 3e-c1
         Limit { child, remaining: limit, to_skip: offset }
@@ -136,6 +139,7 @@ pub struct Concat {
 }
 
 impl Concat {
+    /// Produces every row of `a`, then every row of `b`.
     pub fn new(a: Box<dyn Executor>, b: Box<dyn Executor>) -> Concat {
         // @begin 3e-c1
         Concat { a, b, a_done: false }

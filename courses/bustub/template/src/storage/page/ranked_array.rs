@@ -7,6 +7,7 @@ pub struct RankedSet {
 }
 
 impl RankedSet {
+    /// An empty set.
     pub fn new() -> RankedSet {
         todo!("2a-c1: an empty set")
     }
@@ -21,6 +22,7 @@ impl RankedSet {
         todo!("2a-c1: remove it, keeping the order")
     }
 
+    /// The number of numbers held.
     pub fn len(&self) -> usize {
         todo!("2a-c1: how many numbers")
     }

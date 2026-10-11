@@ -1,4 +1,4 @@
-//! Port of `comparison_expression.h`: `left <op> right` with SQL's three-valued answer.
+//! `left <op> right` with SQL's three-valued answer.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::storage::table::tuple::Tuple;
 use crate::types::type_id::TypeId;
 use crate::types::value::{CmpBool, Value};
 
-/// BusTub's `ComparisonType`.
+/// Which comparison a comparison expression performs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComparisonType {
     Equal,
@@ -36,7 +36,7 @@ impl ComparisonType {
     }
 }
 
-/// A [`CmpBool`] as a BOOLEAN value: `Null` becomes the BOOLEAN NULL. (BusTub's `ValueFactory::GetBooleanValue(CmpBool)`.)
+/// A [`CmpBool`] as a BOOLEAN value; `Null` becomes the BOOLEAN NULL.
 pub fn cmp_to_value(b: CmpBool) -> Value {
     match b {
         CmpBool::True => Value::boolean(true),
@@ -57,6 +57,7 @@ impl ComparisonExpression {
         ComparisonExpression { comp_type, children: vec![left, right], ret_type: Column::new("<val>", TypeId::Boolean) }
     }
 
+    /// The three-valued result of `lhs <op> rhs`; a NULL operand gives `Null`.
     fn perform_comparison(&self, lhs: &Value, rhs: &Value) -> Result<CmpBool> {
         // @begin 3d-02
         match self.comp_type {

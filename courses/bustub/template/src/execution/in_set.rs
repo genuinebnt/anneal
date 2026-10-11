@@ -7,6 +7,7 @@ pub struct InSet {
 }
 
 impl InSet {
+    /// A set of the list's non-NULL values that remembers whether the list held a NULL.
     pub fn new(list: &[Option<i64>]) -> InSet {
         todo!("3i-c1: remember the non-NULL values, and whether the list had a NULL")
     }
@@ -20,6 +21,7 @@ impl InSet {
         self.len() == 0 && !self.has_null_entry()
     }
 
+    /// Whether the list held a NULL.
     fn has_null_entry(&self) -> bool {
         todo!("3i-c1: did the list have a NULL")
     }

@@ -1,6 +1,7 @@
 //! Prepared statements: `prepare` parses once and counts the `?` placeholders; `execute_prepared` puts values in their place and runs
-//! the statements. A value becomes a *literal of the syntax tree*, never text that is parsed again, so a string that looks like SQL
-//! stays a string. Module 3i.
+//! the statements.
+//!
+//! A value becomes a *literal of the syntax tree*, never text that is parsed again, so a string that looks like SQL stays a string.
 
 use crate::common::bustub_instance::BusTubInstance;
 use crate::common::exception::{Exception, ExceptionType, Result};

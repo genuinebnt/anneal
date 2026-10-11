@@ -1,9 +1,8 @@
-//! A one-shot promise and future: C++'s `std::promise<T>` / `std::future<T>`, which the disk scheduler uses to tell the caller
-//! "your request is done". One side sets a value once; the other waits for it. The inside is yours to design.
+//! A one-shot promise and future: one side sets a value once, the other waits for it.
 
 // TODO(1b-02): your imports and private types go here.
 
-/// The promise was dropped before it set a value: the future will never get one. (C++: `std::future_error`, `broken_promise`.)
+/// The promise was dropped before it set a value, so the future will never get one.
 #[derive(Debug, PartialEq, Eq)]
 pub struct BrokenPromise;
 

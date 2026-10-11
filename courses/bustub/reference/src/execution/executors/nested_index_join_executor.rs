@@ -1,6 +1,6 @@
-//! Port of `nested_index_join_executor.cpp`: a join whose inner side is a table with an index on the join column. For every tuple of the
-//! (outer) child, evaluate the `key_predicate` on it to get the key, probe the inner table's index for that key, fetch the inner row and
-//! output the pair. A LEFT join also outputs an outer tuple that found no inner row, once, with NULLs.
+//! A join whose inner side is a table with an index on the join column. For every tuple of the outer child, the `key_predicate` gives the key, the
+//! inner table's index is probed for it, and each matching inner row is output with the outer tuple. A LEFT join also outputs, once and with NULLs, an
+//! outer tuple that found no inner row.
 
 use std::collections::VecDeque;
 use std::sync::Arc;

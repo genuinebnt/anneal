@@ -1,6 +1,6 @@
-//! One error type for the whole database (module 3k). Every layer below this one has its own failure type; a client of the database
-//! needs one: something it can print, walk the causes of, group by a stable code, and send across threads. **The design of `DbError` is
-//! yours**: the tests only use the traits and methods named on the stage pages. The imports, the alias and the derive are given.
+//! One error type for the whole database.
+//!
+//! Every layer has its own failure type; a client needs one it can print, walk the causes of, group by a stable code and send across threads.
 
 use std::error::Error;
 use std::fmt;
@@ -164,8 +164,9 @@ where
 }
 
 impl DbError {
-    /// A five-character code for the kind of failure, in the style of SQLSTATE (see the table on the stage page). It comes from the
-    /// innermost cause, so adding context never changes it.
+    /// A five-character code for the kind of failure, in the style of SQLSTATE.
+    ///
+    /// It comes from the innermost cause, so adding context never changes it.
     pub fn code(&self) -> &'static str {
         todo!("3k-04: look at the innermost cause and answer from the table on the stage page; anything not listed is XX000")
     }

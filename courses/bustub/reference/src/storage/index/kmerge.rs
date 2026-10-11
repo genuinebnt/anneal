@@ -12,6 +12,7 @@ pub struct KMerge {
 }
 
 impl KMerge {
+    /// A merge over sorted `runs`, with a heap that holds the next key of each run.
     pub fn new(runs: Vec<Vec<i64>>) -> KMerge {
         // @begin 2c-c4
         let mut iters: Vec<_> = runs.into_iter().map(|r| r.into_iter()).collect();

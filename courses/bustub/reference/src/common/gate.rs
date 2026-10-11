@@ -1,5 +1,4 @@
-//! A one-shot gate: threads wait at it until somebody opens it, and once open it stays open.
-//! This code is complete and looks right, but it has a bug: find it with the tests and fix it.
+//! A one-shot gate: threads wait at it until it is opened, and once open it stays open.
 
 use std::sync::{Condvar, Mutex};
 
@@ -22,6 +21,7 @@ impl Gate {
         *self.open.lock().unwrap() = true;
         // @begin 1b-c2
         self.changed.notify_all();
+        //~ // TODO(1b-c2): this looks right and has a bug; find it and fix it
         //~ self.changed.notify_one();
         // @end
     }

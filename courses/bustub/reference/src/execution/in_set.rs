@@ -11,6 +11,7 @@ pub struct InSet {
 }
 
 impl InSet {
+    /// A set of the list's non-NULL values that remembers whether the list held a NULL.
     pub fn new(list: &[Option<i64>]) -> InSet {
         // @begin 3i-c1
         InSet { values: list.iter().flatten().copied().collect(), has_null: list.iter().any(|v| v.is_none()) }
@@ -30,6 +31,7 @@ impl InSet {
         self.len() == 0 && !self.has_null_entry()
     }
 
+    /// Whether the list held a NULL.
     fn has_null_entry(&self) -> bool {
         // @begin 3i-c1
         self.has_null

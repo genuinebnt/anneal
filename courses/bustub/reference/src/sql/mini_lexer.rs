@@ -24,6 +24,8 @@ pub struct LexError {
     pub kind: LexErrorKind,
 }
 
+/// Splits `sql` into tokens: strings and quoted identifiers use a doubled quote for a literal quote, and comments are skipped. An error carries
+/// the byte position and the kind of the mistake.
 pub fn tokenize(sql: &str) -> Result<Vec<Tok>, LexError> {
     // @begin 3d-c1
     let b = sql.as_bytes();

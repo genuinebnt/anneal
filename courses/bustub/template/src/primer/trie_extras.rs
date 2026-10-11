@@ -9,6 +9,7 @@ pub fn keys_with_prefix(trie: &Trie, prefix: &str) -> Vec<String> {
     todo!("0a-c2: follow the prefix down, then collect every value below, children in order")
 }
 
+/// The number of nodes in the subtree at `node`, itself included.
 fn count(node: &Arc<TrieNode>) -> usize {
     todo!("0a-c3: this node and everything below it")
 }
@@ -18,6 +19,8 @@ pub fn node_count(trie: &Trie) -> usize {
     todo!("0a-c3: nodes reachable from the root")
 }
 
+/// The number of nodes `a` and `b` share. A node that is the same allocation shares its whole subtree; otherwise the children with the same
+/// letter are compared.
 fn shared(a: &Arc<TrieNode>, b: &Arc<TrieNode>) -> usize {
     todo!("0a-c3: a node that is the same allocation shares its whole subtree; otherwise compare the children with the same letter")
 }

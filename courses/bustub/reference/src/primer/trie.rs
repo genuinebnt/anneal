@@ -1,6 +1,5 @@
-//! Port of `src/include/primer/trie.h` and `src/primer/trie.cpp`: a **persistent** (copy-on-write) trie that maps strings to values of
-//! any type. `put` and `remove` never change a trie: they return a new one that shares every node they did not have to touch with the
-//! old one, so old versions stay valid and cost almost nothing to keep.
+//! A **persistent** (copy-on-write) trie that maps strings to values of any type. `put` and `remove` never change a trie: they return a new one
+//! that shares every node they did not have to touch with the old one, so old versions stay valid and cost almost nothing to keep.
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -34,12 +33,12 @@ impl Trie {
         Trie { root: None }
     }
 
-    /// A trie with the given root (given). `put` is how tries are normally made; this is for tests that build a shape by hand.
+    /// A trie with the given root. `put` is how tries are normally made; this builds a shape by hand.
     pub fn from_root(root: Option<Arc<TrieNode>>) -> Trie {
         Trie { root }
     }
 
-    /// The root node (`None` for an empty trie); for tests.
+    /// The root node; `None` for an empty trie.
     pub fn root(&self) -> Option<&Arc<TrieNode>> {
         self.root.as_ref()
     }

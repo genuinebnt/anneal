@@ -21,6 +21,7 @@ struct Node<T> {
 // @end
 
 impl<T> Stack<T> {
+    /// An empty stack.
     pub fn new() -> Stack<T> {
         // @begin r-03
         Stack { head: None, len: 0 }
@@ -28,6 +29,7 @@ impl<T> Stack<T> {
         // @end
     }
 
+    /// The number of values.
     pub fn len(&self) -> usize {
         // @begin r-03
         self.len
@@ -39,6 +41,7 @@ impl<T> Stack<T> {
         self.len() == 0
     }
 
+    /// Pushes `value` on top.
     pub fn push(&mut self, value: T) {
         // @begin r-03
         let next = self.head.take();
@@ -48,6 +51,7 @@ impl<T> Stack<T> {
         // @end
     }
 
+    /// Removes and returns the top value.
     pub fn pop(&mut self) -> Option<T> {
         // @begin r-03
         let node = self.head.take()?;
@@ -58,6 +62,7 @@ impl<T> Stack<T> {
         // @end
     }
 
+    /// The top value, without removing it.
     pub fn peek(&self) -> Option<&T> {
         // @begin r-03
         self.head.as_ref().map(|n| &n.value)
@@ -65,6 +70,7 @@ impl<T> Stack<T> {
         // @end
     }
 
+    /// A mutable reference to the top value.
     pub fn peek_mut(&mut self) -> Option<&mut T> {
         // @begin r-03
         self.head.as_mut().map(|n| &mut n.value)
@@ -152,6 +158,7 @@ struct Slot<T> {
 // @end
 
 impl<T> Slab<T> {
+    /// An empty slab.
     pub fn new() -> Slab<T> {
         // @begin r-03
         Slab { slots: Vec::new(), free: Vec::new(), len: 0 }
@@ -159,6 +166,7 @@ impl<T> Slab<T> {
         // @end
     }
 
+    /// The number of values.
     pub fn len(&self) -> usize {
         // @begin r-03
         self.len
@@ -189,6 +197,7 @@ impl<T> Slab<T> {
         // @end
     }
 
+    /// The value `handle` names. `None` if its slot does not exist, was reused by a newer generation or holds no value.
     pub fn get(&self, handle: Handle) -> Option<&T> {
         // @begin r-03
         let slot = self.slots.get(handle.index)?;
@@ -200,6 +209,7 @@ impl<T> Slab<T> {
         // @end
     }
 
+    /// As [`get`](Self::get), mutably.
     pub fn get_mut(&mut self, handle: Handle) -> Option<&mut T> {
         // @begin r-03
         let slot = self.slots.get_mut(handle.index)?;

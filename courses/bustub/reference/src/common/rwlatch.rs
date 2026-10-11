@@ -1,5 +1,4 @@
-//! Port of `src/include/common/rwlatch.h`. BusTub's `ReaderWriterLatch` has `RLock/RUnlock/WLock/WUnlock` over a `std::shared_mutex`.
-//! In Rust the lock and unlock are one guard, and the latch owns what it protects.
+//! A reader-writer latch that owns what it protects: lock and unlock are one guard.
 
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
@@ -26,8 +25,9 @@ impl<T> ReaderWriterLatch<T> {
         // @end
     }
 
-    /// Takes a read latch (BusTub's `RLock`); it is released when the guard is dropped (`RUnlock`). Any number of readers may
-    /// hold it together, and none while a writer does. A latch whose holder panicked still works.
+    /// Takes a read latch, released when the guard drops. Any number of readers may hold it together, and none while a writer does.
+    ///
+    /// A latch whose holder panicked still works.
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
         // @begin 1b-05
         self.inner.read().unwrap_or_else(PoisonError::into_inner)
@@ -35,8 +35,7 @@ impl<T> ReaderWriterLatch<T> {
         // @end
     }
 
-    /// Takes the write latch (BusTub's `WLock`); it is released when the guard is dropped (`WUnlock`). Only one writer, and no
-    /// readers, at a time.
+    /// Takes the write latch, released when the guard drops. One writer at a time, and no readers meanwhile.
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         // @begin 1b-05
         self.inner.write().unwrap_or_else(PoisonError::into_inner)

@@ -1,13 +1,13 @@
-//! Port of `src/storage/index/b_plus_tree.cpp`: a B+ tree index whose nodes are pages in the buffer pool. Internal pages direct the
-//! search; leaf pages hold the `(key, value)` pairs and are chained left to right for range scans. Keys are unique.
+//! A B+ tree index whose nodes are pages in the buffer pool. Internal pages direct the search; leaf pages hold the `(key, value)` pairs and are
+//! chained left to right for range scans. Keys are unique.
 //!
-//! A node is split when it overflows (a leaf the moment it holds `leaf_max_size` pairs, an internal page when it would need more
-//! than `internal_max_size` children) and merged or topped up from a sibling when it underflows, so the tree grows and shrinks
-//! at the root and every leaf is at the same depth.
+//! A node is split when it overflows (a leaf the moment it holds `leaf_max_size` pairs, an internal page when it would need more than
+//! `internal_max_size` children) and merged or topped up from a sibling when it underflows, so the tree grows and shrinks at the root and every
+//! leaf is at the same depth.
 //!
-//! Latching is by guards, top down. Readers hold a parent until the child is latched ("latch crabbing"). Writers keep write guards
-//! on the whole path (`Context::write_set`) until a child that cannot split or underflow is reached ("safe"), which lets them let go
-//! of everything above it; and most writes try an optimistic path first that write-latches only the leaf.
+//! Latching is by guards, top down. Readers hold a parent until the child is latched ("latch crabbing"). Writers keep write guards on the whole
+//! path (`Context::write_set`) until a child that cannot split or underflow is reached ("safe"), which lets them let go of everything above it;
+//! and most writes try an optimistic path first that write-latches only the leaf.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -23,9 +23,10 @@ use crate::storage::index::generic_key::KeyComparator;
 
 // TODO(2c-01): private types of yours go here (a write operation needs to remember the guards it holds).
 
-/// A B+ tree over the buffer pool. `TOMBS` is the size of each leaf's tombstone buffer (module 2d); 0 means deletes are physical.
+/// A B+ tree over the buffer pool. `TOMBS` is the size of each leaf's tombstone buffer; 0 means deletes are physical.
 pub struct BPlusTree<'a, K, V, C, const TOMBS: usize = 0> {
-    /// Public, like BusTub's `bpm_`: tests read how many pages the tree latched. Use it for every page you read or write.
+    /// The buffer pool the tree reads and writes through. It is public so that the pages the tree latched can be counted; every page access goes
+    /// through it.
     pub bpm: TracedBufferPoolManager<'a>,
     _tree: PhantomData<(K, V, C)>,
     // TODO(2c-01): the fields are yours: the name, the comparator, the two sizes and the header page's id.
@@ -53,10 +54,12 @@ where
         todo!("2c-01: how many children fit in one of your internal pages")
     }
 
+    /// The name the tree was created with.
     pub fn index_name(&self) -> &str {
         todo!("2c-01: the name the tree was created with")
     }
 
+    /// Whether the tree has no root.
     pub fn is_empty(&self) -> bool {
         todo!("2c-01: the tree is empty when the header names no root")
     }
@@ -66,25 +69,23 @@ where
         todo!("2c-01: read the root id from the header page (under its read latch)")
     }
 
-    /// How many levels the tree has: 0 for an empty tree, 1 for a lone root leaf. A read-only observer for the tests.
+    /// How many levels the tree has: 0 for an empty tree, 1 for a lone root leaf. Read-only.
     pub fn depth(&self) -> usize {
         todo!("2c-01: 0 for an empty tree; otherwise follow the first child from the root down to a leaf and count the levels")
     }
 
-    /// How many `(key, value)` pairs each leaf holds physically (live or, with tombstones, deleted), from the leftmost leaf to the
-    /// rightmost, following the links between leaves. Empty for an empty tree. A read-only observer for the tests.
+    /// How many `(key, value)` pairs each leaf holds physically (live or, with tombstones, deleted), from the leftmost leaf to the rightmost,
+    /// following the links between leaves. Empty for an empty tree. Read-only.
     pub fn leaf_sizes(&self) -> Vec<usize> {
         todo!("2c-01: walk the leaves left to right (the leaf links) and collect how many pairs each holds")
     }
 
-    /// The keys physically stored in each leaf, in order, tombstoned ones included, from the leftmost leaf to the rightmost (module 2d).
-    /// A read-only observer for the tests.
+    /// The keys physically stored in each leaf, in order, tombstoned ones included, from the leftmost leaf to the rightmost. Read-only.
     pub fn leaf_keys(&self) -> Vec<Vec<K>> {
         Vec::new() // TODO(2d-01): the keys of every leaf, tombstoned ones included, left to right
     }
 
-    /// The keys in each leaf's tombstone buffer, oldest first, for every leaf from left to right (module 2d). Empty lists when
-    /// `TOMBS` is 0. A read-only observer for the tests.
+    /// The keys in each leaf's tombstone buffer, oldest first, for every leaf from left to right. Empty lists when `TOMBS` is 0. Read-only.
     pub fn leaf_tombstones(&self) -> Vec<Vec<K>> {
         Vec::new() // TODO(2d-01): the tombstone buffer of every leaf, left to right
     }
@@ -95,7 +96,7 @@ where
 
     // TODO(2c-01): a private helper of yours: the stage page says what it is for. Its name and shape are your choice.
 
-    /// The value stored for `key`: empty or one element (keys are unique; BusTub's `GetValue` fills a vector).
+    /// The value stored for `key`: empty or one element, since keys are unique.
     pub fn get_value(&self, key: &K) -> Vec<V> {
         todo!("2c-01: find the leaf and look the key up in it")
     }

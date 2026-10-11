@@ -1,5 +1,5 @@
-//! Port of `mock_scan_executor.cpp`: the built-in `__mock_*` tables. They have no storage: a function makes row number `i` on demand.
-//! The tests use them for data that is awkward to insert (a million rows, NULLs in a pattern, a small graph). Given code.
+//! The built-in `__mock_*` tables. They have no storage: a function makes row number `i` on demand, so large or patterned data (a million rows,
+//! NULLs in a pattern, a small graph) costs nothing to set up.
 
 use super::abstract_executor::Executor;
 use crate::catalog::column::Column;
@@ -64,7 +64,7 @@ fn ints(names: &[&str]) -> Schema {
     Schema::new(names.iter().map(|n| Column::new(n, TypeId::Integer)).collect())
 }
 
-/// The schema of a mock table. (BusTub: `GetMockTableSchemaOf`.)
+/// The schema of a mock table.
 pub fn get_mock_table_schema_of(table: &str) -> Result<Schema> {
     let vc = |n: &str| Column::new_varchar(n, 128);
     let int = |n: &str| Column::new(n, TypeId::Integer);
@@ -112,7 +112,7 @@ fn get_size_of(table: &str) -> usize {
     }
 }
 
-/// Row `cursor` of a mock table, as values. (BusTub: `GetFunctionOf`.)
+/// Row `cursor` of a mock table, as values.
 fn mock_row(table: &str, cursor: usize, schema: &Schema) -> Vec<Value> {
     let int = |v: i64| Value::integer(v as i32);
     let s = Value::varchar;

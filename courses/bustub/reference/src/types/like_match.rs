@@ -5,7 +5,7 @@ pub enum LikeError {
     TrailingEscape,
 }
 
-/// Does `text` match `pattern`? `escape`, when given, makes the following pattern character literal.
+/// Whether `text` matches `pattern`. `escape`, when present, makes the following pattern character literal.
 pub fn like(text: &str, pattern: &str, escape: Option<char>) -> Result<bool, LikeError> {
     // @begin 3a-c5
     #[derive(Clone, Copy)]

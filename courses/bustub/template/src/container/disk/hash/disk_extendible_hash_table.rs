@@ -1,10 +1,11 @@
-//! Port of `src/container/disk/hash/disk_extendible_hash_table.cpp`: an extendible hash table whose header, directories and buckets
-//! are pages in the buffer pool. Three levels: the header maps the top bits of a hash to a directory; a directory maps the low
-//! bits to a bucket; a bucket holds a few pairs. A full bucket splits (and the directory doubles if the bucket was already
-//! as deep as the directory); an empty one merges with its split image (and the directory halves if it can).
+//! An extendible hash table whose header, directories and buckets are pages in the buffer pool.
 //!
-//! Latching is by guards, top down, releasing a parent once the child is known to be safe ("latch crabbing"):
-//! `get_value` read-latches header -> directory -> bucket; `insert` and `remove` write-latch them.
+//! Three levels: the header maps the top bits of a hash to a directory, a directory maps the low bits to a bucket, and a bucket holds a
+//! few pairs. A full bucket splits, and the directory doubles if the bucket was already as deep as the directory; an empty one merges
+//! with its split image, and the directory halves if it can.
+//!
+//! Pages are latched top down through guards, releasing a parent once its child is known to be safe: `get_value` read-latches header,
+//! directory and bucket; `insert` and `remove` write-latch them.
 
 use crate::buffer::buffer_pool_manager::BufferPoolManager;
 use crate::common::config::PageId;
@@ -58,6 +59,7 @@ where
         todo!("2b-02: the id of the header page")
     }
 
+    /// The name the table was created with.
     pub fn index_name(&self) -> &str {
         todo!("2b-02: the name the table was created with")
     }
@@ -69,7 +71,7 @@ where
         todo!("2b-02: follow the header to the key's directory, if there is one, and report its global depth")
     }
 
-    /// The value stored for `key`: empty or one element (keys are unique; BusTub's `GetValue` fills a vector).
+    /// The value stored for `key`: empty or one element, since keys are unique.
     pub fn get_value(&self, key: &K) -> Vec<V> {
         todo!("2b-02: hash the key, follow the header to a directory and the directory to a bucket (read-latching each), and look the key up; an empty slot means no value")
     }

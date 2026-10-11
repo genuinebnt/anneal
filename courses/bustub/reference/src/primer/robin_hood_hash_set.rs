@@ -1,16 +1,15 @@
-//! Port of `src/include/primer/robin_hood_hash_set.h` and `src/primer/robin_hood_hash_set.cpp`: a fixed-capacity hash set that resolves
-//! collisions by **linear probing with Robin Hood displacement**.
+//! A fixed-capacity hash set that resolves collisions by **linear probing with Robin Hood displacement**.
 //!
-//! Every key has a *home bucket* (`hash % capacity`) and is stored at the first bucket from there that suits it. The *probe distance*
-//! of a key is how far it sits from its home. Robin Hood hashing takes from the rich and gives to the poor: when an incoming key is
-//! further from its home than the key it meets, it takes that bucket and the displaced key probes on. That keeps probe distances even,
-//! and keeps the longest probe short. A removed key leaves a **tombstone**.
+//! Every key has a *home bucket* (`hash % capacity`) and is stored at the first bucket from there that suits it. The *probe distance* of a key is
+//! how far it sits from its home. Robin Hood hashing takes from the rich and gives to the poor: when an incoming key is further from its home than
+//! the key it meets, it takes that bucket and the displaced key probes on. That keeps probe distances even, and keeps the longest probe short. A
+//! removed key leaves a **tombstone**.
 
 use std::sync::RwLock;
 
 use crate::common::exception::{Exception, ExceptionType, Result};
 
-/// A deterministic hash of a key (given): the same numbers as BusTub's `RobinHoodHash`, so that tests can pick keys for a home bucket.
+/// A deterministic hash of a key, the same on every run and machine, so that a caller can pick keys for a given home bucket.
 pub trait RobinHoodHash {
     fn robin_hood_hash(&self) -> usize;
 }
@@ -28,8 +27,7 @@ impl RobinHoodHash for i64 {
 }
 
 impl RobinHoodHash for String {
-    /// FNV-1a over the bytes, then the same final mixing as BusTub's `MixRobinHoodHash`. (BusTub hashes the bytes with its own
-    /// `HashUtil::HashBytes`, so string positions differ from the C++ course; only int positions are pinned by tests.)
+    /// FNV-1a over the bytes, then a final mixing step.
     fn robin_hood_hash(&self) -> usize {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in self.as_bytes() {
@@ -98,6 +96,7 @@ impl<K: RobinHoodHash + Clone + PartialEq> RobinHoodHashSet<K> {
         // @end
     }
 
+    /// The capacity the set was made with.
     pub fn capacity(&self) -> usize {
         // @begin 0c-01
         self.capacity

@@ -1,5 +1,4 @@
-//! A B+ tree leaf page: the `(key, value)` pairs, a link to the next leaf, and, for a tree with tombstones (module 2d), a small buffer of
-//! deleted keys.
+//! A B+ tree leaf page: the `(key, value)` pairs, a link to the next leaf and, for a tree with tombstones, a small buffer of deleted keys.
 
 // @begin 2c-01
 use std::cmp::Ordering;

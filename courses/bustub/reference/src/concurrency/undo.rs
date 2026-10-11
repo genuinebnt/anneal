@@ -10,6 +10,9 @@ pub enum UndoLog {
     Columns { mask: Vec<bool>, values: Vec<i64> },
 }
 
+/// The undo log that turns `new` back into `old`, where `None` is no tuple.
+///
+/// An insert is undone by removal, a delete by restoring the row, and an update by the changed columns only.
 pub fn make_undo(old: Option<&[i64]>, new: Option<&[i64]>) -> UndoLog {
     // @begin 4a-c4
     match (old, new) {
@@ -25,6 +28,7 @@ pub fn make_undo(old: Option<&[i64]>, new: Option<&[i64]>) -> UndoLog {
     // @end
 }
 
+/// Applies `log` to `tuple`, giving the version before the change; `None` is no tuple.
 pub fn apply_undo(tuple: Option<&[i64]>, log: &UndoLog) -> Option<Vec<i64>> {
     // @begin 4a-c4
     match log {

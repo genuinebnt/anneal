@@ -1,5 +1,4 @@
-//! Port of `src/include/container/hash/hash_function.h`: hash an index key with MurmurHash3 (x64, 128-bit, seed 0) and keep the
-//! first 64 bits. BusTub hashes the key's raw bytes (`sizeof(KeyType)` of them); here, the bytes of its page encoding.
+//! Hashes an index key with MurmurHash3 (x64, 128-bit, seed 0) and keeps the first 64 bits. The hash is of the key's page encoding.
 
 use super::murmur3::murmur_hash3_x64_128;
 use crate::storage::index::fixed_size::FixedSize;

@@ -17,6 +17,7 @@ pub struct VersionedPages {
 }
 
 impl VersionedPages {
+    /// An empty store.
     pub fn new() -> VersionedPages {
         // @begin 1a-c4
         VersionedPages { versions: BTreeMap::new(), clock: 0, next_id: 0, snapshots: BTreeMap::new() }
@@ -24,6 +25,7 @@ impl VersionedPages {
         // @end
     }
 
+    /// Writes a new version of `page`; older versions are kept.
     pub fn write(&mut self, page: u32, value: u64) {
         // @begin 1a-c4
         self.clock += 1;
@@ -32,6 +34,7 @@ impl VersionedPages {
         // @end
     }
 
+    /// The newest value of `page`; `None` if it was never written.
     pub fn read(&self, page: u32) -> Option<u64> {
         // @begin 1a-c4
         self.versions.get(&page).and_then(|v| v.last()).map(|&(_, x)| x)
@@ -39,6 +42,7 @@ impl VersionedPages {
         // @end
     }
 
+    /// Takes a snapshot: a name for the store as it is now, which later writes do not change.
     pub fn snapshot(&mut self) -> SnapshotId {
         // @begin 1a-c4
         let id = self.next_id;
@@ -49,6 +53,8 @@ impl VersionedPages {
         // @end
     }
 
+    /// The value `page` had when `snapshot` was taken: the newest one written no later than it. `None` for an unknown snapshot or a page not yet
+    /// written then.
     pub fn read_at(&self, snapshot: SnapshotId, page: u32) -> Option<u64> {
         // @begin 1a-c4
         let at = *self.snapshots.get(&snapshot)?;
@@ -57,6 +63,7 @@ impl VersionedPages {
         // @end
     }
 
+    /// Forgets `snapshot`; returns whether it existed.
     pub fn drop_snapshot(&mut self, id: SnapshotId) -> bool {
         // @begin 1a-c4
         self.snapshots.remove(&id).is_some()

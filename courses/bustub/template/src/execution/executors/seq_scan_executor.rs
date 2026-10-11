@@ -1,5 +1,5 @@
-//! Port of `seq_scan_executor.cpp`: reads every row of a table, in the order they are stored, skipping the deleted ones and (when the
-//! optimizer merged a filter into the scan) the rows that do not satisfy the plan's `filter_predicate`.
+//! Reads every row of a table in storage order, skipping deleted rows and, when a filter was merged into the scan, rows that do not satisfy the
+//! plan's `filter_predicate`.
 
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub struct SeqScanExecutor<'e> {
     table_info: &'e TableInfo<'e>,
     filter_predicate: Option<ExprRef>,
     iter: Option<TableIterator<'e>>,
-    /// The transaction to read as, with the manager that holds the version chains (module 4).
+    /// The transaction to read as, with the manager that holds the version chains.
     txn: Option<(Arc<Transaction>, &'e TransactionManager)>,
 }
 

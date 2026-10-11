@@ -52,6 +52,7 @@ impl Decimal {
         // @end
     }
 
+    /// `self + other`; `None` on overflow.
     pub fn add(self, other: Decimal) -> Option<Decimal> {
         // @begin 3a-c1
         self.cents.checked_add(other.cents).map(Decimal::from_cents)
@@ -59,6 +60,7 @@ impl Decimal {
         // @end
     }
 
+    /// `self - other`; `None` on overflow.
     pub fn sub(self, other: Decimal) -> Option<Decimal> {
         // @begin 3a-c1
         self.cents.checked_sub(other.cents).map(Decimal::from_cents)
@@ -66,6 +68,7 @@ impl Decimal {
         // @end
     }
 
+    /// `self * other`, rounded half away from zero; `None` on overflow.
     pub fn mul(self, other: Decimal) -> Option<Decimal> {
         // @begin 3a-c1
         let p = self.cents.checked_mul(other.cents)?;
@@ -74,6 +77,7 @@ impl Decimal {
         // @end
     }
 
+    /// `self / other`, rounded half away from zero; `None` for a zero divisor or on overflow.
     pub fn div(self, other: Decimal) -> Option<Decimal> {
         // @begin 3a-c1
         if other.cents == 0 {

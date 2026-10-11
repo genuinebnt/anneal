@@ -11,6 +11,7 @@ pub struct WriteBehind {
 }
 
 impl WriteBehind {
+    /// A tracker with no dirty page.
     pub fn new() -> WriteBehind {
         // @begin 1f-c3
         WriteBehind { dirty: BTreeMap::new() }
@@ -18,6 +19,7 @@ impl WriteBehind {
         // @end
     }
 
+    /// Records that `page` became dirty at `now`. A page that is already dirty keeps its earlier time.
     pub fn mark_dirty(&mut self, page: u32, now: u64) {
         // @begin 1f-c3
         self.dirty.entry(page).or_insert(now);
@@ -35,6 +37,7 @@ impl WriteBehind {
         // @end
     }
 
+    /// Forgets `page` once it is written back; returns whether it was dirty.
     pub fn flushed(&mut self, page: u32) -> bool {
         // @begin 1f-c3
         self.dirty.remove(&page).is_some()
@@ -42,6 +45,7 @@ impl WriteBehind {
         // @end
     }
 
+    /// The number of dirty pages.
     pub fn dirty_count(&self) -> usize {
         // @begin 1f-c3
         self.dirty.len()

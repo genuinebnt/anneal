@@ -1,5 +1,6 @@
-//! Port of `src/binder/` and `src/include/binder/`. The binder takes the syntax tree and **binds** names: which table a name means,
-//! which column a column reference is, what `*` expands to. It produces the *bound* tree the planner turns into a plan. Given code.
+//! Name resolution: decides which table a name means, which column a reference is and what `*` expands to.
+//!
+//! Produces the bound tree the planner turns into a plan.
 
 pub mod binder;
 pub mod bound_expression;

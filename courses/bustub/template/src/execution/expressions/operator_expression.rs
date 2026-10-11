@@ -1,6 +1,4 @@
-//! The operators BusTub's expression layer does not have: `*`, `/`, `%`, `||`, unary `-`, `NOT` and `IS [NOT] NULL`, and `+` and `-` on
-//! every numeric type (`ArithmeticExpression` is integers only). One expression type with an [`Operator`] tag, as `ArithmeticExpression`
-//! has one with an `ArithmeticType`. Module 3i.
+//! `*`, `/`, `%`, `||`, unary `-`, `NOT` and `IS [NOT] NULL`, and `+` and `-` on every numeric type. One expression type with an [`Operator`] tag.
 
 use std::any::Any;
 use std::sync::Arc;

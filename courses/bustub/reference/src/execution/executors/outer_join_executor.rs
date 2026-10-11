@@ -1,8 +1,8 @@
-//! RIGHT and FULL OUTER joins as a nested loop join that remembers which right tuples found a partner. Module 3j.
+//! RIGHT and FULL OUTER joins as a nested loop join that remembers which right tuples found a partner.
 //!
-//! The nested loop join of module 3f drives from the left side: for each left tuple it scans the right side again. That is enough for a LEFT
-//! join (a left tuple that matched nothing is padded with NULLs). A right tuple that no left tuple matched is only known once **every** left
-//! tuple has been seen, so this join keeps the right side in memory with a flag per tuple and reports the unmatched ones at the end.
+//! A nested loop join drives from the left side, which is enough for a LEFT join: a left tuple that matched nothing is padded with NULLs. A right
+//! tuple that no left tuple matched is known only once **every** left tuple has been seen, so this join keeps the right side in memory with a flag
+//! per tuple and reports the unmatched ones at the end.
 
 use std::collections::VecDeque;
 

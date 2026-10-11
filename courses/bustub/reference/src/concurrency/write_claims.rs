@@ -16,6 +16,7 @@ pub struct WriteClaims {
 }
 
 impl WriteClaims {
+    /// No key is claimed.
     pub fn new() -> WriteClaims {
         // @begin 4b-c1
         WriteClaims { owners: HashMap::new() }
@@ -23,6 +24,11 @@ impl WriteClaims {
         // @end
     }
 
+    /// Takes `key` for `txn` if it is free or already `txn`'s.
+    ///
+    /// # Errors
+    ///
+    /// [`Conflict`] naming the owner if another transaction holds it.
     pub fn claim(&mut self, txn: u64, key: i64) -> Result<(), Conflict> {
         // @begin 4b-c1
         match self.owners.get(&key) {
@@ -36,6 +42,7 @@ impl WriteClaims {
         // @end
     }
 
+    /// Frees every key `txn` holds and returns how many there were.
     pub fn release_all(&mut self, txn: u64) -> usize {
         // @begin 4b-c1
         let before = self.owners.len();
@@ -45,6 +52,7 @@ impl WriteClaims {
         // @end
     }
 
+    /// The transaction that holds `key`, if any.
     pub fn owner_of(&self, key: i64) -> Option<u64> {
         // @begin 4b-c1
         self.owners.get(&key).copied()

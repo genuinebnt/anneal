@@ -12,10 +12,12 @@ pub struct CuckooSet {
 }
 
 impl CuckooSet {
+    /// An empty set.
     pub fn new() -> CuckooSet {
         todo!("2b-c4: two small tables")
     }
 
+    /// The number of keys.
     pub fn len(&self) -> usize {
         todo!("2b-c4: how many keys")
     }
@@ -38,12 +40,16 @@ impl CuckooSet {
         self.position(key).is_some()
     }
 
+    /// Adds `key`; returns false if it was already there.
+    ///
+    /// If displacing keys takes too long, or the tables are half full, the tables grow and every key is placed again.
     pub fn insert(&mut self, key: u64) -> bool {
         todo!("2b-c4: place the key, displacing others; grow and place everything again if that takes too long or the tables are half full")
     }
 
     // TODO(2b-c4): helpers of your own (displacement walk, growing)
 
+    /// Removes `key`; returns whether it was there.
     pub fn remove(&mut self, key: u64) -> bool {
         todo!("2b-c4: clear the key's slot")
     }

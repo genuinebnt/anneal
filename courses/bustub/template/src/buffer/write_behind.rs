@@ -7,10 +7,12 @@ pub struct WriteBehind {
 }
 
 impl WriteBehind {
+    /// A tracker with no dirty page.
     pub fn new() -> WriteBehind {
         todo!("1f-c3: nothing is dirty")
     }
 
+    /// Records that `page` became dirty at `now`. A page that is already dirty keeps its earlier time.
     pub fn mark_dirty(&mut self, page: u32, now: u64) {
         todo!("1f-c3: remember when the page first became dirty")
     }
@@ -20,10 +22,12 @@ impl WriteBehind {
         todo!("1f-c3: the pages that have been dirty long enough, oldest first")
     }
 
+    /// Forgets `page` once it is written back; returns whether it was dirty.
     pub fn flushed(&mut self, page: u32) -> bool {
         todo!("1f-c3: forget the page")
     }
 
+    /// The number of dirty pages.
     pub fn dirty_count(&self) -> usize {
         todo!("1f-c3: how many pages are dirty")
     }

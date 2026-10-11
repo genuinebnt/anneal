@@ -13,10 +13,12 @@ impl<T> RingBuffer<T> {
         todo!("r-05: capacity empty slots; the oldest value is at slot 0")
     }
 
+    /// The number of slots, which is the most values the buffer can hold.
     pub fn capacity(&self) -> usize {
         todo!("r-05: the number of slots")
     }
 
+    /// The number of values held.
     pub fn len(&self) -> usize {
         todo!("r-05: the number of values held")
     }

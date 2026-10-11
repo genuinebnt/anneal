@@ -1,5 +1,4 @@
-//! Port of `third_party/murmur3/MurmurHash3.cpp` (Austin Appleby, public domain): MurmurHash3 for x64, 128-bit output. BusTub
-//! hashes index keys with it, so the hash table tests only come out right with the same function.
+//! MurmurHash3 for x64 with 128-bit output (Austin Appleby, public domain).
 
 #[inline]
 fn fmix64(mut k: u64) -> u64 {

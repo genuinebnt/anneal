@@ -5,6 +5,7 @@ pub struct Defer<F: FnOnce()> {
 }
 
 impl<F: FnOnce()> Defer<F> {
+    /// A guard that runs `f` when it is dropped.
     pub fn new(f: F) -> Defer<F> {
         todo!("1g-c1: remember the closure")
     }

@@ -27,14 +27,18 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
+    /// The tree over `leaves`: the leaves are hashed, then neighbours are paired level by level; an odd one out is paired with itself. An empty tree has
+    /// no levels.
     pub fn new(leaves: &[Vec<u8>]) -> MerkleTree {
         todo!("0d-c3: hash the leaves, then pair neighbours level by level; an odd one out is paired with itself")
     }
 
+    /// The hash at the top, which changes if any leaf does; 0 for no leaves.
     pub fn root(&self) -> u64 {
         todo!("0d-c3: the single hash at the top (0 for no leaves)")
     }
 
+    /// The number of leaves.
     pub fn leaves(&self) -> usize {
         todo!("0d-c3: how many leaves")
     }

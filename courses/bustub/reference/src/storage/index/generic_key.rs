@@ -1,6 +1,4 @@
-//! Port of `src/include/storage/index/generic_key.h`: an index key that is just `KEY_SIZE` opaque bytes, and a comparator that knows
-//! how to read them. BusTub's comparator interprets the bytes through the table's schema; this one (until module 3a brings in
-//! schemas) reads the first 8 bytes as a little-endian `i64`, which is what BusTub's tests put there with `SetFromInteger`.
+//! An index key that is just `KEY_SIZE` opaque bytes, and a comparator that reads the first 8 of them as a little-endian `i64`.
 
 use std::cmp::Ordering;
 
@@ -18,7 +16,7 @@ impl<const KEY_SIZE: usize> Default for GenericKey<KEY_SIZE> {
 }
 
 impl<const KEY_SIZE: usize> GenericKey<KEY_SIZE> {
-    /// Fills the key with zeros and stores `key` in the first 8 bytes, little-endian. (BusTub: "for test purpose only".)
+    /// Fills the key with zeros and stores `key` in the first 8 bytes, little-endian.
     pub fn set_from_integer(&mut self, key: i64) {
         // @begin 2a-02
         self.data = [0; KEY_SIZE];
@@ -54,7 +52,7 @@ impl<const KEY_SIZE: usize> FixedSize for GenericKey<KEY_SIZE> {
     }
 }
 
-/// Orders keys. BusTub's comparators are function objects returning -1, 0 or 1; Rust's version returns an [`Ordering`].
+/// Orders keys, returning an [`Ordering`].
 pub trait KeyComparator<K> {
     fn compare(&self, lhs: &K, rhs: &K) -> Ordering;
 }

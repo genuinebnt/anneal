@@ -1,9 +1,9 @@
-//! Port of `src/include/common/exception.h`: BusTub's exceptions. C++ throws; Rust returns `Result<_, Exception>` (a failing
-//! SQL operation such as an overflow, a division by zero or an impossible cast is an *expected* error, not a bug). Given code.
+//! The database's error type. A failing SQL operation (an overflow, a division by zero, an impossible cast) is an *expected* error,
+//! returned as `Result<_, Exception>`, not a bug.
 
 use std::fmt;
 
-/// BusTub's `ExceptionType` (the kinds this port uses).
+/// The kinds of failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExceptionType {
     Invalid,

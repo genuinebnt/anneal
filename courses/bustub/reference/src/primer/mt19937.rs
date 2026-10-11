@@ -1,7 +1,7 @@
-//! A port of C++'s `std::mt19937` (the 32-bit Mersenne Twister), so that a seed gives the same sequence as in BusTub. Given code.
+//! The 32-bit Mersenne Twister (MT19937), seeded as the reference `mt19937(seed)` is, so a seed gives the standard sequence.
 //!
-//! The skip list draws its node heights from it: with the fixed seed 15445, the shape of a skip list is the same on every machine and
-//! in the C++ course, which is what lets a test say "inserting these keys must give nodes of exactly these heights".
+//! A fixed seed gives the same sequence on every machine, so structures that draw from it, such as the heights of a skip list's nodes, have the
+//! same shape on every machine.
 
 const N: usize = 624;
 const M: usize = 397;

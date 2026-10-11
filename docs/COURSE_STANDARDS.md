@@ -63,3 +63,19 @@ them. **Read this before changing anything under `courses/` or the Courses pages
   more `#[test]` examples, `### In the exercises` and `### Where it is used`. CI runs it, and runs `tools/course_snippets.py` on the examples.
 - `anneal course verify` also fails a non-boss stage with fewer than 5 tests.
 - A module is added to `published_modules` only when lint and verify are clean for it.
+
+## Code comments (owner, 2026-10-11)
+
+The `///` and `//!` comments in the template and reference stay in the learner's code after the course, so they are written for a
+reader who has never seen the course, in the style of the Rust standard library:
+
+- **One summary sentence**, third person, present tense ("Returns the number of ...", "Removes ...", "A queue that ..."), then only
+  what a caller needs: the **behaviour** at the edges, the **invariants** that always hold, and `# Errors` / `# Panics` sections.
+- **Fewer words, more meaning.** No steps, no "first ... then", no implementation (which map, which loop). If the sentence says how, it
+  is the wrong sentence.
+- **Nothing course-specific:** no stage or module ids, no "module 4", "this exercise", "the tests", "yours", "given code", no hints.
+- **Nothing historical:** no "BusTub does ...", no "unlike C++", no "this course leaves out ...", no "port of ...".
+- Every item a learner implements has one. What to do *now* belongs in the `todo!("<stage>: ...")` message, which the learner replaces;
+  it states the behaviour wanted, not the steps.
+
+`tools/check_code_comments.py` lists breaches (course words, history, a stub without a doc); keep it at zero.

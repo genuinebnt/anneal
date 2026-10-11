@@ -1,8 +1,8 @@
 //! What the write-ahead log says, one record at a time.
 //!
-//! A record is a transaction beginning, a **change** of one record slot (its state before and after: `None` means the slot holds no live
-//! record), a commit, an abort (written once a rollback has been logged to the end) or a checkpoint. The byte format is yours: the tests
-//! only need `deserialize(serialize(r))` to give `r` back, and a damaged or cut-off record to be recognised as such.
+//! A record is a transaction beginning, a **change** of one record slot (its state before and after: `None` means the slot holds no live record), a
+//! commit, an abort (written once a rollback has been logged to the end) or a checkpoint. The byte format is free: all that is required is that
+//! `deserialize(serialize(r))` gives `r` back and that a damaged or cut-off record is recognised as such.
 
 use crate::common::rid::Rid;
 
@@ -151,8 +151,8 @@ fn checksum(body: &[u8]) -> u32 {
 //~ // TODO(4c-01): helpers of your own (a checksum, a small reader for the fields)
 // @end
 
-/// Every record at the start of `bytes`, in order, with the offset where each begins; it stops at the first record that is cut off or
-/// does not check out. Also the number of bytes those records take. Given: this is what "the log" means after a crash.
+/// Every record at the start of `bytes`, in order, with the offset where each begins; it stops at the first record that is cut off or does not
+/// check out. Also the number of bytes those records take. This is what "the log" means after a crash.
 pub fn parse_log(bytes: &[u8]) -> (Vec<(u64, LogRecord)>, usize) {
     let (mut out, mut at) = (Vec::new(), 0usize);
     while let Some((record, n)) = LogRecord::deserialize(&bytes[at..]) {

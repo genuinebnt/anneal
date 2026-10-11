@@ -1,11 +1,10 @@
-//! A tiny transactional record store on table pages: the thing the log protects. Records are fixed-size byte strings living in
-//! slots of a few pre-allocated heap pages; a record is addressed by its [`Rid`]. Transactions write records (insert, update, delete);
-//! every write is described to the log **before** it reaches the page; a commit makes its log records durable; pages go to disk when
-//! somebody calls [`Store::flush_page`], and never otherwise (the tests keep the pool big enough that nothing is evicted behind the
-//! store's back; a real system hooks eviction).
+//! A tiny transactional record store on table pages: the thing the log protects. Records are fixed-size byte strings living in slots of a few
+//! pre-allocated heap pages; a record is addressed by its [`Rid`]. Transactions write records (insert, update, delete); every write is described to
+//! the log **before** it reaches the page; a commit makes its log records durable; pages go to disk when somebody calls [`Store::flush_page`], and
+//! never otherwise. The store assumes the pool is big enough that nothing is evicted behind its back (a real system hooks eviction).
 //!
-//! The store is strict: a record written by an active transaction cannot be written by another until the first ends, so a crash never
-//! leaves a committed change on top of an uncommitted one.
+//! The store is strict: a record written by an active transaction cannot be written by another until the first ends, so a crash never leaves a
+//! committed change on top of an uncommitted one.
 
 use std::collections::HashMap;
 use std::io;
@@ -57,6 +56,7 @@ impl<'a> Store<'a> {
         todo!("4c-03: keep the pool, the log and the pages (and, from stage 4, the first transaction id)")
     }
 
+    /// The pages the store was opened with.
     pub fn pages(&self) -> &[PageId] {
         todo!("4c-03: the pages the store was opened with")
     }
@@ -89,14 +89,18 @@ impl<'a> Store<'a> {
         todo!("4c-04: refuse a record held by another transaction; append the Change record; then set_state; remember the page's LSN, the hold and the change")
     }
 
+    /// Inserts a record of `RECORD_LEN` bytes into the first page with a free slot, logging the change before the page sees it. Returns the new
+    /// record's [`Rid`].
     pub fn insert(&self, txn: TxnId, data: &[u8]) -> StoreResult<Rid> {
         todo!("4c-04: the first page with room: the new record goes in the next slot; log and apply it with change(None -> Some)")
     }
 
+    /// Replaces the live record at `rid`, logging the change first. The record must exist.
     pub fn update(&self, txn: TxnId, rid: Rid, data: &[u8]) -> StoreResult<()> {
         todo!("4c-04: the record must be live; change(Some(old) -> Some(new))")
     }
 
+    /// Deletes the live record at `rid`, logging the change first. The record must exist.
     pub fn delete(&self, txn: TxnId, rid: Rid) -> StoreResult<()> {
         todo!("4c-04: the record must be live; change(Some(old) -> None)")
     }
@@ -117,6 +121,7 @@ impl<'a> Store<'a> {
         todo!("4c-04: flush the log up to the page's last change, then write the page")
     }
 
+    /// Writes every page of the store to disk.
     pub fn flush_all_pages(&self) -> io::Result<()> {
         todo!("4c-04: flush_page for every page of the store")
     }

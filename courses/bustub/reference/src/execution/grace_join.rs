@@ -12,6 +12,7 @@ pub fn bucket_of(key: i64, k: usize) -> usize {
     ((x ^ (x >> 31)) % k as u64) as usize
 }
 
+/// Splits `rows` into `k` buckets by the hash of their key, so rows with equal keys land in the same bucket, in input order.
 pub fn partition(rows: &[Row], k: usize) -> Vec<Vec<Row>> {
     // @begin 3f-c3
     let mut buckets = vec![Vec::new(); k];
@@ -23,6 +24,8 @@ pub fn partition(rows: &[Row], k: usize) -> Vec<Vec<Row>> {
     // @end
 }
 
+/// The equi-join of two row sets on their keys, as `(left payload, right payload)` pairs. Both sides are partitioned into `k` buckets and each pair
+/// of buckets is joined in memory, so only one bucket's hash table exists at a time.
 pub fn grace_join(left: &[Row], right: &[Row], k: usize) -> Vec<(u32, u32)> {
     // @begin 3f-c3
     let (lp, rp) = (partition(left, k), partition(right, k));
