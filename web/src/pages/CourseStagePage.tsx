@@ -8,7 +8,6 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { api, type CourseStagePage as Page, type CourseRun } from "../api";
 import { Header } from "../components/Header";
 import { Celebration, celebrateOff } from "../components/kit";
-import { FocusTimer } from "../components/FocusTimer";
 import { MockCopy, MockRoot, reducedMotion } from "../components/mock";
 import { toast } from "../components/toasts";
 import { getPref, setPref } from "../prefs";
@@ -110,7 +109,6 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
     const [flipped, setFlipped] = useState<Set<string>>(() => new Set());
     const [openOpt, setOpenOpt] = useState<Set<string>>(() => new Set());
     const [strip, setStrip] = useState(false);
-    const [time, setTime] = useState("25:00");
     const seenRun = useRef<number | null>(null);
     const tabFromHash = (): Tab => TAB_IDS.find((x) => x === location.hash.slice(1)) ?? "instructions";
     const [tab, setTab] = useState<Tab>(tabFromHash);
@@ -409,16 +407,6 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                     </button>
                     <button onClick={() => panels.setDrawer(panels.drawer === "r" ? null : "r")} aria-expanded={panels.drawer === "r"}>
                         ▤ Page &amp; notes <b>{notes.length}</b>
-                    </button>
-                    <span className="k-sp" />
-                    <button
-                        className="k-tm2"
-                        onClick={() => {
-                            panels.setDrawer("r");
-                            setTimeout(() => document.getElementById("focus")?.scrollIntoView({ block: "end", behavior: reducedMotion() ? "auto" : "smooth" }), 420);
-                        }}
-                    >
-                        ⏱ <span>{time}</span>
                     </button>
                 </div>
                 <div className={`k-dbk${panels.drawer ? " k-on" : ""}`} onClick={() => panels.setDrawer(null)} aria-hidden="true" />
@@ -753,7 +741,6 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 </div>
                             </div>
                         </div>
-                        <FocusTimer onTime={setTime} />
                     </aside>
                 </div>
                 {panels.p.rc && (

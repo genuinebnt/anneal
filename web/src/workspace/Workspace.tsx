@@ -12,6 +12,7 @@ import { EditorSettingsButton } from "./EditorSettings";
 import { useEditorSettings } from "../settings";
 import { changedLines } from "./diff";
 import { deriveLanes } from "./lanes";
+import { FocusTimer } from "../components/FocusTimer";
 import { Ansi } from "./ansi";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
@@ -866,6 +867,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 )}
                 <TestsPanel python={py} run={shown} cases={cases} hiddenCases={hiddenCases} busy={run.isPending || submit.isPending} open={open} setOpen={setOpen} runNo={shownIdx + 1} onRun={doRun} canRun={p.status === "ready"} />
               </div>
+              <FocusTimer />
               <div className="acts">
                 <button className="go" onClick={doSubmit} disabled={busy || p.status !== "ready"} title="Run the visible and hidden tests (⇧⌘↵)">
                   {submit.isPending && <span className="spin" aria-hidden="true" />}

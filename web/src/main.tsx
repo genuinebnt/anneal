@@ -38,6 +38,7 @@ import "./styles/mock-course.css";
 import "./styles/mock-section.css";
 import "./styles/mock-extra.css";
 import "./styles/polish.css";
+import "./styles/focus-timer.css";
 
 const rootRoute = createRootRoute({
   component: () => (

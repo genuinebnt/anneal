@@ -116,7 +116,7 @@ test.describe("on a phone", () => {
         await expect(page.locator(".k-tree.k-open")).toHaveCount(0);
         await page.getByRole("button", { name: /Page & notes/ }).click();
         await expect(page.locator(".k-toc.k-open")).toHaveCount(1);
-        await expect(page.locator(".k-focus")).toBeVisible();
+        await expect(page.locator(".k-toc.k-open .k-rcard", { hasText: "THIS STAGE" })).toBeVisible();
         await page.locator(".k-dbk").evaluate((el) => (el as HTMLElement).click());
         await expect(page.locator(".k-toc.k-open")).toHaveCount(0);
     });
@@ -126,10 +126,6 @@ test.describe("on a phone", () => {
         await page.locator(".k-tlist .k-tl", { hasText: "The snapshot scan" }).click();
         await expect(page).toHaveURL(/4a-05/);
         await expect(page.locator(".k-tree.k-open")).toHaveCount(0);
-    });
-
-    test("the phone bar shows the focus timer", async ({ page }) => {
-        await expect(page.locator(".k-mbar .k-tm2")).toContainText("25:00");
     });
 
     test("there is no horizontal scroll", async ({ page }) => {

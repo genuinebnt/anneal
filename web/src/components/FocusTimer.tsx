@@ -1,4 +1,4 @@
-// A focus timer for the stage page's right panel: Pomodoro (focus and break phases, a long break after the fourth), a countdown (the interview
+// A focus timer for the DSA problem page and the Rust workspace (a card in the page's right column): Pomodoro (focus and break phases, a long break after the fourth), a countdown (the interview
 // clock) and a stopwatch, all on one ring. It lives in the browser only: nothing about it is stored on the server, only the lengths you chose.
 
 import { useEffect, useRef, useState } from "react";
@@ -61,14 +61,12 @@ export function advance(s: State, dt: number, c: Cfg, mode: Mode): State {
 
 const mmss = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
 
-export function FocusTimer({ onTime }: { onTime?: (text: string) => void }) {
+export function FocusTimer() {
     const [cfg, setCfg] = useState<Cfg>(() => ({ ...DEFAULTS, ...getPref<Partial<Cfg>>("focus.cfg", {}) }));
     const [s, setS] = useState<State>(() => fresh(cfg));
     const [settings, setSettings] = useState(false);
     // Focus time spent since this page opened (nothing about it is stored).
     const [visit, setVisit] = useState({ focus: 0 });
-    // The phone bar shows the same time as the ring.
-    useEffect(() => onTime?.(mmss(s.secs)), [s.secs, onTime]);
     const cfgRef = useRef(cfg);
     cfgRef.current = cfg;
     const phaseRef = useRef<Phase>("focus");
@@ -107,7 +105,7 @@ export function FocusTimer({ onTime }: { onTime?: (text: string) => void }) {
     const sw = cfg.mode === "sw";
     const p = sw ? ((s.secs % 60) / 60) * 100 : s.total ? ((s.total - s.secs) / s.total) * 100 : 0;
     const frac = s.total ? s.secs / s.total : 1;
-    const tone = sw ? "" : cfg.mode === "pom" ? (s.phase === "focus" ? "" : " k-brk") : frac < 0.05 ? " k-crit" : frac < 0.2 ? " k-warn" : "";
+    const tone = sw ? "" : cfg.mode === "pom" ? (s.phase === "focus" ? "" : " ft-brk") : frac < 0.05 ? " ft-crit" : frac < 0.2 ? " ft-warn" : "";
     const label = sw ? "ELAPSED" : cfg.mode === "timer" ? "REMAINING" : s.phase === "focus" ? `FOCUS ${s.cycle} / 4` : s.phase === "long" ? "LONG BREAK" : "BREAK";
     const fresh0 = sw ? s.secs === 0 : s.secs === s.total;
     // A countdown that ran out offers to start again, not to resume at zero.
@@ -116,67 +114,67 @@ export function FocusTimer({ onTime }: { onTime?: (text: string) => void }) {
     const worked = Math.floor(visit.focus / 60);
 
     return (
-        <div className={`k-rcard k-focus${tone}`} id="focus" aria-label="Focus timer">
-            <h6>
-                FOCUS{" "}
-                <span className="k-fm" role="group" aria-label="Timer mode">
+        <div className={`ft${tone}`} aria-label="Focus timer">
+            <h6 className="ft-h">
+                <span>FOCUS</span>
+                <span className="ft-modes" role="group" aria-label="Timer mode">
                     {MODES.map(([m, l]) => (
-                        <button key={m} aria-pressed={cfg.mode === m} className={cfg.mode === m ? "k-on" : ""} onClick={() => setMode(m)}>
+                        <button key={m} aria-pressed={cfg.mode === m} className={cfg.mode === m ? "ft-on" : ""} onClick={() => setMode(m)}>
                             {l}
                         </button>
                     ))}
                 </span>
             </h6>
-            <div className="k-fbody">
-                <div className={`k-fring${s.running ? " k-run" : ""}`} style={{ "--p": p } as React.CSSProperties} role="timer" aria-label={`${label} ${mmss(s.secs)}`}>
+            <div className="ft-body">
+                <div className={`ft-ring${s.running ? " ft-run" : ""}`} style={{ "--p": p } as React.CSSProperties} role="timer" aria-label={`${label} ${mmss(s.secs)}`}>
                     <span>
                         <b>{mmss(s.secs)}</b>
                         <small>{label}</small>
                     </span>
                 </div>
-                <div className="k-fctl">
-                    <button className="k-cta k-sm" onClick={() => setS((x) => (finished ? { ...fresh(cfg), running: true } : { ...x, running: !x.running, note: "" }))}>
-                        <span className="k-lbl">{s.running ? "Pause" : finished ? "Restart" : fresh0 ? "Start" : "Resume"}</span>
+                <div className="ft-ctl">
+                    <button className="ft-go" onClick={() => setS((x) => (finished ? { ...fresh(cfg), running: true } : { ...x, running: !x.running, note: "" }))}>
+                        {s.running ? "Pause" : finished ? "Restart" : fresh0 ? "Start" : "Resume"}
                     </button>
-                    <div className="k-fbtns">
-                        <button className="k-sbtn" aria-label="Reset" title="Reset" onClick={() => setS(fresh(cfg))}>
+                    <div className="ft-btns">
+                        <button className="ft-sb" aria-label="Reset" title="Reset" onClick={() => setS(fresh(cfg))}>
                             ↺
                         </button>
-                        <button className="k-sbtn" aria-label="Skip to the next phase" title="Skip to the next phase" disabled={sw || cfg.mode === "timer"} onClick={() => setS((x) => ({ ...advance({ ...x, running: true }, x.secs + 1, cfg, cfg.mode), running: x.running }))}>
+                        <button className="ft-sb" aria-label="Skip to the next phase" title="Skip to the next phase" disabled={sw || cfg.mode === "timer"} onClick={() => setS((x) => ({ ...advance({ ...x, running: true }, x.secs + 1, cfg, cfg.mode), running: x.running }))}>
                             ⏭
                         </button>
-                        <button className="k-sbtn" aria-label="Settings" aria-expanded={settings} title="Settings" onClick={() => setSettings(!settings)}>
+                        <button className="ft-sb" aria-label="Settings" aria-expanded={settings} title="Settings" onClick={() => setSettings(!settings)}>
                             ⚙
                         </button>
                     </div>
                 </div>
             </div>
             {cfg.mode === "pom" && (
-                <div className="k-fdots" aria-hidden="true">
+                <div className="ft-dots" aria-hidden="true">
                     {[1, 2, 3, 4].map((i) => (
-                        <i key={i} className={i <= s.done ? "k-done" : i === s.cycle && s.phase === "focus" ? "k-cur" : ""} />
+                        <i key={i} className={i <= s.done ? "ft-done" : i === s.cycle && s.phase === "focus" ? "ft-cur" : ""} />
                     ))}
                 </div>
             )}
-            <div className={`k-fset${settings ? " k-open" : ""}`}>
+            <div className={`ft-set${settings ? " ft-open" : ""}`}>
                 <div inert={!settings}>
-                    <label className="k-rng">
-                        <span className="k-h">
+                    <label className="ft-rng">
+                        <span className="ft-rh">
                             <span>Focus</span>
                             <b>{cfg.focus} min</b>
                         </span>
                         <input type="range" min={5} max={60} step={5} value={cfg.focus} style={range(5, 60, cfg.focus)} onChange={(e) => setLen("focus", +e.target.value)} />
                     </label>
-                    <label className="k-rng">
-                        <span className="k-h">
+                    <label className="ft-rng">
+                        <span className="ft-rh">
                             <span>Break</span>
                             <b>{cfg.brk} min</b>
                         </span>
                         <input type="range" min={3} max={20} value={cfg.brk} style={range(3, 20, cfg.brk)} onChange={(e) => setLen("brk", +e.target.value)} />
                     </label>
                     {cfg.mode === "timer" && (
-                        <label className="k-rng">
-                            <span className="k-h">
+                        <label className="ft-rng">
+                            <span className="ft-rh">
                                 <span>Countdown</span>
                                 <b>{cfg.timer} min</b>
                             </span>
@@ -185,7 +183,7 @@ export function FocusTimer({ onTime }: { onTime?: (text: string) => void }) {
                     )}
                 </div>
             </div>
-            <div className="k-fsum" role="status" aria-live="polite">
+            <div className="ft-sum" role="status" aria-live="polite">
                 {s.note ? (
                     <span>{s.note}</span>
                 ) : (

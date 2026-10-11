@@ -6,6 +6,7 @@ import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../componen
 import { Header } from "../components/Header";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
+import { FocusTimer } from "../components/FocusTimer";
 import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
 
 const LIST_NAME = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "NeetCode All", practice: "Practice" };
@@ -362,6 +363,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                             )}
                         </div>
                     )}
+
+                    <FocusTimer />
 
                     {p.companies.length > 0 && (
                         <div className="pp-card">
