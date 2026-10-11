@@ -3,6 +3,7 @@
 
 mod activity;
 pub mod auth;
+pub mod cli_updates;
 mod dsa;
 pub mod dsa_next;
 mod error;
@@ -130,6 +131,11 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
     if let Some(dir) = std::env::var_os("ANNEAL_DOWNLOADS").map(std::path::PathBuf::from).filter(|d| d.is_dir()) {
         router = router.merge(Router::new().nest_service("/downloads", ServeDir::new(dir)).layer(middleware::from_fn(revalidate)));
     }
+    // What an installed CLI asks to update itself and its course files (also public; see cli_updates).
+    router = router.merge(cli_updates::router(
+        Some(std::env::var_os("ANNEAL_COURSES").map(std::path::PathBuf::from).unwrap_or_else(|| "courses".into())).filter(|d| d.is_dir()),
+        std::env::var_os("ANNEAL_DOWNLOADS").map(std::path::PathBuf::from).filter(|d| d.is_dir()),
+    ));
     if let Some(dist) = web_dist.filter(|d| d.join("index.html").is_file()) {
         // Vite names everything under /assets by content hash, so those files never change: browsers and
         // Cloudflare may keep them for a year without asking again. A missing one is a plain 404, never the

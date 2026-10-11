@@ -10,28 +10,23 @@ use anyhow::Context;
 static BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/courses.bin"));
 
 /// The embedded files as (relative path, bytes).
-fn entries(blob: &[u8]) -> Vec<(&str, &[u8])> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + 4 <= blob.len() {
-        let plen = u32::from_le_bytes(blob[at..at + 4].try_into().unwrap()) as usize;
-        at += 4;
-        let path = std::str::from_utf8(&blob[at..at + plen]).unwrap_or("");
-        at += plen;
-        let dlen = u64::from_le_bytes(blob[at..at + 8].try_into().unwrap()) as usize;
-        at += 8;
-        out.push((path, &blob[at..at + dlen]));
-        at += dlen;
-    }
-    out
+pub fn entries(blob: &[u8]) -> Vec<(&str, &[u8])> {
+    anneal_content::bundle::unpack(blob).unwrap_or_default()
 }
 
-/// FNV-1a: names the cache directory after the content, so a new build never reads an old extraction.
+/// Names the cache directory after the content, so a new build never reads an old extraction.
 fn fingerprint(blob: &[u8]) -> u64 {
-    blob.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3))
+    anneal_content::bundle::fingerprint(blob)
 }
 
-fn cache_base() -> Option<PathBuf> {
+/// The fingerprint of one embedded course as the app serves it (`/courses-bundle/<id>`), so the two can be compared.
+pub fn course_fingerprint(id: &str) -> Option<u64> {
+    let prefix = format!("{id}/");
+    let mine: Vec<(String, Vec<u8>)> = entries(BLOB).into_iter().filter(|(p, _)| p.starts_with(&prefix)).map(|(p, d)| (p.to_owned(), d.to_vec())).collect();
+    (!mine.is_empty()).then(|| anneal_content::bundle::fingerprint(&anneal_content::bundle::pack(&mine)))
+}
+
+pub fn cache_base() -> Option<PathBuf> {
     std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache"))).map(|b| b.join("anneal"))
 }
 
@@ -48,8 +43,14 @@ pub fn courses_dir() -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(dir))
 }
 
-fn extract(blob: &[u8], dir: &Path) -> anyhow::Result<()> {
-    for (rel, data) in entries(blob) {
+/// Writes a blob's files under `dir`, then a `.complete` marker. A blob that is cut short, or names a path outside `dir`, is refused
+/// before anything is written (the blob may have come over the network).
+pub fn extract(blob: &[u8], dir: &Path) -> anyhow::Result<()> {
+    let files = anneal_content::bundle::unpack(blob).map_err(anyhow::Error::msg)?;
+    if let Some((bad, _)) = files.iter().find(|(p, _)| !anneal_content::bundle::safe_path(p)) {
+        anyhow::bail!("the bundle names a path outside the course directory: {bad:?}");
+    }
+    for (rel, data) in files {
         let target = dir.join(rel);
         fs::create_dir_all(target.parent().context("a file has no parent")?)?;
         fs::write(&target, data).with_context(|| format!("writing {}", target.display()))?;
@@ -72,16 +73,13 @@ mod tests {
             blob.extend(data);
         }
         assert_eq!(entries(&blob).len(), 2);
+        let evil = anneal_content::bundle::pack(&[("../escape".to_owned(), b"x".to_vec())]);
+        assert!(extract(&evil, &std::env::temp_dir().join("anneal-embedded-evil")).is_err());
+        assert!(extract(&blob[..blob.len() - 1], &std::env::temp_dir().join("anneal-embedded-cut")).is_err());
         let dir = std::env::temp_dir().join(format!("anneal-embedded-test-{}", std::process::id()));
         extract(&blob, &dir).unwrap();
         assert_eq!(fs::read_to_string(dir.join("c/template/src/lib.rs")).unwrap(), "// hi\n");
         assert!(dir.join(".complete").exists());
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_fingerprint_changes_with_the_content() {
-        assert_ne!(fingerprint(b"a"), fingerprint(b"b"));
-        assert_eq!(fingerprint(b"same"), fingerprint(b"same"));
     }
 }

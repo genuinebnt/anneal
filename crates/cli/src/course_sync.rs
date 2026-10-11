@@ -27,6 +27,11 @@ fn session_path() -> Option<PathBuf> {
     Some(base.join("anneal").join("course-session.json"))
 }
 
+/// The app you signed in to (`anneal course login <url>`), if any.
+pub fn app_url() -> Option<String> {
+    load_session().map(|s| s.url)
+}
+
 fn load_session() -> Option<Session> {
     serde_json::from_str(&fs::read_to_string(session_path()?).ok()?).ok()
 }

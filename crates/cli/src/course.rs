@@ -144,6 +144,12 @@ pub enum CourseCmd {
         course: String,
         #[arg(long, default_value = "courses")]
         courses: PathBuf,
+        /// The app to fetch the newest course files from. Default: the one you signed in to.
+        #[arg(long)]
+        from: Option<String>,
+        /// Use only the course files built into this anneal; do not ask the app.
+        #[arg(long)]
+        offline: bool,
     },
     /// What a git hook runs. `anneal course hook pre-push`.
     Hook { name: String },
@@ -782,16 +788,28 @@ pub fn run(cmd: CourseCmd) -> anyhow::Result<ExitCode> {
         CourseCmd::Solutions { course, courses, out, stages } => solutions(&course, &courses, out, &stages),
         CourseCmd::Adopt { stage, yes } => adopt(stage.as_deref(), yes),
         CourseCmd::Reset { module, all, yes } => reset(module.as_deref(), all, yes),
-        CourseCmd::Status { json } => status(json),
+        CourseCmd::Status { json } => {
+            let done = status(json);
+            if !json {
+                crate::update::hint("bustub");
+            }
+            done
+        }
         CourseCmd::Show { stage, hint, no_pager } => show(stage.as_deref(), hint, no_pager),
-        CourseCmd::Test { stage, all, only, verbose, filter, watch } => test_command(stage.as_deref(), TestOpts { all, only, verbose, hook: false }, filter.as_deref(), watch),
+        CourseCmd::Test { stage, all, only, verbose, filter, watch } => {
+            let done = test_command(stage.as_deref(), TestOpts { all, only, verbose, hook: false }, filter.as_deref(), watch);
+            if !watch {
+                crate::update::hint("bustub");
+            }
+            done
+        }
         CourseCmd::Next => next(),
         CourseCmd::Doctor => doctor(),
         CourseCmd::Sync => {
             course_sync::sync(&find_repo()?)?;
             Ok(ExitCode::SUCCESS)
         }
-        CourseCmd::Update { course, courses } => update(&course, &courses),
+        CourseCmd::Update { course, courses, from, offline } => update(&course, &courses, from.as_deref(), offline),
         CourseCmd::Hooks => {
             install_hooks(&find_repo()?)?;
             println!("hooks installed");
@@ -1148,8 +1166,29 @@ fn list_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// `anneal course update`: new stages and files arrive; your edited files are never overwritten.
-fn update(course_id: &str, courses: &Path) -> anyhow::Result<ExitCode> {
+fn update(course_id: &str, courses: &Path, from: Option<&str>, offline: bool) -> anyhow::Result<ExitCode> {
     let repo = find_repo()?;
+    // A checkout's own `courses/<id>` (an author working in the repo) wins. Otherwise ask the app for the newest files, so new stages
+    // and tests need no new binary; the files built into this anneal are the fallback.
+    let fetched = if offline || courses.join(course_id).join("course.toml").exists() {
+        None
+    } else {
+        match crate::update::fetch_bundle(course_id, from) {
+            crate::update::Bundle::Fresh(dir) => {
+                println!("Course files: the newest ones from the app.");
+                Some(dir)
+            }
+            crate::update::Bundle::Current => {
+                println!("Course files: the ones built into this anneal are the newest.");
+                None
+            }
+            crate::update::Bundle::Unavailable(why) => {
+                eprintln!("note: using the course files built into this anneal ({why})");
+                None
+            }
+        }
+    };
+    let courses = fetched.as_deref().unwrap_or(courses);
     let root = course_root(courses, course_id);
     let template = root.join("template");
     if !template.is_dir() {

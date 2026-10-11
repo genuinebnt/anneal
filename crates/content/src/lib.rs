@@ -3,6 +3,7 @@
 //! [`Catalog::load`] reads everything and reports every problem it finds with the
 //! content as an [`Issue`], so `anneal validate` can list them all at once.
 
+pub mod bundle;
 mod catalog;
 pub mod course;
 mod dsa;

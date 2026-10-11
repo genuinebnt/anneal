@@ -46,8 +46,24 @@ Rust toolchain, and its git must be able to read the repository (an SSH key, or 
 - **CLI** (`crates/cli/src/course.rs`): `remote` and `restore`; `course_sync.rs` has the two calls to the app.
 - **Web**: the Get started panel on the Courses page shows the install line as step 1 and the last run the CLI reported (`last_run` in the course overview, from any laptop), and an "Another laptop" panel.
 
-The binary embeds the course template, so a downloaded CLI matches the app it came from; after a new module ships, the learner runs
-`anneal course update` (the CLI of a new deploy has the new stages).
+The binary embeds the course template, so a downloaded CLI matches the app it came from. Two commands keep an installed CLI current
+without running the installer again:
+
+- **`anneal self-update [--from <url>] [--check]`** asks `GET /cli/<target>/version` (the SHA-256 and size of the build the app serves),
+  compares it with the hash of the running binary and, if they differ, downloads `/downloads/anneal-<target>` next to the binary,
+  checks size, hash and `--version`, and renames it over the old one. `--check` only reports. The app is the one you signed in to, or `--from`.
+- **`anneal course update [--from <url>] [--offline]`** first asks `GET /courses-bundle/<course>` (ETag = the bundle's fingerprint) for the
+  course's learner-facing files (`course.toml`, `lectures.toml`, `modules/`, `template/`; never `reference/`), extracts them under
+  `~/.cache/anneal/bundles/`, and updates your repo from those: new stages, tests and stubs arrive with no new binary. A given file you
+  did not touch is refreshed; one you edited stays and the new version lands beside it as `<file>.new`. With no network, no sign-in or
+  `--offline` it uses the files built into the binary. A bundle in a newer format than the binary reads (`X-Anneal-Bundle-Format`) is
+  refused with "run `anneal self-update` first". A local `courses/<id>` checkout wins, so authors are not affected.
+
+`anneal course status` and `anneal course test` end with a one-line hint when the app has a newer CLI or newer course files. The app is
+asked at most once a day (`~/.cache/anneal/update-hint` remembers the answer); `ANNEAL_NO_UPDATE_CHECK=1` turns it off.
+
+The shared format and packing are `crates/content/src/bundle.rs` (std only; `crates/cli/build.rs` includes it by path), the app side is
+`crates/api/src/cli_updates.rs`, the CLI side `crates/cli/src/update.rs`.
 
 ## Test it without a deploy
 

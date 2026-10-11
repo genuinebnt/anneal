@@ -2,6 +2,7 @@ mod course;
 mod course_sync;
 mod course_unlock;
 mod embedded;
+mod update;
 mod render;
 mod term;
 
@@ -41,6 +42,15 @@ enum Command {
     /// CodeCrafters-style courses (docs/BUSTUB.md): create a repo, run a stage's tests, and the git hooks.
     #[command(subcommand)]
     Course(course::CourseCmd),
+    /// Replace this anneal with the build the app serves, when they differ. Asks the app you signed in to (or `--from`).
+    SelfUpdate {
+        /// The app's address, e.g. https://anneal.example.dev. Default: the one you signed in to.
+        #[arg(long)]
+        from: Option<String>,
+        /// Only say whether a newer build exists.
+        #[arg(long)]
+        check: bool,
+    },
     /// List tracks, or the problems in one track.
     List { track: Option<String> },
     /// Check every ready problem end to end: the reference solution passes every test
@@ -98,12 +108,13 @@ async fn main() -> anyhow::Result<ExitCode> {
     // Courses run on the learner's machine, without the content directory.
     let cli = match cli.command {
         Command::Course(cmd) => return course::run(cmd),
+        Command::SelfUpdate { from, check } => return update::self_update(from, check),
         _ => cli,
     };
     let Loaded { catalog, issues } = Catalog::load(&cli.content)
         .with_context(|| format!("loading {}", cli.content.display()))?;
     match cli.command {
-        Command::Passphrase | Command::Completions { .. } | Command::Course(_) => unreachable!("handled before loading content"),
+        Command::Passphrase | Command::Completions { .. } | Command::Course(_) | Command::SelfUpdate { .. } => unreachable!("handled before loading content"),
         Command::Validate => {
             let problems: usize = catalog.tracks.iter().map(|t| t.problems.len()).sum();
             let mut issues: Vec<String> = issues.iter().map(ToString::to_string).collect();
