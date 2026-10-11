@@ -63,63 +63,6 @@ Optional. Predict first, then run.
 1. **Break one rule.** Remove the log flush in `flush_page`. Which of the three bank flush modes finds it?
 2. **Delay the commit's flush by one record.** Does any test notice? What does that tell you about the limits of testing durability with only whole-record crashes?
 
-## Explain it aloud
-
-The tests check that recovery is right. An interviewer checks that you know **why**, with no keyboard. Answer each question out loud in about a minute before opening the model answer; record yourself once and listen for the places you stall.
-
-> [!CHECK] A client is told "committed", and the machine loses power a millisecond later. What guarantees the transaction survives, and what exactly had to be on the disk before the client heard "committed"?
-> ||The `Commit` record, and every record before it, flushed to stable storage (an `fsync` of the log): the log is read back on restart and the transaction is a winner. The data pages did **not** have to be written: they may be written minutes later or lost, because redo can rebuild them from the log. That is why a commit costs one sequential log write and one sync, not a write of every page it touched. The rule that makes it safe is write-ahead: no page reaches the disk before the log records describing it.
->
-> - What is on disk when the client is told, and what is not?
-> - Why is flushing the log enough, when the pages are not written?
-> - Which rule stops a page from being written before its log record?
-
-> [!CHECK] Recovery redoes the changes of transactions that never committed. Why not skip them, and what does the undo pass then do?
-> ||Because the pages may hold any mixture of old and new states, and "put every change in place, in log order, whoever made it" is the one procedure that is correct from every starting point: afterwards the pages are exactly as they were at the instant of the crash. That is a clean base for undo, which then rolls back each loser's changes, newest first, restoring the before-state. Skipping the losers' redo would leave pages in a state undo does not expect. Redo is safe to repeat because each record says "put this slot in this state", not "add 5".
->
-> - What state are the pages in after redo, and why does that help?
-> - Why must redo be idempotent?
-> - In what order does undo go, and why?
-
-> [!CHECK] The machine dies again in the middle of recovery. Why is it safe to run recovery a second time, and what would break if undo steps were not logged?
-> ||Redo repeats history, so a second recovery repeats everything the first one did, including the undo steps already done: they were logged as changes with before and after swapped, so they are replayed like any other record, and only the remaining undo work is left. Without that logging a second recovery would not know which of a loser's changes were already rolled back and would undo them again, possibly on top of newer work. Logging the undo is what makes recovery make progress even if it keeps being interrupted.
->
-> - What exactly is logged when a loser is undone?
-> - What does a second recovery redo?
-> - Which bug does the "crash between redo and undo" test catch?
-
-> [!CHECK] The last record in the log is half written. How does recovery know, and what must happen to the log afterwards?
-> ||Every record carries a length and a checksum, so a record that is cut short or damaged fails the check and is treated as the end of the log; everything before it is intact. Afterwards new records must be appended where the last whole record ended, not after the garbage, or the next recovery would stop at the garbage and lose them. The garbage-tail test checks exactly that: a new transaction after recovery survives another crash.
->
-> - What stops recovery from reading garbage as a record?
-> - Where does the next record go?
-> - What would a missing checksum let through?
-
-> [!CHECK] Compare a sharp checkpoint with a fuzzy one: what does each cost while the database runs, and what does each save at restart?
-> ||A sharp checkpoint writes every dirty page and then logs a record listing the active transactions: simple, and redo starts at the checkpoint, but it stops the world while the pages are written. A fuzzy checkpoint does not stop anything: it logs the set of pages that were dirty and the transactions that were active, and restart redoes from the oldest change that might not have reached the disk. Normal operation is smoother, restart does more work, and the bookkeeping (a dirty page table) is the price. Either way, losers that were active at the checkpoint still have changes before it, so undo must read back to their first record.
->
-> - What is guaranteed to be on the disk after a sharp checkpoint?
-> - Where does redo start in each design?
-> - Why must undo still look before the checkpoint?
-
-> [!CHECK] Back of the envelope. A database commits 20 000 transactions a second and one `fsync` of its log takes 1 ms. How can that be, and what does the latency of one commit look like?
-> ||One device can do at most 1 000 syncs a second at 1 ms each, so 20 000 commits a second means each sync must cover about 20 commits: **group commit**. While one sync is in flight, the commits that arrive wait; the next sync makes all of them durable together. A commit's latency is therefore between 1 and 2 ms: it may wait for the sync already running, then for its own. Throughput is limited by how many commits share a sync, not by the sync itself, and the price is a little latency for every commit.
->
-> - How many syncs per second does one device allow?
-> - How many commits must share each one?
-> - What is the best and the worst latency of a single commit?
-
-## Write it up
-
-Write `notes/recovery.md` in your repo, one page, in your own words:
-
-- **The design.** What a log record holds, where you flush the log, and how you chose which pages to write and when.
-- **A measurement.** How many crash points the bank script tries, and what the flush modes (no pages, every step, every other step) found or ruled out. One sentence on what the numbers say.
-- **A bug.** One failure you hit, how the crash-at-every-moment test or the shrunk property showed it, and the fix.
-- **A limit.** One thing your recovery cannot do, such as fuzzy checkpoints or group commit, and what you would add.
-
-Then read it aloud in three minutes. If a sentence needs the code open to make sense, rewrite it.
-
 ## Other designs
 
 None for this stage. The *Other designs* sections of 4c-01 to 4c-07 list the alternatives to compare with yours.
