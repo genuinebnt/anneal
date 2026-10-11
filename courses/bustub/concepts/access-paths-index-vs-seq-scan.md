@@ -16,6 +16,29 @@ To answer `select * from t where a = 5` the engine has an **access path** to cho
 
 If a query matches 1 row in a million, the index reads about 4 pages and wins by five orders of magnitude. If it matches 60% of the rows, the index scan visits most of the table's pages one fetch at a time in *random* order (each rid leads to a different page), which is far worse than reading the table sequentially. Optimizers estimate the fraction of rows that match (the **selectivity**, from statistics) and choose; PostgreSQL's planner switches from an index scan to a *bitmap* scan to a sequential scan as the estimate grows. BusTub has no statistics and uses simple rules.
 
+```svg
+caption: Pages read as the share of matching rows grows (not to scale). A sequential scan always reads the whole table, so it is a flat line. An index scan reads a few index pages and then one table page per match, so it starts far below and climbs steeply. Where the lines cross, the optimizer's estimate of selectivity decides. (Animated: more rows match.)
+<svg viewBox="0 0 760 316" role="img" aria-label="A chart of pages read against the fraction of rows matched, with a flat sequential scan line and a rising index scan line that cross">
+<style>
+@keyframes ap-m{0%{transform:translateX(0)}86%,100%{transform:translateX(600px)}}
+@keyframes ap-a{0%,22%{opacity:1}28%,100%{opacity:.2}}
+@keyframes ap-b{0%,24%{opacity:.2}30%,100%{opacity:1}}
+.ap-m{animation:ap-m 12s linear infinite}.ap-a{animation:ap-a 12s linear infinite}.ap-b{animation:ap-b 12s linear infinite}
+</style>
+<path class="grid" d="M70 240 H730"/><path class="grid" d="M70 40 V240"/>
+<text class="dim sm" x="76" y="32">pages read</text><text class="end dim sm" x="730" y="262">share of rows that match, 0 to 100% →</text>
+<path style="stroke:var(--fn);stroke-width:2.4;fill:none" d="M70 96 H730"/>
+<text class="end t-b sm" x="730" y="86">sequential scan: the whole table</text>
+<path style="stroke:var(--acc);stroke-width:2.4;fill:none" d="M70 232 L170 96 L730 44"/>
+<text class="t-a sm" x="200" y="190">index scan: a few pages, then one table page per match</text>
+<circle class="hot" cx="170" cy="96" r="6"/>
+<text class="dim sm" x="184" y="120">they cross</text>
+<g class="ap-m"><path style="stroke:var(--dim);stroke-width:1.4;stroke-dasharray:4 4" d="M80 40 V240"/><circle class="live" cx="80" cy="236" r="5"/></g>
+<text class="t-a sm ap-a" x="70" y="286">1 row in a million: the index reads about 4 pages and wins by orders of magnitude.</text>
+<text class="t-b sm ap-b" x="70" y="304" style="text-anchor:start">60% of the rows: random fetches lose to one sequential pass.</text>
+</svg>
+```
+
 ## From a key to a row
 
 The index stores `key → rid`, not the row. An index scan therefore does, for each match: **look up the key** (get the rid) → **fetch the tuple at the rid** from the table heap → **check it is still there** (the table is the truth; a deleted row may linger in an index) → apply any further filter. Two reads per row, which is why many matches make an index scan slow.
@@ -27,6 +50,13 @@ A B+ tree keeps its keys sorted, and its leaves are linked (module 2c): a full s
 ## Point lookups and ranges
 
 `where a = 5` is a **point** lookup: one key (or a list: `a = 4 or a = 7` is two lookups). `where a > 5` is a **range** scan: find the first key, follow the leaf chain. BusTub's index scan plan supports points (`pred_keys`) and the full ordered scan; ranges are an exercise in the same spirit.
+
+## Invariants: what must always be true
+
+- **Both paths return the same rows,** as a set. An index scan never invents a row and never drops one that the sequential scan would have returned.
+- **The table is the truth.** Every rid an index returns is checked against the table heap: a deleted row may still be in the index, and a tuple that is gone must not appear in the output.
+- **Order is a promise only of the index scan:** key order, because the leaves are linked in order. A sequential scan promises none.
+- **Cost depends on different things.** A sequential scan on the size of the table, an index scan on the number of matches and the height of the tree; the choice depends on the estimated selectivity, so a wrong estimate is a slow query, never a wrong answer.
 
 ## C++ comparison
 

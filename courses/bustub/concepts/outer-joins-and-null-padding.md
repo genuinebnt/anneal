@@ -17,6 +17,38 @@ So every outer join is the inner join plus the unmatched rows of the *preserved*
 
 A RIGHT join is a LEFT join written backwards: `a RIGHT JOIN b` returns the same rows as `b LEFT JOIN a` with the columns in a different order. Many databases rewrite one into the other and implement only LEFT. This course's engine keeps all three because the executor for RIGHT and FULL teaches something the LEFT one does not.
 
+```svg
+caption: Two small tables, `a.x` = 1, 2, 3 and `b.x` = 2, 3, 4. Every outer join is the inner join (2 and 3 match) plus the unmatched rows of the preserved side or sides, padded with NULLs: LEFT adds `1 · NULL`, RIGHT adds `NULL · 4`, FULL adds both. (Animated: inner, left, right, full.)
+<svg viewBox="0 0 760 300" role="img" aria-label="Two tables, their matching pairs, and the extra padded rows that LEFT, RIGHT and FULL joins add to the inner join">
+<style>
+@keyframes oj-l{0%,24%{opacity:.12}27%,49%{opacity:1}52%,74%{opacity:.12}77%,100%{opacity:1}}
+@keyframes oj-r{0%,49%{opacity:.12}52%,100%{opacity:1}}
+@keyframes oj-1{0%,24%{opacity:1}27%,100%{opacity:.35}}
+@keyframes oj-2{0%,24%{opacity:.35}27%,49%{opacity:1}52%,100%{opacity:.35}}
+@keyframes oj-3{0%,49%{opacity:.35}52%,74%{opacity:1}77%,100%{opacity:.35}}
+@keyframes oj-4{0%,74%{opacity:.35}77%,100%{opacity:1}}
+.oj-l{animation:oj-l 14s ease-in-out infinite}.oj-r{animation:oj-r 14s ease-in-out infinite}
+.oj-1{animation:oj-1 14s ease-in-out infinite}.oj-2{animation:oj-2 14s ease-in-out infinite}.oj-3{animation:oj-3 14s ease-in-out infinite}.oj-4{animation:oj-4 14s ease-in-out infinite}
+</style>
+<text class="dim sm" x="40" y="30">a</text><text class="dim sm" x="300" y="30">b</text><text class="dim sm" x="520" y="30">output</text>
+<rect class="hot oj-l" x="40" y="44" width="120" height="34" rx="4"/><text class="mid fg" x="100" y="66">x = 1</text>
+<rect class="live" x="40" y="94" width="120" height="34" rx="4"/><text class="mid fg" x="100" y="116">x = 2</text>
+<rect class="live" x="40" y="144" width="120" height="34" rx="4"/><text class="mid fg" x="100" y="166">x = 3</text>
+<rect class="live" x="300" y="44" width="120" height="34" rx="4"/><text class="mid fg" x="360" y="66">x = 2</text>
+<rect class="live" x="300" y="94" width="120" height="34" rx="4"/><text class="mid fg" x="360" y="116">x = 3</text>
+<rect class="hot oj-r" x="300" y="144" width="120" height="34" rx="4"/><text class="mid fg" x="360" y="166">x = 4</text>
+<path class="ln-g" d="M160 111 L298 61"/><path class="ln-g" d="M160 161 L298 111"/>
+<rect class="live" x="520" y="44" width="220" height="30" rx="4"/><text class="fg sm" x="534" y="64">2 · 2     (inner)</text>
+<rect class="live" x="520" y="80" width="220" height="30" rx="4"/><text class="fg sm" x="534" y="100">3 · 3     (inner)</text>
+<g class="oj-l"><rect class="hot" x="520" y="116" width="220" height="30" rx="4"/><text class="fg sm" x="534" y="136">1 · NULL   (a, unmatched)</text></g>
+<g class="oj-r"><rect class="hot" x="520" y="152" width="220" height="30" rx="4"/><text class="fg sm" x="534" y="172">NULL · 4   (b, unmatched)</text></g>
+<text class="t-g sm oj-1" x="40" y="218">INNER   the pairs that match: (2, 2) and (3, 3). Unmatched rows vanish.</text>
+<text class="t-a sm oj-2" x="40" y="238">LEFT    inner + each unmatched row of a, the columns of b padded with NULL.</text>
+<text class="t-a sm oj-3" x="40" y="258">RIGHT   inner + each unmatched row of b, the columns of a padded with NULL.</text>
+<text class="t-a sm oj-4" x="40" y="278">FULL    inner + the unmatched rows of both sides.</text>
+</svg>
+```
+
 ## Why a left join is easy and a right join is not
 
 The nested loop join of module 3f takes a left row, scans the whole right side for partners, and emits a pair for each. For a LEFT join one more line is enough: if the scan found no partner, emit the left row padded with NULLs. The decision about a left row is complete the moment its scan ends.
@@ -32,6 +64,15 @@ The price is that the whole right side is held in memory, which the plain nested
 ## The condition in ON is not a filter
 
 In an inner join a condition can sit in `ON` or in `WHERE` and the answer is the same. In an outer join it cannot. `a LEFT JOIN b ON a.x = b.x AND b.z > 250` keeps every row of `a`: a row whose partners all have `z <= 250` simply counts as unmatched and is padded. The same condition in `WHERE` removes rows afterwards, including the padded ones (their `b.z` is NULL, and `NULL > 250` is unknown). The next article, *filters above and below outer joins*, builds on exactly this difference.
+
+## Invariants: what must always be true
+
+- **Output = inner join + unmatched rows of the preserved side(s),** each padded with NULLs, and nothing else. Remove the padded rows from a LEFT join and what is left is the inner join.
+- **Every row of a preserved side appears at least once.** That is the whole point of an outer join; a result that loses one is wrong, with no error to say so.
+- **Padding is NULL,** never zero or an empty string: a client must be able to tell "no partner" from "partner with value 0".
+- **A NULL join key matches nothing,** not even another NULL, yet the row is still emitted, padded, on a preserved side.
+- **A condition in `ON` decides who matches; it never removes a preserved row.** A condition in `WHERE` is applied afterwards and does remove rows, which is why moving one between them changes the answer.
+- **`a RIGHT JOIN b` returns the rows of `b LEFT JOIN a`,** with the columns in the other order.
 
 ## Try it
 

@@ -7,21 +7,26 @@ this file says where the work stands today.
 **Keep it current.** At the end of every batch: add a line to "Done" (newest first, with the commit), update "Now" and "Next", and set
 the date below. Do not let it drift: a wrong line here costs the next agent more than a missing one.
 
-Last updated: **2026-10-11** (after commit `8b663d66`).
+Last updated: **2026-10-11** (after the 3k commit; see section 2).
 
 ## 1. Now (unfinished or waiting)
 
 | What | State |
 |---|---|
-| Deploy of `6c5605e4` (CLI screens) and `8b663d66` (2c-06 pilot) | pushed; CI was running. Check `gh run list`. When "Deploy to production" is green the owner runs `anneal self-update` to get the new screens. |
-| **End-to-end learner simulation** (owner asked 2026-10-11) | **not started.** A scratch folder, the real CLI, every core stage solved from the reference solution, then reset. Recipe in section 5. Run it in the background; never block the turn on it. |
+| Module **3k** (errors) | committed locally, **not pushed** until `anneal course verify --stage unlock` is green (log `/tmp/c2/unlock-verify.log`, scratch `/tmp/c2/work_unlock`). Then push and watch CI. |
+| Deploys of the CLI screens, 2c-06 pilot and concept figures | pushed earlier; check `gh run list`. When "Deploy to production" is green the owner runs `anneal self-update` to get the new CLI screens. |
+| Learner journey | **done 2026-10-11**: `tools/course-journey.sh` (already existed) passed, 42 steps, 0 failures, against a throwaway app. |
 | Full `anneal course verify` after the 2c-05 fix | **not completed.** The last full run was killed by an IDE crash at 4c-08. Until then 3d-07 and 3h-04 each passed alone (164s and 185s) and 2c-05 passed under load (0 failures in 480 runs), but no complete green run exists since `1ccea220`. |
+| Mutation experiment on the stage tests | **paused** after 10 mutants (the run, and the IDE, were killed by memory pressure). Harness: `/tmp/c2/mut/mutate.py` (ephemeral). Rerun later with one build at a time. |
 | Owner decisions waiting | see section 4 |
 
 ## 2. Done (newest first)
 
 | Commit | What |
 |---|---|
+| 3k commit (this session) | **BusTub module 3k, "Errors worth returning"** (`courses/bustub/modules/15b-errors-worth-returning`, code `3k`, placed after 3d, mid-course): one `DbError` for the whole database; the learner designs it, 32 tests check only the contract (From, `?`, Display, `source()`, `context`, `report()`, SQLSTATE-style `code()`, `client_message()`, Send+Sync, threads, a proptest model). Reference `src/common/db_error.rs`, tests `tests/stages_3k.rs`, concept `errors-that-carry-their-cause`. Pass counts after each stage: 0, 7, 13, 21, 32 (checked with `/tmp/c2/work_3k/check.sh`, one render folder). Also new animated figures and Invariants sections for two-phase locking, waits-for graphs, logical clocks and MVCC. Later modules needed no change. |
+| `fc510812` | Animated figures and Invariants sections for ARIES, write-ahead logging, undo logs and fsync. |
+| `9e395d38` | `docs/PROGRESS.md` created. |
 | `8b663d66` | BusTub 2c-06 (B+ tree boss): an "Explain it aloud" round (six open `[!CHECK]` questions with model answers) and a one-page design-note task. **Pilot of the interview layer**; only this module has it. |
 | `6c5605e4` | CLI screens (`crates/cli/src/ui.rs`): stage banner, `course tests` (test cases by readable name, ✓/✗ from the last run in `.git/anneal-last-run.json`), "next to fix" nudge on failure, completion/module/course boxes, roadmap strip in `status`, `course guide`. The stage count in the test header now matches `status` (challenges are not counted). |
 | `243e7dfc` | `anneal self-update [--from] [--check]`; `anneal course update` fetches the course files from the app (`/courses-bundle/<id>`, ETag = fingerprint, never `reference/`) with the built-in files as fallback; a once-a-day update hint after `status`/`test`. Shared std-only format `crates/content/src/bundle.rs`; app side `crates/api/src/cli_updates.rs`; CLI side `crates/cli/src/update.rs`. Docs: CLI_INSTALL.md. |
@@ -33,8 +38,8 @@ The owner's own CLI was reinstalled from production on 2026-10-11 (the `243e7dfc
 
 ## 3. Where the course stands (measured 2026-10-11)
 
-Numbers from `courses/bustub`: 31 modules, **164 core stages** (120 build, 30 boss, 14 learn) and 148 optional challenges, 160 concept
-articles. `anneal course lint`: 282 stages checked, 0 problems. `anneal validate`: 0 issues.
+Numbers from `courses/bustub`: 32 modules, **169 core stages** (124 build, 31 boss, 14 learn) and 148 optional challenges, 161 concept
+articles. `anneal course lint`: 286 stages checked, 0 problems. `anneal validate`: 0 issues.
 
 What is good: every core stage has "Your freedom", "Performance" and "Experiment"; 136 of 164 core stages carry an open `[!CHECK]`
 question; 132 of 160 concepts have runnable "In real code" examples; the shape is contract + freedom, not recipes.
@@ -43,7 +48,7 @@ Gaps, most costly first (the owner agreed spaced return does **not** fit a cumul
 earlier code):
 
 1. **Interview/career layer** is missing (0 mentions of "interview"). Piloted on 2c-06 only. If the pilot reads well, roll out per module.
-2. **Visuals are thin and uneven.** 66 of 160 concepts have an SVG, 39 only a text diagram, 55 no figure; only 5 are animated. No core
+2. **Visuals are thin and uneven** (partly fixed 2026-10-11: ARIES, write-ahead logging, undo logs, fsync, 2PL, waits-for graphs and logical clocks now have animated figures, and those plus MVCC have Invariants sections; the counts below are from before). 66 of 160 concepts have an SVG, 39 only a text diagram, 55 no figure; only 5 are animated. No core
    stage page has an SVG, and stages link 849 concepts as *optional* against 52 as required. Weakest by diagram share: LRU-K (1 of 10
    concepts), values and types (1/12), optimiser rules (1/9), ACID logging and recovery (6/17, 10 with no figure; ARIES has none),
    lock manager (5/15), skip list (3/8), Robin Hood (3/9). The B+ tree module is the best covered, not typical.
@@ -61,13 +66,10 @@ check questions = `> [!CHECK]` callouts in `modules/*/stages/*/stage.md`; concep
 
 ## 4. Next, in order (owner decisions marked)
 
-1. **Learner simulation** (section 5). Then reset its scratch progress. Nothing to decide.
-2. **Visual and invariants pass** on the 8 to 10 most process-heavy concepts: ARIES recovery, MVCC version chains and visibility, buffer
-   pool and LRU-K, the lock queue and 2PL, extendible hash directory doubling, then external merge sort and hash join. One animated SVG
-   (the format of the splits figure in `concepts/splitting-and-promoting.md`) and an "Invariants" box each; promote one concept per
-   module to required reading. **Waiting for the owner's go**, proposed to start with ARIES.
-3. **Roll out the interview layer** to the other modules, after the owner reads the 2c-06 pilot. **Owner decision.**
-4. **Rewrite the dozen thinnest boss openings.**
+1. **Push module 3k** once `anneal course verify --stage unlock` is green; watch CI; update this file.
+2. **Visual and invariants pass** (the owner said "fill all thin areas"). Done: ARIES, WAL, undo logs, fsync, 2PL, waits-for, logical clocks (figures + Invariants), MVCC (Invariants). Still to do, database-core concepts with no figure: outer joins and null padding, access paths (index vs seq scan), hash functions, LIKE matching, conjunctive predicates; with a figure but no Invariants: external merge sort, join algorithms, LRU-K, the clock algorithm, the catalog, HyperLogLog, maintaining indexes. Then the Rust-language concepts without a figure, lower priority. Format: animated SVG whose base state shows everything (see `concepts/aries-recovery.md`); check by restarting the API and screenshotting `/courses/bustub/concept/<slug>`.
+3. **Roll out the interview layer** to the other modules (an "Explain it aloud" section of open `[!CHECK]` questions plus a one-page write-up, as in 2c-06). The owner said to fill thin areas, so this is approved in principle; the pilot is the template.
+4. **Rewrite the dozen thinnest boss openings.** Also proposed, waiting for the owner: a short "Fixed by the tests" line beside "Your freedom" on every stage (tests pin exact tree shapes, depths, latch counts and pin counts in several modules); an optional 4d challenge making `LockError` a real `Error` with lock codes (`40P01`, `55P03`) for `DbError`; a 4e stage where the SQL session returns `DbError` and the client sees `client_message()`.
 5. CLI ideas the owner liked but not built: `course tests --explain <test>`, a "Next:" line after every command, `doctor` reporting a
    stale CLI or stale course files. Already exist (do not rebuild): `test --watch`, `test --filter`, `status --json`, `show --hint N`.
 6. DSA: only write cards where free LeetCode problems exist (the 1,456 names-only techniques stay names). Dead CSS to remove when
