@@ -23,6 +23,7 @@ Last updated: **2026-10-11** (after the 3k commit; see section 2).
 
 | Commit | What |
 |---|---|
+| time-limit commit | **Time limit exceeded** (owner asked): the CLI no longer discards what a test binary printed when it is stopped (180 s, 300 s for regression): finished tests keep their results and each unfinished one fails with "Time limit exceeded ..." (`run_until`, `mark_unfinished`, `test_fn_names` in `course.rs`); the stage page's toast, bottom bar and "Last run" say "time limit exceeded" and show the hung test first (`hitLimit` in `CourseStagePage.tsx`). Needs the owner to `anneal self-update` (a CLI change). Tests: 3 CLI unit tests, 1 Playwright test. |
 | 3k commit (this session) | **BusTub module 3k, "Errors worth returning"** (`courses/bustub/modules/15b-errors-worth-returning`, code `3k`, placed after 3d, mid-course): one `DbError` for the whole database; the learner designs it, 32 tests check only the contract (From, `?`, Display, `source()`, `context`, `report()`, SQLSTATE-style `code()`, `client_message()`, Send+Sync, threads, a proptest model). Reference `src/common/db_error.rs`, tests `tests/stages_3k.rs`, concept `errors-that-carry-their-cause`. Pass counts after each stage: 0, 7, 13, 21, 32 (checked with `/tmp/c2/work_3k/check.sh`, one render folder). Also new animated figures and Invariants sections for two-phase locking, waits-for graphs, logical clocks and MVCC. Later modules needed no change. |
 | `fc510812` | Animated figures and Invariants sections for ARIES, write-ahead logging, undo logs and fsync. |
 | `9e395d38` | `docs/PROGRESS.md` created. |
@@ -65,7 +66,7 @@ check questions = `> [!CHECK]` callouts in `modules/*/stages/*/stage.md`; concep
 
 ## 4. Next, in order (owner decisions marked)
 
-1. **Time limit exceeded in the CLI and the web page** (owner asked, 2026-10-11): in progress or just shipped; see the Done table.
+1. ~~Time limit exceeded~~ shipped 2026-10-11; see the Done table.
 2. **Visual and invariants pass** (the owner said "fill all thin areas"). Done: ARIES, WAL, undo logs, fsync, 2PL, waits-for, logical clocks (figures + Invariants), MVCC (Invariants). Still to do, database-core concepts with no figure: outer joins and null padding, access paths (index vs seq scan), hash functions, LIKE matching, conjunctive predicates; with a figure but no Invariants: the catalog, HyperLogLog, maintaining indexes (external merge sort, join algorithms with a new hash-join animation, LRU-K and the clock algorithm got theirs 2026-10-11). Then the Rust-language concepts without a figure, lower priority. Format: animated SVG whose base state shows everything (see `concepts/aries-recovery.md`); check by restarting the API and screenshotting `/courses/bustub/concept/<slug>`.
 3. ~~Interview layer~~ dropped (owner, 2026-10-11).
 4. **Rewrite the dozen thinnest boss openings.** Also proposed, waiting for the owner: a short "Fixed by the tests" line beside "Your freedom" on every stage (tests pin exact tree shapes, depths, latch counts and pin counts in several modules); an optional 4d challenge making `LockError` a real `Error` with lock codes (`40P01`, `55P03`) for `DbError`; a 4e stage where the SQL session returns `DbError` and the client sees `client_message()`.

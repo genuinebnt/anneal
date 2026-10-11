@@ -609,7 +609,7 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
                             let mut cmd = Command::new(exe);
                             cmd.current_dir(repo).args(*filters);
                             cmd.env("RUST_BACKTRACE", "0").env("CARGO_MANIFEST_DIR", repo).env("CARGO_TERM_COLOR", "never");
-                            run_with_timeout(cmd, timeout)
+                            run_until(cmd, timeout)
                         }
                     };
                     results.lock().unwrap()[k] = Some(out);
@@ -623,9 +623,19 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
                 report.problem = Some(format!("{bin}: {e}"));
                 return report;
             }
-            Ok((stdout, stderr, code)) => {
+            Ok(ran) => {
                 let before = report.tests.len();
-                parse_tests(&stdout, &mut report.tests);
+                parse_tests(&ran.stdout, &mut report.tests);
+                if ran.timed_out {
+                    // keep the tests that finished; those that did not are failures that say why
+                    let wanted = test_fn_names(repo, bin, filters);
+                    if mark_unfinished(&mut report.tests, before, wanted, timeout.as_secs()) == 0 {
+                        report.problem = Some(format!("{bin}: Time limit exceeded: stopped after {}s (a deadlock or an endless loop?)", timeout.as_secs()));
+                        return report;
+                    }
+                    continue;
+                }
+                let (stderr, code) = (ran.stderr, ran.code);
                 if report.tests.len() == before {
                     let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
                     let shown = if tail.len() > 40 { &tail[..40] } else { &tail[..] };
@@ -643,9 +653,20 @@ fn run_entries(repo: &Path, entries: &[String], target_dir: Option<&Path>, timeo
 }
 
 /// What one test binary printed: stdout, stderr and the exit code, or why it could not run.
-type RunOutput = anyhow::Result<(String, String, Option<i32>)>;
+type RunOutput = anyhow::Result<Ran>;
 
-fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<(String, String, Option<i32>)> {
+/// What a process printed and how it ended.
+struct Ran {
+    stdout: String,
+    stderr: String,
+    code: Option<i32>,
+    /// It was stopped for running past its time limit. What it had printed by then is in `stdout`: libtest prints a line as each test
+    /// finishes, so the tests that did finish are all there.
+    timed_out: bool,
+}
+
+/// Runs `cmd`, killing it after `timeout`, and returns what it printed either way.
+fn run_until(mut cmd: Command, timeout: Duration) -> anyhow::Result<Ran> {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().context("starting cargo")?;
     let mut out = child.stdout.take().unwrap();
@@ -661,18 +682,42 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> anyhow::Result<(Stri
         String::from_utf8_lossy(&s).into_owned()
     });
     let start = Instant::now();
-    let status = loop {
+    let (status, timed_out) = loop {
         if let Some(st) = child.try_wait()? {
-            break st;
+            break (Some(st), false);
         }
         if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("timed out after {}s (a deadlock or an endless loop?)", timeout.as_secs());
+            break (None, true);
         }
         std::thread::sleep(Duration::from_millis(40));
     };
-    Ok((t_out.join().unwrap_or_default(), t_err.join().unwrap_or_default(), status.code()))
+    Ok(Ran { stdout: t_out.join().unwrap_or_default(), stderr: t_err.join().unwrap_or_default(), code: status.and_then(|s| s.code()), timed_out })
+}
+
+/// Like `run_until`, but a process that runs past its limit is an error (a build, a `cargo` call whose output is useless half done).
+fn run_with_timeout(cmd: Command, timeout: Duration) -> anyhow::Result<(String, String, Option<i32>)> {
+    let ran = run_until(cmd, timeout)?;
+    if ran.timed_out {
+        bail!("Time limit exceeded: stopped after {}s (a deadlock or an endless loop?)", timeout.as_secs());
+    }
+    Ok((ran.stdout, ran.stderr, ran.code))
+}
+
+/// The tests that were meant to run and gave no result when the binary was stopped: each one is a failure that says so. Returns how
+/// many there are. `done` are the outcomes already read from the output (from index `from` of `tests`).
+fn mark_unfinished(tests: &mut Vec<TestOutcome>, from: usize, wanted: Vec<String>, secs: u64) -> usize {
+    let finished: std::collections::HashSet<String> = tests[from..].iter().map(|t| t.name.rsplit("::").next().unwrap_or(&t.name).to_owned()).collect();
+    let detail = format!("Time limit exceeded: the run was stopped after {secs} s and this test had not finished (an endless loop? a latch that is never released?)");
+    let mut n = 0;
+    for name in wanted {
+        if !finished.contains(&name) {
+            tests.push(TestOutcome { name, ok: false, detail: detail.clone() });
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Reads libtest's output: `test a::b ... ok` lines, and the `---- a::b stdout ----` blocks of the failures.
@@ -1627,25 +1672,38 @@ fn readable_test_name(name: &str) -> String {
     parts[skip..].join(" ")
 }
 
+/// The names of the `#[test]` functions of `tests/<bin>.rs` in the learner's repo whose name contains one of `filters` (all of them
+/// when there are none), in file order. Read from the source, so it also names tests that never printed a result.
+fn test_fn_names(repo: &Path, bin: &str, filters: &[&str]) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(repo.join("tests").join(format!("{bin}.rs"))) else { return Vec::new() };
+    let mut names: Vec<String> = Vec::new();
+    let mut after_attr = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("#[test]") {
+            after_attr = true;
+        } else if after_attr && let Some(rest) = t.strip_prefix("fn ") {
+            let name = rest.split('(').next().unwrap_or("").trim().to_owned();
+            if (filters.is_empty() || filters.iter().any(|f| name.contains(f))) && !names.contains(&name) {
+                names.push(name);
+            }
+            after_attr = false;
+        } else if !t.starts_with("#[") && !t.is_empty() {
+            after_attr = false;
+        }
+    }
+    names
+}
+
 /// The names of a stage's test functions, in file order, read from the test files in the learner's repo.
 fn stage_test_names(repo: &Path, s: &Stage) -> Vec<String> {
-    let mut names = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for entry in &s.def.tests {
         let (bin, filter) = split_entry(entry);
-        let Ok(text) = fs::read_to_string(repo.join("tests").join(format!("{bin}.rs"))) else { continue };
-        let mut after_attr = false;
-        for line in text.lines() {
-            let t = line.trim();
-            if t.starts_with("#[test]") {
-                after_attr = true;
-            } else if after_attr && let Some(rest) = t.strip_prefix("fn ") {
-                let name = rest.split('(').next().unwrap_or("").trim().to_owned();
-                if filter.is_none_or(|f| name.contains(f)) && !names.contains(&name) {
-                    names.push(name);
-                }
-                after_attr = false;
-            } else if !t.starts_with("#[") && !t.is_empty() {
-                after_attr = false;
+        let filters: Vec<&str> = filter.into_iter().collect();
+        for n in test_fn_names(repo, bin, &filters) {
+            if !names.contains(&n) {
+                names.push(n);
             }
         }
     }
@@ -2363,6 +2421,47 @@ mod learner_screens {
         // not a stage prefix: left alone
         assert_eq!(readable_test_name("plain_name_here"), "plain name here");
         assert_eq!(readable_test_name("short"), "short");
+    }
+
+    #[test]
+    fn a_process_past_its_limit_is_stopped_and_what_it_printed_is_kept() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo 'test a ... ok'; echo 'test b ... FAILED'; exec sleep 30"]);
+        let started = Instant::now();
+        let ran = run_until(cmd, Duration::from_millis(600)).unwrap();
+        assert!(ran.timed_out, "it ran for 30 s against a 0.6 s limit");
+        assert!(started.elapsed() < Duration::from_secs(10), "it was killed, not waited for");
+        assert!(ran.stdout.contains("test a ... ok") && ran.stdout.contains("test b ... FAILED"), "what it printed before the limit is kept: {:?}", ran.stdout);
+        let quick = run_until({ let mut c = Command::new("sh"); c.args(["-c", "echo done"]); c }, Duration::from_secs(10)).unwrap();
+        assert!(!quick.timed_out && quick.code == Some(0) && quick.stdout.trim() == "done", "a process that ends in time is not marked");
+        let mut slow = Command::new("sh");
+        slow.args(["-c", "exec sleep 30"]);
+        assert!(run_with_timeout(slow, Duration::from_millis(300)).unwrap_err().to_string().starts_with("Time limit exceeded"), "the strict form says so");
+    }
+
+    #[test]
+    fn tests_that_never_finished_become_time_limit_failures() {
+        let mut tests = vec![
+            TestOutcome { name: "earlier".into(), ok: true, detail: String::new() },
+            TestOutcome { name: "s9z_01_done".into(), ok: true, detail: String::new() },
+            TestOutcome { name: "s9z_01_failed".into(), ok: false, detail: "boom".into() },
+        ];
+        let n = mark_unfinished(&mut tests, 1, vec!["s9z_01_done".into(), "s9z_01_failed".into(), "s9z_01_hangs".into(), "earlier".into()], 180);
+        assert_eq!(n, 2, "the one that hangs, and `earlier`, which is not among the outcomes from index 1");
+        let hung = tests.iter().find(|t| t.name == "s9z_01_hangs").unwrap();
+        assert!(!hung.ok && hung.detail.starts_with("Time limit exceeded") && hung.detail.contains("180 s"), "{hung:?}");
+        assert!(tests.iter().find(|t| t.name == "s9z_01_failed").unwrap().detail == "boom", "a failure that was reported keeps its own detail");
+    }
+
+    #[test]
+    fn test_function_names_are_filtered_and_kept_in_file_order() {
+        let dir = std::env::temp_dir().join(format!("anneal-fn-names-{}", std::process::id()));
+        fs::create_dir_all(dir.join("tests")).unwrap();
+        fs::write(dir.join("tests/stages_9y.rs"), "#[test]\nfn s9y_01_a() {}\n\n#[test]\n#[ignore]\nfn s9y_02_b() {}\n\nfn helper() {}\n\n#[test]\nfn s9y_01_c() {}\n").unwrap();
+        assert_eq!(test_fn_names(&dir, "stages_9y", &[]), ["s9y_01_a", "s9y_02_b", "s9y_01_c"], "no filter: every test, in file order");
+        assert_eq!(test_fn_names(&dir, "stages_9y", &["s9y_01"]), ["s9y_01_a", "s9y_01_c"], "a filter keeps the matching names");
+        assert!(test_fn_names(&dir, "no_such_file", &[]).is_empty(), "a missing file names nothing");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

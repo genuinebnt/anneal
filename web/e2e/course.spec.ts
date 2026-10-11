@@ -118,3 +118,22 @@ test("a test's code opens under its result, for failed and for passed tests", as
     await row.locator(".k-rrow").click();
     await expect(row.getByTestId("test-code")).toHaveCount(0);
 });
+
+test("a run stopped for taking too long says time limit exceeded, and keeps the tests that finished", async ({ page, request }) => {
+    const stage = "3d-02";
+    const st = await (await request.get(`/api/courses/bustub/stages/${stage}`)).json();
+    const names = Object.keys(st.stage.test_sources);
+    const [hung, fine] = [names[0], names[1]];
+    const detail = "Time limit exceeded: the run was stopped after 180 s and this test had not finished (an endless loop? a latch that is never released?)";
+    await request.post("/api/courses/bustub/runs", {
+        data: { stage_id: stage, tests: [{ name: hung, ok: false, detail }, { name: fine, ok: true, detail: "" }], commit: "abc1234", duration_ms: 180_000 },
+    });
+    await page.goto(`/courses/bustub/${stage}#run`);
+    // the summary says so, not "did not run" or a bare count, and the test that finished is still listed
+    await expect(page.getByText(/time limit exceeded/i).first()).toBeVisible();
+    await expect(page.getByText("did not run")).toHaveCount(0);
+    await expect(page.locator(".k-rt.k-bad", { hasText: hung })).toBeVisible();
+    await expect(page.locator("#logt")).toContainText("Time limit exceeded");
+    await page.locator(".k-rph").click();
+    await expect(page.locator(".k-rwrap", { hasText: fine })).toBeVisible();
+});

@@ -80,3 +80,5 @@ Screens are pure functions returning text, so they are unit-tested; colour follo
 run (kept in `.git/anneal-last-run.json`, never committed or reported); a failing `test` names the first test of the file still to fix and
 the hint command; a pass draws a completion box (module box, trophy on the last stage); `status` shows a one-line roadmap of the modules
 (● done, ◐ begun, ○ not yet); `init` and `anneal course guide` print the logo and the one-screen guide.
+
+A run that hangs is stopped (180 s for a stage, 300 s for the earlier stages' regression run). What the test binary had already printed is kept: finished tests show their results, and each test that never finished fails with "Time limit exceeded"; the web stage page then says "time limit exceeded" instead of "did not run". Stage test files that wrap their tests in `within(60 s)` (1g, 2b, 2c) get the same message from inside, per test, after 60 s.

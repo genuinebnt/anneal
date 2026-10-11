@@ -5,7 +5,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, type CourseStagePage as Page } from "../api";
+import { api, type CourseStagePage as Page, type CourseRun } from "../api";
 import { Header } from "../components/Header";
 import { Celebration, celebrateOff } from "../components/kit";
 import { FocusTimer } from "../components/FocusTimer";
@@ -16,6 +16,11 @@ import { Resizer, usePanels } from "./stagePanels";
 import { ConceptsTab, HintsTab, Prose, RunTab, SolutionTab } from "./stage/Tabs";
 import { Tree } from "./stage/Tree";
 import { DIFFICULTY_LABEL, ago } from "./stage/shared";
+
+const LIMIT = "Time limit exceeded";
+
+/** A run the CLI stopped for taking too long: the whole run, or each test that never finished, says "Time limit exceeded". */
+const hitLimit = (r: CourseRun | null | undefined): boolean => !!r && !r.ok && ((r.problem?.includes(LIMIT) ?? false) || r.tests.some((t) => !t.ok && t.detail.startsWith(LIMIT)));
 
 type Tab = "instructions" | "hints" | "solution" | "concepts" | "run";
 const TAB_IDS: Tab[] = ["instructions", "hints", "solution", "concepts", "run"];
@@ -168,7 +173,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
         if (lastRun.ok) {
             toast("ok", "Tests passed", p.next ? "Moving on is one click away." : "That was the last stage.", p.next ? { label: `PROCEED TO ${p.next.title.toUpperCase()} →`, run: () => nav({ to: "/courses/$course/$stage", params: { course, stage: p.next!.id } }) } : undefined);
         } else {
-            toast("er", lastRun.problem ? "The tests did not run" : `${lastRun.passed} of ${lastRun.total} passing`, undefined, { label: "SEE DETAILS →", run: () => pick("run") });
+            toast("er", hitLimit(lastRun) ? "Time limit exceeded" : lastRun.problem ? "The tests did not run" : `${lastRun.passed} of ${lastRun.total} passing`, undefined, { label: "SEE DETAILS →", run: () => pick("run") });
         }
     }, [lastRun?.id]); // eslint-disable-line react-hooks/exhaustive-deps
     useEffect(() => {
@@ -355,7 +360,9 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
     const cmd = `anneal course test ${p.stage.id}`;
     const reqConcepts = p.concepts.filter((k) => k.required);
     const reqDone = reqConcepts.filter((k) => k.read).length;
-    const failedFirst = run?.tests.find((t) => !t.ok);
+    const limit = hitLimit(run);
+    // a test that hit the time limit comes first: it is the one to look at, and the others may only have been waiting behind it
+    const failedFirst = run?.tests.find((t) => !t.ok && t.detail.startsWith(LIMIT)) ?? run?.tests.find((t) => !t.ok);
     const outlineEntries: [string, string][] = [["s-top", "Overview"], ...entries.map((e): [string, string] => [e.id, e.title])];
     const tabs: [Tab, string, string][] = [
         ["instructions", "Instructions", ""],
@@ -731,7 +738,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 </div>
                                 <div className="k-kv2">
                                     <span>Last run</span>
-                                    <b>{run ? (run.problem ? "did not run" : `${run.passed} / ${run.total} · ${ago(run.at)}`) : "none yet"}</b>
+                                    <b>{run ? (limit ? `time limit exceeded · ${ago(run.at)}` : run.problem ? "did not run" : `${run.passed} / ${run.total} · ${ago(run.at)}`) : "none yet"}</b>
                                 </div>
                                 <div className="k-kv2">
                                     <span>Hints used</span>
@@ -768,7 +775,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 </>
                             ) : run ? (
                                 <>
-                                    <b>{run.ok ? "stage passed" : run.problem ? "did not run" : `${run.passed} / ${run.total} passing`}</b> · run {ago(run.at)}
+                                    <b>{run.ok ? "stage passed" : limit ? (run.problem ? "time limit exceeded" : `time limit exceeded · ${run.passed} / ${run.total} passing`) : run.problem ? "did not run" : `${run.passed} / ${run.total} passing`}</b> · run {ago(run.at)}
                                     {run.commit_sha ? ` · ${run.commit_sha.slice(0, 7)}` : ""}
                                 </>
                             ) : (
