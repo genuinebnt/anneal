@@ -3,7 +3,7 @@ title = "Build a DBMS: BusTub in Rust"
 repo_name = "bustub-rs"
 # The web app shows only these modules until the rest are rewritten and checked.
 planned_modules = []
-published_modules = ["r", "1a", "1b", "1c", "1d", "1e", "1f", "1g", "2a", "2b", "2c", "2d", "3a", "3b", "3c", "3d", "3e", "3f", "3g", "3h", "3i", "3j", "4a", "4b", "4c", "4d", "4e", "0a", "0b", "0c", "0d"]
+published_modules = ["r", "1a", "1b", "1c", "1d", "1e", "1f", "1g", "2a", "2b", "2c", "2d", "3a", "3b", "3c", "3d", "3e", "3f", "3g", "3h", "3i", "3j", "3k", "4a", "4b", "4c", "4d", "4e", "0a", "0b", "0c", "0d"]
 
 # Projects group modules by their code's leading number (1a, 1b → project 1), or by `project` in module.toml. The projects show in this order: the optional Rust on-ramp (project 0) first, the optional primer (project 5) last.
 [[project]]

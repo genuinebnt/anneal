@@ -33,11 +33,46 @@ If every transaction obeys 2PL, every outcome is equal to some one-at-a-time ord
 
 The **isolation levels** are 2PL with the rule loosened on purpose, to let more transactions run at once. Under *read uncommitted* a transaction never takes shared locks (it can see changes that are not committed yet). Under *read committed* it takes shared locks but gives them back right after reading. Under *repeatable read* it keeps everything until the end. The price of each loosening is an anomaly that the stronger level does not have.
 
+```svg
+caption: The number of locks a transaction holds over time, under two-phase locking. It only grows until the lock point, then only shrinks. Strict two-phase locking (dashed) holds its exclusive locks until the end and releases them together at commit or abort. Acquiring a lock after the first release (red) is what the rule forbids. (Animated: the three phases in turn.)
+<svg viewBox="0 0 760 320" role="img" aria-label="A step curve of held locks: growing to a lock point, a plateau, then shrinking; a dashed strict variant and a forbidden late acquire">
+<style>
+@keyframes tp-1{0%,26%{opacity:.5}32%,100%{opacity:0}}
+@keyframes tp-2{0%,30%{opacity:0}36%,60%{opacity:.5}66%,100%{opacity:0}}
+@keyframes tp-3{0%,64%{opacity:0}70%,94%{opacity:.5}100%{opacity:0}}
+.tp-1{opacity:0;animation:tp-1 12s ease-in-out infinite}.tp-2{opacity:0;animation:tp-2 12s ease-in-out infinite}.tp-3{opacity:0;animation:tp-3 12s ease-in-out infinite}
+</style>
+<rect class="tp-1" x="100" y="40" width="190" height="200" rx="4" style="fill:var(--grn-bg)"/>
+<rect class="tp-2" x="290" y="40" width="210" height="200" rx="4" style="fill:var(--acc-bg)"/>
+<rect class="tp-3" x="500" y="40" width="130" height="200" rx="4" style="fill:var(--warn-bg)"/>
+<path class="grid" d="M60 240 H730"/><path class="grid" d="M60 40 V240"/>
+<text class="dim sm" x="20" y="244">0</text><text class="dim sm" x="20" y="204">1</text><text class="dim sm" x="20" y="164">2</text><text class="dim sm" x="20" y="124">3</text>
+<text class="dim sm" x="62" y="30">locks held</text><text class="end dim sm" x="730" y="262">time</text>
+<path style="stroke:var(--fn);stroke-width:2.4;fill:none" d="M60 240 H110 V200 H200 V160 H290 V120 H500 V160 H560 V200 H620 V240 H730"/>
+<path style="stroke:var(--grn);stroke-width:1.8;fill:none;stroke-dasharray:6 4" d="M290 118 H640 V240"/>
+<path style="stroke:var(--bad);stroke-width:1.8;fill:none;stroke-dasharray:3 3" d="M560 200 V160 H600"/>
+<text class="t-r sm" x="566" y="150">✗ never</text>
+<text class="t-g sm" x="110" y="276">growing phase: only acquire</text>
+<text class="t-a sm" x="298" y="108">the lock point: everything is held, the work happens here</text>
+<text class="t-w sm" x="470" y="276">shrinking phase: only release</text>
+<text class="dim sm" x="60" y="300">Strict 2PL (dashed): exclusive locks wait for commit or abort, so nobody reads what is later rolled back.</text>
+</svg>
+```
+
 ## What can go wrong
 
 - **Starvation.** If readers may always join existing readers, a stream of readers keeps a writer waiting forever. Fair queues grant requests in arrival order, and a reader that is compatible with the holders still waits behind a writer that is waiting.
 - **Deadlock.** Two transactions each hold a lock the other wants. Locking never fixes this by itself; see the waits-for graph concept.
 - **Upgrade deadlock.** Two transactions hold S on the same row and both ask for X: each waits for the other to let go. Systems allow only one upgrade at a time and abort the other.
+
+## Invariants: what must always be true
+
+- **Compatibility is symmetric, and X is compatible with nothing.** If a held mode and a requested mode conflict one way, they conflict the other way too.
+- **Two-phase.** A transaction never acquires a lock after it has released one. Break it, and the gap between two locks is a window for another transaction to change what the first one already read.
+- **Strict.** Exclusive locks are kept until the transaction commits or aborts. Break it, and another transaction can read a value that is later rolled back.
+- **Intention before detail.** Holding S or X on a row means holding IS or IX (or stronger) on its table first. Break it, and a table lock cannot know a writer is working inside.
+- **Upgrades only go up,** and at most one upgrade per resource waits at a time. Break the second, and two shared holders that both ask for X wait for each other forever.
+- **Requests are granted in arrival order,** unless a request is compatible with every holder and every request ahead of it. Break it, and a stream of readers starves a writer.
 
 ## C++ comparison
 

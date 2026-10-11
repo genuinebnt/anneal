@@ -32,6 +32,38 @@ Properties: **total order** (no two events share a value), **deterministic** (re
 
 Leslie Lamport's 1978 paper generalised this to distributed systems (each process keeps a counter and takes the maximum of its own and any received one), and **transaction timestamps** in module 4's MVCC are the same idea: a monotonically increasing number that says who is older.
 
+```svg
+caption: Two reasons to keep your own counter. Above, inside one program: a coarse wall clock gives the first two events the same reading, so "which came first?" has no answer; a counter you advance gives every event its own number. Below, between two processes (Lamport): a received message makes the receiver jump to the larger of its own clock and the sender's, plus one, so a cause always has a smaller stamp than its effect. (Animated: the stamps arrive in order.)
+<svg viewBox="0 0 760 350" role="img" aria-label="Events stamped by a counter while a wall clock ties, and two processes exchanging a stamped message so that the receiver takes the maximum">
+<style>
+@keyframes lc-1{0%,8%{opacity:.15}16%,100%{opacity:1}}
+@keyframes lc-2{0%,24%{opacity:.15}32%,100%{opacity:1}}
+@keyframes lc-3{0%,40%{opacity:.15}48%,100%{opacity:1}}
+@keyframes lc-4{0%,56%{opacity:.15}64%,100%{opacity:1}}
+@keyframes lc-m{0%,70%{opacity:.15}78%,92%{opacity:1}100%{opacity:.15}}
+.lc-1{animation:lc-1 12s ease-in-out infinite}.lc-2{animation:lc-2 12s ease-in-out infinite}.lc-3{animation:lc-3 12s ease-in-out infinite}.lc-4{animation:lc-4 12s ease-in-out infinite}.lc-m{animation:lc-m 12s ease-in-out infinite}
+</style>
+<defs><marker id="lc-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" style="fill:var(--acc)"/></marker></defs>
+<text class="dim sm" x="30" y="24">INSIDE ONE PROGRAM</text>
+<path class="ln" d="M40 70 H720"/>
+<g class="lc-1"><circle class="live" cx="110" cy="70" r="14"/><text class="mid fg" x="110" y="75">A</text><text class="mid t-g sm" x="110" y="104">counter 0</text><text class="mid t-r sm" x="110" y="122">wall 12:00:00.001</text></g>
+<g class="lc-2"><circle class="live" cx="250" cy="70" r="14"/><text class="mid fg" x="250" y="75">B</text><text class="mid t-g sm" x="250" y="104">counter 1</text><text class="mid t-r sm" x="250" y="122">wall 12:00:00.001</text></g>
+<g class="lc-3"><circle class="live" cx="390" cy="70" r="14"/><text class="mid fg" x="390" y="75">A</text><text class="mid t-g sm" x="390" y="104">counter 2</text><text class="mid dim sm" x="390" y="122">wall 12:00:00.002</text></g>
+<g class="lc-4"><circle class="live" cx="530" cy="70" r="14"/><text class="mid fg" x="530" y="75">C</text><text class="mid t-g sm" x="530" y="104">counter 3</text><text class="mid dim sm" x="530" y="122">wall 12:00:00.002</text></g>
+<text class="dim sm" x="30" y="150">A and B read the same wall clock: a tie. The counter never repeats and never goes back.</text>
+<text class="dim sm" x="30" y="190">BETWEEN TWO PROCESSES</text>
+<path class="ln" d="M40 230 H720"/><path class="ln" d="M40 300 H720"/>
+<text class="dim sm" x="30" y="222">P</text><text class="dim sm" x="30" y="292">Q</text>
+<circle class="blue" cx="130" cy="230" r="11"/><text class="mid fg sm" x="130" y="234">4</text>
+<circle class="blue" cx="290" cy="230" r="11"/><text class="mid fg sm" x="290" y="234">5</text><text class="end dim sm" x="276" y="256">send, stamp 5</text>
+<circle class="blue" cx="130" cy="300" r="11"/><text class="mid fg sm" x="130" y="304">1</text>
+<circle class="blue" cx="210" cy="300" r="11"/><text class="mid fg sm" x="210" y="304">2</text>
+<g class="lc-m"><path class="ln-w" d="M290 242 L420 288" marker-end="url(#lc-a)"/><circle class="hot" cx="430" cy="300" r="13"/><text class="mid fg sm" x="430" y="304">6</text>
+<text class="t-a sm" x="460" y="296">receive: max(own 2, stamp 5) + 1 = 6</text></g>
+<text class="dim sm" x="30" y="338">A stamp is an order, not a duration: 100 is not "100 ms". A cause is always stamped lower than its effect.</text>
+</svg>
+```
+
 ## When you do need real time
 
 | need | use | notes |
@@ -43,6 +75,13 @@ Leslie Lamport's 1978 paper generalised this to distributed systems (each proces
 
 > [!PORT] C++
 > `std::chrono::steady_clock` is Rust's `Instant`; `system_clock` is `SystemTime`. Using `system_clock::now()` to order events is a classic bug in ported code: use a counter.
+
+## Invariants: what must always be true
+
+- **A clock only moves forward.** It never repeats a value and never goes back, so two events in one program never share a stamp.
+- **Stamp order is event order.** Replaying the same calls gives the same stamps, which is what makes a test about "who is evicted first" deterministic.
+- **On receive, the clock becomes `max(own, received) + 1`.** Afterwards a cause always carries a smaller stamp than its effect, across processes too.
+- **A stamp is not a duration.** Differences between stamps count events, not milliseconds; never use them to time anything.
 
 ## A caveat
 

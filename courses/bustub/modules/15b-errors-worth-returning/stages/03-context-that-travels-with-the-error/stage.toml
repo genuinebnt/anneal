@@ -1,0 +1,8 @@
+id = "3k-03"
+title = "Context that travels with the error"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3k::s3k_03"]
+learn = ["adding a layer that says what the caller was doing", "walking a chain of causes and finding the root", "a report for the log: every layer, outermost first", "context built only on failure"]
+concepts = ["errors-that-carry-their-cause", "iterators-and-closures"]
+concepts_optional = ["designing-error-types", "generics-and-static-dispatch", "trait-objects-and-the-disk-seam"]

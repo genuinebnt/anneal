@@ -1,0 +1,9 @@
+id = "3k-05"
+title = "Boss: a statement fails in every layer"
+kind = "boss"
+difficulty = "medium"
+tests = ["stages_3k::s3k_05"]
+learn = ["checking an error type across threads and layers", "a model of what a stack of context must do", "an error type as a public contract"]
+concepts = ["errors-that-carry-their-cause", "property-testing-and-fuzzing"]
+concepts_optional = ["model-based-testing", "moving-data-across-threads", "send-and-sync"]
+retest = true

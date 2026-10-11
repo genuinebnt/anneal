@@ -1,0 +1,26 @@
+code = "3k"
+title = "Errors worth returning"
+summary = "One error type for a whole database. Every layer you have built so far fails in its own way (a file, a lexer, a catalog, an integer, the engine); a client needs one type that keeps the cause as a value, says what each layer was doing, carries a stable SQLSTATE-style code, and shows a client only what it may see. You design the type; the tests check the standard behaviour: `From`, `?`, `Display`, `source()`, context, codes and a client-safe message. Not in BusTub, which throws C++ exceptions with a type and a message."
+lectures = []
+bustub = []
+files = []
+
+[[resources]]
+kind = "docs"
+title = "std::error::Error and the source chain"
+url = "https://doc.rust-lang.org/std/error/trait.Error.html"
+
+[[resources]]
+kind = "docs"
+title = "Rust API Guidelines: error types are meaningful and well-behaved"
+url = "https://rust-lang.github.io/api-guidelines/interoperability.html#error-types-are-meaningful-and-well-behaved-c-good-err"
+
+[[resources]]
+kind = "docs"
+title = "PostgreSQL: error codes (SQLSTATE)"
+url = "https://www.postgresql.org/docs/current/errcodes-appendix.html"
+
+[[resources]]
+kind = "docs"
+title = "anyhow: context and chains without a type of your own"
+url = "https://docs.rs/anyhow"

@@ -1,0 +1,8 @@
+id = "3k-01"
+title = "One type for every failure"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3k::s3k_01"]
+learn = ["an error type that keeps its cause as a value, not as text", "Display for one layer and source() for the chain", "why a real Error needs one From impl per layer", "Send + Sync + 'static as a property tests can check"]
+concepts = ["errors-that-carry-their-cause", "designing-error-types"]
+concepts_optional = ["errors-as-values-with-result", "send-and-sync", "smart-pointers-box-rc-arc", "trait-objects-and-the-disk-seam"]

@@ -43,6 +43,15 @@ The delta design makes the common case cheap: most reads want the newest version
 - **Time for old readers.** A long-running reader has to walk long chains.
 - **Weaker isolation than it looks.** A snapshot is not serializable by itself (*write skew*); stronger levels add validation.
 
+## Invariants: what must always be true
+
+- **A version's timestamp is a commit time, or a temporary one.** Until its writer commits it carries a temporary timestamp that no reader can mistake for a commit time, and only its writer can see it.
+- **A reader sees the newest version at or before its read timestamp,** or its own writes. The read timestamp is fixed when the transaction begins, so the whole transaction sees one snapshot.
+- **The chain is ordered.** Walking from the newest version meets timestamps that only go down, so the first visible version is the right one.
+- **Readers never wait for writers, and writers never wait for readers.** Writers conflict only with other writers.
+- **An old version is kept while some active transaction may still need it,** and no longer: the oldest read timestamp of any active transaction is the line below which versions can be collected.
+- **An aborted writer leaves nothing visible.** No version keeps its temporary timestamp after the abort.
+
 ## C++ comparison
 
 | C / C++ | Rust |

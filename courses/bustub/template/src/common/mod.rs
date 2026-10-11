@@ -20,3 +20,4 @@ pub mod session_state;
 pub mod idle_reaper;
 pub mod session_pool;
 pub mod read_only;
+pub mod db_error;

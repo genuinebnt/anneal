@@ -1,0 +1,8 @@
+id = "3k-04"
+title = "Codes, and what a client may see"
+kind = "build"
+difficulty = "medium"
+tests = ["stages_3k::s3k_04"]
+learn = ["a stable five-character code for each kind of failure, read from the root cause", "why context must never change the code", "what a client may be shown and what stays in the log"]
+concepts = ["errors-that-carry-their-cause", "sql-types-and-three-valued-logic"]
+concepts_optional = ["designing-error-types", "errors-as-values-with-result"]

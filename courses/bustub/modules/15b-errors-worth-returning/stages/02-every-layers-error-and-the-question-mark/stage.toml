@@ -1,0 +1,8 @@
+id = "3k-02"
+title = "Every layer's error, and the question mark"
+kind = "build"
+difficulty = "easy"
+tests = ["stages_3k::s3k_02"]
+learn = ["making plain error enums into real errors with Display", "one From per layer, and a macro for eight of the same shape", "messages that say what happened and where, in words"]
+concepts = ["errors-that-carry-their-cause", "designing-error-types"]
+concepts_optional = ["errors-as-values-with-result", "generics-and-static-dispatch"]
