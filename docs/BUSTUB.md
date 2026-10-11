@@ -120,6 +120,8 @@ the mmap-in-a-DBMS paper), engineering blogs, and real code (SQLite, PostgreSQL,
 anneal course init bustub ~/code/bustub-rs   # copy the template, git init, install the pre-push hook, first commit
 anneal course status                         # modules and stages, ✓ done, → current
 anneal course show [stage]                   # the stage page
+anneal course tests [stage]                  # the test cases to pass (readable names), with ✓/✗ from your last run
+anneal course guide                          # the one-screen guide: the loop and the commands around it
 anneal course test [stage] [--all]           # run the stage's tests, then everything done so far (regression)
 anneal course next                           # the next stage
 git commit -am work && git push              # hook: runs the tests, records the result, prints the next stage

@@ -2,6 +2,7 @@ mod course;
 mod course_sync;
 mod course_unlock;
 mod embedded;
+mod ui;
 mod update;
 mod render;
 mod term;

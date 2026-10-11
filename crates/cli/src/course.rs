@@ -118,6 +118,13 @@ pub enum CourseCmd {
     },
     /// Show the next stage's README. Run after the current stage passes.
     Next,
+    /// List the test cases a stage must pass (default: the current stage), with how your last run went.
+    Tests {
+        /// The stage id, e.g. 1a-01.
+        stage: Option<String>,
+    },
+    /// The one-screen guide: the loop of reading, testing and moving on, and the commands around it.
+    Guide,
     /// Check the tools and the setup a learner needs: rust, git, curl, the hook, the login, the queue, the build directory.
     Doctor,
     /// Send the test runs that could not be reported earlier (no network, an expired session).
@@ -804,6 +811,11 @@ pub fn run(cmd: CourseCmd) -> anyhow::Result<ExitCode> {
             done
         }
         CourseCmd::Next => next(),
+        CourseCmd::Tests { stage } => tests_command(stage.as_deref()),
+        CourseCmd::Guide => {
+            println!("{}", crate::ui::guide());
+            Ok(ExitCode::SUCCESS)
+        }
         CourseCmd::Doctor => doctor(),
         CourseCmd::Sync => {
             course_sync::sync(&find_repo()?)?;
@@ -1071,7 +1083,7 @@ fn init(course_id: &str, dir: Option<PathBuf>, courses: &Path) -> anyhow::Result
     if !committed {
         println!("(The first commit didn't happen: set git user.name and user.email, then `git commit -am start`.)");
     }
-    println!("\n  cd {}\n  anneal course show      # read the first stage\n  anneal course test      # run its tests\n  git commit -am work && git push   # the hook runs the tests too", dir.display());
+    println!("\n{}\n\n  {}\n", crate::ui::guide(), term::bold(&format!("cd {}  and start with: anneal course show", dir.display())));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1516,6 +1528,9 @@ fn status(json: bool) -> anyhow::Result<ExitCode> {
     if challenges > 0 {
         println!("{}", dim(&format!("{challenges_done} of {challenges} challenges (extra practice, not part of the course)")));
     }
+    let strip: Vec<(String, usize, usize)> = modules.iter().map(|(code, _, stages)| (code.clone(), stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count(), stages.iter().filter(|s| core(s)).count())).collect();
+    let here = cur.as_deref().and_then(|id| course.stage(id).ok()).map(|s| s.module.clone());
+    println!("\n{}", crate::ui::roadmap(&strip, here.as_deref(), term::text_width()));
     for (code, title, stages) in &modules {
         let n = stages.iter().filter(|s| core(s)).count();
         let d = stages.iter().filter(|s| core(s)).filter(|s| progress.passed.contains_key(&s.def.id)).count();
@@ -1550,7 +1565,7 @@ fn show(stage: Option<&str>, hint: Option<usize>, no_pager: bool) -> anyhow::Res
     };
     match hint {
         Some(n) => print_hint(&course.meta.id, s, n, no_pager)?,
-        None => print_stage(&repo, s, no_pager),
+        None => print_stage(&repo, &course, &progress, s, no_pager),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1564,6 +1579,114 @@ fn print_hint(course_id: &str, s: &Stage, n: usize, no_pager: bool) -> anyhow::R
     let text = format!("{}\n\n{}", term::bold(&format!("Stage {} · hint {n}: {title}", s.def.id)), render::render(&md, term::text_width(), term::color_on()));
     term::page(&text, no_pager);
     Ok(())
+}
+
+/// Stages that count towards the course (challenges are extra practice): (passed, all).
+fn core_counts(course: &Course, progress: &Progress) -> (usize, usize) {
+    let core = course.stages.iter().filter(|s| s.def.kind != "challenge");
+    (core.clone().filter(|s| progress.passed.contains_key(&s.def.id)).count(), core.count())
+}
+
+/// What the stage banner shows about `s`: its place in its module and in the course.
+fn stage_info<'a>(course: &Course, progress: &Progress, s: &'a Stage) -> crate::ui::StageInfo<'a> {
+    let in_module: Vec<&Stage> = course.stages.iter().filter(|x| x.module == s.module && x.def.kind != "challenge").collect();
+    let of = in_module.len().max(1);
+    let at = in_module.iter().position(|x| x.def.id == s.def.id).map_or(of, |i| i + 1);
+    let (course_done, course_total) = core_counts(course, progress);
+    crate::ui::StageInfo { module: &s.module, module_title: &s.module_title, id: &s.def.id, title: &s.def.title, difficulty: difficulty_label(&s.def.difficulty), kind: &s.def.kind, at, of, course_done, course_total }
+}
+
+/// The results of the learner's recent test runs, by test name. It lives inside `.git`, so it is never committed or reported.
+fn last_run_path(repo: &Path) -> PathBuf {
+    repo.join(".git").join("anneal-last-run.json")
+}
+
+fn load_last_run(repo: &Path) -> BTreeMap<String, bool> {
+    fs::read_to_string(last_run_path(repo)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// Remembers this run's results. Best effort: a repo without a `.git` directory (or a read-only one) just forgets.
+fn save_last_run(repo: &Path, report: &RunReport) {
+    let mut last = load_last_run(repo);
+    for t in &report.tests {
+        last.insert(short_test_name(&t.name), t.ok);
+    }
+    if let Ok(text) = serde_json::to_string(&last) {
+        let _ = fs::write(last_run_path(repo), text);
+    }
+}
+
+fn short_test_name(full: &str) -> String {
+    full.rsplit("::").next().unwrap_or(full).to_owned()
+}
+
+/// `s2c_05_a_scan_that_runs...` as `a scan that runs...`: the stage prefix (`s2c_05_`) dropped, underscores as spaces.
+fn readable_test_name(name: &str) -> String {
+    let parts: Vec<&str> = name.split('_').collect();
+    let skip = if parts.len() > 2 && parts[0].starts_with('s') && parts[0].len() <= 4 && parts[1].len() <= 3 && parts[1].chars().all(|c| c.is_ascii_alphanumeric()) { 2 } else { 0 };
+    parts[skip..].join(" ")
+}
+
+/// The names of a stage's test functions, in file order, read from the test files in the learner's repo.
+fn stage_test_names(repo: &Path, s: &Stage) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in &s.def.tests {
+        let (bin, filter) = split_entry(entry);
+        let Ok(text) = fs::read_to_string(repo.join("tests").join(format!("{bin}.rs"))) else { continue };
+        let mut after_attr = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with("#[test]") {
+                after_attr = true;
+            } else if after_attr && let Some(rest) = t.strip_prefix("fn ") {
+                let name = rest.split('(').next().unwrap_or("").trim().to_owned();
+                if filter.is_none_or(|f| name.contains(f)) && !names.contains(&name) {
+                    names.push(name);
+                }
+                after_attr = false;
+            } else if !t.starts_with("#[") && !t.is_empty() {
+                after_attr = false;
+            }
+        }
+    }
+    names
+}
+
+/// `anneal course tests`: the test cases of a stage, before you run them.
+fn tests_command(stage: Option<&str>) -> anyhow::Result<ExitCode> {
+    use crate::term::{bold, dim, green, red};
+    let repo = find_repo()?;
+    let course = learner_course(&repo)?;
+    let progress = load_progress(&repo);
+    let s = match stage {
+        Some(id) => course.stage(id)?,
+        None => current(&course, &progress).context("every stage is done")?,
+    };
+    println!("{}\n", crate::ui::stage_banner(&stage_info(&course, &progress, s)));
+    let names = stage_test_names(&repo, s);
+    if names.is_empty() {
+        println!("The test files for this stage are not in your repo yet. They arrive with the module: `anneal course update`.");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let last = load_last_run(&repo);
+    let passing = names.iter().filter(|n| last.get(*n) == Some(&true)).count();
+    println!("{}  {}", bold(&format!("{} test cases to pass", names.len())), dim(&format!("{passing} passing in your last run")));
+    let room = term::text_width().saturating_sub(6);
+    for n in &names {
+        let mark = match last.get(n) {
+            Some(true) => green("✓"),
+            Some(false) => red("✗"),
+            None => dim("·"),
+        };
+        println!("  {mark} {}", crate::ui::clip(&readable_test_name(n), room));
+    }
+    println!("\n{}", dim("✓ passed · ✗ failed · · not run yet"));
+    println!("Run them:  anneal course test       One of them:  anneal course test --filter <words of its name, with _>");
+    let hints = render::split_hints(&s.readme).1.len();
+    if hints > 0 {
+        println!("Stuck?     anneal course show {} --hint 1   ({hints} hint{}; the website counts the stage as passed with help)", s.def.id, if hints == 1 { "" } else { "s" });
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn difficulty_label(d: &str) -> &'static str {
@@ -1601,17 +1724,10 @@ fn stage_files(repo: &Path, id: &str) -> Vec<(String, usize)> {
     out
 }
 
-fn print_stage(repo: &Path, s: &Stage, no_pager: bool) {
+fn print_stage(repo: &Path, course: &Course, progress: &Progress, s: &Stage, no_pager: bool) {
     let (body, hints) = render::split_hints(&s.readme);
     let (color, width) = (term::color_on(), term::text_width());
-    let mut text = format!(
-        "{} · {}\n{}\n{}  [{}]\n\n",
-        s.module,
-        s.module_title,
-        term::bold(&format!("Stage {}: {}", s.def.id, s.def.title)),
-        difficulty_label(&s.def.difficulty),
-        s.def.kind
-    );
+    let mut text = format!("{}\n\n", crate::ui::stage_banner(&stage_info(course, progress, s)));
     let files = stage_files(repo, &s.def.id);
     if !files.is_empty() {
         let list = files.iter().map(|(f, n)| format!("  {f}  ({n} place{})", if *n == 1 { "" } else { "s" })).collect::<Vec<_>>().join("\n");
@@ -1623,7 +1739,7 @@ fn print_stage(repo: &Path, s: &Stage, no_pager: bool) {
     if !s.resources.is_empty() {
         text.push_str(&format!("\n{}\n{}\n", term::bold("Module resources"), s.resources.trim_end()));
     }
-    text.push_str(&format!("\n{} {}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   ")));
+    text.push_str(&format!("\n{} {}\n{}\n", term::bold("Tests:"), s.def.tests.iter().map(|t| format!("cargo test --test {}", t.replace("::", " -- "))).collect::<Vec<_>>().join("   "), term::dim(&format!("`anneal course tests {}` lists the test cases; `anneal course test` runs them", s.def.id))));
     if !hints.is_empty() {
         let titles = hints.iter().enumerate().map(|(i, (t, _))| format!("{}. {t}", i + 1)).collect::<Vec<_>>().join("  ");
         text.push_str(&format!("\n{} {titles}\n{}\n", term::bold("Hints:"), term::dim(&format!("open one with `anneal course show {} --hint 1`; the website then counts the stage as passed with help once it passes", s.def.id))));
@@ -1638,7 +1754,7 @@ fn next() -> anyhow::Result<ExitCode> {
     maybe_unlock(&repo, &course, &progress)?;
     match current(&course, &progress) {
         Some(s) => {
-            print_stage(&repo, s, false);
+            print_stage(&repo, &course, &progress, s, false);
             Ok(ExitCode::SUCCESS)
         }
         None => {
@@ -1732,8 +1848,8 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
             }
         },
     };
-    let done = progress.passed.len();
-    println!("{}  {}\n", bold(&format!("Stage {} · {}", target.def.id, target.def.title)), dim(&format!("({done} of {} stages done)", course.stages.len())));
+    let (done, total) = core_counts(&course, &progress);
+    println!("{}  {}\n", bold(&format!("Stage {} · {}", target.def.id, target.def.title)), dim(&format!("({done} of {total} stages done)")));
     let started = Instant::now();
     let entries: Vec<String> = match filter {
         // the stage's test files, but only the tests with this text in their name
@@ -1751,6 +1867,7 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
     }
     let report = run_entries(&repo, &entries, None, Duration::from_secs(180));
     print_report(&report, verbose);
+    save_last_run(&repo, &report);
     let ok = report.passed();
     if filter.is_some() {
         return Ok(if ok { ExitCode::SUCCESS } else { failure_code(opts, cfg.block_on_fail, report.tests.is_empty()) });
@@ -1761,6 +1878,16 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
     }
     if !ok {
         println!("\n{} `anneal course show {}` has the task and hints; `-v` shows every failure in full.", red("Not yet."), target.def.id);
+        let failing: Vec<String> = report.tests.iter().filter(|t| !t.ok).map(|t| short_test_name(&t.name)).collect();
+        // the first one in the order of the test file: the stage builds up, so that is the one to fix first
+        let first = stage_test_names(&repo, target).into_iter().find(|n| failing.contains(n)).or_else(|| failing.iter().min().cloned());
+        if let Some(first) = first {
+            println!("  {} {}", dim("next to fix:"), readable_test_name(&first));
+            let hints = render::split_hints(&target.readme).1.len();
+            if hints > 0 {
+                println!("  {} anneal course show {} --hint 1   {}", dim("stuck?      "), target.def.id, dim("(counts the stage as helped)"));
+            }
+        }
         return Ok(failure_code(opts, cfg.block_on_fail, report.tests.is_empty()));
     }
     let ms = started.elapsed().as_millis() as u64;
@@ -1794,7 +1921,15 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
         let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         progress.passed.insert(target.def.id.clone(), Passed { at, commit: head_commit(&repo), ms });
         save_progress(&repo, &progress)?;
-        println!("\n{}", green(&format!("✓ Stage {} complete.", target.def.id)));
+        let (course_done, course_total) = core_counts(&course, &progress);
+        let module_core: Vec<&Stage> = course.stages.iter().filter(|s| s.module == target.module && s.def.kind != "challenge").collect();
+        let module_done = module_core.iter().filter(|s| progress.passed.contains_key(&s.def.id)).count();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let last_day = progress.passed.values().filter(|p| p.at + 86_400 >= now).count();
+        println!("\n{}", crate::ui::stage_complete(&crate::ui::StageDone { id: &target.def.id, title: &target.def.title, course_done, course_total, took_ms: ms, last_day, module_done, module_total: module_core.len() }));
+        if !module_core.is_empty() && module_done == module_core.len() && target.def.kind != "challenge" {
+            println!("\n{}", crate::ui::module_complete(&target.module, &target.module_title, module_core.len()));
+        }
         let before_module = target.module.clone();
         maybe_unlock(&repo, &course, &progress)?;
         match current(&course, &progress) {
@@ -1804,7 +1939,7 @@ fn test(stage: Option<&str>, opts: TestOpts, filter: Option<&str>) -> anyhow::Re
                 }
                 println!("Next: {} · {}  (`anneal course next`)", n.def.id, n.def.title)
             }
-            None => println!("That was the last stage."),
+            None => println!("\n{}", crate::ui::course_complete(&course.meta.title)),
         }
     } else {
         println!("\n{}", green(&format!("✓ Stage {} passes (already recorded).", target.def.id)));
@@ -2212,5 +2347,45 @@ mod bar_tests {
         assert_eq!(bar(99, 100, 10), "█████████░");
         assert_eq!(bar(10, 10, 10), "██████████");
         assert_eq!(bar(0, 0, 4), "░░░░");
+    }
+}
+
+#[cfg(test)]
+mod learner_screens {
+    use super::*;
+
+    #[test]
+    fn a_test_name_reads_as_a_sentence() {
+        assert_eq!(readable_test_name("s2c_05_a_scan_that_runs_while_writers_work"), "a scan that runs while writers work");
+        assert_eq!(readable_test_name("s1a_01_new_creates_the_db_file"), "new creates the db file");
+        assert_eq!(readable_test_name("sr_01_bytes_round_trip"), "bytes round trip");
+        assert_eq!(readable_test_name("s2c_c1_a_challenge_test"), "a challenge test");
+        // not a stage prefix: left alone
+        assert_eq!(readable_test_name("plain_name_here"), "plain name here");
+        assert_eq!(readable_test_name("short"), "short");
+    }
+
+    #[test]
+    fn a_stages_tests_are_read_from_the_test_file_in_order() {
+        let dir = std::env::temp_dir().join(format!("anneal-tests-listing-{}", std::process::id()));
+        fs::create_dir_all(dir.join("tests")).unwrap();
+        fs::write(
+            dir.join("tests/stages_9z.rs"),
+            "use x;\n\n#[test]\nfn s9z_01_first_thing() {}\n\n/// docs\n#[test]\n#[should_panic]\nfn s9z_01_second_thing() {}\n\nfn helper_not_a_test() {}\n\n#[test]\nfn s9z_02_other_stage() {}\n",
+        )
+        .unwrap();
+        let stage = |tests: &[&str]| Stage {
+            def: StageToml { id: "9z-01".into(), title: "t".into(), kind: "build".into(), difficulty: "easy".into(), tests: tests.iter().map(|t| (*t).to_owned()).collect(), retest: false },
+            module: "9z".into(),
+            optional: false,
+            module_title: "m".into(),
+            readme: String::new(),
+            resources: String::new(),
+            rank: 0,
+        };
+        assert_eq!(stage_test_names(&dir, &stage(&["stages_9z::s9z_01"])), ["s9z_01_first_thing", "s9z_01_second_thing"]);
+        assert_eq!(stage_test_names(&dir, &stage(&["stages_9z"])).len(), 3);
+        assert!(stage_test_names(&dir, &stage(&["stages_missing"])).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

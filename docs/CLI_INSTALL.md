@@ -71,3 +71,12 @@ Start the API on a throwaway database with `ANNEAL_DOWNLOADS=/some/dir` holding 
 `curl -fsSL http://127.0.0.1:8791/install.sh | ANNEAL_INSTALL_DIR=/tmp/bin sh`, `anneal course remote <bare repo>`, and
 `anneal course restore` on a second `XDG_CONFIG_HOME`. The API tests `the_repository_of_a_course_is_recorded_and_read_back` and
 `the_installer_names_the_address_it_was_fetched_from` cover the server half.
+
+## What the learner sees (`crates/cli/src/ui.rs`)
+
+Screens are pure functions returning text, so they are unit-tested; colour follows `term::color_on()` (a terminal, no `NO_COLOR`).
+`show`/`next`/`tests` open with the stage banner (module, stage, difficulty, a meter of the module and of the course);
+`anneal course tests` lists a stage's test cases by readable name (read from the test files, so it works offline) with ✓/✗/· from the last
+run (kept in `.git/anneal-last-run.json`, never committed or reported); a failing `test` names the first test of the file still to fix and
+the hint command; a pass draws a completion box (module box, trophy on the last stage); `status` shows a one-line roadmap of the modules
+(● done, ◐ begun, ○ not yet); `init` and `anneal course guide` print the logo and the one-screen guide.
