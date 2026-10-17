@@ -314,6 +314,29 @@ pub async fn problem_row(State(s): State<AppState>, Path(id): Path<String>) -> A
     Ok(Json(serde_json::to_value(row(t, p, &progress, &by_problem, today)).map_err(|e| ApiError::BadRequest(e.to_string()))?))
 }
 
+/// The problem the plan has next right now: the first of the calendar's queue, else the plain sequence.
+async fn current_problem(s: &AppState, settings: &Settings) -> ApiResult<Option<String>> {
+    let progress = store::progress(&s.db).await?;
+    let reviews = dsa_reviews(&s.catalog, store::reviews(&s.db).await?);
+    let today = crate::activity::today();
+    let (fallback, start) = next_up_ids(s, settings, &progress, 1).await?;
+    let book = crate::calendar::book(&s.db).await?;
+    let overrides = crate::calendar::active_overrides(&s.db).await?;
+    let world = crate::calendar::World::build(&s.catalog, settings, &progress, &reviews, start.as_deref(), today);
+    let planned = world.run(&book.active_plan().rules, &overrides);
+    Ok(planned.queue.order.first().map(|i| world.ids[*i].to_owned()).or_else(|| fallback.into_iter().next()))
+}
+
+/// Logging `id` when `current` was next counts as "instead of the next problem" when it is a different problem of the
+/// same topic.
+fn instead_of_current(catalog: &Catalog, current: Option<&str>, id: &str) -> bool {
+    let Some(current) = current.filter(|c| *c != id) else { return false };
+    match (catalog.problem(current), catalog.problem(id)) {
+        (Some((a, _)), Some((b, _))) => a.code == b.code,
+        _ => false,
+    }
+}
+
 #[derive(Deserialize)]
 pub struct LogBody {
     grade: Grade,
@@ -336,9 +359,13 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     }
     let settings = crate::settings::srs(&s.db).await?;
     let practice = is_practice(p);
+    // What was next before this log, to tell "did the next problem" from "did another one instead".
+    let current = if practice { None } else { current_problem(&s, &settings).await? };
     let scheduled = store::log_attempt(&s.db, &id, body.grade, &settings_for(&s.catalog, &id, &settings), !practice).await?;
-    // The next problem follows from the one just done, unless it was practice, which isn't part of the plan.
-    if !practice {
+    // The next problem follows from the one just done, unless it was practice, which isn't part of the plan. Doing a
+    // different problem of the same topic instead of the next one leaves the next one next: its slot just drops out of
+    // the plan and the days after it close up. Doing one from another topic restarts the sequence after it (decision 22).
+    if !practice && !instead_of_current(&s.catalog, current.as_deref(), &id) {
         store::set_dsa_start(&s.db, &id).await?;
     }
     Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days) }))

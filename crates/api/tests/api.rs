@@ -868,7 +868,8 @@ async fn logging_a_dsa_problem_feeds_progress_reviews_and_next_up(db: PgPool) {
     assert_eq!((o["plan"]["goal_done"].as_u64(), o["patterns"][0]["solved"].as_u64()), (Some(1), Some(1)));
     // The plan walks on from the problem just logged, skipping the done one and the Premium one outside the goal. What
     // was left above it in the same topic comes next, before the next topic, so a topic is finished before moving on.
-    assert_eq!(o["plan"]["start"], "lc-two-sum");
+    // lc-contains-duplicate was next and lc-two-sum is in the same topic, so it stays next and the start doesn't move.
+    assert_eq!(o["plan"]["start"], Value::Null);
     assert_eq!(o["plan"]["next_up"], json!(["lc-contains-duplicate", "lc-valid-palindrome", "lc-two-sum-ii-input-array-is-sorted"]));
 
     // A solve through the log counts toward the streak and the Progress pages like any other.
@@ -1827,4 +1828,47 @@ async fn shipped_solutions_are_loaded_once_and_only_for_stages_the_course_has(db
     let app = test_app(db.clone());
     let page = call(&app, Method::GET, "/api/courses/bustub/stages/1a-01", None).await.1;
     assert_eq!(page["solution"]["available"], true, "{page}");
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn plan_lists_every_topic_even_when_it_starts_part_way(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db, root.path());
+    let (status, _) = call(&app, Method::POST, "/api/dsa/start", Some(json!({ "from": "d2-two-pointers" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, p) = call(&app, Method::GET, "/api/plan", None).await;
+    let topics: Vec<&str> = p["topics"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(topics, ["D2", "D1"], "{}", p["topics"]);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn doing_another_problem_instead_of_the_next_one(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db, root.path());
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!(o["plan"]["next_up"][0], "lc-contains-duplicate");
+    let today_of = |p: &Value, id: &str| -> Option<String> {
+        p["days"].as_array().unwrap().iter().find(|d| d["new"].as_array().is_some_and(|n| n.iter().any(|x| x["id"] == id))).map(|d| d["date"].as_str().unwrap().to_owned())
+    };
+    let (_, before) = call(&app, Method::GET, "/api/plan", None).await;
+    let two_sum_day = today_of(&before, "lc-two-sum").expect("two sum is planned");
+    let next_day = today_of(&before, "lc-contains-duplicate").expect("the next problem is planned");
+
+    // Same topic: lc-two-sum is done instead. The next problem stays next, on the first problem day, and the plan
+    // closes up behind it (two sum's own day is no longer needed).
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!((o["plan"]["start"].clone(), o["plan"]["next_up"][0].clone()), (Value::Null, json!("lc-contains-duplicate")));
+    let (_, after) = call(&app, Method::GET, "/api/plan", None).await;
+    assert_eq!(today_of(&after, "lc-contains-duplicate"), Some(next_day.clone()));
+    assert_eq!(today_of(&after, "lc-two-sum"), None, "done, so no longer planned (was {two_sum_day})");
+
+    // Another topic: the sequence restarts after the problem chosen, and the calendar follows it.
+    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "good" }))).await;
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!(o["plan"]["start"], "lc-valid-palindrome");
+    assert_eq!(o["plan"]["next_up"][0], "lc-two-sum-ii-input-array-is-sorted");
+    let (_, p) = call(&app, Method::GET, "/api/plan", None).await;
+    let first = p["days"].as_array().unwrap().iter().find_map(|d| d["new"].as_array().and_then(|n| n.first()).map(|x| x["id"].clone())).unwrap();
+    assert_eq!(first, "lc-two-sum-ii-input-array-is-sorted");
 }
