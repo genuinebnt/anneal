@@ -53,3 +53,10 @@
 .pempty{margin:0;padding:18px 0;font-size:13.5px;color:var(--dim)}
 .resolve-bar{display:flex;align-items:center;gap:12px;padding:8px 20px;border-bottom:1px solid var(--line2);background:var(--vio-bg);font:500 12px var(--mono);color:var(--fg)}
 .resolve-bar b{color:var(--vio);letter-spacing:.14em}
+
+/* DSA solve record */
+.rec-note{display:block;margin-top:2px;font:400 11px var(--mono);color:var(--dim)}
+.rec-ok{color:var(--grn)}.rec-half{color:var(--warn)}.rec-no{color:var(--bad)}
+.rec-foot{display:flex;flex-wrap:wrap;gap:22px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2)}
+.rec-foot span{display:block;font:500 10.5px var(--mono);letter-spacing:.14em;color:var(--dim)}
+.rec-foot b{display:block;margin-top:4px;font:700 22px var(--mono)}

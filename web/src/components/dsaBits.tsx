@@ -8,7 +8,7 @@ import { DIFF, markOf, niceDate } from "../dsa";
 const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "not yet", easy: "easy" };
 
 /** Logs a problem and says when it comes back. Render `toast` once on the page. */
-export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade) => void; toast: ReactNode; busy: boolean } {
+export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<number>(0);
@@ -19,15 +19,21 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const m = useMutation({
-    mutationFn: ({ p, grade }: { p: DsaProblem; grade: Grade }) => api.logDsa(p.id, grade),
-    onSuccess: (r, { p, grade }) => {
-      say(r.due ? `${p.title}: ${SAID[grade]}. Back for review ${today ? niceDate(r.due, today) : r.due}.` : `${p.title}: ${SAID[grade]}. Practice schedules no review.`);
+    mutationFn: ({ p, grade, practice }: { p: DsaProblem; grade: Grade; practice: boolean }) => api.logDsa(p.id, grade, practice),
+    onSuccess: (r, { p, grade, practice }) => {
+      say(
+        practice
+          ? `${p.title}: practice, ${SAID[grade]}. ${grade === "again" ? "Logged as a miss." : "Counts toward your streak."} The review schedule is unchanged.`
+          : r.due
+            ? `${p.title}: ${SAID[grade]}. Back for review ${today ? niceDate(r.due, today) : r.due}.`
+            : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
+      );
       for (const key of ["dsa", "dsa-preview", "practice", "activity", "tracks", "reviews", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
     },
     onError: (e: Error) => say(`Couldn't log it: ${e.message}`),
   });
   return {
-    log: (p, grade) => m.mutate({ p, grade }),
+    log: (p, grade, practice = false) => m.mutate({ p, grade, practice }),
     busy: m.isPending,
     toast: message ? (
       <div className="d-toast" role="status">

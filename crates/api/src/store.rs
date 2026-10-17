@@ -166,7 +166,7 @@ pub async fn progress(db: &PgPool) -> sqlx::Result<HashMap<String, ProgressRow>>
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT DISTINCT ON (a.problem_id) a.problem_id, a.solved_at IS NOT NULL, a.assisted, r.stability, r.difficulty, r.last_review
          FROM attempts a LEFT JOIN reviews r ON r.problem_id = a.problem_id
-         ORDER BY a.problem_id, (a.solved_at IS NOT NULL) DESC, a.started_at DESC, a.id DESC",
+         ORDER BY a.problem_id, (a.solved_at IS NOT NULL) DESC, (a.kind <> 'extra') DESC, a.started_at DESC, a.id DESC",
     )
     .fetch_all(db)
     .await?;
@@ -320,6 +320,7 @@ pub async fn log_attempt(
     grade: crate::reviews::Grade,
     settings: &crate::reviews::Settings,
     schedule: bool,
+    extra: bool,
 ) -> sqlx::Result<Option<crate::reviews::Scheduled>> {
     use crate::reviews::Grade;
     let resolve: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM reviews WHERE problem_id = $1)").bind(problem_id).fetch_one(db).await?;
@@ -330,15 +331,24 @@ pub async fn log_attempt(
          VALUES ($1, $2, CASE WHEN $3 THEN now() END, $4)",
     )
     .bind(problem_id)
-    .bind(if resolve { "resolve" } else { "practice" })
+    .bind(if extra { "extra" } else if resolve { "resolve" } else { "practice" })
     .bind(solved)
     .bind(assisted)
     .execute(db)
     .await?;
-    if !schedule {
+    if !schedule || extra {
         return Ok(None);
     }
     record_review(db, problem_id, grade, resolve, settings).await.map(Some)
+}
+
+/// A problem's logged attempts, oldest first: the kind (`practice` is the first try, `resolve` a later one, `extra` a
+/// repeat for practice), whether it was solved and whether it needed help.
+pub async fn attempt_history(db: &PgPool, problem_id: &str) -> sqlx::Result<Vec<(String, bool, bool)>> {
+    sqlx::query_as("SELECT kind, solved_at IS NOT NULL, assisted FROM attempts WHERE problem_id = $1 AND kind <> 'mock' ORDER BY started_at, id")
+        .bind(problem_id)
+        .fetch_all(db)
+        .await
 }
 
 /// The DSA problems (`lc-…`) that have any attempt logged, with any grade.

@@ -288,6 +288,29 @@ export interface ProgressOverview {
   readiness_trend: { area: "dsa" | "rust"; points: (number | null)[] }[];
   this_week: { date: string; solved: number; unassisted: number; focus_seconds: number }[];
   by_section: { section: Section; solved: number; written: number; readiness: number | null }[];
+  /** How the DSA problems were logged: first tries, later (scheduled) tries and practice, each counted apart. */
+  record: SolveRecord;
+}
+
+export interface Outcomes {
+  own: number;
+  help: number;
+  not_yet: number;
+}
+
+export interface SolveRecord {
+  first: Outcomes;
+  later: Outcomes;
+  practice: Outcomes;
+  practice_count: number;
+  problems_practised: number;
+  practice_week: number;
+}
+
+/** One logged attempt at a problem, oldest first. */
+export interface TryMark {
+  kind: "first" | "later" | "practice";
+  result: "good" | "hard" | "again";
 }
 
 export interface Counted {
@@ -956,7 +979,7 @@ export const api = {
   reviews: () => request<ReviewsView>("GET", "/reviews"),
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),
   dsa: () => request<DsaOverview>("GET", "/dsa"),
-  preview: (id: string) => request<{ previews: Record<Grade, ReviewPreview> | null }>("GET", `/dsa/problems/${id}/preview`),
+  preview: (id: string) => request<{ previews: Record<Grade, ReviewPreview> | null; history: TryMark[] }>("GET", `/dsa/problems/${id}/preview`),
   statement: (id: string) => request<DsaStatement>("GET", `/dsa/problems/${id}/statement`),
   plan: (from: string, to: string) => request<PlanView>("GET", `/plan?from=${from}&to=${to}`),
   planPreview: (body: { rules?: PlanRules; overrides?: Record<string, DayKind | null> }) => request<PlanPreview>("POST", "/plan/preview", body),
@@ -973,7 +996,7 @@ export const api = {
   dsaRow: (id: string) => request<DsaProblem>("GET", `/dsa/problems/${id}/row`),
   patternLessons: (pattern: string) => request<PatternLessons>("GET", `/dsa/patterns/${pattern}`),
   practice: (pattern: string) => request<PracticeList>("GET", `/dsa/practice/${pattern}`),
-  logDsa: (id: string, grade: Grade) => request<{ id: string; due: string | null; ideal_days: number | null }>("POST", `/dsa/problems/${id}/log`, { grade }),
+  logDsa: (id: string, grade: Grade, practice = false) => request<{ id: string; due: string | null; ideal_days: number | null }>("POST", `/dsa/problems/${id}/log`, { grade, practice }),
   review: () => request<ReviewQueue>("GET", "/dsa/review"),
   mock: () => request<MockData>("GET", "/dsa/mock"),
   saveMock: (saved: MockSaved) => request<MockSaved>("PUT", "/dsa/mock/config", saved),

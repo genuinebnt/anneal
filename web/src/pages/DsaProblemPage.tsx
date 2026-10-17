@@ -19,6 +19,11 @@ const TILES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
     { grade: "easy", glyph: "⚡", label: "Instant", cls: "fast" },
 ];
 
+const RESULT_GLYPH = { good: "✓", hard: "½", again: "✗" } as const;
+const RESULT_CLASS = { good: "ok", hard: "half", again: "no" } as const;
+const RESULT_WORD = { good: "on my own", hard: "with help", again: "not yet" } as const;
+const ORD = (n: number) => (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
+
 const dotOf = (p: DsaProblem) => (p.state.last_grade ? (p.state.last_grade === "again" ? "fail" : p.state.last_grade === "hard" ? "help" : "solo") : "");
 
 /** The owner's own solutions: any number, kept so they can be read later. Written in the same editor as the workspace, so Vim mode works. */
@@ -110,6 +115,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const statement = useQuery({ queryKey: ["dsa-statement", p?.id], queryFn: () => api.statement(p!.id), enabled: !!p, staleTime: Infinity, retry: false });
     const preview = useQuery({ queryKey: ["dsa-preview", p?.id], queryFn: () => api.preview(p!.id), enabled: !!p });
     const [tab, setTab] = useState(0);
+    const [practiceMode, setPracticeMode] = useState(false);
+    useEffect(() => setPracticeMode(false), [p?.id]);
     const [hintsShown, setHintsShown] = useState(0);
     const [more, setMore] = useState(false);
     const [section, setSection] = useState("problem");
@@ -171,7 +178,14 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const recall = s.retrievability != null ? Math.round(s.retrievability * 100) : null;
     const today = o.today;
     const go = (id: string) => document.getElementById(`pp-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Practice is a repeat of a problem already logged; the first log is always a first try, and a LeetCode practice problem schedules nothing anyway.
+    const history = preview.data?.history ?? [];
+    const canPractice = previews !== undefined && previews !== null && history.length > 0;
+    const practising = practiceMode && canPractice;
+    const tryNo = history.filter((h) => h.kind !== "practice").length + 1;
+    const practised = history.filter((h) => h.kind === "practice").length;
     const gradeNote = (g: Grade) => {
+        if (practising) return g === "easy" ? "review grade" : g === "again" ? "logged as a miss" : "+1 practice";
         if (previews === undefined) return "…";
         if (previews === null) return "no review";
         const v = previews[g];
@@ -332,14 +346,35 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                     </div>
 
                     <div className="pp-card">
-                        <h3><span>LOG IT</span>{previews === null && <span>schedules no review</span>}</h3>
+                        <h3><span>LOG IT</span>{previews === null ? <span>schedules no review</span> : practising ? <span>practice · schedule unchanged</span> : null}</h3>
+                        {canPractice && (
+                            <>
+                                <div className="pp-seg" role="group" aria-label="This time">
+                                    <button className={practising ? "" : "on"} aria-pressed={!practising} onClick={() => setPracticeMode(false)}>Try {tryNo}<small>scheduled review</small></button>
+                                    <button className={practising ? "on" : ""} aria-pressed={practising} onClick={() => setPracticeMode(true)}>Practice<small>extra repeat, +1</small></button>
+                                </div>
+                                <p className="pp-what">{practising ? "An extra repeat. It adds 1 to your practice count and keeps the streak going, and changes no review date, recall figure or plan." : "A scheduled review. It moves the next review date and your recall."}</p>
+                            </>
+                        )}
                         <div className="pp-log">
                             {TILES.map((g) => (
-                                <button key={g.grade} className={`lg ${g.cls}${s.last_grade === g.grade ? " on" : ""}`} disabled={busy} onClick={() => log(p, g.grade)}>
+                                <button key={g.grade} className={`lg ${g.cls}${!practising && s.last_grade === g.grade ? " on" : ""}`} disabled={busy || (practising && g.grade === "easy")} onClick={() => log(p, g.grade, practising)}>
                                     <b>{g.glyph}</b><span>{g.label}</span><small>{gradeNote(g.grade)}</small>
                                 </button>
                             ))}
                         </div>
+                        {history.length > 0 && (
+                            <div className="pp-hist" aria-label="This problem's tries">
+                                <span>THIS PROBLEM</span>
+                                {history.map((h, i) => (
+                                    <i key={i} className={`${h.kind === "practice" ? "pr" : RESULT_CLASS[h.result]}`} title={`${h.kind === "first" ? "First try" : h.kind === "later" ? "Later try" : "Practice"}: ${RESULT_WORD[h.result]}`}>
+                                        {h.kind === "practice" ? "P " : `${history.slice(0, i + 1).filter((x) => x.kind !== "practice").length}${ORD(history.slice(0, i + 1).filter((x) => x.kind !== "practice").length)} `}
+                                        {RESULT_GLYPH[h.result]}
+                                    </i>
+                                ))}
+                                {practised > 0 && <em>practised {practised}×</em>}
+                            </div>
+                        )}
                         <div className="pp-status">
                             <div className="pp-gauge" style={{ "--p": `${recall ?? 0}%` } as CSSProperties}><span>{recall != null ? `${recall}%` : "–"}</span></div>
                             <div><b>{standing[0]}</b><small>{standing[1]}{s.last_grade && recall != null && status !== "due" ? ` · ${recall}% recall now` : ""}</small></div>

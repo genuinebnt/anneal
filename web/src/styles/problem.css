@@ -115,3 +115,18 @@
 .pp-mrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .pp-save{height:38px;padding:0 18px;border-radius:10px;background:var(--acc);color:var(--on-acc);font:700 13px var(--sans)}.pp-save:disabled{opacity:.5;cursor:default}
 .pp-add{align-self:flex-start;height:38px;padding:0 16px;border:1px dashed var(--line);border-radius:10px;font:600 12.5px var(--sans);color:var(--mut)}.pp-add:hover{border-color:var(--acc);color:var(--fg)}
+
+/* The log card's "This time" choice (try n or practice) and the problem's own tries. */
+.pp-seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:8px}
+.pp-seg button{padding:9px 6px;text-align:center;font-size:12px;font-weight:600;border-right:1px solid var(--line2);background:var(--bg);color:var(--mut)}
+.pp-seg button:last-child{border-right:0}
+.pp-seg button small{display:block;margin-top:2px;font:500 10px var(--mono);color:var(--dim)}
+.pp-seg button.on{background:var(--acc-bg);color:var(--acc)}
+.pp-seg button.on small{color:var(--acc)}
+.pp-what{margin:0 0 12px;font-size:12.5px;line-height:1.5;color:var(--mut)}
+.pp-hist{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2);font:500 11.5px var(--mono);color:var(--mut)}
+.pp-hist>span{width:100%;font-size:10.5px;letter-spacing:.14em;color:var(--dim)}
+.pp-hist i{font-style:normal;border:1px solid var(--line2);border-radius:14px;padding:3px 10px;white-space:nowrap}
+.pp-hist i.ok{color:var(--grn)}.pp-hist i.half{color:var(--warn)}.pp-hist i.no{color:var(--bad)}
+.pp-hist i.pr{border-color:var(--acc);background:var(--acc-bg);color:var(--acc)}
+.pp-hist em{font-style:normal;color:var(--dim)}

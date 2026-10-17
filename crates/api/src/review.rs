@@ -32,11 +32,21 @@ pub async fn preview(State(s): State<AppState>, Path(id): Path<String>) -> ApiRe
     if problem.dsa.is_none() {
         return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
     }
-    if crate::dsa::is_practice(problem) {
-        return Ok(Json(json!({ "previews": null })));
+    // How this problem has been logged so far, oldest first: `first`, `later` or `practice`, and the result.
+    let practice_list = crate::dsa::is_practice(problem);
+    let history: Vec<Value> = store::attempt_history(&s.db, &id)
+        .await?
+        .into_iter()
+        .map(|(kind, solved, assisted)| {
+            let kind = if practice_list || kind == "extra" { "practice" } else if kind == "resolve" { "later" } else { "first" };
+            json!({ "kind": kind, "result": if !solved { "again" } else if assisted { "hard" } else { "good" } })
+        })
+        .collect();
+    if practice_list {
+        return Ok(Json(json!({ "previews": null, "history": history })));
     }
     let settings = crate::settings::srs(&s.db).await?;
-    Ok(Json(json!({ "previews": previews(&s, &id, &settings, crate::activity::today()).await? })))
+    Ok(Json(json!({ "previews": previews(&s, &id, &settings, crate::activity::today()).await?, "history": history })))
 }
 
 pub async fn queue(State(s): State<AppState>) -> ApiResult<Json<Value>> {

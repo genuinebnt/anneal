@@ -87,6 +87,61 @@ pub struct Overview {
     pub readiness_trend: Vec<AreaTrend>,
     pub this_week: Vec<DayRow>,
     pub by_section: Vec<SectionRow>,
+    /// How the DSA problems have been logged, separately for first tries, later tries and practice.
+    pub record: SolveRecord,
+}
+
+/// How many logs went each way.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct Outcomes {
+    pub own: u32,
+    pub help: u32,
+    pub not_yet: u32,
+}
+
+/// The DSA solve record: a problem's first log is a first try, the scheduled reviews are later tries, and a repeat done
+/// on purpose (or any log of a LeetCode practice problem) is practice. Each has its own counts and they are never added
+/// together; the practice count is the number of practice solves (on my own or with help).
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct SolveRecord {
+    pub first: Outcomes,
+    pub later: Outcomes,
+    pub practice: Outcomes,
+    pub practice_count: u32,
+    pub problems_practised: u32,
+    pub practice_week: u32,
+}
+
+fn solve_record(catalog: &Catalog, rows: &[ActivityRow], today: NaiveDate) -> SolveRecord {
+    let mut r = SolveRecord::default();
+    let mut practised = std::collections::HashSet::new();
+    for a in rows {
+        let Some((_, p)) = catalog.problem(&a.problem_id) else { continue };
+        if p.dsa.is_none() {
+            continue;
+        }
+        let practice = a.kind == "extra" || crate::dsa::is_practice(p);
+        let bucket = match (practice, a.kind.as_str()) {
+            (true, _) => &mut r.practice,
+            (false, "practice") => &mut r.first,
+            (false, "resolve") => &mut r.later,
+            _ => continue,
+        };
+        match (a.solved_at, a.assisted) {
+            (None, _) => bucket.not_yet += 1,
+            (Some(_), true) => bucket.help += 1,
+            (Some(_), false) => bucket.own += 1,
+        }
+        if let (true, Some(at)) = (practice, a.solved_at) {
+            r.practice_count += 1;
+            practised.insert(a.problem_id.as_str());
+            if local_day(at) + Days::new(6) >= today {
+                r.practice_week += 1;
+            }
+        }
+    }
+    r.problems_practised = practised.len() as u32;
+    r
 }
 
 #[derive(Debug, Serialize)]
@@ -124,7 +179,8 @@ pub struct SectionRow {
 fn progress_as_of(rows: &[ActivityRow], day: NaiveDate) -> HashMap<String, ProgressRow> {
     let mut best: HashMap<String, (DateTime<Utc>, bool)> = HashMap::new();
     for r in rows {
-        let Some(at) = r.solved_at else { continue };
+        // A repeat for practice never changes where a problem stands.
+        let Some(at) = r.solved_at.filter(|_| r.kind != "extra") else { continue };
         if local_day(at) > day {
             continue;
         }
@@ -256,6 +312,7 @@ pub fn overview(
         readiness_trend,
         this_week,
         by_section,
+        record: solve_record(catalog, rows, today),
     }
 }
 

@@ -1872,3 +1872,66 @@ async fn doing_another_problem_instead_of_the_next_one(db: PgPool) {
     let first = p["days"].as_array().unwrap().iter().find_map(|d| d["new"].as_array().and_then(|n| n.first()).map(|x| x["id"].clone())).unwrap();
     assert_eq!(first, "lc-two-sum-ii-input-array-is-sorted");
 }
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_practice_repeat_counts_but_changes_nothing_else(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let log = |id: &'static str, body: Value| {
+        let app = app.clone();
+        async move { call(&app, Method::POST, &format!("/api/dsa/problems/{id}/log"), Some(body)).await }
+    };
+
+    // A problem that was never logged has nothing to repeat.
+    let (status, _) = log("lc-two-sum", json!({ "grade": "good", "practice": true })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // First try, on my own: schedules the first review.
+    assert_eq!(log("lc-two-sum", json!({ "grade": "good" })).await.0, StatusCode::OK);
+    let (_, before) = call(&app, Method::GET, "/api/dsa", None).await;
+    let st = &problem_of(&before, "lc-two-sum")["state"];
+    let (due, reps) = (st["due"].clone(), st["reps"].clone());
+
+    // Two practice repeats: one on my own, one needing help.
+    let (status, out) = log("lc-two-sum", json!({ "grade": "good", "practice": true })).await;
+    assert_eq!((status, out["due"].clone()), (StatusCode::OK, Value::Null));
+    assert_eq!(log("lc-two-sum", json!({ "grade": "hard", "practice": true })).await.0, StatusCode::OK);
+    assert_eq!(log("lc-two-sum", json!({ "grade": "again", "practice": true })).await.0, StatusCode::OK);
+
+    // The schedule, the standing and the plan are exactly as the first try left them.
+    let (_, after) = call(&app, Method::GET, "/api/dsa", None).await;
+    let st = &problem_of(&after, "lc-two-sum")["state"];
+    assert_eq!((st["due"].clone(), st["reps"].clone(), st["solved"].clone(), st["assisted"].clone(), st["last_grade"].clone()), (due, reps, json!(true), json!(false), json!("good")));
+    assert_eq!(after["plan"]["start"], before["plan"]["start"]);
+    let reviews: i64 = sqlx::query_scalar("SELECT count(*) FROM reviews WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
+    assert_eq!(reviews, 1);
+
+    // The streak and this week count the solves (the first try and two practice solves), not the failed repeat.
+    let (_, a) = call(&app, Method::GET, "/api/activity?sections=D", None).await;
+    assert_eq!((a["streak"].as_u64(), a["week_solved"].as_u64()), (Some(1), Some(3)));
+    assert_eq!(a["recent"][0]["detail"].as_str().map(|d| d.starts_with("practice")), Some(true));
+
+    // The solve record keeps each kind apart.
+    let (_, p) = call(&app, Method::GET, "/api/progress", None).await;
+    assert_eq!(
+        p["record"],
+        json!({
+            "first": { "own": 1, "help": 0, "not_yet": 0 },
+            "later": { "own": 0, "help": 0, "not_yet": 0 },
+            "practice": { "own": 1, "help": 1, "not_yet": 1 },
+            "practice_count": 2, "problems_practised": 1, "practice_week": 2
+        })
+    );
+
+    // The problem's own history, oldest first.
+    let (_, pv) = call(&app, Method::GET, "/api/dsa/problems/lc-two-sum/preview", None).await;
+    assert_eq!(
+        pv["history"],
+        json!([{ "kind": "first", "result": "good" }, { "kind": "practice", "result": "good" }, { "kind": "practice", "result": "hard" }, { "kind": "practice", "result": "again" }])
+    );
+
+    // A later scheduled try is counted as a later try, apart from the practice.
+    assert_eq!(log("lc-two-sum", json!({ "grade": "hard" })).await.0, StatusCode::OK);
+    let (_, p) = call(&app, Method::GET, "/api/progress", None).await;
+    assert_eq!(p["record"]["later"], json!({ "own": 0, "help": 1, "not_yet": 0 }));
+}

@@ -101,7 +101,11 @@ pub fn build(
                 (None, _) if r.runs > 0 => ("failing", plural(r.runs, "run")),
                 (None, _) => ("started", "started".to_string()),
             };
-            let detail = if r.kind == "resolve" { format!("re-solve · {detail}") } else { detail };
+            let detail = match r.kind.as_str() {
+                "resolve" => format!("re-solve · {detail}"),
+                "extra" => format!("practice · {detail}"),
+                _ => detail,
+            };
             Some(Recent {
                 problem_id: r.problem_id.clone(),
                 title: p.meta.title.clone(),

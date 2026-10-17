@@ -238,6 +238,51 @@ function Overview({ o }: { o: ProgressOverview }) {
             </tbody>
           </table>
         </Box>
+        <Box title="DSA solve record" sub="How problems were logged. First tries, later tries and practice are counted apart.">
+          <table className="ptable">
+            <thead>
+              <tr>
+                <th />
+                <th className="num">ON MY OWN</th>
+                <th className="num">WITH HELP</th>
+                <th className="num">NOT YET</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                [
+                  ["First try", "a problem's first log", o.record.first],
+                  ["Later tries", "scheduled reviews", o.record.later],
+                  ["Practice", "extra repeats, +1 each", o.record.practice],
+                ] as const
+              ).map(([name, note, r]) => (
+                <tr key={name}>
+                  <td>
+                    {name}
+                    <small className="rec-note">{note}</small>
+                  </td>
+                  <td className="num rec-ok">{r.own}</td>
+                  <td className="num rec-half">{r.help}</td>
+                  <td className="num rec-no">{r.not_yet}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="rec-foot">
+            <div>
+              <span>PRACTICE COUNT</span>
+              <b>{o.record.practice_count}</b>
+            </div>
+            <div>
+              <span>PROBLEMS PRACTISED</span>
+              <b>{o.record.problems_practised}</b>
+            </div>
+            <div>
+              <span>PRACTICE THIS WEEK</span>
+              <b>{o.record.practice_week}</b>
+            </div>
+          </div>
+        </Box>
         <Box title="By section" sub="Solved of written problems, and readiness.">
           <table className="ptable">
             <thead>

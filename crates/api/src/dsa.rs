@@ -340,6 +340,9 @@ fn instead_of_current(catalog: &Catalog, current: Option<&str>, id: &str) -> boo
 #[derive(Deserialize)]
 pub struct LogBody {
     grade: Grade,
+    /// A repeat done for practice: it counts toward the streak and the solve record, and schedules nothing.
+    #[serde(default)]
+    practice: bool,
 }
 
 #[derive(Serialize)]
@@ -359,13 +362,18 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     }
     let settings = crate::settings::srs(&s.db).await?;
     let practice = is_practice(p);
+    // A repeat for practice needs a first log to repeat; the first time is always a first try.
+    let repeat = body.practice && !practice;
+    if repeat && store::attempt_history(&s.db, &id).await?.is_empty() {
+        return Err(ApiError::BadRequest(format!("{id} hasn't been logged yet; log the first try before practising it")));
+    }
     // What was next before this log, to tell "did the next problem" from "did another one instead".
-    let current = if practice { None } else { current_problem(&s, &settings).await? };
-    let scheduled = store::log_attempt(&s.db, &id, body.grade, &settings_for(&s.catalog, &id, &settings), !practice).await?;
+    let current = if practice || repeat { None } else { current_problem(&s, &settings).await? };
+    let scheduled = store::log_attempt(&s.db, &id, body.grade, &settings_for(&s.catalog, &id, &settings), !practice, repeat).await?;
     // The next problem follows from the one just done, unless it was practice, which isn't part of the plan. Doing a
     // different problem of the same topic instead of the next one leaves the next one next: its slot just drops out of
     // the plan and the days after it close up. Doing one from another topic restarts the sequence after it (decision 22).
-    if !practice && !instead_of_current(&s.catalog, current.as_deref(), &id) {
+    if !practice && !repeat && !instead_of_current(&s.catalog, current.as_deref(), &id) {
         store::set_dsa_start(&s.db, &id).await?;
     }
     Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days) }))
