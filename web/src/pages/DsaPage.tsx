@@ -703,6 +703,8 @@ const OUTCOME_COLOR = { solved: "var(--grn)", assisted: "var(--acc)", failing: "
 
 function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activity?: Activity; tracks: TrackSummary[]; showDue: () => void }) {
   const ready = useReady();
+  const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+  const rec = progress.data?.record;
   const shade = (n: number) => (n === 0 ? "var(--raise)" : `color-mix(in oklab, var(--grn) ${Math.min(100, 25 + n * 20)}%, var(--raise))`);
   const byId = new Map(o.problems.map((p) => [p.id, p]));
   const due = o.plan.review_ids.map((id) => byId.get(id)).filter((p): p is DsaProblem => !!p);
@@ -724,6 +726,31 @@ function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activi
             {activity?.week_unassisted ?? 0} of {activity?.week_solved ?? 0}
           </b>
         </div>
+      </div>
+      <div className="s-card s-rv" style={rise(6).style}>
+        <h5>
+          PRACTICE
+          <Link to="/progress" style={{ color: "var(--dim)", font: "inherit", float: "right" }}>
+            solve record ›
+          </Link>
+        </h5>
+        <div className="s-prac">
+          <div>
+            <b>{rec?.practice_count ?? 0}</b>
+            <span>practice solves</span>
+          </div>
+          <div>
+            <b>{rec?.practice_week ?? 0}</b>
+            <span>this week</span>
+          </div>
+          <div>
+            <b>{rec?.problems_practised ?? 0}</b>
+            <span>problems</span>
+          </div>
+        </div>
+        <p className="s-none" style={{ marginTop: 10 }}>
+          {rec ? `${rec.practice.own} on my own · ${rec.practice.help} with help. Counts toward the streak, schedules nothing.` : "Repeat a logged problem from its page."}
+        </p>
       </div>
       <div className="s-card s-rv" style={rise(6).style}>
         <h5>RECENT</h5>
