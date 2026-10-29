@@ -165,11 +165,10 @@ export function DsaPage() {
             </div>
           </section>
 
-          <Goals o={o} f={f} setList={(list) => update({ list })} />
-
           <div className="s-main">
             <div className="cat-main">
               <NextUp o={o} streak={activity.data?.streak ?? 0} />
+              <Goals o={o} f={f} setList={(list) => update({ list })} />
               <div className="s-tools s-rv" style={rise(5).style}>
                 <label className="s-search">
                   <span>⌕</span>

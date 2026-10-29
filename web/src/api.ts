@@ -1002,6 +1002,8 @@ export const api = {
   practice: (pattern: string) => request<PracticeList>("GET", `/dsa/practice/${pattern}`),
   resetDsa: (id: string) => request<{ id: string; archived: boolean }>("DELETE", `/dsa/problems/${id}/log`),
   restoreDsa: (id: string) => request<{ id: string; restored: boolean }>("POST", `/dsa/problems/${id}/restore`),
+  setWhy: (id: string, why: string) => request<{ id: string; why: string }>("POST", `/dsa/problems/${id}/why`, { why }),
+  day: (date: string) => request<{ date: string; solves: { problem_id: string; title: string; slug: string | null; kind: string; assisted: boolean; at: string }[] }>("GET", `/day/${date}`),
   undoDsa: (id: string) => request<{ id: string; undone: boolean }>("POST", `/dsa/problems/${id}/undo`),
   logDsa: (id: string, grade: Grade, practice = false, hints = 0) => request<{ id: string; due: string | null; ideal_days: number | null; undoable: boolean }>("POST", `/dsa/problems/${id}/log`, { grade, practice, hints }),
   review: () => request<ReviewQueue>("GET", "/dsa/review"),

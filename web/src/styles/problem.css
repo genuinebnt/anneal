@@ -135,6 +135,7 @@
 .pp-hist em{font-style:normal;color:var(--dim)}
 
 /* Solve and the log live in one card, so the four outcomes sit above the fold */
-.pp-solve{display:flex;gap:8px}.pp-solve .pp-act{margin:0}.pp-solve .pp-act.pri{flex:1}.pp-solve .pp-act.alt{flex:none;padding-inline:14px}
+.pp-solve{display:flex;gap:8px}.pp-solve .pp-act{margin:0;width:auto}.pp-solve .pp-act.pri{flex:1;min-width:0}.pp-solve .pp-act.alt{flex:none;padding-inline:14px}
 .pp-log .lg{position:relative}.pp-log .lg kbd{position:absolute;top:6px;right:8px;font:500 9.5px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
 .pp-log .lg.sug{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}
+.pp-nrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pp-nrow input{flex:1;min-width:140px;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:0 10px;font:500 12px var(--mono)}.pp-nrow .pp-act{margin:0;flex:1}

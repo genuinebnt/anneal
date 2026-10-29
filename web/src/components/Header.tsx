@@ -1,10 +1,11 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
+import { toast } from "./toasts";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
 // The header has two tiers (docs/mockups/navbar-v2.html). The first answers "where in the product am I": the three areas as one switcher
@@ -104,6 +105,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+    const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]), enabled: current === "dsa" });
     const [paletteOpen, setPaletteOpen] = useState(false);
 
     const rust = useMemo(() => {
@@ -201,6 +203,17 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                                     <span className="hd-chip">
                                         streak <b>{progress.data?.streak ?? "–"}</b> {progress.data?.streak === 1 ? "day" : "days"}
                                     </span>
+                                    {dsa.data && activity.data && (() => {
+                                        const plan = dsa.data.plan;
+                                        const doneToday = activity.data.week[activity.data.week.length - 1]?.solved ?? 0;
+                                        const target = plan.solve_day ? dsa.data.settings.new_per_day : 0;
+                                        const full = target > 0 ? doneToday >= target : plan.due === 0;
+                                        return (
+                                            <Link to="/dsa/review" className={`hd-chip hd-today${full ? " full" : ""}`} title={plan.solve_day ? "New problems done today against today's plan, and the reviews still due" : "A practice or rest day: reviews only"}>
+                                                today {target > 0 ? <span><b>{doneToday}</b>/{target} new</span> : <span>no new</span>}{plan.due > 0 ? <> · <b>{plan.due}</b> due</> : null}
+                                            </Link>
+                                        );
+                                    })()}
                                 </>
                             )}
                             {current === "rust" && (
@@ -426,6 +439,7 @@ type Hit = { key: string; label: string; kind: string; color: string; go: () => 
 /** Search: pages, tracks, course stages and DSA problems by name. It reads what the app already loads. */
 function Palette({ onClose }: { onClose: () => void }) {
     const nav = useNavigate();
+    const qc = useQueryClient();
     const tracks = useQuery({ queryKey: ["tracks"], queryFn: api.tracks });
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
@@ -449,6 +463,12 @@ function Palette({ onClose }: { onClose: () => void }) {
             { key: "p-courses", label: "BusTub course", kind: "Page", color: "var(--grn)", go: go(() => nav({ to: "/courses" })) },
             { key: "p-progress", label: "Progress", kind: "Page", color: "var(--fg)", go: go(() => nav({ to: "/progress" })) },
         ];
+        hits.push(
+            { key: "a-settings", label: "Settings", kind: "Action", color: "var(--fg)", go: go(() => nav({ to: "/settings" })) },
+            { key: "a-help", label: "Keyboard shortcuts", kind: "Action", color: "var(--fg)", go: go(() => window.dispatchEvent(new Event("anneal:help"))) },
+            { key: "a-backup", label: "Download a backup of everything", kind: "Action", color: "var(--fg)", go: go(() => window.location.assign("/api/export")) },
+            { key: "a-theme", label: "Change the theme (dark, light, system)", kind: "Action", color: "var(--fg)", go: go(() => { const next = THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length]!; applyTheme(next); }) },
+        );
         for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", color: "var(--vio)", go: go(() => nav({ to: "/t/$track", params: { track: t.slug } })) });
         for (const p of course.data?.projects ?? [])
             for (const m of p.modules)
@@ -462,6 +482,30 @@ function Palette({ onClose }: { onClose: () => void }) {
         const needle = q.trim().toLowerCase();
         if (!needle) return all.slice(0, 10);
         const words = needle.split(/\s+/);
+        // "log two sum": the four outcomes for the best matches, logged straight from here
+        if (words[0] === "log" && words.length > 1) {
+            const rest = words.slice(1);
+            const hits: Hit[] = [];
+            for (const p of (dsa.data?.problems ?? []).filter((x) => rest.every((w) => `${x.title} ${x.number}`.toLowerCase().includes(w))).slice(0, 2))
+                for (const [grade, label] of [["good", "on my own"], ["hard", "with help"], ["again", "attempted"], ["easy", "instant"]] as const)
+                    hits.push({
+                        key: `log-${p.id}-${grade}`,
+                        label: `Log ${p.title}: ${label}`,
+                        kind: "Log",
+                        color: "var(--acc)",
+                        go: () => {
+                            onClose();
+                            void api.logDsa(p.id, grade).then(
+                                () => {
+                                    for (const key of ["dsa", "activity", "tracks", "progress", "stats", "reviews", "dsa-preview", "practice"]) void qc.invalidateQueries({ queryKey: [key] });
+                                    toast("ok", `${p.title}: ${label}`, "Logged. Open its page to undo.");
+                                },
+                                (e: Error) => toast("er", "Couldn't log it", e.message),
+                            );
+                        },
+                    });
+            if (hits.length) return hits;
+        }
         return all.filter((h) => words.every((w) => `${h.label} ${h.kind}`.toLowerCase().includes(w))).slice(0, 14);
     }, [all, q]);
     useEffect(() => setSel(0), [q]);

@@ -8,6 +8,7 @@ import { Skeleton } from "../components/Skeleton";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
+import { getPref, setPref } from "../prefs";
 import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
 
 const LIST_NAME = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "NeetCode All", practice: "Practice" };
@@ -26,6 +27,48 @@ const RESULT_WORD = { good: "on my own", hard: "with help", again: "attempted" }
 const ORD = (n: number) => (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 
 const dotOf = (p: DsaProblem) => (p.state.last_grade ? (p.state.last_grade === "again" ? "fail" : p.state.last_grade === "hard" ? "help" : "solo") : "");
+
+/** A link to the owner's own notes for this problem (Notion, Obsidian, a file URL). Only the link is kept, as a preference, so it follows
+ *  the owner to another laptop; anneal stores no notes. */
+function NotesLink({ id }: { id: string }) {
+    const key = `notes:${id}`;
+    const [url, setUrl] = useState(() => getPref(key, ""));
+    const [edit, setEdit] = useState(false);
+    const [draft, setDraft] = useState(url);
+    useEffect(() => {
+        const u = getPref(key, "");
+        setUrl(u);
+        setDraft(u);
+        setEdit(false);
+    }, [key]);
+    const ok = draft.trim() === "" || /^https?:\/\//i.test(draft.trim());
+    const save = () => {
+        if (!ok) return;
+        setPref(key, draft.trim());
+        setUrl(draft.trim());
+        setEdit(false);
+    };
+    return (
+        <div className="pp-card pp-notes-card">
+            <h3><span>MY NOTES</span><span>a link, kept here</span></h3>
+            {edit ? (
+                <div className="pp-nrow">
+                    <input id="pp-notes-url" aria-label="Link to my notes" placeholder="https://…" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") setEdit(false); }} autoFocus />
+                    <button className="pp-link" disabled={!ok} onClick={save}>Save</button>
+                    <button className="pp-link" onClick={() => { setDraft(url); setEdit(false); }}>Cancel</button>
+                    {!ok && <small style={{ color: "var(--bad)" }}>Start with http:// or https://</small>}
+                </div>
+            ) : url ? (
+                <div className="pp-nrow">
+                    <a className="pp-act alt" href={url} target="_blank" rel="noreferrer">Open my notes ↗</a>
+                    <button className="pp-link" onClick={() => setEdit(true)}>Edit</button>
+                </div>
+            ) : (
+                <button className="pp-link" onClick={() => setEdit(true)}>+ Link to my notes</button>
+            )}
+        </div>
+    );
+}
 
 /** The owner's own solutions: any number, kept so they can be read later. Written in the same editor as the workspace, so Vim mode works. */
 function MySolutions({ p, template }: { p: DsaProblem; template: string }) {
@@ -430,6 +473,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                             )}
                         </div>
                     )}
+
+                    <NotesLink id={p.id} />
 
                     <FocusTimer suggest={MINUTES[p.difficulty]} />
 

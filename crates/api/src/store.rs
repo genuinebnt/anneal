@@ -499,8 +499,8 @@ pub async fn restore_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<bool
         sqlx::query_as("SELECT id, attempts, review FROM reset_archive WHERE problem_id = $1 AND restored_at IS NULL ORDER BY id DESC LIMIT 1").bind(problem_id).fetch_optional(&mut *tx).await?;
     let Some((id, attempts, review)) = entry else { return Ok(false) };
     sqlx::query(
-        "INSERT INTO attempts (problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted)
-         SELECT problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted
+        "INSERT INTO attempts (problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted, why)
+         SELECT problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted, why
          FROM jsonb_populate_recordset(NULL::attempts, $1) ORDER BY id",
     )
     .bind(attempts)

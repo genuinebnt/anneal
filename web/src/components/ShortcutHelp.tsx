@@ -62,8 +62,13 @@ export function ShortcutHelp() {
                 setOpen((o) => !o);
             } else if (e.key === "Escape") setOpen(false);
         };
+        const show = () => setOpen(true);
         window.addEventListener("keydown", f);
-        return () => window.removeEventListener("keydown", f);
+        window.addEventListener("anneal:help", show);
+        return () => {
+            window.removeEventListener("keydown", f);
+            window.removeEventListener("anneal:help", show);
+        };
     }, []);
     useEffect(() => {
         if (open) close.current?.focus();

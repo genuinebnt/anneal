@@ -386,6 +386,28 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days), undoable }))
 }
 
+#[derive(Deserialize)]
+pub struct WhyBody {
+    why: String,
+}
+
+/// `POST .../why`: says why the latest attempt of a problem went badly (`idea`, `implementation`, `edge_cases` or
+/// `complexity`). Optional; it changes nothing about the schedule.
+pub async fn why(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<WhyBody>) -> ApiResult<Json<serde_json::Value>> {
+    let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
+    if p.dsa.is_none() {
+        return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
+    }
+    if !["idea", "implementation", "edge_cases", "complexity"].contains(&body.why.as_str()) {
+        return Err(ApiError::BadRequest("why is one of idea, implementation, edge_cases, complexity".into()));
+    }
+    let set = sqlx::query("UPDATE attempts SET why = $2 WHERE id = (SELECT id FROM attempts WHERE problem_id = $1 ORDER BY id DESC LIMIT 1)").bind(&id).bind(&body.why).execute(&s.db).await?.rows_affected();
+    if set == 0 {
+        return Err(ApiError::NotFound(format!("no attempt of {id} to give a reason for")));
+    }
+    Ok(Json(serde_json::json!({ "id": id, "why": body.why })))
+}
+
 /// Takes back the latest log of a problem (the review goes back as it was). `undone` is false when it cannot be done.
 pub async fn undo(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
     let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;

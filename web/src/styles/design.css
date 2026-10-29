@@ -431,3 +431,5 @@ a.tr:hover{background:var(--sel)}
 
 /* a clipped last item reads as "scrolls" on a phone */
 @media (max-width:900px){.nav{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 28px),transparent)}}
+
+.hd-today{text-decoration:none}.hd-today b{color:var(--fg)}.hd-today.full{border-color:color-mix(in oklab,var(--grn) 50%,var(--line2));color:var(--grn)}.hd-today:hover{border-color:var(--dim)}

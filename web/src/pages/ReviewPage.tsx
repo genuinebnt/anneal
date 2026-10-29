@@ -49,6 +49,37 @@ const SORTS: [SortKey, string][] = [
   ["pattern", "Pattern"],
 ];
 
+/** The reviews that are not due yet, to do early; "weak spots only" narrows them to the ones forgotten twice or likely forgotten. */
+function Ahead({ items, today, onPick, open = false }: { items: ReviewItem[]; today: string; onPick: (id: string) => void; open?: boolean }) {
+  const [weakOnly, setWeakOnly] = useState(false);
+  if (items.length === 0) return null;
+  const shown = weakOnly ? items.filter(isWeak) : items;
+  return (
+    <details className="rv-ahead" open={open || undefined}>
+      <summary>Review ahead · {items.length} more ›</summary>
+      <label className="rv-weak">
+        <input type="checkbox" checked={weakOnly} onChange={(e) => setWeakOnly(e.target.checked)} /> Weak spots only <small>({items.filter(isWeak).length}: lapsed twice or more, or under 70% recall)</small>
+      </label>
+      <div className="rv-q">
+        {shown.map((it) => (
+          <button key={it.problem.id} className="rv-qi pick" onClick={() => onPick(it.problem.id)}>
+            <span className="n">+</span>
+            <span className="t">
+              {it.problem.title}
+              <small><i className={`dp ${it.problem.difficulty}`} />{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, today)}</small>
+            </span>
+            <span className={`rc ${it.recall < 0.7 ? "lo" : it.recall < 0.85 ? "mid" : "hi"}`}>{Math.round(it.recall * 100)}%</span>
+          </button>
+        ))}
+      </div>
+      <span className="rv-note">Reviewing early still counts. It moves the next date out a little less.</span>
+    </details>
+  );
+}
+
+/** A weak spot: forgotten at least twice, or unlikely to be recalled today. */
+const isWeak = (i: ReviewItem) => i.problem.state.lapses >= 2 || i.recall < 0.7;
+
 /** How a review stands against today: "3 days overdue", "due today", "due in 2 days". */
 function dueLabel(due: string, today: string): string {
   const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${due}T00:00`)) / 864e5);
@@ -203,7 +234,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
   if (queue.items.length === 0 && results.length === 0 && pending.length === 0) return <Empty queue={queue} ahead={queue.ahead} onPick={pick} />;
   if (!item) return <Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} onUndo={last ? () => undo.mutate(last.id) : undefined} />;
 
-  const waiting = queue.ahead.filter((i) => !pending.includes(i.problem.id) && !results.some((r) => r.id === i.problem.id));
+  const waitingAll = queue.ahead.filter((i) => !pending.includes(i.problem.id) && !results.some((r) => r.id === i.problem.id));
   const timed = results.filter((r) => r.seconds > 0);
   const average = timed.length ? Math.round(timed.reduce((n, r) => n + r.seconds, 0) / timed.length) : null;
   return (
@@ -254,24 +285,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
                 );
               })}
             </div>
-            {waiting.length > 0 && (
-              <details className="rv-ahead">
-                <summary>Review ahead · {waiting.length} more ›</summary>
-                <div className="rv-q">
-                  {waiting.map((it) => (
-                    <button key={it.problem.id} className="rv-qi pick" onClick={() => pick(it.problem.id)}>
-                      <span className="n">+</span>
-                      <span className="t">
-                        {it.problem.title}
-                        <small><i className={`dp ${it.problem.difficulty}`} />{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, queue.today)}</small>
-                      </span>
-                      <span className={`rc ${it.recall < 0.7 ? "lo" : it.recall < 0.85 ? "mid" : "hi"}`}>{Math.round(it.recall * 100)}%</span>
-                    </button>
-                  ))}
-                </div>
-                <span className="rv-note">Reviewing early still counts. It moves the next date out a little less.</span>
-              </details>
-            )}
+            <Ahead items={waitingAll} today={queue.today} onPick={pick} />
           </div>
         </aside>
         <div className="rv-card" key={item.problem.id}>
@@ -436,20 +450,7 @@ function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem
           )}
           {queue.solve_day && queue.next_new ? " Today is a solve day, so your next new problem is ready." : ""}
         </p>
-        {ahead.length > 0 && (
-          <details className="rv-ahead" open>
-            <summary>Review ahead · {ahead.length} coming up ›</summary>
-            <div className="rv-q">
-              {ahead.map((it) => (
-                <button key={it.problem.id} className="rv-qi pick" onClick={() => onPick(it.problem.id)}>
-                  <span className="n">+</span>
-                  <span className="t">{it.problem.title}<small>{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, queue.today)}</small></span>
-                  <span className="rc">{Math.round(it.recall * 100)}%</span>
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
+        <Ahead items={ahead} today={queue.today} onPick={onPick} open />
         <Next queue={queue} />
       </div>
     </div>

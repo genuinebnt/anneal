@@ -101,3 +101,9 @@
 /* The course map's hover tooltips are placed past the viewport edge for nodes near it: clip them instead of widening the page. */
 .k-root{overflow-x:clip}
 .s-root .s-next.s-click{cursor:pointer}.s-root .s-next.s-click:hover{border-color:var(--s-ac)}
+
+/* the DSA home: a shorter headline, so the Next up card is in view without scrolling (the goals sit under it) */
+.s-root.s-dsa .s-hero{padding:26px 0 20px}
+.s-root.s-dsa h1{font-size:clamp(28px,3.4vw,42px);max-width:none;margin:6px 0 8px}
+.s-root.s-dsa .s-lead{font-size:14.5px}
+.s-root.s-dsa .d-goals{padding-top:0}

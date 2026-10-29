@@ -15,13 +15,16 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
   const [action, setAction] = useState<{ label: string; run: () => void } | null>(null);
   // The problem to do next, offered in the toast once the overview has been refreshed after a log.
   const [next, setNext] = useState<{ title: string; slug: string } | null>(null);
+  // After Attempted or With help: optionally say why (one click). It is kept with the attempt and feeds the weak spots.
+  const [whyFor, setWhyFor] = useState<DsaProblem | null>(null);
   const timer = useRef<number>(0);
   const say = (m: string, act: { label: string; run: () => void } | null = null) => {
     setMessage(m);
     setAction(act);
     setNext(null);
+    setWhyFor(null);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); setNext(null); }, act ? 8000 : 3200);
+    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); setNext(null); setWhyFor(null); }, act ? 9000 : 3200);
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const m = useMutation({
@@ -35,6 +38,7 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
             : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
         r.undoable ? { label: "Undo", run: () => u.mutate(p) } : null,
       );
+      if (!practice && (grade === "again" || grade === "hard")) setWhyFor(p);
       for (const key of ["activity", "tracks", "reviews", "progress", "stats", "dsa-preview", "practice"]) void qc.invalidateQueries({ queryKey: [key] });
       // After the overview is fresh, say which problem is next (never the one just logged)
       if (!practice) {
@@ -85,6 +89,22 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
           <Link className="d-next" to="/d/$slug" params={{ slug: next.slug }}>
             Next up: {next.title} ›
           </Link>
+        )}
+        {whyFor && (
+          <span className="d-why" role="group" aria-label="Why did it go badly?">
+            Why?
+            {(["idea", "implementation", "edge_cases", "complexity"] as const).map((w) => (
+              <button
+                key={w}
+                onClick={() => {
+                  const p = whyFor;
+                  void api.setWhy(p.id, w).then(() => say(`${p.title}: noted, ${w.replace("_", " ")}.`), () => undefined);
+                }}
+              >
+                {w.replace("_", " ")}
+              </button>
+            ))}
+          </span>
         )}
         {action && (
           <button className="d-undo" disabled={u.isPending || rs.isPending} onClick={action.run}>

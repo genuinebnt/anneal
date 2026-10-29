@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Counted, type ProgressOverview, type ProgressStats, type ReviewsView } from "../api";
@@ -47,10 +47,14 @@ function Box({ title, sub, children, chart }: { title: string; sub?: ReactNode; 
 
 // ---------------------------------------------------------------- overview
 
+/** A local date as `2026-10-29`. */
+const isoOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const RAMP = [0, 30, 50, 72, 100];
 const shade = (n: number) => (n === 0 ? "var(--line2)" : `color-mix(in oklab, var(--acc) ${RAMP[n <= 1 ? 1 : n <= 3 ? 2 : n <= 6 ? 3 : 4]}%, var(--panel))`);
 
 function Heatmap({ start, counts }: { start: string; counts: number[] }) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const dayQ = useQuery({ queryKey: ["day", picked], queryFn: () => api.day(picked!), enabled: !!picked });
   const cell = 12, gap = 3, top = 18, left = 28;
   const weeks = Math.ceil(counts.length / 7);
   const w = left + weeks * (cell + gap), h = top + 7 * (cell + gap);
@@ -83,11 +87,21 @@ function Heatmap({ start, counts }: { start: string; counts: number[] }) {
           </text>
         ))}
         {counts.map((n, i) => (
-          <rect key={i} className="d" x={left + Math.floor(i / 7) * (cell + gap)} y={top + (i % 7) * (cell + gap)} width={cell} height={cell} rx="2" fill={shade(n)}>
+          <rect key={i} className={`d${picked === isoOf(dateOf(i)) ? " pick" : ""}`} x={left + Math.floor(i / 7) * (cell + gap)} y={top + (i % 7) * (cell + gap)} width={cell} height={cell} rx="2" fill={shade(n)} style={{ cursor: n ? "pointer" : "default" }} onClick={() => n && setPicked(picked === isoOf(dateOf(i)) ? null : isoOf(dateOf(i)))}>
             <title>{`${dateOf(i).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}: ${n} solved`}</title>
           </rect>
         ))}
       </svg>
+      {picked && (
+        <div className="heat-day" role="status">
+          <b>{new Date(`${picked}T00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</b>
+          {dayQ.isLoading && <span> · loading…</span>}
+          {dayQ.data && !dayQ.data.solves.length && <span> · nothing solved</span>}
+          {dayQ.data?.solves.map((s, i) => (
+            <span key={i}> · {s.slug ? <Link to="/d/$slug" params={{ slug: s.slug }}>{s.title}</Link> : s.title}{s.assisted ? " (with help)" : ""}{s.kind === "extra" ? " (practice)" : ""}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

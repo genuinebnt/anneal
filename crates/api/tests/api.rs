@@ -2086,3 +2086,24 @@ async fn a_log_keeps_how_many_hints_were_opened(db: PgPool) {
     let rows: Vec<(String, i32)> = sqlx::query_as("SELECT problem_id, hints_revealed FROM attempts ORDER BY id").fetch_all(&db).await.unwrap();
     assert_eq!(rows, [("lc-two-sum".to_owned(), 3), ("lc-valid-palindrome".to_owned(), 0)]);
 }
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_reason_is_kept_with_the_latest_attempt_and_a_day_lists_what_was_solved(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "again" }))).await;
+    let (status, _) = call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/why", Some(json!({ "why": "edge_cases" }))).await;
+    assert_eq!(status, StatusCode::OK);
+    let why: (Option<String>,) = sqlx::query_as("SELECT why FROM attempts WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
+    assert_eq!(why.0.as_deref(), Some("edge_cases"));
+    assert_eq!(call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/why", Some(json!({ "why": "bad mood" }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/why", Some(json!({ "why": "idea" }))).await.0, StatusCode::NOT_FOUND, "no attempt to give a reason for");
+
+    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "good" }))).await;
+    let today = chrono::Local::now().date_naive();
+    let (status, day) = call(&app, Method::GET, &format!("/api/day/{today}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let titles: Vec<&str> = day["solves"].as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap()).collect();
+    assert_eq!(titles.len(), 1, "the attempted one is not a solve: {day}");
+    assert_eq!(call(&app, Method::GET, "/api/day/not-a-date", None).await.0, StatusCode::BAD_REQUEST);
+}

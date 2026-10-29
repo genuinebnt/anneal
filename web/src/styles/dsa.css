@@ -291,3 +291,4 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 .d-legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font:500 11px var(--mono);color:var(--dim);margin:0 0 12px}.d-legend>span{display:inline-flex;align-items:center;gap:6px}.d-legend .d-st{width:16px;height:16px;flex:none}
 .d-next{font:700 12px var(--mono);color:var(--acc);white-space:nowrap}.d-next:hover{color:var(--fg)}
 .d-toast{max-width:min(92vw,720px);flex-wrap:wrap}
+.d-why{display:inline-flex;gap:6px;align-items:center;font:500 11.5px var(--mono);color:var(--dim)}.d-why button{height:24px;padding:0 9px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font:600 11px var(--mono)}.d-why button:hover{border-color:var(--acc);color:var(--fg)}

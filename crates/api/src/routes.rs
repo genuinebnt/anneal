@@ -58,6 +58,21 @@ pub async fn activity(
     Ok(Json(activity::build(&s.catalog, &sections, &progress, &rows, activity::today(), count_premium, &is_solve_day)))
 }
 
+/// `GET /api/day/{date}`: what was solved on a day (a local date, `2026-10-29`), for the heatmap's click.
+pub async fn day(State(s): State<AppState>, Path(date): Path<String>) -> ApiResult<Json<Value>> {
+    let day: chrono::NaiveDate = date.parse().map_err(|_| ApiError::BadRequest("a date looks like 2026-10-29".into()))?;
+    let rows = store::activity(&s.db).await?;
+    let solves: Vec<Value> = rows
+        .iter()
+        .filter(|r| r.solved_at.is_some_and(|t| t.with_timezone(&chrono::Local).date_naive() == day))
+        .map(|r| {
+            let (title, slug) = s.catalog.problem(&r.problem_id).map_or((r.problem_id.clone(), None), |(_, p)| (p.meta.title.clone(), p.dsa.as_ref().map(|d| d.slug.clone())));
+            json!({ "problem_id": r.problem_id, "title": title, "slug": slug, "kind": r.kind, "assisted": r.assisted, "at": r.solved_at })
+        })
+        .collect();
+    Ok(Json(json!({ "date": day, "solves": solves })))
+}
+
 pub async fn progress(State(s): State<AppState>) -> ApiResult<Json<Overview>> {
     let rows = store::activity(&s.db).await?;
     let focus = store::focus(&s.db).await?;
