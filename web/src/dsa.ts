@@ -68,7 +68,7 @@ export const MARK_GLYPH = { solo: "✓", help: "½", fail: "✗", "": "" } as co
 
 export const GRADES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
   { grade: "good", glyph: "✓", label: "Solved on my own", cls: "solo" },
-  { grade: "hard", glyph: "½", label: "Solved with a hint", cls: "" },
+  { grade: "hard", glyph: "½", label: "Solved with help", cls: "" },
   { grade: "again", glyph: "✗", label: "Attempted, not solved", cls: "fail" },
 ];
 

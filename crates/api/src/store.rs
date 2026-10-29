@@ -351,6 +351,89 @@ pub async fn attempt_history(db: &PgPool, problem_id: &str) -> sqlx::Result<Vec<
         .await
 }
 
+/// What undoing a problem's latest log changes besides deleting that attempt.
+enum Undo {
+    /// A repeat for practice or a problem without reviews: the schedule was not touched.
+    AttemptOnly,
+    /// The first log: the review it created goes too.
+    DropReview,
+    /// A later log: the review goes back to the state the log before it left.
+    Restore { index: i32, step: i32, due_at: DateTime<Utc>, stability: f32, difficulty: f32, at: DateTime<Utc>, grade: String, result: String, lapse: i32 },
+}
+
+/// The latest attempt of a problem and what undoing it would do, or `None` when there is nothing to undo or the review
+/// history does not hold enough to restore the earlier state (reviews logged before FSRS).
+async fn undo_plan(db: &PgPool, problem_id: &str) -> sqlx::Result<Option<(i64, Undo)>> {
+    let latest: Option<(i64, String)> = sqlx::query_as("SELECT id, kind FROM attempts WHERE problem_id = $1 ORDER BY id DESC LIMIT 1").bind(problem_id).fetch_optional(db).await?;
+    let Some((attempt, kind)) = latest else { return Ok(None) };
+    let history: Option<Json<Vec<serde_json::Value>>> = sqlx::query_scalar("SELECT history FROM reviews WHERE problem_id = $1").bind(problem_id).fetch_optional(db).await?;
+    let plan = match history {
+        _ if kind == "extra" => Some(Undo::AttemptOnly),
+        None => Some(Undo::AttemptOnly),
+        Some(Json(h)) if h.len() <= 1 => Some(Undo::DropReview),
+        Some(Json(h)) => restore_from(&h),
+    };
+    Ok(plan.map(|u| (attempt, u)))
+}
+
+fn restore_from(h: &[serde_json::Value]) -> Option<Undo> {
+    let (removed, prev) = (&h[h.len() - 1], &h[h.len() - 2]);
+    let at = |v: &serde_json::Value| v.get("at")?.as_str()?.parse::<DateTime<Utc>>().ok();
+    let due = prev.get("due")?.as_str()?.parse::<chrono::NaiveDate>().ok()?;
+    let due_at = chrono::TimeZone::from_local_datetime(&chrono::Local, &due.and_hms_opt(6, 0, 0)?).earliest()?.with_timezone(&Utc);
+    Some(Undo::Restore {
+        index: i32::try_from(h.len() - 1).ok()?,
+        step: i32::try_from(prev.get("step")?.as_i64()?).ok()?,
+        due_at,
+        stability: prev.get("stability")?.as_f64()? as f32,
+        difficulty: prev.get("difficulty")?.as_f64()? as f32,
+        at: at(prev)?,
+        grade: prev.get("grade")?.as_str()?.to_owned(),
+        result: prev.get("result")?.as_str()?.to_owned(),
+        lapse: i32::from(removed.get("grade")?.as_str()? == "again"),
+    })
+}
+
+/// Whether the latest log of a problem can be taken back.
+pub async fn can_undo(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
+    Ok(undo_plan(db, problem_id).await?.is_some())
+}
+
+/// Takes back the latest log of a problem: deletes that attempt and puts the review back as it was before it.
+/// Returns false, changing nothing, when it cannot be done cleanly.
+pub async fn undo_log(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
+    let Some((attempt, undo)) = undo_plan(db, problem_id).await? else { return Ok(false) };
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM attempts WHERE id = $1").bind(attempt).execute(&mut *tx).await?;
+    match undo {
+        Undo::AttemptOnly => {}
+        Undo::DropReview => {
+            sqlx::query("DELETE FROM reviews WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
+        }
+        Undo::Restore { index, step, due_at, stability, difficulty, at, grade, result, lapse } => {
+            sqlx::query(
+                "UPDATE reviews SET step = $2, due_at = $3, last_result = $4, history = history - $5, stability = $6, difficulty = $7,
+                     last_review = $8, last_grade = $9, reps = GREATEST(reps - 1, 0), lapses = GREATEST(lapses - $10, 0), updated_at = now()
+                 WHERE problem_id = $1",
+            )
+            .bind(problem_id)
+            .bind(step)
+            .bind(due_at)
+            .bind(result)
+            .bind(index)
+            .bind(stability)
+            .bind(difficulty)
+            .bind(at)
+            .bind(grade)
+            .bind(lapse)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(true)
+}
+
 /// Forgets everything logged for a problem: its attempts (and their runs) and its review. What the owner wrote
 /// (saved solutions) and the time spent are kept.
 pub async fn reset_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<()> {

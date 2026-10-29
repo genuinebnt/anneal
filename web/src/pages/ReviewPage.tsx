@@ -184,11 +184,10 @@ const ago = (iso: string | null, today: string) => {
   const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${iso}T00:00`)) / 864e5);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 };
-const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with a hint", again: "✗ attempted" };
+const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "✗ attempted" };
 
 function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
   const p = item.problem;
-  const [sketch, setSketch] = useState("");
   const s = p.state;
   return (
     <>
@@ -211,7 +210,6 @@ function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today
           <span>06:00 suggested</span>
         </div>
       </div>
-      <textarea className="rv-sketch" value={sketch} onChange={(e) => setSketch(e.target.value)} placeholder="Sketch the skeleton here. It is only a scratchpad: it isn't saved." aria-label="Sketch" spellCheck={false} />
       <div className="rv-row">
         <button className="rv-go" onClick={reveal}>
           Show the approach <kbd>Space</kbd>
@@ -264,7 +262,7 @@ function Check({ item, spent, lesson, loading, tab, setTab, grade, busy, error }
       ) : (
         !loading && (
           <div className="rv-reveal">
-            <p style={{ margin: 0 }}>No written page yet. Check your sketch against the problem.</p>
+            <p style={{ margin: 0 }}>No written page yet. Check your own notes against the problem.</p>
             <div className="rv-row">
               <Link className="rv-ghost" to="/d/$slug" params={{ slug: p.slug }}>The problem page</Link>
               <a className="rv-ghost" href={leetcode(p.slug)} target="_blank" rel="noreferrer">LeetCode ↗</a>

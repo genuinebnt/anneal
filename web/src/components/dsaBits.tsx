@@ -5,17 +5,20 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type DsaCompany, type DsaProblem, type Grade } from "../api";
 import { DIFF, markOf, niceDate } from "../dsa";
 
-const SAID: Record<Grade, string> = { good: "on your own", hard: "with a hint", again: "attempted", easy: "instant" };
+const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "attempted", easy: "instant" };
 
 /** Logs a problem and says when it comes back. Render `toast` once on the page. */
 export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; reset: (p: DsaProblem) => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
+  // The problem whose log the toast can take back, while the toast is up.
+  const [undoable, setUndoable] = useState<DsaProblem | null>(null);
   const timer = useRef<number>(0);
-  const say = (m: string) => {
+  const say = (m: string, undo: DsaProblem | null = null) => {
     setMessage(m);
+    setUndoable(undo);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setMessage(null), 3200);
+    timer.current = window.setTimeout(() => { setMessage(null); setUndoable(null); }, undo ? 8000 : 3200);
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const m = useMutation({
@@ -27,6 +30,7 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
           : r.due
             ? `${p.title}: ${SAID[grade]}. Back for review ${today ? niceDate(r.due, today) : r.due}.`
             : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
+        r.undoable ? p : null,
       );
       for (const key of ["dsa", "dsa-preview", "practice", "activity", "tracks", "reviews", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
     },
@@ -40,13 +44,26 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
     },
     onError: (e: Error) => say(`Couldn't reset it: ${e.message}`),
   });
+  const u = useMutation({
+    mutationFn: (p: DsaProblem) => api.undoDsa(p.id),
+    onSuccess: (r, p) => {
+      say(r.undone ? `${p.title}: log undone.` : `${p.title}: that log can't be undone. Use Reset progress on its page.`);
+      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (e: Error) => say(`Couldn't undo it: ${e.message}`),
+  });
   return {
     log: (p, grade, practice = false) => m.mutate({ p, grade, practice }),
     reset: (p) => r.mutate(p),
-    busy: m.isPending || r.isPending,
+    busy: m.isPending || r.isPending || u.isPending,
     toast: message ? (
       <div className="d-toast" role="status">
         {message}
+        {undoable && (
+          <button className="d-undo" disabled={u.isPending} onClick={() => u.mutate(undoable)}>
+            Undo
+          </button>
+        )}
       </div>
     ) : null,
   };
@@ -58,7 +75,7 @@ export function Mark({ p, today }: { p: DsaProblem; today: string }) {
   const mark = markOf(p);
   const started = !!p.state.last_grade;
   const due = started && !!p.state.due && p.state.due <= today && mark !== "fail";
-  const label = started ? (due ? "Due for review" : mark === "fail" ? "Attempted" : mark === "help" ? "Solved with a hint" : "Solved") : "Not started";
+  const label = started ? (due ? "Due for review" : mark === "fail" ? "Attempted" : mark === "help" ? "Solved with help" : "Solved") : "Not started";
   const kind = due ? "due" : mark || "none";
   return (
     <span className={`d-st ${mark} k-${kind}`} title={label} role="img" aria-label={label}>

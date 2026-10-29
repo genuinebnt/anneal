@@ -26,8 +26,6 @@
 .rv-timer .tk{height:6px;border-radius:3px;background:var(--raise);overflow:hidden}.rv-timer .tk i{display:block;height:100%;background:var(--vio)}
 .rv-timer .lb{display:flex;justify-content:space-between;font:500 11.5px var(--mono);color:var(--mut)}
 .rv-timer .lb{align-items:center}.rv-timer .lb button{font:600 11.5px var(--mono);color:var(--vio)}.rv-timer .lb button:hover{color:var(--fg)}
-.rv-sketch{width:100%;min-height:120px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--fg);padding:12px;font:13px/1.6 var(--mono);resize:vertical;outline:none}
-.rv-sketch:focus{border-color:var(--acc)}
 .rv-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .rv-row .sp{flex:1}
 .rv-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;border-radius:9px;background:var(--acc);color:var(--on-acc);font:700 14px var(--sans);padding:0 20px;text-align:center}

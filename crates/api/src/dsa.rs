@@ -352,9 +352,11 @@ pub struct Logged {
     due: Option<NaiveDate>,
     /// Days until then, before it was moved to a day with room.
     ideal_days: Option<f32>,
+    /// Whether `POST .../undo` can take this log back.
+    undoable: bool,
 }
 
-/// Records how a problem went: `again` (attempted, not solved: no streak), `hard` (with a hint), `good` (on my own) or `easy` (instant).
+/// Records how a problem went: `again` (attempted, not solved: no streak), `hard` (with help), `good` (on my own) or `easy` (instant).
 pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<LogBody>) -> ApiResult<Json<Logged>> {
     let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
     if p.dsa.is_none() {
@@ -376,7 +378,17 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     if !practice && !repeat && !instead_of_current(&s.catalog, current.as_deref(), &id) {
         store::set_dsa_start(&s.db, &id).await?;
     }
-    Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days) }))
+    let undoable = store::can_undo(&s.db, &id).await?;
+    Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days), undoable }))
+}
+
+/// Takes back the latest log of a problem (the review goes back as it was). `undone` is false when it cannot be done.
+pub async fn undo(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
+    if p.dsa.is_none() {
+        return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
+    }
+    Ok(Json(serde_json::json!({ "id": id, "undone": store::undo_log(&s.db, &id).await? })))
 }
 
 /// Forgets a problem's log: back to "not started", with no review scheduled. Saved solutions stay.

@@ -124,6 +124,7 @@
 .d-sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg);transition:left .15s}
 .d-sw.on{background:var(--ca)}.d-sw.on::after{left:16px;background:var(--on-acc)}
 .d-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:10px 16px;font:500 12.5px var(--mono);color:var(--fg);box-shadow:0 12px 32px var(--shadow);z-index:60}
+.d-toast{display:flex;align-items:center;gap:14px}.d-undo{font:700 12px var(--mono);color:var(--acc);padding:2px 4px}.d-undo:hover{color:var(--fg)}
 .d-tip{position:fixed;pointer-events:none;background:var(--raise);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:500 11px var(--mono);color:var(--fg);box-shadow:0 8px 20px var(--shadow);z-index:50;max-width:320px}
 @media (max-width:900px){.d-goals{grid-template-columns:1fr}.d-pcard{grid-template-columns:34px minmax(0,1fr)}.d-pside{grid-column:2;flex-direction:row;align-items:center;justify-content:space-between}}
 

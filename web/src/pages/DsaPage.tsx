@@ -428,6 +428,11 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
         </span>
         <span className="s-pill">{patternName(next.pattern)}</span>
         <span className="s-pill">~{MINUTES[next.difficulty]}m</span>
+        {next.state.last_grade === "again" && (
+          <span className="s-pill" style={{ color: "var(--bad)" }}>
+            attempted{next.state.due ? `, retry ${niceDate(next.state.due, o.today)}` : ""}
+          </span>
+        )}
         {next.premium && (
           <span className="s-pill" style={{ color: "var(--warn)" }}>
             premium

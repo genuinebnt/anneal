@@ -14,7 +14,7 @@ test("the whole Next up card opens the problem page, the LeetCode button still g
 test("a problem is logged four ways, Attempted is shown as attempted, and Reset takes it back to not started", async ({ page }) => {
     await page.goto("/d/two-sum");
     const log = page.locator(".pp-log");
-    await expect(log.locator(".lg")).toHaveText([/On my own/, /With hint/, /Attempted/, /Instant/]);
+    await expect(log.locator(".lg")).toHaveText([/On my own/, /With help/, /Attempted/, /Instant/]);
     await expect(page.locator(".pp-status")).toContainText("Not started");
     await expect(page.getByRole("button", { name: "Reset progress" })).toHaveCount(0);
 
@@ -29,4 +29,13 @@ test("a problem is logged four ways, Attempted is shown as attempted, and Reset 
     await page.getByRole("button", { name: "Yes, reset" }).click();
     await expect(page.locator(".pp-status")).toContainText("Not started");
     await expect(page.getByRole("button", { name: "Reset progress" })).toHaveCount(0);
+});
+
+test("the toast after a log offers Undo, which takes the log back", async ({ page }) => {
+    await page.goto("/d/valid-anagram");
+    await page.locator(".pp-log").getByRole("button", { name: /With help/ }).click();
+    await expect(page.locator(".pp-status")).toContainText("Solved with help");
+    await page.locator(".d-toast").getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator(".pp-status")).toContainText("Not started");
+    await expect(page.locator(".d-toast")).toContainText("log undone");
 });
