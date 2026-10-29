@@ -8,12 +8,16 @@
    (`<track code>-<slug>`, or `lc-<slug>` for the DSA lists), so a renamed, moved or deleted problem would otherwise
    vanish from every dashboard.
 2. Migrations are append-only: editing or deleting an applied one makes the API refuse to start.
+3. A new migration may not destroy stored data: DROP TABLE, DROP COLUMN, TRUNCATE, DELETE FROM, ALTER COLUMN ... TYPE
+   or a bare UPDATE of every row fail unless the file says `-- allow-data-loss: <why>` (the owner's rule: progress is
+   never lost; add columns and tables, copy, then stop reading the old ones).
 
 The deploy runs the stronger check too (`anneal-api preflight` against the live database), so this is the early
 warning, not the only one.
 """
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tomllib
@@ -71,6 +75,22 @@ def current():
     return ids, renamed
 
 
+DESTRUCTIVE = [
+    (r"\bDROP\s+TABLE\b", "DROP TABLE"),
+    (r"\bDROP\s+COLUMN\b", "DROP COLUMN"),
+    (r"\bTRUNCATE\b", "TRUNCATE"),
+    (r"\bDELETE\s+FROM\b", "DELETE FROM"),
+    (r"\bALTER\s+COLUMN\s+\w+\s+(SET\s+DATA\s+)?TYPE\b", "ALTER COLUMN ... TYPE"),
+    (r"\bUPDATE\s+\w+\s+SET\b(?![^;]*\bWHERE\b)", "UPDATE without WHERE"),
+]
+
+
+def destructive(sql):
+    """The destructive statements of a migration, ignoring comments."""
+    code = re.sub(r"--[^\n]*", "", sql)
+    return [name for pattern, name in DESTRUCTIVE if re.search(pattern, code, re.I)]
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -93,6 +113,13 @@ def main():
         if not status.startswith("A"):
             problems.append(f"migration {paths[0]} was {'edited' if status == 'M' else 'removed or renamed'}; "
                             "migrations are append-only, add a new one instead")
+        else:
+            sql = git("show", f"HEAD:{paths[0]}")
+            found = destructive(sql)
+            if found and "allow-data-loss:" not in sql:
+                problems.append(f"migration {paths[0]} can destroy stored data ({', '.join(found)}). Progress must never be lost: "
+                                "add columns or tables and copy instead. Only if it is truly intended, say why in a "
+                                "`-- allow-data-loss: <why>` comment")
 
     for p in problems:
         print(f"::error::{p}")

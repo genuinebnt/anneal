@@ -39,3 +39,14 @@ test("the toast after a log offers Undo, which takes the log back", async ({ pag
     await expect(page.locator(".pp-status")).toContainText("Not started");
     await expect(page.locator(".d-toast")).toContainText("log undone");
 });
+
+test("Reset archives the log first and the toast's Restore brings it back", async ({ page }) => {
+    await page.goto("/d/contains-duplicate");
+    await page.locator(".pp-log").getByRole("button", { name: /On my own/ }).click();
+    await expect(page.locator(".pp-status")).toContainText("Solved on my own");
+    await page.getByRole("button", { name: "Reset progress" }).click();
+    await page.getByRole("button", { name: "Yes, reset" }).click();
+    await expect(page.locator(".pp-status")).toContainText("Not started");
+    await page.locator(".d-toast").getByRole("button", { name: "Restore" }).click();
+    await expect(page.locator(".pp-status")).toContainText("Solved on my own");
+});

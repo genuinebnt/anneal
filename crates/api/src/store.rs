@@ -434,13 +434,57 @@ pub async fn undo_log(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
     Ok(true)
 }
 
-/// Forgets everything logged for a problem: its attempts (and their runs) and its review. What the owner wrote
-/// (saved solutions) and the time spent are kept.
-pub async fn reset_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<()> {
+/// Forgets what was logged for a problem: its attempts and its review. They are copied to `reset_archive` first, in the
+/// same transaction, so [`restore_problem`] can bring them back; saved solutions and focus time are never touched. A
+/// problem with workspace runs is refused (a DSA problem has none), so a run can never be cascaded away unarchived.
+/// Returns whether anything was archived and removed.
+pub async fn reset_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
     let mut tx = db.begin().await?;
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE problem_id = $1").bind(problem_id).fetch_one(&mut *tx).await?;
+    if runs > 0 {
+        return Err(sqlx::Error::Protocol(format!("{problem_id} has workspace runs; they are not reset")));
+    }
+    let attempts: Json<serde_json::Value> =
+        sqlx::query_scalar("SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY a.id), '[]'::jsonb) FROM attempts a WHERE problem_id = $1").bind(problem_id).fetch_one(&mut *tx).await?;
+    let review: Option<Json<serde_json::Value>> = sqlx::query_scalar("SELECT to_jsonb(r) FROM reviews r WHERE problem_id = $1").bind(problem_id).fetch_optional(&mut *tx).await?;
+    if attempts.0.as_array().is_some_and(Vec::is_empty) && review.is_none() {
+        return Ok(false);
+    }
+    sqlx::query("INSERT INTO reset_archive (problem_id, attempts, review) VALUES ($1, $2, $3)").bind(problem_id).bind(attempts).bind(review).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM attempts WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM reviews WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
-    tx.commit().await
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Brings back the latest unrestored reset of a problem, when the problem has nothing logged since. Returns false,
+/// changing nothing, when there is nothing to restore or the problem has been logged again.
+pub async fn restore_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
+    let mut tx = db.begin().await?;
+    let logged: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM attempts WHERE problem_id = $1) OR EXISTS (SELECT 1 FROM reviews WHERE problem_id = $1)")
+        .bind(problem_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if logged {
+        return Ok(false);
+    }
+    let entry: Option<(i64, Json<serde_json::Value>, Option<Json<serde_json::Value>>)> =
+        sqlx::query_as("SELECT id, attempts, review FROM reset_archive WHERE problem_id = $1 AND restored_at IS NULL ORDER BY id DESC LIMIT 1").bind(problem_id).fetch_optional(&mut *tx).await?;
+    let Some((id, attempts, review)) = entry else { return Ok(false) };
+    sqlx::query(
+        "INSERT INTO attempts (problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted)
+         SELECT problem_id, kind, started_at, solved_at, hints_revealed, solution_revealed, assisted
+         FROM jsonb_populate_recordset(NULL::attempts, $1) ORDER BY id",
+    )
+    .bind(attempts)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(review) = review {
+        sqlx::query("INSERT INTO reviews SELECT * FROM jsonb_populate_record(NULL::reviews, $1)").bind(review).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE reset_archive SET restored_at = now() WHERE id = $1").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// The DSA problems (`lc-…`) that have any attempt logged, with any grade.

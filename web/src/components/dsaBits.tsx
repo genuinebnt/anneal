@@ -11,14 +11,14 @@ const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", ag
 export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; reset: (p: DsaProblem) => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
-  // The problem whose log the toast can take back, while the toast is up.
-  const [undoable, setUndoable] = useState<DsaProblem | null>(null);
+  // What the toast offers to take back (Undo after a log, Restore after a reset), while it is up.
+  const [action, setAction] = useState<{ label: string; run: () => void } | null>(null);
   const timer = useRef<number>(0);
-  const say = (m: string, undo: DsaProblem | null = null) => {
+  const say = (m: string, act: { label: string; run: () => void } | null = null) => {
     setMessage(m);
-    setUndoable(undo);
+    setAction(act);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => { setMessage(null); setUndoable(null); }, undo ? 8000 : 3200);
+    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); }, act ? 8000 : 3200);
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const m = useMutation({
@@ -30,7 +30,7 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
           : r.due
             ? `${p.title}: ${SAID[grade]}. Back for review ${today ? niceDate(r.due, today) : r.due}.`
             : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
-        r.undoable ? p : null,
+        r.undoable ? { label: "Undo", run: () => u.mutate(p) } : null,
       );
       for (const key of ["dsa", "dsa-preview", "practice", "activity", "tracks", "reviews", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
     },
@@ -38,11 +38,19 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
   });
   const r = useMutation({
     mutationFn: (p: DsaProblem) => api.resetDsa(p.id),
-    onSuccess: (_, p) => {
-      say(`${p.title}: progress reset.`);
+    onSuccess: (out, p) => {
+      say(`${p.title}: progress reset.`, out.archived ? { label: "Restore", run: () => rs.mutate(p) } : null);
       for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
     },
     onError: (e: Error) => say(`Couldn't reset it: ${e.message}`),
+  });
+  const rs = useMutation({
+    mutationFn: (p: DsaProblem) => api.restoreDsa(p.id),
+    onSuccess: (out, p) => {
+      say(out.restored ? `${p.title}: progress restored.` : `${p.title}: nothing to restore, it has been logged since.`);
+      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (e: Error) => say(`Couldn't restore it: ${e.message}`),
   });
   const u = useMutation({
     mutationFn: (p: DsaProblem) => api.undoDsa(p.id),
@@ -55,13 +63,13 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
   return {
     log: (p, grade, practice = false) => m.mutate({ p, grade, practice }),
     reset: (p) => r.mutate(p),
-    busy: m.isPending || r.isPending || u.isPending,
+    busy: m.isPending || r.isPending || u.isPending || rs.isPending,
     toast: message ? (
       <div className="d-toast" role="status">
         {message}
-        {undoable && (
-          <button className="d-undo" disabled={u.isPending} onClick={() => u.mutate(undoable)}>
-            Undo
+        {action && (
+          <button className="d-undo" disabled={u.isPending || rs.isPending} onClick={action.run}>
+            {action.label}
           </button>
         )}
       </div>

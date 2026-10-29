@@ -391,14 +391,25 @@ pub async fn undo(State(s): State<AppState>, Path(id): Path<String>) -> ApiResul
     Ok(Json(serde_json::json!({ "id": id, "undone": store::undo_log(&s.db, &id).await? })))
 }
 
-/// Forgets a problem's log: back to "not started", with no review scheduled. Saved solutions stay.
+/// Forgets a problem's log: back to "not started", with no review scheduled. Saved solutions stay, and what was removed
+/// is archived first (`restored` by `POST .../restore`).
 pub async fn reset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
     let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
     if p.dsa.is_none() {
         return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
     }
-    store::reset_problem(&s.db, &id).await?;
-    Ok(Json(serde_json::json!({ "id": id })))
+    let archived = store::reset_problem(&s.db, &id).await?;
+    Ok(Json(serde_json::json!({ "id": id, "archived": archived })))
+}
+
+/// Takes back the latest reset of a problem. `restored` is false when there is nothing to restore or the problem was
+/// logged again since.
+pub async fn restore(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
+    if p.dsa.is_none() {
+        return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
+    }
+    Ok(Json(serde_json::json!({ "id": id, "restored": store::restore_problem(&s.db, &id).await? })))
 }
 
 #[derive(Deserialize)]

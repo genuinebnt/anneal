@@ -54,6 +54,8 @@ survive any content change. Per-problem progress is keyed by problem id, so thre
    row stored under an old id to the current one (`preflight::apply_renames`, idempotent).
 2. **CI** (`tools/check-progress-safety.py`) fails a push that removes a problem id without a `renamed_from`, or
    edits or deletes an applied migration.
+   The same CI step now also fails a *new* migration that can destroy stored data (DROP TABLE or COLUMN, TRUNCATE, DELETE FROM,
+   ALTER COLUMN TYPE, an UPDATE with no WHERE) unless it carries a `-- allow-data-loss: <why>` comment. Progress is never lost.
 3. **The deploy** backs up the database, then runs `anneal-api preflight` with the *new* image against the live
    database, before anything is replaced. If any stored progress would have no problem, or an applied migration
    changed, the deploy stops and the running version keeps serving.

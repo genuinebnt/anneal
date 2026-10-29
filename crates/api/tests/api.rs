@@ -1935,3 +1935,32 @@ async fn a_practice_repeat_counts_but_changes_nothing_else(db: PgPool) {
     let (_, p) = call(&app, Method::GET, "/api/progress", None).await;
     assert_eq!(p["record"]["later"], json!({ "own": 0, "help": 1, "not_yet": 0 }));
 }
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn reset_archives_what_it_removes_and_restore_brings_it_back(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let log = |grade: &'static str| call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": grade })));
+    log("hard").await;
+    log("good").await;
+    let before: (i64, i64, f32) = sqlx::query_as("SELECT (SELECT count(*) FROM attempts), (SELECT count(*) FROM reviews), (SELECT stability FROM reviews)").fetch_one(&db).await.unwrap();
+    assert_eq!((before.0, before.1), (2, 1));
+
+    let (status, out) = call(&app, Method::DELETE, "/api/dsa/problems/lc-two-sum/log", None).await;
+    assert_eq!((status, out["archived"].clone()), (StatusCode::OK, json!(true)));
+    let gone: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM attempts), (SELECT count(*) FROM reviews), (SELECT count(*) FROM reset_archive)").fetch_one(&db).await.unwrap();
+    assert_eq!(gone, (0, 0, 1), "the reset removed the log and archived it");
+
+    // Logging again blocks the restore (it would mix two histories); nothing is lost either way.
+    log("good").await;
+    let (_, blocked) = call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/restore", None).await;
+    assert_eq!(blocked["restored"], json!(false));
+    call(&app, Method::DELETE, "/api/dsa/problems/lc-two-sum/log", None).await;
+    let (_, back) = call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/restore", None).await;
+    assert_eq!(back["restored"], json!(true));
+    let after: (i64, i64, f32) = sqlx::query_as("SELECT (SELECT count(*) FROM attempts), (SELECT count(*) FROM reviews), (SELECT stability FROM reviews)").fetch_one(&db).await.unwrap();
+    assert_eq!((after.0, after.1), (1, 1), "the second reset archived one attempt and restore brought that one back");
+    let archive: (i64, i64) = sqlx::query_as("SELECT count(*), count(restored_at) FROM reset_archive").fetch_one(&db).await.unwrap();
+    assert_eq!(archive, (2, 1), "archives are never deleted");
+    assert_eq!(call(&app, Method::DELETE, "/api/dsa/problems/lc-nothing/log", None).await.0, StatusCode::NOT_FOUND);
+}

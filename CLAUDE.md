@@ -9,6 +9,7 @@ a checklist of every problem not yet written, and the agent instructions in [doc
 
 The rules that matter most:
 
+- **Never lose the owner's data.** Their progress (attempts, reviews, solutions, settings, course runs) is real and live on production. Every change is additive: new columns and tables, copy then stop reading the old ones, never DROP, TRUNCATE, DELETE or retype stored data (CI fails a migration that does: `tools/check-progress-safety.py`). Code that deletes rows (a reset) must archive them first and ask for confirmation. Test any data-touching change on a throwaway database, never the dev or production one, and check the data is still there after. A backup is taken before every deploy (`deploy/backup.sh`); see docs/DEPLOY.md.
 - Do only what's asked. Propose extras with a recommendation and wait. Never drop existing controls.
 - Mock up new screens and big UI changes in HTML and get approval before building them.
 - No visible scrollbars. 4-space indent. Don't run prettier (there's no config; match the surrounding style).
