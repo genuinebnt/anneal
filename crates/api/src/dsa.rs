@@ -344,6 +344,9 @@ pub struct LogBody {
     /// A repeat done for practice: it counts toward the streak and the solve record, and schedules nothing.
     #[serde(default)]
     practice: bool,
+    /// How many of LeetCode's hints were opened on the problem page before logging; kept with the attempt.
+    #[serde(default)]
+    hints: u32,
 }
 
 #[derive(Serialize)]
@@ -372,7 +375,7 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     }
     // What was next before this log, to tell "did the next problem" from "did another one instead".
     let current = if practice || repeat { None } else { current_problem(&s, &settings).await? };
-    let scheduled = store::log_attempt(&s.db, &id, body.grade, &settings_for(&s.catalog, &id, &settings), !practice, repeat).await?;
+    let scheduled = store::log_attempt(&s.db, &id, body.grade, &settings_for(&s.catalog, &id, &settings), !practice, repeat, body.hints.min(50) as i32).await?;
     // The next problem follows from the one just done, unless it was practice, which isn't part of the plan. Doing a
     // different problem of the same topic instead of the next one leaves the next one next: its slot just drops out of
     // the plan and the days after it close up. Doing one from another topic restarts the sequence after it (decision 22).

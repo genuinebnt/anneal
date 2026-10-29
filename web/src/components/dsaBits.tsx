@@ -2,27 +2,30 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type DsaCompany, type DsaProblem, type Grade } from "../api";
+import { api, type DsaCompany, type DsaOverview, type DsaProblem, type Grade } from "../api";
 import { DIFF, markOf, niceDate } from "../dsa";
 
 const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "attempted", easy: "instant" };
 
 /** Logs a problem and says when it comes back. Render `toast` once on the page. */
-export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; reset: (p: DsaProblem) => void; toast: ReactNode; busy: boolean } {
+export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean, hints?: number) => void; reset: (p: DsaProblem) => void; undo: () => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   // What the toast offers to take back (Undo after a log, Restore after a reset), while it is up.
   const [action, setAction] = useState<{ label: string; run: () => void } | null>(null);
+  // The problem to do next, offered in the toast once the overview has been refreshed after a log.
+  const [next, setNext] = useState<{ title: string; slug: string } | null>(null);
   const timer = useRef<number>(0);
   const say = (m: string, act: { label: string; run: () => void } | null = null) => {
     setMessage(m);
     setAction(act);
+    setNext(null);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); }, act ? 8000 : 3200);
+    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); setNext(null); }, act ? 8000 : 3200);
   };
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const m = useMutation({
-    mutationFn: ({ p, grade, practice }: { p: DsaProblem; grade: Grade; practice: boolean }) => api.logDsa(p.id, grade, practice),
+    mutationFn: ({ p, grade, practice, hints }: { p: DsaProblem; grade: Grade; practice: boolean; hints: number }) => api.logDsa(p.id, grade, practice, hints),
     onSuccess: (r, { p, grade, practice }) => {
       say(
         practice
@@ -32,7 +35,16 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
             : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
         r.undoable ? { label: "Undo", run: () => u.mutate(p) } : null,
       );
-      for (const key of ["dsa", "dsa-preview", "practice", "activity", "tracks", "reviews", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+      for (const key of ["activity", "tracks", "reviews", "progress", "stats", "dsa-preview", "practice"]) void qc.invalidateQueries({ queryKey: [key] });
+      // After the overview is fresh, say which problem is next (never the one just logged)
+      if (!practice) {
+        void qc.refetchQueries({ queryKey: ["dsa"] }).then(() => {
+          const o = qc.getQueryData<DsaOverview>(["dsa"]);
+          const id = o?.plan.next_up.find((x) => x !== p.id);
+          const n = id ? o?.problems.find((x) => x.id === id) : undefined;
+          if (n) setNext({ title: n.title, slug: n.slug });
+        });
+      } else void qc.invalidateQueries({ queryKey: ["dsa"] });
     },
     onError: (e: Error) => say(`Couldn't log it: ${e.message}`),
   });
@@ -61,12 +73,19 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
     onError: (e: Error) => say(`Couldn't undo it: ${e.message}`),
   });
   return {
-    log: (p, grade, practice = false) => m.mutate({ p, grade, practice }),
+    log: (p, grade, practice = false, hints = 0) => m.mutate({ p, grade, practice, hints }),
     reset: (p) => r.mutate(p),
+    // the toast's own button (Undo after a log, Restore after a reset), for a key
+    undo: () => action?.run(),
     busy: m.isPending || r.isPending || u.isPending || rs.isPending,
     toast: message ? (
       <div className="d-toast" role="status">
         {message}
+        {next && (
+          <Link className="d-next" to="/d/$slug" params={{ slug: next.slug }}>
+            Next up: {next.title} ›
+          </Link>
+        )}
         {action && (
           <button className="d-undo" disabled={u.isPending || rs.isPending} onClick={action.run}>
             {action.label}

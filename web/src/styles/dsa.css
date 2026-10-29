@@ -289,3 +289,5 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 .d-pext:hover{color:var(--fg)}
 
 .d-legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font:500 11px var(--mono);color:var(--dim);margin:0 0 12px}.d-legend>span{display:inline-flex;align-items:center;gap:6px}.d-legend .d-st{width:16px;height:16px;flex:none}
+.d-next{font:700 12px var(--mono);color:var(--acc);white-space:nowrap}.d-next:hover{color:var(--fg)}
+.d-toast{max-width:min(92vw,720px);flex-wrap:wrap}

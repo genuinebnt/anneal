@@ -7,6 +7,7 @@ import { Skeleton } from "../components/Skeleton";
 import { Md, PyCode } from "../components/dsaBits";
 import { DIFF, inDays, leetcode, niceDate, videoUrl } from "../dsa";
 import { mmss } from "../mock";
+import { getPref, setPref } from "../prefs";
 
 const GRADES: { grade: Grade; name: string; key: string; hint: string }[] = [
   { grade: "again", name: "Again", key: "1", hint: "couldn't recall it" },
@@ -41,23 +42,54 @@ export function ReviewPage() {
   );
 }
 
+type SortKey = "forgotten" | "overdue" | "pattern";
+const SORTS: [SortKey, string][] = [
+  ["forgotten", "Most forgotten"],
+  ["overdue", "Overdue"],
+  ["pattern", "Pattern"],
+];
+
+/** How a review stands against today: "3 days overdue", "due today", "due in 2 days". */
+function dueLabel(due: string, today: string): string {
+  const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${due}T00:00`)) / 864e5);
+  return days > 1 ? `${days} days overdue` : days === 1 ? "1 day overdue" : days === 0 ? "due today" : `due in ${-days} day${days === -1 ? "" : "s"}`;
+}
+
+/** The queue is yours to pick from: click any review, or move with J and K. Reviewing one that is not due yet is fine. */
 function Session({ queue }: { queue: ReviewQueue }) {
   const qc = useQueryClient();
-  // The queue is fixed when the session starts. Logging a grade changes the server's view, not this order.
-  const [order, setOrder] = useState<string[]>(() => queue.items.map((i) => i.problem.id));
-  const [results, setResults] = useState<Result[]>([]);
+  const all = useMemo(() => new Map([...queue.items, ...queue.ahead].map((i) => [i.problem.id, i])), [queue.items, queue.ahead]);
+  // The session's own list: today's reviews to begin with, and any "review ahead" picked later. Grading takes one out.
+  const [pending, setPending] = useState<string[]>(() => queue.items.map((i) => i.problem.id));
+  const [current, setCurrent] = useState<string | undefined>(() => queue.items[0]?.problem.id);
+  const [sort, setSortState] = useState<SortKey>(() => getPref<SortKey>("review.sort", "forgotten"));
+  const [results, setResults] = useState<(Result & { seconds: number })[]>([]);
   const [step, setStep] = useState<"recall" | "check">("recall");
   // The timer runs only once it is started, and starts over with each problem.
   const [spent, setSpent] = useState(0);
   const [running, setRunning] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
   const sessionStart = useRef(Date.now());
-  const items = useMemo(() => new Map(queue.items.map((i) => [i.problem.id, i])), [queue.items]);
 
-  const item = order[0] ? items.get(order[0]) : undefined;
-  const total = queue.items.length;
+  const sorted = useMemo(() => {
+    const it = (id: string) => all.get(id)!;
+    const by: Record<SortKey, (a: string, b: string) => number> = {
+      forgotten: (a, b) => it(a).recall - it(b).recall,
+      overdue: (a, b) => it(a).due.localeCompare(it(b).due) || it(a).recall - it(b).recall,
+      pattern: (a, b) => it(a).pattern.localeCompare(it(b).pattern) || it(a).recall - it(b).recall,
+    };
+    return [...pending].sort(by[sort]);
+  }, [pending, sort, all]);
+  const setSort = (s: SortKey) => {
+    setSortState(s);
+    setPref("review.sort", s);
+  };
+
+  const item = current ? all.get(current) : undefined;
+  const total = results.length + pending.length;
   const done = results.length;
 
   useEffect(() => {
@@ -70,6 +102,37 @@ function Session({ queue }: { queue: ReviewQueue }) {
     return () => window.clearInterval(t);
   }, [running]);
 
+  const fresh = () => {
+    setStep("recall");
+    setTab(0);
+    setSpent(0);
+    setRunning(false);
+    setError(null);
+  };
+  const refresh = () => {
+    for (const key of ["dsa", "practice", "activity", "tracks", "reviews", "progress", "stats", "dsa-mock"]) void qc.invalidateQueries({ queryKey: [key] });
+  };
+  /** Opens a review: one of today's, or a later one picked from "review ahead", which joins the session. */
+  const pick = (id: string) => {
+    if (id === current) return;
+    if (!pending.includes(id)) setPending((p) => [...p, id]);
+    setCurrent(id);
+    setNote(null);
+    fresh();
+  };
+  const move = useCallback(
+    (delta: number) => {
+      if (!sorted.length) return;
+      const at = current ? sorted.indexOf(current) : -1;
+      const next = sorted[(at + delta + sorted.length) % sorted.length]!;
+      if (next !== current) {
+        setCurrent(next);
+        fresh();
+      }
+    },
+    [sorted, current], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const lesson = useQuery({
     queryKey: ["dsa-page", item?.problem.id],
     queryFn: () => api.dsaPage(item!.problem.id),
@@ -79,17 +142,30 @@ function Session({ queue }: { queue: ReviewQueue }) {
   const log = useMutation({
     mutationFn: ({ id, grade }: { id: string; grade: Grade }) => api.logDsa(id, grade),
     onSuccess: (r, { id, grade }) => {
-      const it = items.get(id);
-      setResults((cur) => [...cur, { id, title: it?.problem.title ?? id, grade, due: r.due }]);
-      setOrder((cur) => cur.filter((x) => x !== id));
-      setStep("recall");
-      setTab(0);
-      setSpent(0);
-      setRunning(false);
-      setError(null);
-      for (const key of ["dsa", "practice", "activity", "tracks", "reviews", "progress", "stats", "dsa-mock"]) void qc.invalidateQueries({ queryKey: [key] });
+      const it = all.get(id);
+      setResults((cur) => [...cur, { id, title: it?.problem.title ?? id, grade, due: r.due, seconds: spent }]);
+      const left = sorted.filter((x) => x !== id);
+      const at = sorted.indexOf(id);
+      setPending(left);
+      setCurrent(left.length ? left[Math.min(at, left.length - 1)] : undefined);
+      setNote(null);
+      fresh();
+      refresh();
     },
     onError: (e: Error) => setError(`Couldn't log it: ${e.message}`),
+  });
+  const undo = useMutation({
+    mutationFn: (id: string) => api.undoDsa(id),
+    onSuccess: (r, id) => {
+      if (!r.undone) return setNote("That grade can't be undone here. Use Reset progress on the problem's page.");
+      setResults((cur) => cur.filter((x) => x.id !== id));
+      setPending((p) => (p.includes(id) ? p : [...p, id]));
+      setCurrent(id);
+      setNote(null);
+      fresh();
+      refresh();
+    },
+    onError: (e: Error) => setNote(`Couldn't undo it: ${e.message}`),
   });
 
   const grade = useCallback(
@@ -98,37 +174,43 @@ function Session({ queue }: { queue: ReviewQueue }) {
     },
     [item, log],
   );
-  const skip = useCallback(() => {
-    setOrder((cur) => (cur.length > 1 ? [...cur.slice(1), cur[0]!] : cur));
-    setStep("recall");
-    setSpent(0);
-    setRunning(false);
-  }, []);
+  const last = results[results.length - 1];
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof HTMLElement && e.target.closest("input, textarea, [contenteditable]"))) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || (e.target instanceof HTMLElement && e.target.closest("input, textarea, select, [contenteditable]"))) return;
       if (e.key === " " && step === "recall" && item) {
         e.preventDefault();
         setStep("check");
       } else if (step === "check" && "1234".includes(e.key) && e.key) {
         grade(GRADES[Number(e.key) - 1]!.grade);
+      } else if (e.key === "j" || e.key === "J" || e.key === "ArrowDown") {
+        e.preventDefault();
+        move(1);
+      } else if (e.key === "k" || e.key === "K" || e.key === "ArrowUp") {
+        e.preventDefault();
+        move(-1);
       } else if ((e.key === "s" || e.key === "S") && step === "recall") {
-        skip();
+        move(1);
+      } else if ((e.key === "u" || e.key === "U") && last && !undo.isPending) {
+        undo.mutate(last.id);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [step, item, grade, skip]);
+  }, [step, item, grade, move, last, undo]);
 
-  if (total === 0) return <Empty queue={queue} />;
-  if (!item) return <Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} />;
+  if (queue.items.length === 0 && results.length === 0 && pending.length === 0) return <Empty queue={queue} ahead={queue.ahead} onPick={pick} />;
+  if (!item) return <Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} onUndo={last ? () => undo.mutate(last.id) : undefined} />;
 
+  const waiting = queue.ahead.filter((i) => !pending.includes(i.problem.id) && !results.some((r) => r.id === i.problem.id));
+  const timed = results.filter((r) => r.seconds > 0);
+  const average = timed.length ? Math.round(timed.reduce((n, r) => n + r.seconds, 0) / timed.length) : null;
   return (
     <>
       <div className="rv-bar">
         <div className="rv-t">
-          <span className="l">REVIEW · {done + 1} OF {total}</span>
+          <span className="l">REVIEW · {done} OF {total} DONE</span>
           <span className="c">{mmss(spent)}</span>
         </div>
         <div className="rv-dots" aria-hidden="true">
@@ -140,16 +222,16 @@ function Session({ queue }: { queue: ReviewQueue }) {
         <Link className="rv-ghost" to="/dsa">Exit</Link>
       </div>
       <div className="wrap rv-stage">
-        <div className="rv-card">
-          {step === "recall" ? (
-            <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={skip} canSkip={order.length > 1} today={queue.today} />
-          ) : (
-            <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
-          )}
-        </div>
         <aside className="rv-side">
-          <div className="rv-card" style={{ gap: 10 }}>
-            <span className="rv-lab">TODAY'S QUEUE</span>
+          <div className="rv-card" style={{ gap: 12 }} aria-label="Reviews">
+            <div className="rv-qh">
+              <span className="rv-lab">REVIEWS</span>
+              <div className="rv-sort" role="group" aria-label="Sort the reviews">
+                {SORTS.map(([k, label]) => (
+                  <button key={k} className={sort === k ? "on" : ""} aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="rv-q">
               {results.map((r) => (
                 <div key={r.id} className="rv-qi done">
@@ -158,23 +240,69 @@ function Session({ queue }: { queue: ReviewQueue }) {
                   <span className={`r ${r.grade}`}>{r.grade}</span>
                 </div>
               ))}
-              {order.map((id, i) => (
-                <div key={id} className={`rv-qi${i === 0 ? " cur" : ""}`}>
-                  <span className="n">{done + i + 1}</span>
-                  <span className="t">{i === 0 ? items.get(id)?.problem.title : "Hidden until its turn"}</span>
-                </div>
-              ))}
+              {sorted.map((id, i) => {
+                const it = all.get(id)!;
+                return (
+                  <button key={id} className={`rv-qi pick${id === current ? " cur" : ""}`} aria-current={id === current} onClick={() => pick(id)}>
+                    <span className="n">{done + i + 1}</span>
+                    <span className="t">
+                      {it.problem.title}
+                      <small><i className={`dp ${it.problem.difficulty}`} />{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, queue.today)}</small>
+                    </span>
+                    <span className={`rc ${it.recall < 0.7 ? "lo" : it.recall < 0.85 ? "mid" : "hi"}`}>{Math.round(it.recall * 100)}%</span>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-          <div className="rv-card" style={{ gap: 10 }}>
-            <span className="rv-lab">KEYS</span>
-            <dl className="rv-kv">
-              <div><dt>Show the approach</dt><dd><kbd>Space</kbd></dd></div>
-              <div><dt>Again · Hard · Good · Easy</dt><dd><kbd>1 2 3 4</kbd></dd></div>
-              <div><dt>Skip for now</dt><dd><kbd>S</kbd></dd></div>
-            </dl>
+            {waiting.length > 0 && (
+              <details className="rv-ahead">
+                <summary>Review ahead · {waiting.length} more ›</summary>
+                <div className="rv-q">
+                  {waiting.map((it) => (
+                    <button key={it.problem.id} className="rv-qi pick" onClick={() => pick(it.problem.id)}>
+                      <span className="n">+</span>
+                      <span className="t">
+                        {it.problem.title}
+                        <small><i className={`dp ${it.problem.difficulty}`} />{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, queue.today)}</small>
+                      </span>
+                      <span className={`rc ${it.recall < 0.7 ? "lo" : it.recall < 0.85 ? "mid" : "hi"}`}>{Math.round(it.recall * 100)}%</span>
+                    </button>
+                  ))}
+                </div>
+                <span className="rv-note">Reviewing early still counts. It moves the next date out a little less.</span>
+              </details>
+            )}
           </div>
         </aside>
+        <div className="rv-card" key={item.problem.id}>
+          {step === "recall" ? (
+            <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} today={queue.today} />
+          ) : (
+            <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
+          )}
+        </div>
+      </div>
+      <div className="wrap rv-strip" aria-label="This session">
+        <div className="rv-sg">
+          <span className="rv-lab">THIS SESSION</span>
+          <span><b>{done}</b> done</span>
+          <span><b>{pending.length}</b> left</span>
+          <span>{average != null ? <>average <b>{mmss(average)}</b></> : "start the timer to see your average"}</span>
+          {GRADES.map((g) => {
+            const n = results.filter((r) => r.grade === g.grade).length;
+            return n ? <span key={g.grade} className={`rv-pill ${g.grade}`}>{g.name} {n}</span> : null;
+          })}
+          {last && (
+            <button className="rv-ghost" disabled={undo.isPending} onClick={() => undo.mutate(last.id)}>Undo “{last.title}” <kbd>U</kbd></button>
+          )}
+          {note && <span className="rv-err" role="status">{note}</span>}
+        </div>
+        <dl className="rv-kv rv-keys">
+          <div><dt>Show the approach</dt><dd><kbd>Space</kbd></dd></div>
+          <div><dt>Again · Hard · Good · Easy</dt><dd><kbd>1 2 3 4</kbd></dd></div>
+          <div><dt>Next · previous</dt><dd><kbd>J</kbd> <kbd>K</kbd></dd></div>
+          <div><dt>Undo the last grade</dt><dd><kbd>U</kbd></dd></div>
+        </dl>
       </div>
     </>
   );
@@ -291,7 +419,7 @@ function Check({ item, spent, lesson, loading, tab, setTab, grade, busy, error }
   );
 }
 
-function Empty({ queue }: { queue: ReviewQueue }) {
+function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem[]; onPick: (id: string) => void }) {
   const next = queue.next_review;
   return (
     <div className="wrap rv-stage" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
@@ -308,6 +436,20 @@ function Empty({ queue }: { queue: ReviewQueue }) {
           )}
           {queue.solve_day && queue.next_new ? " Today is a solve day, so your next new problem is ready." : ""}
         </p>
+        {ahead.length > 0 && (
+          <details className="rv-ahead" open>
+            <summary>Review ahead · {ahead.length} coming up ›</summary>
+            <div className="rv-q">
+              {ahead.map((it) => (
+                <button key={it.problem.id} className="rv-qi pick" onClick={() => onPick(it.problem.id)}>
+                  <span className="n">+</span>
+                  <span className="t">{it.problem.title}<small>{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, queue.today)}</small></span>
+                  <span className="rc">{Math.round(it.recall * 100)}%</span>
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
         <Next queue={queue} />
       </div>
     </div>
@@ -327,7 +469,7 @@ function Next({ queue }: { queue: ReviewQueue }) {
   );
 }
 
-function Finished({ queue, results, seconds }: { queue: ReviewQueue; results: Result[]; seconds: number }) {
+function Finished({ queue, results, seconds, onUndo }: { queue: ReviewQueue; results: Result[]; seconds: number; onUndo?: () => void }) {
   const count = (g: Grade) => results.filter((r) => r.grade === g).length;
   const tomorrow = results.filter((r) => r.due && r.due <= tomorrowOf(queue.today)).length;
   return (
@@ -356,6 +498,7 @@ function Finished({ queue, results, seconds }: { queue: ReviewQueue; results: Re
           ))}
         </div>
         <Next queue={queue} />
+        {onUndo && <button className="rv-ghost" style={{ alignSelf: "flex-start" }} onClick={onUndo}>Undo the last grade <kbd>U</kbd></button>}
         <p className="rv-note">{tomorrow ? `Tomorrow: ${tomorrow} review${tomorrow === 1 ? " is" : "s are"} due.` : "Nothing is due tomorrow."}</p>
       </div>
     </div>

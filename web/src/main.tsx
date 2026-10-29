@@ -23,6 +23,7 @@ import { installPressEffects } from "./components/kit";
 import { KitPage } from "./pages/KitPage";
 import { ToastHost } from "./components/toasts";
 import { hydratePrefs } from "./prefs";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 import { SettingsPage } from "./pages/SettingsPage";
 import "./styles/design.css";
 import "./styles/app.css";
@@ -48,6 +49,7 @@ const rootRoute = createRootRoute({
     <>
       <Outlet />
       <ToastHost />
+      <ShortcutHelp />
     </>
   ),
 });

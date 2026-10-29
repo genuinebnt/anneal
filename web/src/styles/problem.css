@@ -133,3 +133,8 @@
 .pp-hist i.ok{color:var(--grn)}.pp-hist i.half{color:var(--warn)}.pp-hist i.no{color:var(--bad)}
 .pp-hist i.pr{border-color:var(--acc);background:var(--acc-bg);color:var(--acc)}
 .pp-hist em{font-style:normal;color:var(--dim)}
+
+/* Solve and the log live in one card, so the four outcomes sit above the fold */
+.pp-solve{display:flex;gap:8px}.pp-solve .pp-act{margin:0}.pp-solve .pp-act.pri{flex:1}.pp-solve .pp-act.alt{flex:none;padding-inline:14px}
+.pp-log .lg{position:relative}.pp-log .lg kbd{position:absolute;top:6px;right:8px;font:500 9.5px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
+.pp-log .lg.sug{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}

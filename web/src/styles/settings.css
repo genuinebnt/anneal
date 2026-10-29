@@ -19,3 +19,16 @@
 .st-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .st-ok{font:500 12px var(--mono);color:var(--grn)}.st-bad{font:500 12px var(--mono);color:var(--bad)}
 @media (max-width:640px){.st-row{grid-template-columns:1fr}.st-row>.st-ctl{grid-column:1;grid-row:auto}}
+
+/* the shortcut list that "?" opens */
+.sh-back{position:fixed;inset:0;z-index:90;background:color-mix(in oklab,var(--bg) 70%,transparent);backdrop-filter:blur(3px);display:grid;place-items:center;padding:16px}
+.sh-box{width:min(860px,100%);max-height:calc(100vh - 32px);overflow:auto;scrollbar-width:none;border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:22px 26px;box-shadow:0 24px 64px var(--shadow)}
+.sh-box::-webkit-scrollbar{display:none}
+.sh-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.sh-head h2{margin:0;font-size:20px;letter-spacing:-.02em}
+.sh-x{width:32px;height:32px;border-radius:8px;color:var(--dim)}.sh-x:hover{background:var(--raise);color:var(--fg)}.sh-x:focus-visible{outline:2px solid var(--acc)}
+.sh-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px 28px}
+.sh-grid h3{margin:0 0 8px;font:600 10.5px var(--mono);letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+.sh-grid dl{margin:0;display:flex;flex-direction:column;gap:7px}.sh-grid dl>div{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;align-items:baseline}
+.sh-grid dt{display:flex;gap:4px;flex-wrap:wrap}.sh-grid dd{margin:0;font-size:12.5px;color:var(--mut);line-height:1.45}
+.sh-grid kbd{font:600 10.5px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--fg);background:var(--bg)}
+.sh-foot{margin:16px 0 0;font-size:12px;color:var(--dim)}

@@ -325,19 +325,21 @@ pub async fn log_attempt(
     settings: &crate::reviews::Settings,
     schedule: bool,
     extra: bool,
+    hints: i32,
 ) -> sqlx::Result<Option<crate::reviews::Scheduled>> {
     use crate::reviews::Grade;
     let resolve: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM reviews WHERE problem_id = $1)").bind(problem_id).fetch_one(db).await?;
     let solved = grade != Grade::Again;
     let assisted = matches!(grade, Grade::Again | Grade::Hard);
     sqlx::query(
-        "INSERT INTO attempts (problem_id, kind, solved_at, assisted)
-         VALUES ($1, $2, CASE WHEN $3 THEN now() END, $4)",
+        "INSERT INTO attempts (problem_id, kind, solved_at, assisted, hints_revealed)
+         VALUES ($1, $2, CASE WHEN $3 THEN now() END, $4, $5)",
     )
     .bind(problem_id)
     .bind(if extra { "extra" } else if resolve { "resolve" } else { "practice" })
     .bind(solved)
     .bind(assisted)
+    .bind(hints)
     .execute(db)
     .await?;
     if !schedule || extra {

@@ -51,3 +51,12 @@ test("a page that is still loading shows a placeholder, not bare text", async ({
     await page.goto("/dsa/review");
     await expect(page.locator(".sk")).toBeVisible();
 });
+
+test("? opens the list of shortcuts and Escape closes it", async ({ page }) => {
+    await page.goto("/dsa");
+    await page.keyboard.press("?");
+    await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+    await expect(page.getByText("Log On my own")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+});

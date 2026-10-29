@@ -82,8 +82,10 @@ function beep(ctx: AudioContext | null) {
 
 const mmss = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
 
-export function FocusTimer() {
-    const [cfg, setCfg] = useState<Cfg>(() => ({ ...DEFAULTS, ...getPref<Partial<Cfg>>("focus.cfg", {}) }));
+/** `suggest`: the minutes the problem is estimated to take. In Timer mode the countdown starts there unless the owner chose a length. */
+export function FocusTimer({ suggest }: { suggest?: number }) {
+    const suggested = suggest ? Math.max(5, Math.round(suggest / 5) * 5) : undefined;
+    const [cfg, setCfg] = useState<Cfg>(() => ({ ...DEFAULTS, ...(suggested ? { timer: suggested } : {}), ...getPref<Partial<Cfg>>("focus.cfg", {}) }));
     const [s, setS] = useState<State>(() => fresh(cfg));
     const [settings, setSettings] = useState(false);
     // Focus time spent since this page opened (nothing about it is stored).
@@ -135,7 +137,9 @@ export function FocusTimer() {
 
     const save = (next: Cfg) => {
         setCfg(next);
-        setPref("focus.cfg", next);
+        // a countdown length that is only the problem's estimate is not stored as the owner's choice
+        const { timer, ...rest } = next;
+        setPref("focus.cfg", timer === suggested && getPref<Partial<Cfg>>("focus.cfg", {}).timer === undefined ? rest : next);
     };
     const setMode = (mode: Mode) => {
         const next = { ...cfg, mode };

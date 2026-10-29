@@ -49,4 +49,6 @@ test("Reset archives the log first and the toast's Restore brings it back", asyn
     await expect(page.locator(".pp-status")).toContainText("Not started");
     await page.locator(".d-toast").getByRole("button", { name: "Restore" }).click();
     await expect(page.locator(".pp-status")).toContainText("Solved on my own");
+    // leave the database as it was, for the tests that follow
+    await page.request.delete("/api/dsa/problems/lc-contains-duplicate/log");
 });

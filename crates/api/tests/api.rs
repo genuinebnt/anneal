@@ -523,6 +523,10 @@ async fn passphrase_login_gates_the_api(db: PgPool) {
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"), "{cookie}");
     let pair = cookie.split(';').next().unwrap().to_owned();
 
+    // The routes that hand out or take in everything the owner has made are behind the login too.
+    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
+        assert_eq!(raw(&app, method, path, None, Some(json!({}))).await.0, StatusCode::UNAUTHORIZED, "{path} must need the login");
+    }
     assert_eq!(raw(&app, Method::GET, "/api/tracks", Some(&pair), None).await.0, StatusCode::OK);
     let (_, _, s) = raw(&app, Method::GET, "/api/auth/session", Some(&pair), None).await;
     assert_eq!(s["authenticated"], true);
@@ -2055,4 +2059,30 @@ async fn premium_is_listed_but_counted_only_when_chosen_while_what_was_done_alwa
     assert_eq!(call(&app, Method::PUT, "/api/settings/srs", Some(srs)).await.0, StatusCode::OK);
     let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
     assert_eq!((sum(&o, "solved"), sum(&o, "total")), (1, 6));
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_review_queue_offers_upcoming_reviews_to_do_early(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "hard" }))).await;
+    let (status, q) = call(&app, Method::GET, "/api/dsa/review", None).await;
+    assert_eq!(status, StatusCode::OK);
+    // Nothing is due yet, so both are offered ahead, soonest first, each with when it is due and what every grade schedules.
+    let ahead = q["ahead"].as_array().unwrap();
+    assert_eq!(ahead.len(), 2, "{q}");
+    assert!(ahead.iter().all(|i| i["due"].is_string() && i["previews"]["good"]["days"].is_number() && i["problem"]["title"].is_string()));
+    assert!(ahead[0]["due"].as_str() <= ahead[1]["due"].as_str());
+    assert_eq!(q["items"].as_array().unwrap().len(), 0);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_log_keeps_how_many_hints_were_opened(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "hard", "hints": 3 }))).await;
+    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "good" }))).await;
+    let rows: Vec<(String, i32)> = sqlx::query_as("SELECT problem_id, hints_revealed FROM attempts ORDER BY id").fetch_all(&db).await.unwrap();
+    assert_eq!(rows, [("lc-two-sum".to_owned(), 3), ("lc-valid-palindrome".to_owned(), 0)]);
 }

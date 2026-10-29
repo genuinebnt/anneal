@@ -721,6 +721,8 @@ export interface ReviewItem {
   /** Days until recall drops to 90%. */
   stability: number;
   previews: Record<Grade, ReviewPreview>;
+  /** When it is due (a local date). */
+  due: string;
 }
 
 /** Today's review session (docs/DSA.md, decision 26). */
@@ -730,6 +732,8 @@ export interface ReviewQueue {
   due: number;
   solve_day: boolean;
   items: ReviewItem[];
+  /** The other reviews, soonest first: more due today than the day takes, then the ones coming up. */
+  ahead: ReviewItem[];
   next_new: { id: string; slug: string; title: string } | null;
   next_review: { id: string; slug: string; title: string; due: string } | null;
 }
@@ -999,7 +1003,7 @@ export const api = {
   resetDsa: (id: string) => request<{ id: string; archived: boolean }>("DELETE", `/dsa/problems/${id}/log`),
   restoreDsa: (id: string) => request<{ id: string; restored: boolean }>("POST", `/dsa/problems/${id}/restore`),
   undoDsa: (id: string) => request<{ id: string; undone: boolean }>("POST", `/dsa/problems/${id}/undo`),
-  logDsa: (id: string, grade: Grade, practice = false) => request<{ id: string; due: string | null; ideal_days: number | null; undoable: boolean }>("POST", `/dsa/problems/${id}/log`, { grade, practice }),
+  logDsa: (id: string, grade: Grade, practice = false, hints = 0) => request<{ id: string; due: string | null; ideal_days: number | null; undoable: boolean }>("POST", `/dsa/problems/${id}/log`, { grade, practice, hints }),
   review: () => request<ReviewQueue>("GET", "/dsa/review"),
   mock: () => request<MockData>("GET", "/dsa/mock"),
   saveMock: (saved: MockSaved) => request<MockSaved>("PUT", "/dsa/mock/config", saved),

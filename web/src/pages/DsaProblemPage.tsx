@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
@@ -107,7 +107,7 @@ function MySolutions({ p, template }: { p: DsaProblem; template: string }) {
 export function DsaProblemPage({ slug }: { slug: string }) {
     const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const o = overview.data;
-    const { log, reset, toast, busy } = useLogger(o?.today);
+    const { log, reset, undo, toast, busy } = useLogger(o?.today);
     const [confirmReset, setConfirmReset] = useState(false);
     // a problem outside the NeetCode lists is not in the overview: ask for it by itself
     const listed = o?.problems.find((x) => x.slug === slug);
@@ -120,7 +120,15 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const [practiceMode, setPracticeMode] = useState(false);
     useEffect(() => setPracticeMode(false), [p?.id]);
     const [hintsShown, setHintsShown] = useState(0);
+    useEffect(() => setHintsShown(0), [p?.id]);
     const [more, setMore] = useState(false);
+    // 1 to 4 log, U takes the last log back. The handler is set below, once the page knows what it can log.
+    const keys = useRef<(e: KeyboardEvent) => void>(() => {});
+    useEffect(() => {
+        const f = (e: KeyboardEvent) => keys.current(e);
+        window.addEventListener("keydown", f);
+        return () => window.removeEventListener("keydown", f);
+    }, []);
     const [section, setSection] = useState("problem");
     const hasHints = (statement.data?.hints.length ?? 0) > 0;
     const hasLesson = !!lesson.data;
@@ -174,6 +182,14 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const first = lesson.data?.approaches[0]?.code.split("\n") ?? [];
     const defAt = first.findIndex((l) => l.trimStart().startsWith("def "));
     const template = defAt >= 0 ? `${first.slice(first.findIndex((l) => l.startsWith("class ")), defAt + 1).join("\n")}\n        pass\n` : "class Solution:\n    pass\n";
+    keys.current = (e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.closest?.("input,textarea,select,[contenteditable],.cm-editor")) return;
+        const i = "1234".indexOf(e.key);
+        if (i >= 0 && e.key) {
+            const g = TILES[i]!;
+            if (!busy && !(practising && g.grade === "easy")) log(p, g.grade, practising, hintsShown);
+        } else if (e.key === "u" || e.key === "U") undo();
+    };
     const status = statusOf(p, o.today);
     const s = p.state;
     const previews = preview.data?.previews;
@@ -343,11 +359,10 @@ export function DsaProblemPage({ slug }: { slug: string }) {
 
                 <aside className="pp-rail">
                     <div className="pp-card">
-                        <a className="pp-act pri" href={leetcode(p.slug)} target="_blank" rel="noreferrer">Solve on LeetCode ↗</a>
-                        {p.video && <a className="pp-act alt" href={videoUrl(p.video)} target="_blank" rel="noreferrer">▶ NeetCode's video</a>}
-                    </div>
-
-                    <div className="pp-card">
+                        <div className="pp-solve">
+                            <a className="pp-act pri" href={leetcode(p.slug)} target="_blank" rel="noreferrer">Solve on LeetCode ↗</a>
+                            {p.video && <a className="pp-act alt" href={videoUrl(p.video)} target="_blank" rel="noreferrer" title="NeetCode's video">▶ Video</a>}
+                        </div>
                         <h3><span>LOG IT</span>{previews === null ? <span>schedules no review</span> : practising ? <span>practice · schedule unchanged</span> : null}</h3>
                         {canPractice && (
                             <>
@@ -360,8 +375,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         )}
                         <div className="pp-log">
                             {TILES.map((g) => (
-                                <button key={g.grade} className={`lg ${g.cls}${!practising && s.last_grade === g.grade ? " on" : ""}`} disabled={busy || (practising && g.grade === "easy")} onClick={() => log(p, g.grade, practising)}>
-                                    <b>{g.glyph}</b><span>{g.label}</span><small>{gradeNote(g.grade)}</small>
+                                <button key={g.grade} className={`lg ${g.cls}${!practising && s.last_grade === g.grade ? " on" : ""}${hintsShown > 0 && g.grade === "hard" ? " sug" : ""}`} disabled={busy || (practising && g.grade === "easy")} onClick={() => log(p, g.grade, practising, hintsShown)}>
+                                    <b>{g.glyph}</b><span>{g.label}</span><small>{gradeNote(g.grade)}</small><kbd>{TILES.indexOf(g) + 1}</kbd>
                                 </button>
                             ))}
                         </div>
@@ -377,6 +392,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                 {practised > 0 && <em>practised {practised}×</em>}
                             </div>
                         )}
+                        {hintsShown > 0 && <p className="pp-streak">You opened {hintsShown} hint{hintsShown === 1 ? "" : "s"}. With help is usually the honest log; the choice is yours.</p>}
                         <p className="pp-streak">On my own, With help and Instant count towards your streak. Attempted doesn't.</p>
                         <div className="pp-status">
                             <div className="pp-gauge" style={{ "--p": `${recall ?? 0}%` } as CSSProperties}><span>{recall != null ? `${recall}%` : "–"}</span></div>
@@ -415,7 +431,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         </div>
                     )}
 
-                    <FocusTimer />
+                    <FocusTimer suggest={MINUTES[p.difficulty]} />
 
                     {p.companies.length > 0 && (
                         <div className="pp-card">
