@@ -152,3 +152,14 @@
 .mi-main{display:flex;flex-direction:column;gap:16px;min-width:0}
 .mi-log3 .lg{position:relative}.mi-log3 .lg kbd{position:absolute;top:6px;right:8px;font:500 9.5px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
 .mi-stage{padding-inline:0}
+
+/* the pool breakdown, and presets that fill the row */
+.mi-presets{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.mi-mix{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.mi-mix .split{flex:1 1 100%;height:10px;border-radius:999px;background:var(--raise);display:flex;overflow:hidden}
+.mi-mix .split i{display:block;height:100%}
+.mi-mix i.e{background:var(--grn)}.mi-mix i.w{background:var(--warn)}.mi-mix i.h{background:var(--bad)}
+.mi-mix>span{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--mono);color:var(--dim)}
+.mi-mix>span>i{width:8px;height:8px;border-radius:2px}
+.mi-mix b{color:var(--fg);font-weight:600}
+.mi-mix.hist>span{flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);padding:8px 14px;min-width:116px;flex:1}.mi-mix.hist b{font-size:18px}

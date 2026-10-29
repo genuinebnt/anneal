@@ -77,6 +77,34 @@ function Ahead({ items, today, onPick, open = false }: { items: ReviewItem[]; to
   );
 }
 
+/** The next seven days of reviews as bars, and what follows the reviews today: the new problem, or the next review to come. */
+function Coming({ today, items, next }: { today: string; items: ReviewItem[]; next: ReviewQueue }) {
+  const base = new Date(`${today}T00:00`);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const n = items.filter((it) => (i === 0 ? it.due <= key : it.due === key)).length;
+    return { key, n, label: d.toLocaleDateString("en", { weekday: "short" }).slice(0, 2) };
+  });
+  const top = Math.max(1, ...days.map((d) => d.n));
+  return (
+    <div className="rv-coming">
+      <span className="rv-lab">NEXT 7 DAYS</span>
+      <div className="rv-week" aria-label="Reviews in the next seven days">
+        {days.map((d) => (
+          <div key={d.key} title={`${d.n} review${d.n === 1 ? "" : "s"}`}>
+            <i style={{ height: `${Math.max(d.n ? 8 : 2, (d.n / top) * 100)}%` }} />
+            <b>{d.n}</b>
+            <span>{d.label}</span>
+          </div>
+        ))}
+      </div>
+      {next.solve_day && next.next_new && <Link className="rv-after" to="/d/$slug" params={{ slug: next.next_new.slug }}><small>THEN TODAY'S NEW PROBLEM</small>{next.next_new.title}</Link>}
+      {!next.solve_day && next.next_review && <Link className="rv-after" to="/d/$slug" params={{ slug: next.next_review.slug }}><small>NEXT REVIEW {niceDate(next.next_review.due, today).toUpperCase()}</small>{next.next_review.title}</Link>}
+    </div>
+  );
+}
+
 /** How well this one is remembered: the numbers behind it, and the forecast. */
 function MemoryCard({ item, today }: { item: ReviewItem; today: string }) {
   const s = item.problem.state;
@@ -376,12 +404,13 @@ function Session({ queue }: { queue: ReviewQueue }) {
                 );
               })}
             </div>
-            <Ahead items={waitingAll} today={queue.today} onPick={pick} />
+            <Ahead items={waitingAll} today={queue.today} onPick={pick} open={waitingAll.length > 0 && sorted.length + results.length < 8} />
+            <Coming today={queue.today} items={[...sorted.map((id) => all.get(id)!).filter(Boolean), ...waitingAll]} next={queue} />
           </div>
         </aside>
         <div className="rv-card" key={item.problem.id}>
           {step === "recall" ? (
-            <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} today={queue.today} />
+            <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} today={queue.today} upcoming={sorted.filter((id) => id !== current).map((id) => all.get(id)!).filter(Boolean)} onPick={pick} />
           ) : (
             <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
           )}
@@ -422,11 +451,16 @@ const ago = (iso: string | null, today: string) => {
   const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${iso}T00:00`)) / 864e5);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 };
+const TRY_GLYPH = { good: "✓", hard: "½", again: "!" } as const;
+const TRY_NAME = { good: "on my own", hard: "with help", again: "attempted" } as const;
+const ORD = (n: number) => (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th");
 const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "! attempted" };
 
-function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
+function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today, upcoming, onPick }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string; upcoming: ReviewItem[]; onPick: (id: string) => void }) {
   const p = item.problem;
   const s = p.state;
+  const tries = useQuery({ queryKey: ["dsa-preview", p.id], queryFn: () => api.preview(p.id) });
+  const history = tries.data?.history ?? [];
   return (
     <>
       <span className="rv-lab">RECALL · SUGGESTED 6 MIN</span>
@@ -459,6 +493,43 @@ function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today
           </button>
         )}
       </div>
+      {history.length > 0 && (
+        <section className="rv-sec" aria-label="Your tries">
+          <span className="rv-lab">YOUR TRIES</span>
+          <div className="rv-tries">
+            {history.map((h, i) => (
+              <span key={i} className={`rv-try ${h.result}`}>
+                <i>{TRY_GLYPH[h.result]}</i>
+                {h.kind === "practice" ? "Practice" : `${history.slice(0, i + 1).filter((x) => x.kind !== "practice").length}${ORD(history.slice(0, i + 1).filter((x) => x.kind !== "practice").length)} try`}
+                <small>{TRY_NAME[h.result]}</small>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+      {p.companies.length > 0 && (
+        <section className="rv-sec" aria-label="Asked by">
+          <span className="rv-lab">ASKED BY</span>
+          <Companies companies={p.companies} limit={10} />
+        </section>
+      )}
+      {upcoming.length > 0 && (
+        <section className="rv-sec" aria-label="Up next in this session">
+          <span className="rv-lab">UP NEXT IN THIS SESSION</span>
+          <div className="rv-q">
+            {upcoming.slice(0, 4).map((it) => (
+              <button key={it.problem.id} className="rv-qi pick" onClick={() => onPick(it.problem.id)}>
+                <span className="n">›</span>
+                <span className="t">
+                  {it.problem.title}
+                  <small><i className={`dp ${it.problem.difficulty}`} />{DIFF[it.problem.difficulty][0]} · {dueLabel(it.due, today)}</small>
+                </span>
+                <span className={`rc ${it.recall < 0.7 ? "lo" : it.recall < 0.85 ? "mid" : "hi"}`}>{Math.round(it.recall * 100)}%</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </>
   );
 }
@@ -529,7 +600,7 @@ function Check({ item, spent, lesson, loading, tab, setTab, grade, busy, error }
 function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem[]; onPick: (id: string) => void }) {
   const next = queue.next_review;
   return (
-    <div className="wrap rv-stage" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+    <div className="rv-wide rv-stage rv-empty">
       <div className="rv-card">
         <span className="rv-lab">{queue.capacity === 0 ? "A REST DAY" : "NOTHING DUE"}</span>
         <h2 className="rv-title">{queue.capacity === 0 ? "No reviews today." : "You're caught up."}</h2>
@@ -543,8 +614,12 @@ function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem
           )}
           {queue.solve_day && queue.next_new ? " Today is a solve day, so your next new problem is ready." : ""}
         </p>
-        <Ahead items={ahead} today={queue.today} onPick={onPick} open />
         <Next queue={queue} />
+      </div>
+      <div className="rv-card">
+        <Coming today={queue.today} items={ahead} next={queue} />
+        <Ahead items={ahead} today={queue.today} onPick={onPick} open />
+        {ahead.length === 0 && <p className="rv-note">Nothing is waiting. Log a problem and its reviews are planned here.</p>}
       </div>
     </div>
   );

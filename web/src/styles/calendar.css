@@ -114,7 +114,7 @@
 .c-tr .nm{grid-area:nm;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:8px;align-items:center}.c-tr .nm i{grid-row:1/3;width:8px;height:26px;border-radius:3px}
 .c-tr .nm b{font-size:12px;line-height:1.3;overflow-wrap:anywhere}.c-tr .nm small,.c-tr .dt small{font:500 11px var(--mono);color:var(--dim)}
 .c-tr .st{grid-area:st;justify-self:start;font:700 11px var(--mono);text-align:center;border-radius:8px;padding:4px 6px}.c-tr .st.ok{color:var(--grn);background:var(--grn-bg)}.c-tr .st.bad{color:var(--warn);background:var(--warn-bg)}.c-tr .st.muted{color:var(--dim)}
-.c-tr .dt{grid-area:dt;display:flex;gap:10px;align-items:center}.c-tr .dt input{height:28px;font-size:11px;padding:0 4px;width:128px}
+.c-tr .dt{grid-area:dt;display:flex;gap:10px;align-items:center}
 .c-sg{border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.5;color:var(--mut);display:flex;flex-direction:column;gap:8px;background:var(--bg)}.c-sg b{color:var(--fg)}
 .c-sg .two{display:flex;gap:8px;flex-wrap:wrap}
 .c-sg button{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--acc);color:var(--acc);font:700 11px var(--mono)}.c-sg button:hover:not(:disabled){background:var(--acc-bg)}

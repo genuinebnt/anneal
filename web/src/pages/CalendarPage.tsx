@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Skeleton } from "../components/Skeleton";
-import { ConfirmButton } from "../components/ui";
+import { ConfirmButton, DateField } from "../components/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
@@ -577,7 +577,7 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                 <Seg value={r.order} options={[["curriculum", "Curriculum"], ["ramp", "Easy → hard"], ["company", "Most asked"], ["important", "Most important"]]} onPick={(v) => setRules((x) => ({ ...x, order: v }), "Order")} />
             </Acc>
             <Acc id="targets" title="Targets" summary={`${nt ? `${nt} topic target${nt > 1 ? "s" : ""} · ` : ""}all by ${finishBy ? short(finishBy) : "—"}`} open={open} setOpen={setOpen}>
-                <div className="fl row1"><span>Everything done by</span><input type="date" aria-label="Everything done by" value={finishBy} onChange={(e) => setRules((x) => ({ ...x, finish_by: e.target.value || null }), "Final target")} /></div>
+                <div className="fl row1"><span>Everything done by</span><DateField label="Everything done by" className="compact" value={finishBy} onChange={(v) => setRules((x) => ({ ...x, finish_by: v || null }), "Final target")} /></div>
                 <div className="c-trs">
                     {rows.map((t, i) => (
                         <div key={t.id} className={`c-tr${t.status ? "" : " dim"}`}>
@@ -585,7 +585,7 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                             <span className="nm"><i style={{ background: hue(t.id) }} /><b title={t.name}>{t.name}</b><small>{t.status ? `${t.status.n} left` : "none in scope"}</small></span>
                             {!t.status ? <span className="st muted">—</span> : t.status.due && (t.target || t.covered) ? (t.status.late ? <span className="st bad">⚠ {t.status.late >= 9999 ? "not in time" : `${t.status.late}d late`}</span> : <span className="st ok">✓ {t.status.slack}d spare</span>) : null}
                             <span className="dt">
-                                <input type="date" value={t.target ?? ""} aria-label={`${t.name} target`} onChange={(e) => setRules((x) => { const targets = { ...x.targets }; if (e.target.value) targets[t.id] = e.target.value; else delete targets[t.id]; return { ...x, targets }; }, `${t.name} target`)} />
+                                <DateField label={`${t.name} target`} className="compact" value={t.target ?? ""} onChange={(v) => setRules((x) => { const targets = { ...x.targets }; if (v) targets[t.id] = v; else delete targets[t.id]; return { ...x, targets }; }, `${t.name} target`)} />
                                 {t.covered && <small>due with a later topic</small>}
                             </span>
                         </div>

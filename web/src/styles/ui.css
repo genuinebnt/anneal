@@ -63,3 +63,62 @@ html[data-hide-topics] .d-topics{display:none}
 /* the toast stack sits at the bottom, so it never covers the buttons on the page */
 .k-root .k-tstack{top:auto;bottom:52px;right:auto;left:50%;transform:translateX(-50%);width:min(420px,calc(100% - 32px))}
 @media (max-width:700px){.k-root .k-tstack{bottom:92px}}
+
+/* Stepper, Select and DateField: one control height, one font, the same border and focus ring as the other fields */
+.ui-step{display:inline-grid;grid-template-columns:38px 52px 38px;align-items:stretch;height:38px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);overflow:hidden;flex:none}
+.ui-step button{display:grid;place-items:center;padding:0;color:var(--mut);font:500 17px var(--mono);line-height:1;transition:background .15s,color .15s}
+.ui-step button:hover:not(:disabled){background:var(--raise);color:var(--fg)}
+.ui-step button:disabled{opacity:.35;cursor:default}
+.ui-step output{display:grid;place-items:center;font:600 13px var(--mono);color:var(--fg);border-inline:1px solid var(--line2)}
+.ui-step.off{opacity:.4}
+.ui-step.compact{height:32px;grid-template-columns:30px 40px 30px}
+.ui-step.compact button{font-size:15px}.ui-step.compact output{font-size:12px}
+.ui-pop{position:relative;display:inline-block;min-width:0}
+.ui-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:176px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);color:var(--fg);font:500 12px var(--mono);text-align:left;transition:border-color .15s,box-shadow .15s}
+.ui-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ui-trigger svg{flex:none;color:var(--dim)}
+.ui-trigger.empty{color:var(--dim)}
+.ui-trigger:hover,.ui-trigger[aria-expanded="true"]{border-color:var(--ca,var(--acc))}
+.ui-trigger:focus-visible{box-shadow:0 0 0 3px var(--cab,var(--acc-bg));outline:none}
+.ui-list,.ui-cal{position:absolute;z-index:60;top:calc(100% + 6px);left:0;border:1px solid var(--line);border-radius:var(--r-3,12px);background:var(--panel);box-shadow:0 24px 60px -20px var(--shadow)}
+.ui-list{margin:0;padding:6px;list-style:none;min-width:100%;width:max-content;max-width:min(340px,86vw);display:flex;flex-direction:column;gap:2px}
+.ui-list li{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:8px 10px;border-radius:6px;font:500 12px var(--mono);color:var(--mut);cursor:pointer}
+.ui-list li.at{background:var(--raise);color:var(--fg)}
+.ui-list li.on{color:var(--fg)}.ui-list li b{color:var(--acc);font-size:12px}
+.ui-cal{width:292px;max-width:86vw;padding:12px;display:flex;flex-direction:column;gap:10px}
+.ui-cal-head{display:grid;grid-template-columns:30px 30px 1fr 30px 30px;align-items:center;text-align:center}
+.ui-cal-head b{font:600 13px var(--sans);color:var(--fg)}
+.ui-cal-head button,.ui-cal-foot button{display:grid;place-items:center;padding:0;height:30px;border-radius:6px;color:var(--mut);font:600 14px var(--mono)}
+.ui-cal-head button:hover,.ui-cal-foot button:hover:not(:disabled){background:var(--raise);color:var(--fg)}
+.ui-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.ui-cal-grid .dow{text-align:center;font:600 11px var(--mono);color:var(--dim);padding:4px 0}
+.ui-cal-grid button{display:grid;place-items:center;padding:0;height:34px;border-radius:6px;font:500 12px var(--mono);color:var(--fg)}
+.ui-cal-grid button:hover:not(:disabled):not(.on){background:var(--raise)}
+.ui-cal-grid button.today:not(.on){box-shadow:inset 0 0 0 1px var(--line)}
+.ui-cal-grid button.on{background:var(--acc);color:var(--on-acc,var(--bg));font-weight:700}
+.ui-cal-grid button:disabled{opacity:.3;cursor:default}
+.ui-cal-foot{display:flex;justify-content:space-between;border-top:1px solid var(--line2);padding-top:8px}
+.ui-cal-foot button{font:600 12px var(--mono);padding:0 10px;color:var(--acc)}.ui-cal-foot button:disabled{opacity:.35}
+
+/* Settings-style forms: a label above each control, controls on one baseline, equal heights */
+.f-grid{display:flex;flex-wrap:wrap;gap:20px 36px;align-items:flex-start}
+.f-fld{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0}
+.f-fld>span:first-child{font:700 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.f-fld .ui-seg{max-width:100%}
+.f-prog{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.f-prog .bar{flex:1;min-width:140px;height:8px;border-radius:999px;background:var(--raise);overflow:hidden}
+.f-prog .bar i{display:block;height:100%;border-radius:999px;background:var(--acc)}
+.f-prog span{font:500 12px var(--mono);color:var(--dim)}.f-prog b{color:var(--fg)}
+
+/* the shared page header (components/PageHero.tsx): the title sits on one line, and the content below starts a little closer */
+.s-root.s-sub .s-hero h1{max-width:none;font-size:clamp(30px,4vw,46px);margin:8px 0 12px}
+.s-root.s-sub .s-hero{padding:30px 0 22px}
+.s-root.s-sub .s-body{padding:24px 0 80px}
+
+/* the compact form of the field, for dense rows such as the calendar's targets */
+.ui-pop.compact .ui-trigger{height:30px;min-width:128px;padding:0 9px;font-size:11px;gap:8px}
+.ui-pop.compact .ui-cal{left:auto;right:0}
+
+/* a segmented control with many or long options wraps instead of widening the page */
+.ui-seg{max-width:100%}
+@media (max-width:700px){.ui-seg{flex-wrap:wrap}.ui-seg button{flex:1 1 auto}}

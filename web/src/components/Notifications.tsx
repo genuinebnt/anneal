@@ -1,13 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { counted, newOn, niceDate, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { clearNotes, useNotes } from "./toasts";
 import { useDialog } from "./useDialog";
 
-type Need = { id: string; text: string; to: string; slug?: string };
+type Need = { id: string; label: string; text: ReactNode; sub: string; tone: "due" | "next" | "warn" | "late"; to: string; slug?: string };
 
 const today = () => new Date().toLocaleDateString("en-CA");
 const ago = (t: number) => {
@@ -22,7 +22,8 @@ export function NotificationBell() {
     const box = useRef<HTMLDivElement>(null);
     const pop = useRef<HTMLDivElement>(null);
     useDialog(pop, open, () => setOpen(false));
-    const notes = useNotes();
+    // an entry from the removed "What's new" list can still be in this browser's history
+    const recent = useNotes().filter((n) => !/^anneal was updated/i.test(n.title));
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]) });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
@@ -50,11 +51,15 @@ export function NotificationBell() {
         const p = o.plan;
         const doneToday = activity.data?.week[activity.data.week.length - 1]?.solved ?? 0;
         const next = o.problems.find((x) => x.id === p.next_up[0]);
-        if (p.due > 0) needs.push({ id: "due", text: `${p.due} review${p.due === 1 ? "" : "s"} due${p.overdue ? `, ${p.overdue} overdue` : ""}`, to: "/dsa/review" });
-        if (p.solve_day && next && counted(o, next) && doneToday < newOn(o.settings, WEEKDAYS[(new Date().getDay() + 6) % 7] ?? "mon")) needs.push({ id: "today", text: `Today's problem: ${next.title}`, to: "/d/$slug", slug: next.slug });
+        const due = p.due === 1 ? "review" : "reviews";
+        if (p.due > 0) needs.push({ id: "due", label: `${p.due} ${due} due`, text: <><b className="nt-num">{p.due}</b> {due} due{p.overdue ? <>, <b className="nt-num">{p.overdue}</b> overdue</> : null}</>, sub: "Open today's queue", tone: "due", to: "/dsa/review" });
+        if (p.solve_day && next && counted(o, next) && doneToday < newOn(o.settings, WEEKDAYS[(new Date().getDay() + 6) % 7] ?? "mon")) needs.push({ id: "today", label: `Today's problem: ${next.title}`, text: <>Today's problem: <b>{next.title}</b></>, sub: `${next.difficulty} · new`, tone: "next", to: "/d/$slug", slug: next.slug });
         const streak = progress.data?.streak ?? 0;
-        if (p.solve_day && streak > 0 && doneToday === 0 && new Date().getHours() >= 17) needs.push({ id: "streak", text: `Your ${streak}-day streak needs a solve today`, to: next ? "/d/$slug" : "/dsa", slug: next?.slug });
-        if (plan.data && plan.data.summary.late > 0) needs.push({ id: "late", text: `Your plan is ${plan.data.summary.late} problem${plan.data.summary.late === 1 ? "" : "s"} late${plan.data.summary.finish ? `, finishing ${niceDate(plan.data.summary.finish, plan.data.today)}` : ""}`, to: "/dsa/calendar" });
+        if (p.solve_day && streak > 0 && doneToday === 0 && new Date().getHours() >= 17) needs.push({ id: "streak", label: `Your ${streak}-day streak needs a solve today`, text: <>Your <b className="nt-num">{streak}</b>-day streak needs a solve today</>, sub: "Before midnight", tone: "warn", to: next ? "/d/$slug" : "/dsa", slug: next?.slug });
+        if (plan.data && plan.data.summary.late > 0) {
+            const late = plan.data.summary.late;
+            needs.push({ id: "late", label: `Your plan is ${late} problems late`, text: <>Your plan is <b className="nt-num">{late}</b> problem{late === 1 ? "" : "s"} late</>, sub: plan.data.summary.finish ? `Finishing ${niceDate(plan.data.summary.finish, plan.data.today)}` : "Open the calendar", tone: "late", to: "/dsa/calendar" });
+        }
     }
     const live = needs.filter((n) => !dismissed.includes(n.id));
     const count = live.filter((n) => n.id !== "late").length;
@@ -78,31 +83,41 @@ export function NotificationBell() {
                 <div className="nt-pop" ref={pop} role="dialog" aria-label="Notifications">
                     {o && (
                         <div className="nt-sum" aria-label="Today at a glance">
-                            <div><b>{progress.data?.streak ?? 0}</b><span>day streak</span></div>
-                            <div><b>{o.plan.due}</b><span>reviews due</span></div>
-                            <div><b>{activity.data?.week[activity.data.week.length - 1]?.solved ?? 0}</b><span>solved today</span></div>
-                            <div><b>{o.plan.goal_done}<small>/{o.plan.goal_total}</small></b><span>of the goal</span></div>
+                            <div><b>{progress.data?.streak ?? 0}</b><span>streak</span></div>
+                            <div><b>{o.plan.due}</b><span>due</span></div>
+                            <div><b>{activity.data?.week[activity.data.week.length - 1]?.solved ?? 0}</b><span>today</span></div>
+                            <div><b>{o.plan.goal_done}<small>/{o.plan.goal_total}</small></b><span>goal</span></div>
                         </div>
                     )}
                     <span className="nt-lab">NEEDS YOU</span>
-                    {live.length === 0 && <p className="nt-empty">Nothing needs you right now.</p>}
-                    {live.map((n) => (
-                        <div key={n.id} className="nt-item">
-                            {n.slug ? <Link to="/d/$slug" params={{ slug: n.slug }} onClick={() => setOpen(false)}>{n.text}</Link> : <Link to={n.to as "/dsa/review"} onClick={() => setOpen(false)}>{n.text}</Link>}
-                            <button className="nt-x" aria-label={`Dismiss: ${n.text}`} title="Dismiss for today" onClick={() => dismiss(n.id)}>×</button>
-                        </div>
-                    ))}
+                    {live.length === 0 && <p className="nt-empty"><i aria-hidden="true">✓</i> You're caught up.</p>}
+                    {live.map((n) => {
+                        const inner = (
+                            <>
+                                <i className={`nt-dot ${n.tone}`} aria-hidden="true" />
+                                <span className="nt-tx"><span>{n.text}</span><small>{n.sub}</small></span>
+                                <span className="nt-go" aria-hidden="true">›</span>
+                            </>
+                        );
+                        return (
+                            <div key={n.id} className="nt-item">
+                                {n.slug ? <Link to="/d/$slug" params={{ slug: n.slug }} onClick={() => setOpen(false)}>{inner}</Link> : <Link to={n.to as "/dsa/review"} onClick={() => setOpen(false)}>{inner}</Link>}
+                                <button className="nt-x" aria-label={`Dismiss: ${n.label}`} title="Dismiss for today" onClick={() => dismiss(n.id)}>×</button>
+                            </div>
+                        );
+                    })}
                     <div className="nt-links">
                         <Link to="/dsa/plan" onClick={() => setOpen(false)}>Plan</Link>
                         <Link to="/dsa/calendar" onClick={() => setOpen(false)}>Calendar</Link>
                         <Link to="/dsa/review" onClick={() => setOpen(false)}>Review</Link>
                         <Link to="/settings" onClick={() => setOpen(false)}>Settings</Link>
                     </div>
-                    <span className="nt-lab">RECENT <button className="nt-clear" onClick={clearNotes} disabled={notes.length === 0}>clear</button></span>
-                    {notes.length === 0 && <p className="nt-empty">Nothing yet. What you log, undo and change shows up here.</p>}
-                    {notes.slice(0, 8).map((n) => (
+                    <span className="nt-lab">RECENT <button className="nt-clear" onClick={clearNotes} disabled={recent.length === 0}>clear</button></span>
+                    {recent.length === 0 && <p className="nt-empty">Nothing yet. What you log, undo and change shows up here.</p>}
+                    {recent.slice(0, 8).map((n) => (
                         <div key={n.id} className={`nt-note ${n.kind}`}>
-                            <span>{n.title}{n.text ? <small> {n.text}</small> : null}</span>
+                            <i className="nt-ico" aria-hidden="true">{n.kind === "ok" ? "✓" : n.kind === "er" ? "×" : "i"}</i>
+                            <span className="nt-tx"><span>{n.title}</span>{n.text ? <small>{n.text}</small> : null}</span>
                             <time>{ago(n.at)}</time>
                         </div>
                     ))}

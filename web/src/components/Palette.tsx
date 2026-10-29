@@ -2,13 +2,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api } from "../api";
-import { counted, newOn, statusOf, WEEKDAYS } from "../dsa";
+import { counted, newOn, niceDate, statusOf, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { THEMES, applyTheme, storedTheme } from "../theme";
 import { toast } from "./toasts";
 import { useDialog } from "./useDialog";
 
-type Hit = { key: string; label: string; kind: string; color: string; go: () => void; meta?: string };
+type Hit = { key: string; label: string; kind: string; color: string; go: () => void; meta?: string; rows?: [string, string][] };
 
 /** The order the groups are shown in. */
 const GROUPS = ["Now", "Recent", "Log", "Action", "Page", "Problem", "Stage", "Challenge", "Track"];
@@ -66,9 +66,9 @@ export function Palette({ onClose }: { onClose: () => void }) {
             void fn();
         };
         const hits: Hit[] = [
-            { key: "p-dsa", label: "DSA problems", kind: "Page", color: "var(--acc)", go: go("p-dsa", () => nav({ to: "/dsa" })) },
-            { key: "p-plan", label: "Plan", kind: "Page", color: "var(--acc)", go: go("p-plan", () => nav({ to: "/dsa/plan" })) },
-            { key: "p-review", label: "Review", kind: "Page", color: "var(--acc)", go: go("p-review", () => nav({ to: "/dsa/review" })) },
+            { key: "p-dsa", label: "DSA problems", kind: "Page", color: "var(--acc)", rows: dsa.data ? [["Goal", `${dsa.data.plan.goal_done} of ${dsa.data.plan.goal_total} done`], ["Reviews due", String(dsa.data.plan.due)]] : undefined, go: go("p-dsa", () => nav({ to: "/dsa" })) },
+            { key: "p-plan", label: "Plan", kind: "Page", color: "var(--acc)", rows: dsa.data ? [["Today", dsa.data.plan.solve_day ? "a solve day" : "no new problem"], ["New a week", String(dsa.data.settings.new_days.length * dsa.data.settings.new_per_day)], ["Finish by", dsa.data.settings.target_date ? niceDate(dsa.data.settings.target_date, dsa.data.today) : "not set"]] : undefined, go: go("p-plan", () => nav({ to: "/dsa/plan" })) },
+            { key: "p-review", label: "Review", kind: "Page", color: "var(--acc)", rows: dsa.data ? [["Due", String(dsa.data.plan.due)], ["Overdue", String(dsa.data.plan.overdue)], ["Room today", String(dsa.data.plan.capacity)]] : undefined, go: go("p-review", () => nav({ to: "/dsa/review" })) },
             { key: "p-cal", label: "Calendar", kind: "Page", color: "var(--acc)", go: go("p-cal", () => nav({ to: "/dsa/calendar" })) },
             { key: "p-company", label: "Interview mode (a company and a day)", kind: "Page", color: "var(--acc)", go: go("p-company", () => nav({ to: "/dsa/company" })) },
             { key: "p-mock", label: "Mock interview", kind: "Page", color: "var(--acc)", go: go("p-mock", () => nav({ to: "/dsa/mock" })) },
@@ -86,10 +86,10 @@ export function Palette({ onClose }: { onClose: () => void }) {
         if (o) {
             const p = o.plan;
             const next = o.problems.find((x) => x.id === p.next_up[0]);
-            if (p.due > 0) hits.unshift({ key: "n-review", label: `Review ${p.due} due problem${p.due === 1 ? "" : "s"}`, kind: "Now", color: "var(--vio)", meta: p.overdue ? `${p.overdue} overdue` : "today", go: go("n-review", () => nav({ to: "/dsa/review" })) });
+            if (p.due > 0) hits.unshift({ key: "n-review", label: `Review ${p.due} due problem${p.due === 1 ? "" : "s"}`, kind: "Now", color: "var(--vio)", meta: p.overdue ? `${p.overdue} overdue` : "today", rows: [["Due", String(p.due)], ["Overdue", String(p.overdue)], ["Room today", String(p.capacity)]], go: go("n-review", () => nav({ to: "/dsa/review" })) });
             if (p.solve_day && next && counted(o, next)) {
                 const n = newOn(o.settings, WEEKDAYS[(new Date(`${o.today}T00:00`).getDay() + 6) % 7] ?? "mon");
-                hits.unshift({ key: "n-next", label: `Today's problem: ${next.number} · ${next.title}`, kind: "Now", color: "var(--acc)", meta: `${next.difficulty} · ${n} today`, go: go("n-next", () => nav({ to: "/d/$slug", params: { slug: next.slug } })) });
+                hits.unshift({ key: "n-next", label: `Today's problem: ${next.number} · ${next.title}`, kind: "Now", color: "var(--acc)", meta: `${next.difficulty} · ${n} today`, rows: [["Difficulty", next.difficulty], ["New today", String(n)], ["Asked by", next.companies.slice(0, 3).map((c) => c.name).join(", ") || "–"]], go: go("n-next", () => nav({ to: "/d/$slug", params: { slug: next.slug } })) });
             }
         }
         for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", color: "var(--vio)", go: go(`t-${t.slug}`, () => nav({ to: "/t/$track", params: { track: t.slug } })) });
@@ -100,7 +100,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
         const today = dsa.data?.today ?? "";
         for (const p of dsa.data?.problems ?? []) {
             const st = today ? statusOf(p, today) : "new";
-            hits.push({ key: `d-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Problem", color: st === "solved" ? "var(--grn)" : "var(--acc)", meta: `${st === "solved" ? "solved · " : st === "due" ? "review due · " : st === "retry" ? "attempted · " : ""}${p.difficulty}`, go: go(`d-${p.id}`, () => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
+            hits.push({ key: `d-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Problem", color: st === "solved" ? "var(--grn)" : "var(--acc)", meta: `${st === "solved" ? "solved · " : st === "due" ? "review due · " : st === "retry" ? "attempted · " : ""}${p.difficulty}`,
+                rows: [["Difficulty", p.difficulty], ["Status", { new: "not attempted", retry: "attempted", due: "review due", solved: "solved" }[st]], ["Last tried", p.state.last_review ? niceDate(p.state.last_review.slice(0, 10), today) : "never"], ["Next review", p.state.due ? niceDate(p.state.due, today) : "none"], ...(p.companies.length ? [["Asked by", p.companies.slice(0, 3).map((c) => c.name).join(", ")] as [string, string]] : []), ...(p.premium ? [["Premium", "needs a subscription"] as [string, string]] : [])], go: go(`d-${p.id}`, () => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
         }
         return hits;
     }, [tracks.data, dsa.data, course.data, nav, onClose, recent]);
@@ -188,6 +189,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
                         } else if (e.key === "Enter") shown[sel]?.go();
                     }}
                 />
+                <div className="hd-main">
                 <ul role="listbox" ref={list}>
                     {shown.map((h, i) => (
                         <li key={`${h.kind}-${h.key}`} role="presentation">
@@ -203,6 +205,19 @@ export function Palette({ onClose }: { onClose: () => void }) {
                     ))}
                     {shown.length === 0 && <li className="hd-none">No match. Try fewer letters, a LeetCode number, or <b>&gt;</b> for actions.</li>}
                 </ul>
+                {shown[sel] && (
+                    <aside className="hd-prev" aria-label="Preview" style={{ "--c": shown[sel]!.color } as CSSProperties}>
+                        <span className="k"><i />{(HEADINGS[shown[sel]!.kind] ?? shown[sel]!.kind).toLowerCase()}</span>
+                        <b className="t">{shown[sel]!.label}</b>
+                        {shown[sel]!.rows && (
+                            <dl>
+                                {shown[sel]!.rows!.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}
+                            </dl>
+                        )}
+                        <span className="go"><kbd>↵</kbd> open</span>
+                    </aside>
+                )}
+                </div>
                 <div className="hd-hint">
                     <span>↑↓ move</span>
                     <span>↵ open</span>

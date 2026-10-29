@@ -4,30 +4,38 @@ test("each weekday takes its own number of new and practice problems, and it sur
     const before = (await (await request.get("/api/dsa")).json()).settings;
     try {
         await page.goto("/dsa/plan");
-        const wed = page.locator(".p-day").nth(2);
-        await expect(wed.locator(".n")).toHaveText("WED");
-        // make sure Wednesday is a solve day, then ask for three new problems and four practice ones
-        if (!(await wed.getAttribute("class"))?.includes("solve")) {
-            while (!(await wed.getAttribute("class"))?.includes("solve")) await wed.locator(".mode").click();
-        }
-        const solve = wed.locator(".p-cap").nth(1);
-        const practice = wed.locator(".p-cap").nth(0);
-        await expect(solve.locator("span").first()).toHaveText("solve");
-        await expect(practice.locator("span").first()).toHaveText("practice");
-        while (Number(await solve.locator("b").innerText()) < 3) await solve.getByRole("button", { name: "more" }).click();
-        while (Number(await practice.locator("b").innerText()) < 4) await practice.getByRole("button", { name: "more" }).click();
-        await expect(page.locator(".p-bar").nth(2).locator("b")).toHaveText("7");
+        const wed = page.locator(".p-r:not(.head)").nth(2);
+        await expect(wed.locator(".dn")).toHaveText("WED");
+        await wed.getByRole("radio", { name: "Solve" }).click();
+        const solve = wed.getByRole("group", { name: "wed solve" });
+        const practice = wed.getByRole("group", { name: "wed practice" });
+        while (Number(await solve.locator("output").innerText()) < 3) await solve.getByRole("button", { name: "More wed solve" }).click();
+        while (Number(await practice.locator("output").innerText()) < 4) await practice.getByRole("button", { name: "More wed practice" }).click();
+        await expect(wed.locator(".ld b")).toHaveText("7");
         await page.getByRole("button", { name: "Save plan" }).click();
         await expect(page.getByText("Saved.")).toBeVisible();
         await page.reload();
-        const again = page.locator(".p-day").nth(2);
-        await expect(again.locator(".p-cap").nth(1).locator("b")).toHaveText("3");
-        await expect(again.locator(".p-cap").nth(0).locator("b")).toHaveText("4");
+        const again = page.locator(".p-r:not(.head)").nth(2);
+        await expect(again.getByRole("group", { name: "wed solve" }).locator("output")).toHaveText("3");
+        await expect(again.getByRole("group", { name: "wed practice" }).locator("output")).toHaveText("4");
         // the other solve days keep the usual number
-        await expect(page.locator(".p-day.solve").first().locator(".p-cap").nth(1).locator("b")).toHaveText(/^[1-9]/);
+        await expect(page.locator(".p-r.solve").first().getByRole("group", { name: /solve$/ }).locator("output")).toHaveText(/^[1-9]/);
     } finally {
         await request.put("/api/settings/srs", { data: before });
     }
+});
+
+test("the themed date field and select open, pick and close with the keyboard", async ({ page }) => {
+    await page.goto("/dsa/plan");
+    await page.getByRole("button", { name: "Finish by" }).click();
+    await expect(page.getByRole("dialog", { name: /Finish by/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: /Finish by/ })).toHaveCount(0);
+    const first = page.getByRole("button", { name: "First reviews go to" });
+    await first.click();
+    await expect(page.getByRole("listbox", { name: "First reviews go to" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
 });
 
 test("⌘K opens on what to do next, and the bell shows today at a glance", async ({ page }) => {

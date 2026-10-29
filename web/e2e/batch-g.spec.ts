@@ -74,9 +74,10 @@ test("interview mode: pick a company, make it the plan, and go back to the main 
     await page.getByLabel("COMPANY").fill("Amazon");
     await page.getByRole("option", { name: /Amazon/ }).first().click();
     await expect(page.locator(".cm-stats")).toContainText("in the plan");
-    const when = new Date(Date.now() + 40 * 864e5).toISOString().slice(0, 10);
-    await page.getByLabel("INTERVIEW DAY (OPTIONAL)").fill(when);
-    await expect(page.locator(".cm-pace")).toContainText("solve day");
+    await page.getByRole("button", { name: "Interview day" }).click();
+    await page.getByRole("button", { name: "Next month" }).click();
+    await page.getByRole("button", { name: /^15 / }).click();
+    await expect(page.locator(".cm-chips")).toContainText("solve day");
     await page.getByRole("button", { name: "Make this my plan" }).click();
     await expect(page.locator(".cm-now")).toContainText("Interview: Amazon");
     await page.getByRole("button", { name: "Back to my main plan" }).click();

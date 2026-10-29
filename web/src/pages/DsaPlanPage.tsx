@@ -1,13 +1,12 @@
-import { Link } from "@tanstack/react-router";
 import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type DsaOverview, type SrsSettings, type Weekday } from "../api";
-import { Header } from "../components/Header";
+import { PageFrame, PageHero } from "../components/PageHero";
+import { DateField, Segmented, Select, Stepper } from "../components/ui";
 import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
 type Mode = "solve" | "practice" | "rest";
-const NEXT: Record<Mode, Mode> = { solve: "practice", practice: "rest", rest: "solve" };
 
 const modeOf = (s: SrsSettings, d: Weekday): Mode => (s.new_days.includes(d) ? "solve" : s.capacity[d] > 0 ? "practice" : "rest");
 
@@ -16,30 +15,14 @@ export function DsaPlanPage() {
   const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
   const o = overview.data;
   return (
-    <>
-      <Header area="dsa" />
-      <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-        <div className="wrap" style={{ paddingBlock: 28 }}>
-          <div className="eyebrow">
-            <Link to="/dsa" style={{ color: "var(--ca)" }}>DSA</Link>
-            <span>/</span>
-            <span>PLAN</span>
-          </div>
-          <h1 className="h1 md">Your plan</h1>
-          {o ? <Editor key={o.today} o={o} /> : overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}
-        </div>
-      </main>
-    </>
-  );
-}
-
-function Stepper({ value, onChange, min, max, step = 1 }: { value: number; onChange: (n: number) => void; min: number; max: number; step?: number }) {
-  return (
-    <span className="p-step">
-      <button aria-label="less" onClick={() => onChange(Math.max(min, value - step))}>−</button>
-      <b>{value}</b>
-      <button aria-label="more" onClick={() => onChange(Math.min(max, value + step))}>+</button>
-    </span>
+    <PageFrame>
+      {o ? <Editor key={o.today} o={o} /> : (
+        <>
+          <PageHero eyebrow={<><b>DSA</b> / PLAN</>} title="Your plan," accent="on pace." />
+          <div className="s-body">{overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}</div>
+        </>
+      )}
+    </PageFrame>
   );
 }
 
@@ -81,138 +64,107 @@ function Editor({ o }: { o: DsaOverview }) {
     setS((cur) => ({ ...cur, goal: { ...cur.goal, list: "neetcode150", free_only: true, extra: kind === "plus" ? 5 : 0, custom_left: kind === "custom" ? (cur.goal.custom_left ?? 40) : null } }));
   };
 
-  const status =
-    pace.finish == null ? (
-      <span className="p-pill none">no solve days chosen</span>
-    ) : pace.daysVsTarget == null ? null : pace.daysVsTarget <= 0 ? (
-      <span className="p-pill ok">{Math.abs(pace.daysVsTarget)} days before the target</span>
-    ) : (
-      <span className="p-pill late">{pace.daysVsTarget} days after the target</span>
-    );
-  const note =
-    room < 14
-      ? "Under about 14 reviews a week, recall of what you learned starts to slip (86% in the simulation). Add room on a practice day."
-      : solveDays === 0
-        ? "With no solve days, anneal only schedules reviews."
-        : `A week: ${newPerWeek} new, up to ${room} reviews, ${WEEKDAYS.filter((d) => modeOf(s, d) === "rest").length} rest.`;
+  const restDays = WEEKDAYS.filter((d) => modeOf(s, d) === "rest").length;
+  const practiceDays = 7 - solveDays - restDays;
+  const done = goal.total - goal.remaining;
+
+  const modeOptions = [["solve", "Solve"], ["practice", "Practice"], ["rest", "Rest"]] as const;
+  const coreOptions: (readonly [string, string])[] = [["", `The same as the rest (${Math.round(s.retention * 100)}%)`], ...[0.9, 0.92, 0.95].filter((r) => r > s.retention).map((r) => [String(r), `${Math.round(r * 100)}%`] as const)];
+  const firstOptions: (readonly [string, string])[] = [["", "Any day with room"], ...WEEKDAYS.filter((d) => s.capacity[d] > 0).map((d) => [d, d.charAt(0).toUpperCase() + d.slice(1)] as const)];
 
   return (
-    <div className="p-grid">
+    <>
+    <PageHero
+      eyebrow={<><b>DSA</b> / PLAN</>}
+      title="Your plan,"
+      accent="on pace."
+      stats={[
+        { value: goal.remaining, label: "LEFT TO SOLVE" },
+        { value: newPerWeek, label: "NEW A WEEK" },
+        { value: pace.finish ? niceDate(pace.finish, o.today) : "never", label: "FINISH AT THIS PACE" },
+      ]}
+    />
+    <div className="p-grid s-body">
       <div className="p-col">
         <section className="p-card">
-          <h2>TARGET <em>a soft goal, not a deadline</em></h2>
-          <div className="p-row">
-            <label className="p-fld">
-              <span>Finish by</span>
-              <input type="date" value={s.target_date ?? ""} onChange={(e) => setS({ ...s, target_date: e.target.value || null })} />
-            </label>
-            <div className="p-fld">
+          <h2>TARGET</h2>
+          <div className="f-grid">
+            <div className="f-fld"><span>Finish by</span><DateField label="Finish by" value={s.target_date ?? ""} onChange={(v) => setS({ ...s, target_date: v || null })} /></div>
+            <div className="f-fld">
               <span>Goal</span>
-              <div className="seg" role="group" aria-label="Goal">
-                <button className={goalKind === "150" ? "on" : ""} onClick={() => pickGoal("150")}>NeetCode 150 · free</button>
-                <button className={goalKind === "plus" ? "on" : ""} onClick={() => pickGoal("plus")}>+ from the 250</button>
-                <button className={goalKind === "custom" ? "on" : ""} onClick={() => pickGoal("custom")}>Custom</button>
-              </div>
+              <Segmented label="Goal" value={goalKind} onChange={pickGoal} options={[["150", "NeetCode 150"], ["plus", "+ from the 250"], ["custom", "Custom"]]} />
             </div>
-            {goalKind === "plus" && (
-              <div className="p-fld"><span>Extra from the 250</span><Stepper value={s.goal.extra} min={1} max={100} onChange={(extra) => setS({ ...s, goal: { ...s.goal, extra } })} /></div>
-            )}
-            {goalKind === "custom" && (
-              <div className="p-fld"><span>Problems left</span><Stepper value={s.goal.custom_left ?? 40} min={1} max={943} step={5} onChange={(custom_left) => setS({ ...s, goal: { ...s.goal, custom_left } })} /></div>
-            )}
-          </div>
-          <div className="p-row" style={{ alignItems: "center" }}>
-            <div className="p-fld">
+            {goalKind === "plus" && <div className="f-fld"><span>Extra from the 250</span><Stepper label="extra problems" value={s.goal.extra} min={1} max={100} onChange={(extra) => setS({ ...s, goal: { ...s.goal, extra } })} /></div>}
+            {goalKind === "custom" && <div className="f-fld"><span>Problems left</span><Stepper label="problems left" value={s.goal.custom_left ?? 40} min={1} max={943} step={5} onChange={(custom_left) => setS({ ...s, goal: { ...s.goal, custom_left } })} /></div>}
+            <div className="f-fld">
               <span>Premium problems</span>
-              <div className="seg" role="group" aria-label="Premium problems">
-                <button className={s.goal.free_only ? "on" : ""} onClick={() => setS({ ...s, goal: { ...s.goal, free_only: true } })}>Left out</button>
-                <button className={s.goal.free_only ? "" : "on"} onClick={() => setS({ ...s, goal: { ...s.goal, free_only: false } })}>Included</button>
-              </div>
+              <Segmented label="Premium problems" value={s.goal.free_only ? "out" : "in"} onChange={(v) => setS({ ...s, goal: { ...s.goal, free_only: v === "out" } })} options={[["out", "Left out"], ["in", "Included"]]} />
             </div>
           </div>
-          <p className="p-hint">{goal.remaining} left of {goal.total}. Solved problems come off on their own. Premium problems need a LeetCode subscription, so the plan and the calendar leave them out unless you include them.</p>
+          <div className="f-prog" role="img" aria-label={`${done} of ${goal.total} done`}>
+            <div className="bar"><i style={{ width: `${goal.total ? (done / goal.total) * 100 : 0}%` }} /></div>
+            <span><b>{done}</b> of {goal.total} done · <b>{goal.remaining}</b> left</span>
+          </div>
         </section>
 
         <section className="p-card">
-          <h2>WEEK <em>click a day to cycle solve → practice → rest</em></h2>
-          <div className="p-week">
-            {WEEKDAYS.map((d) => {
-              const m = modeOf(s, d);
-              return (
-                <div key={d} className={`p-day ${m}`}>
-                  <span className="n">{d.toUpperCase()}</span>
-                  <button className="mode" onClick={() => setMode(d, NEXT[m])}>{m}</button>
-                  <div className={`p-cap${m === "rest" ? " off" : ""}`}>
-                    <span>practice</span>
-                    <Stepper value={m === "rest" ? 0 : s.capacity[d]} min={m === "solve" ? 0 : 1} max={30} onChange={(n) => setS({ ...s, capacity: { ...s.capacity, [d]: n } })} />
-                  </div>
-                  <div className={`p-cap${m === "solve" ? "" : " off"}`}>
-                    <span>solve</span>
-                    <Stepper value={m === "solve" ? newOn(s, d) : 0} min={1} max={20} onChange={(n) => setS({ ...s, new_by_day: { ...s.new_by_day, [d]: n } })} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="p-load" aria-label="Problems per day">
+          <h2>
+            WEEK
+            <span className="p-tally"><b>{newPerWeek}</b> new · <b>{room}</b> practice · <b>{restDays}</b> rest</span>
+          </h2>
+          <div className="p-rows">
+            <div className="p-r head" aria-hidden="true"><span>Day</span><span>Mode</span><span>Solve</span><span>Practice</span><span>Load</span></div>
             {WEEKDAYS.map((d, i) => {
+              const m = modeOf(s, d);
               const n = newByDay[i] ?? 0;
-              const r = modeOf(s, d) === "rest" ? 0 : s.capacity[d];
+              const r = m === "rest" ? 0 : s.capacity[d];
               return (
-                <div key={d} className="p-bar" title={`${d}: ${n} new, ${r} practice`}>
-                  <div className="stack">
-                    <i className="rv" style={{ height: `${(r / busiest) * 100}%` }} />
-                    <i className="nw" style={{ height: `${(n / busiest) * 100}%` }} />
-                  </div>
-                  <b>{n + r}</b>
+                <div key={d} className={`p-r ${m}`}>
+                  <b className="dn">{d.toUpperCase()}</b>
+                  <Segmented label={`${d} mode`} className="p-mode" value={m} onChange={(v) => setMode(d, v)} options={modeOptions} />
+                  <span className="cell" data-l="Solve"><Stepper compact label={`${d} solve`} disabled={m !== "solve"} value={m === "solve" ? newOn(s, d) : 0} min={1} max={20} onChange={(v) => setS({ ...s, new_by_day: { ...s.new_by_day, [d]: v } })} /></span>
+                  <span className="cell" data-l="Practice"><Stepper compact label={`${d} practice`} disabled={m === "rest"} value={r} min={m === "solve" ? 0 : 1} max={30} onChange={(v) => setS({ ...s, capacity: { ...s.capacity, [d]: v } })} /></span>
+                  <span className="ld" title={`${n} new, ${r} practice`}>
+                    <span className="split"><i className="nw" style={{ width: `${(n / busiest) * 100}%` }} /><i className="rv" style={{ width: `${(r / busiest) * 100}%` }} /></span>
+                    <b>{n + r}</b>
+                  </span>
                 </div>
               );
             })}
           </div>
-          <div className="p-key"><span><i style={{ background: "var(--acc)" }} />solve: new problems, plus practice</span><span><i style={{ background: "var(--vio)" }} />practice: reviews only</span><span><i style={{ background: "var(--line)" }} />rest: nothing</span></div>
-          <div className="p-row" style={{ alignItems: "center" }}>
-            <div className="p-fld"><span>Usual new problems on a solve day</span><Stepper value={s.new_per_day} min={1} max={5} onChange={(new_per_day) => setS({ ...s, new_per_day })} /></div>
-            <label className="p-fld">
-              <span>First reviews go to</span>
-              <select value={s.consolidate_on ?? ""} onChange={(e) => setS({ ...s, consolidate_on: (e.target.value || null) as Weekday | null })}>
-                <option value="">any day with room</option>
-                {WEEKDAYS.filter((d) => s.capacity[d] > 0).map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </label>
-          </div>
-          <div className="p-row" style={{ alignItems: "center" }}>
-            <div className="p-fld">
+        </section>
+
+        <section className="p-card">
+          <h2>RULES</h2>
+          <div className="f-grid">
+            <div className="f-fld"><span>Usual new problems on a solve day</span><Stepper label="usual new problems" value={s.new_per_day} min={1} max={5} onChange={(new_per_day) => setS({ ...s, new_per_day })} /></div>
+            <div className="f-fld"><span>First reviews go to</span><Select label="First reviews go to" value={s.consolidate_on ?? ""} options={firstOptions} onChange={(v) => setS({ ...s, consolidate_on: (v || null) as Weekday | null })} /></div>
+            <div className="f-fld">
               <span>When a day is full</span>
-              <div className="seg" role="group" aria-label="Review order">
-                <button className={s.prioritise ? "on" : ""} onClick={() => setS({ ...s, prioritise: true })}>Important first</button>
-                <button className={s.prioritise ? "" : "on"} onClick={() => setS({ ...s, prioritise: false })}>Most forgotten first</button>
-              </div>
+              <Segmented label="Review order" value={s.prioritise ? "important" : "forgotten"} onChange={(v) => setS({ ...s, prioritise: v === "important" })} options={[["important", "Important first"], ["forgotten", "Most forgotten first"]]} />
             </div>
-            <label className="p-fld">
-              <span>Remember core problems to</span>
-              <select value={s.core_retention ?? ""} onChange={(e) => setS({ ...s, core_retention: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">the same as the rest ({Math.round(s.retention * 100)}%)</option>
-                {[0.9, 0.92, 0.95].filter((r) => r > s.retention).map((r) => <option key={r} value={r}>{Math.round(r * 100)}%, a few more reviews</option>)}
-              </select>
-            </label>
+            <div className="f-fld"><span>Remember core problems to</span><Select label="Remember core problems to" value={s.core_retention == null ? "" : String(s.core_retention)} options={coreOptions} onChange={(v) => setS({ ...s, core_retention: v ? Number(v) : null })} /></div>
           </div>
         </section>
       </div>
 
-      <aside className="p-col">
+      <aside className="p-col p-side">
         <section className="p-card p-res">
           <h2>YOUR PACE</h2>
           <div className="p-big">{pace.perSolveDay ?? "—"}<small>{pace.perSolveDay == null ? "no solve days" : "a solve day"}</small></div>
-          {status}
+          {pace.finish == null ? <span className="p-pill none">No solve days chosen</span> : pace.daysVsTarget == null ? null : pace.daysVsTarget <= 0 ? <span className="p-pill ok">{Math.abs(pace.daysVsTarget)} days before the target</span> : <span className="p-pill late">{pace.daysVsTarget} days after the target</span>}
           <dl className="p-kv">
             <div><dt>Solve days left</dt><dd>{pace.solveDaysLeft}</dd></div>
             <div><dt>Needed per week</dt><dd>{pace.perWeek != null ? pace.perWeek.toFixed(1) : "—"}</dd></div>
             <div><dt>Finish at your pace</dt><dd>{pace.finish ? niceDate(pace.finish, o.today) + (pace.finish > o.today ? `, ${pace.finish.slice(0, 4)}` : "") : "never"}</dd></div>
-            <div><dt>New problems per week</dt><dd>{newPerWeek}</dd></div>
-            <div><dt>Practice room per week</dt><dd>{room}</dd></div>
-            <div><dt>Problems in a busy day</dt><dd>{busiest}</dd></div>
+            <div><dt>New per week</dt><dd>{newPerWeek}</dd></div>
+            <div><dt>Practice per week</dt><dd>{room}</dd></div>
+            <div><dt>Busiest day</dt><dd>{busiest}</dd></div>
           </dl>
-          <p className="p-hint">{note}</p>
+          <div className="p-mix" role="img" aria-label={`${solveDays} solve days, ${practiceDays} practice days, ${restDays} rest days`}>
+            {WEEKDAYS.map((d) => <i key={d} className={modeOf(s, d)} title={`${d}: ${modeOf(s, d)}`} />)}
+          </div>
+          {room < 14 && <p className="p-warn" role="status">Under 14 practice problems a week, recall starts to slip.</p>}
           <div className="p-save">
             <button className="nu-go" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : "Save plan"}</button>
             {dirty && <button className="d-clear" onClick={() => { setS(o.settings); }}>discard</button>}
@@ -222,5 +174,6 @@ function Editor({ o }: { o: DsaOverview }) {
         </section>
       </aside>
     </div>
+    </>
   );
 }

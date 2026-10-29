@@ -63,7 +63,7 @@
 .cm-card{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
 .cm-lab{font:600 11px var(--mono);letter-spacing:.14em;color:var(--dim)}
 .cm-q,.cm-date{height:38px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:0 12px;font:500 13px var(--sans)}
-.cm-list{display:flex;flex-direction:column;gap:6px;max-height:480px;overflow-y:auto;scrollbar-width:none}.cm-list::-webkit-scrollbar{display:none}
+.cm-list{display:flex;flex-direction:column;gap:6px;max-height:640px;overflow-y:auto;scrollbar-width:none}.cm-list::-webkit-scrollbar{display:none}
 .cm-co{display:flex;flex-direction:column;gap:2px;text-align:left;padding:9px 12px;border:1px solid var(--line2);border-radius:12px;background:var(--bg);cursor:pointer}
 .cm-co:hover{border-color:var(--line)}.cm-co.on{border-color:var(--acc);background:var(--acc-bg)}.cm-co b{font-size:13px}.cm-co small{font:500 11px var(--mono);color:var(--dim)}
 .cm-h{margin:0;font-size:24px;letter-spacing:-.02em}
@@ -72,3 +72,34 @@
 .cm-pace{margin:0;font:500 12px/1.6 var(--mono);color:var(--mut);background:var(--raise);border-radius:8px;padding:10px 12px}.cm-pace b{color:var(--fg)}
 .cm-next{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:5px;font-size:13px}.cm-next li small{margin-left:8px;font:500 11px var(--mono);color:var(--dim)}.cm-next a{color:var(--fg)}.cm-next a:hover{color:var(--acc)}
 .cm-ok{font:500 12px var(--mono);color:var(--grn)}
+
+/* Interview mode inside the shared page frame */
+.s-wrap .cm-wrap{max-width:none;padding:24px 0 80px;gap:16px}
+.cm-cols{grid-template-columns:minmax(280px,34%) minmax(0,1fr)}
+.cm-card{border-radius:12px}
+.cm-card[aria-label="The plan"]{position:relative;overflow:hidden;gap:16px;border-color:color-mix(in oklab,var(--acc) 40%,var(--line2))}
+.cm-card[aria-label="The plan"]::before{content:"";position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,transparent,var(--acc),transparent)}
+.cm-top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.cm-sub{font:500 12px var(--mono);color:var(--dim)}
+.cm-opt{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--fg)}.cm-opt small{margin-left:8px;font:500 11px var(--mono);color:var(--dim)}
+.cm-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:700px){.cm-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.cm-split{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.cm-split .split{flex:1 1 100%;height:10px;border-radius:999px;background:var(--raise);display:flex;overflow:hidden}
+.cm-split .split i{display:block;height:100%}
+.cm-split i.e{background:var(--grn)}.cm-split i.m{background:var(--warn)}.cm-split i.h{background:var(--bad)}
+.cm-split>span{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--mono);color:var(--dim)}.cm-split>span>i{width:8px;height:8px;border-radius:2px}.cm-split b{color:var(--fg);font-weight:600}.cm-split .r{margin-left:auto}
+.cm-when{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 24px}
+.cm-chips{display:flex;gap:8px;flex-wrap:wrap}
+.cm-chip{font:500 12px var(--mono);border:1px solid var(--line2);border-radius:8px;background:var(--bg);padding:8px 11px;color:var(--mut)}.cm-chip b{color:var(--fg)}
+.cm-chip.ok{color:var(--grn);border-color:color-mix(in oklab,var(--grn) 40%,var(--line2));background:var(--grn-bg)}
+.cm-chip.warn,.cm-chip.bad{color:var(--warn);border-color:color-mix(in oklab,var(--warn) 40%,var(--line2));background:var(--warn-bg)}
+.cm-next{padding:0;list-style:none;gap:0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
+.cm-next li{display:grid;grid-template-columns:26px minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:9px 12px;border-top:1px solid var(--line2)}
+.cm-next li:first-child{border-top:0}
+.cm-next li .rk{font:600 11px var(--mono);color:var(--dim)}
+.cm-next li a{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cm-next li a:hover{color:var(--acc)}
+.cm-next li small{margin:0;font:500 11px var(--mono);color:var(--dim)}
+.cm-d{font:600 11px var(--mono);border-radius:4px;padding:2px 8px;background:var(--raise);color:var(--mut)}
+.cm-d.easy{color:var(--grn);background:var(--grn-bg)}.cm-d.medium{color:var(--warn);background:var(--warn-bg)}.cm-d.hard{color:var(--bad);background:color-mix(in oklab,var(--bad) 14%,transparent)}
+.cm-co{position:relative}

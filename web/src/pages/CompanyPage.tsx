@@ -1,9 +1,10 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type DsaProblem } from "../api";
-import { Header } from "../components/Header";
+import { PageFrame, PageHero } from "../components/PageHero";
 import { Skeleton } from "../components/Skeleton";
+import { DateField, Switch } from "../components/ui";
 import { DIFF, counted, niceDate } from "../dsa";
 import { COUNT_KEYS } from "../premium";
 
@@ -44,6 +45,13 @@ export function CompanyPage() {
         }
         return [...by.values()].sort((a, b) => b.asked - a.asked || a.name.localeCompare(b.name));
     }, [o]);
+    // never an empty page: the company asked about most is chosen until you pick another
+    useEffect(() => {
+        if (!company && companies[0]) {
+            setCompany(companies[0].name);
+            setRecent(companies[0].recent >= 8);
+        }
+    }, [companies, company]);
     const shown = companies.filter((c) => c.name.toLowerCase().includes(q.trim().toLowerCase()));
     const chosen = companies.find((c) => c.name === company);
 
@@ -59,6 +67,7 @@ export function CompanyPage() {
         return n + ((o.settings.new_days as string[]).some((d) => WEEKDAY[d] === new Date().getDay()) ? 1 : 0);
     }, [o, date]);
     const perDay = solveDays ? left.length / solveDays : null;
+    const bands = [0, 1, 2].map((i) => left.filter((p) => ["easy", "medium", "hard"][i] === p.difficulty).length);
     const planned = o?.settings.new_per_day ?? 1;
 
     const make = useMutation({
@@ -80,12 +89,18 @@ export function CompanyPage() {
     const tomorrow = isoDay(new Date(Date.now() + 864e5));
 
     return (
-        <>
-            <Header area="dsa" />
-            <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <div className="cm-wrap">
-                    <h1>Interview mode</h1>
-
+        <PageFrame>
+            <PageHero
+                eyebrow={<><b>DSA</b> / INTERVIEW MODE</>}
+                title="Interview"
+                accent="mode."
+                stats={[
+                    { value: companies.length, label: "COMPANIES" },
+                    { value: chosen ? scope.length : "–", label: chosen ? `${chosen.name.toUpperCase()} IN THE PLAN` : "IN THE PLAN" },
+                    { value: chosen ? left.length : "–", label: "TO GO" },
+                ]}
+            />
+            <div className="cm-wrap">
                     {onCompanyPlan && (
                         <div className="cm-now" role="status">
                             <span>Your plan is <b>{active.name}</b>{active.finish ? <>, finishing {niceDate(active.finish, plan.data!.today)}</> : null}{active.late ? <>, <b>{active.late}</b> late</> : null}. Next up follows it.</span>
@@ -119,29 +134,50 @@ export function CompanyPage() {
                                     <p className="rempty" style={{ margin: 0 }}>Choose a company to see what it asks.</p>
                                 ) : (
                                     <>
-                                        <h2 className="cm-h">{chosen.name}</h2>
-                                        <label className="cm-chk"><input type="checkbox" checked={recent} onChange={(e) => setRecent(e.target.checked)} /> Only what it asked in the last six months <small>({chosen.recent} of {chosen.asked})</small></label>
+                                        <div className="cm-top">
+                                            <h2 className="cm-h">{chosen.name}</h2>
+                                            <span className="cm-sub">{chosen.asked} asked · {chosen.recent} in the last six months</span>
+                                        </div>
+                                        <div className="cm-opt">
+                                            <Switch on={recent} onChange={setRecent} label="Only what it asked in the last six months" />
+                                            <span>Only the last six months <small>{chosen.recent} of {chosen.asked}</small></span>
+                                        </div>
                                         <div className="cm-stats">
                                             <div><b>{scope.length}</b><span>in the plan</span></div>
-                                            <div><b>{scope.length - left.length}</b><span>already solved</span></div>
+                                            <div><b>{scope.length - left.length}</b><span>solved</span></div>
                                             <div><b>{left.length}</b><span>to go</span></div>
+                                            <div><b>{perDay != null ? perDay.toFixed(1) : "–"}</b><span>per solve day</span></div>
                                         </div>
-                                        <label className="cm-lab" htmlFor="cm-date">INTERVIEW DAY (OPTIONAL)</label>
-                                        <input id="cm-date" className="cm-date" type="date" min={tomorrow} value={date} onChange={(e) => setDate(e.target.value)} />
-                                        {date && solveDays != null && (
-                                            <p className="cm-pace" role="status">
-                                                {solveDays === 0 ? "There is no solve day before that day in your routine." : (
-                                                    <>
-                                                        {solveDays} solve day{solveDays === 1 ? "" : "s"} until then. <b>{left.length}</b> to go is about <b>{perDay!.toFixed(1)}</b> a solve day; your routine does {planned}.{" "}
-                                                        {perDay! <= planned ? "That fits." : perDay! <= planned * 1.5 ? "Tight: add a solve day or two on the calendar." : "More than the routine can do: narrow it to the last six months, or move the day."}
-                                                    </>
-                                                )}
-                                            </p>
-                                        )}
+                                        <div className="cm-split" role="img" aria-label={`${bands[0]} easy, ${bands[1]} medium, ${bands[2]} hard to go`}>
+                                            <div className="split">{bands.map((n, i) => (n ? <i key={i} className={["e", "m", "h"][i]} style={{ flex: n }} /> : null))}</div>
+                                            <span><i className="e" />Easy <b>{bands[0]}</b></span>
+                                            <span><i className="m" />Medium <b>{bands[1]}</b></span>
+                                            <span><i className="h" />Hard <b>{bands[2]}</b></span>
+                                            <span className="r"><b>{left.filter((p) => p.companies.find((c) => c.name === company)?.recent).length}</b> recent</span>
+                                        </div>
+                                        <div className="cm-when">
+                                            <div className="f-fld"><span>Interview day</span><DateField label="Interview day" min={tomorrow} value={date} onChange={setDate} /></div>
+                                            {date && solveDays != null && (
+                                                <div className="cm-chips" role="status">
+                                                    {solveDays === 0 ? <span className="cm-chip bad">No solve day before then</span> : (
+                                                        <>
+                                                            <span className="cm-chip"><b>{solveDays}</b> solve day{solveDays === 1 ? "" : "s"}</span>
+                                                            <span className="cm-chip"><b>{perDay!.toFixed(1)}</b> a day · routine {planned}</span>
+                                                            <span className={`cm-chip ${perDay! <= planned ? "ok" : perDay! <= planned * 1.5 ? "warn" : "bad"}`}>{perDay! <= planned ? "Fits" : perDay! <= planned * 1.5 ? "Tight" : "Too much"}</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
                                         <span className="cm-lab">FIRST UP</span>
                                         <ol className="cm-next">
-                                            {next.map((p) => (
-                                                <li key={p.id}><Link to="/d/$slug" params={{ slug: p.slug }}>{p.title}</Link><small>{DIFF[p.difficulty][0]} · {p.companies.find((c) => c.name === company)?.recent ? "recent" : "older"}</small></li>
+                                            {next.map((p, i) => (
+                                                <li key={p.id}>
+                                                    <span className="rk">{i + 1}</span>
+                                                    <Link to="/d/$slug" params={{ slug: p.slug }}>{p.title}</Link>
+                                                    <span className={`cm-d ${p.difficulty}`}>{DIFF[p.difficulty][0]}</span>
+                                                    <small>{p.companies.find((c) => c.name === company)?.recent ? "recent" : "older"}</small>
+                                                </li>
                                             ))}
                                             {next.length === 0 && <li className="rempty">You have done every problem in this plan.</li>}
                                         </ol>
@@ -155,8 +191,7 @@ export function CompanyPage() {
                             </section>
                         </div>
                     )}
-                </div>
-            </main>
-        </>
+            </div>
+        </PageFrame>
     );
 }

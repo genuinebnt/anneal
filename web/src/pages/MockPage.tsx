@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
+import { Segmented } from "../components/ui";
+import { PageHero } from "../components/PageHero";
+import { MockRoot } from "../components/mock";
 import { GradeGlyph } from "../components/icons";
-import { DIFF, leetcode, niceDate } from "../dsa";
+import { DIFF, leetcode, niceDate, statusOf } from "../dsa";
 import {
     BANDS,
     FAVOUR,
@@ -175,11 +178,7 @@ function Num({ value, onChange, min, max, step = 1, label, unit }: { value: numb
 }
 
 function Seg<T extends string>({ value, options, onPick, label }: { value: T; options: [T, string][]; onPick: (v: T) => void; label: string }) {
-    return (
-        <div className="mi-seg" role="group" aria-label={label}>
-            {options.map(([v, l]) => <button key={v} className={v === value ? "on" : ""} aria-pressed={v === value} onClick={() => onPick(v)}>{l}</button>)}
-        </div>
-    );
+    return <Segmented value={value} options={options} onChange={onPick} label={label} />;
 }
 
 /** The shape of a round as small bars, one per problem: green easy, amber medium, red hard. */
@@ -293,15 +292,18 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
 
     return (
         <div className="mi-wrap m-setup">
-            <div className="eyebrow">
-                <Link to="/dsa" style={{ color: "var(--ca)" }}>DSA</Link>
-                <span>/</span>
-                <span style={{ color: "var(--ca)" }}>MOCK INTERVIEW</span>
-                <span>/</span>
-                <span>{data.rounds.length} ROUND{data.rounds.length === 1 ? "" : "S"} TAKEN</span>
-            </div>
-            <h1 className="mi-h1">Build your interview</h1>
-            <p className="mi-sub">Pick a shape, narrow the pool, set the clock. Problems are drawn at start.</p>
+            <MockRoot prefix="s-" className="s-dsa s-sub" style={{ "--s-ac": "var(--acc)", "--s-acb": "var(--acc-bg)" } as CSSProperties}>
+                <PageHero
+                    eyebrow={<><b>DSA</b> / MOCK INTERVIEW</>}
+                    title="Build your"
+                    accent="interview."
+                    stats={[
+                        { value: data.rounds.length, label: data.rounds.length === 1 ? "ROUND TAKEN" : "ROUNDS TAKEN" },
+                        { value: pool.length, label: "IN THE POOL" },
+                        { value: need, label: need === 1 ? "PROBLEM A ROUND" : "PROBLEMS A ROUND" },
+                    ]}
+                />
+            </MockRoot>
 
             <div className="mi-presets" role="group" aria-label="Presets">
                 {PRESETS.map((p) => (
@@ -356,12 +358,22 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                                     </div>
                                 </div>
                                 <div className="mi-sec">
-                                    <span className="t">YOUR HISTORY <em>which of those can be drawn</em></span>
+                                    <span className="t">YOUR HISTORY</span>
                                     <Seg label="History" value={c.status} options={MOCK_STATUS.map(([k, l]) => [k, l])} onPick={(status) => edit((cur) => ({ ...cur, status }))} />
                                 </div>
                                 <div className="mi-sec">
                                     <span className="t">HOW TO DRAW</span>
                                     <Seg label="How to draw" value={c.favour} options={FAVOUR.map(([k, l]) => [k, l])} onPick={(favour) => edit((cur) => ({ ...cur, favour }))} />
+                                </div>
+                                <div className="mi-sec">
+                                    <span className="t">IN THE POOL <em>{pool.length}</em></span>
+                                    <div className="mi-mix" role="img" aria-label={`${have[0]} easy, ${have[1]} medium, ${have[2]} hard`}>
+                                        <div className="split">{have.map((n, i) => (n ? <i key={i} className={"ewh"[i]} style={{ flex: n }} /> : null))}</div>
+                                        {(["Easy", "Medium", "Hard"] as const).map((l, i) => <span key={l}><i className={"ewh"[i]} />{l} <b>{have[i]}</b></span>)}
+                                    </div>
+                                    <div className="mi-mix hist">
+                                        {(["new", "retry", "solved", "due"] as const).map((k) => <span key={k}><b>{pool.filter((p) => statusOf(p, data.today) === k).length}</b>{{ new: "not attempted", retry: "attempted", solved: "solved", due: "due for review" }[k]}</span>)}
+                                    </div>
                                 </div>
                             </>
                         )}
@@ -406,7 +418,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                                     </div>
                                     <input className="mi-search" value={coQuery} onChange={(e) => setCoQuery(e.target.value)} placeholder="Find a company" aria-label="Find a company" />
                                 </div>
-                                <Switch on={c.recent} onClick={() => edit((cur) => ({ ...cur, recent: !cur.recent }))} title="Asked in the last 6 months" hint="A problem can be drawn if any selected company asked it recently." />
+                                <Switch on={c.recent} onClick={() => edit((cur) => ({ ...cur, recent: !cur.recent }))} title="Asked in the last 6 months" />
                             </>
                         )}
 
@@ -440,7 +452,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
 
                     {data.rounds.length > 0 && (
                         <section className="mi-card">
-                            <h3 className="mi-h3"><span>PAST ROUNDS</span><em>repeat any of them</em></h3>
+                            <h3 className="mi-h3"><span>PAST ROUNDS</span></h3>
                             {(() => {
                                 // the share of each round's problems solved on your own, oldest to newest, over the last ten rounds
                                 const last = [...data.rounds].slice(0, 10).reverse();
@@ -484,7 +496,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                         {slots.map((band, j) => (
                             <div key={j} className="slot">
                                 <i>{j + 1}</i>
-                                <span className="ti">{c.anyDiff ? <b className="a">Any</b> : <b className={BANDS[band]![0]}>{DIFF[BANDS[band]!][0]}</b>} · hidden until you start</span>
+                                <span className="ti">{c.anyDiff ? <b className="a">Any</b> : <b className={BANDS[band]![0]}>{DIFF[BANDS[band]!][0]}</b>}</span>
                                 <span className="tm">~{c.per[c.anyDiff ? 1 : band]}m</span>
                                 <button aria-label={`Remove problem ${j + 1}`} disabled={c.anyDiff && c.anyCount <= 1} onClick={() => removeSlot(band)}>✕</button>
                             </div>
@@ -492,14 +504,14 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                     </div>
                     <div className="adds">
                         {c.anyDiff ? (
-                            <button style={{ gridColumn: "1 / -1" }} disabled={c.anyCount >= 6} onClick={() => edit((cur) => ({ ...cur, anyCount: cur.anyCount + 1 }))}>+ Any difficulty<small>{pool.length} can be drawn</small></button>
+                            <button style={{ gridColumn: "1 / -1" }} disabled={c.anyCount >= 6} onClick={() => edit((cur) => ({ ...cur, anyCount: cur.anyCount + 1 }))}>+ Any difficulty<small>{pool.length} available</small></button>
                         ) : (
                             BANDS.map((band, i) => (
-                                <button key={band} disabled={(c.mix[i] ?? 0) >= have[i]! || (c.mix[i] ?? 0) >= 4} onClick={() => addSlot(i)}>+ {DIFF[band][0]}<small>{have[i]} can be drawn</small></button>
+                                <button key={band} disabled={(c.mix[i] ?? 0) >= have[i]! || (c.mix[i] ?? 0) >= 4} onClick={() => addSlot(i)}>+ {DIFF[band][0]}<small>{have[i]} available</small></button>
                             ))
                         )}
                     </div>
-                    <div className="anyrow"><Switch on={c.anyDiff} onClick={() => edit((cur) => ({ ...cur, anyDiff: !cur.anyDiff }))} title="Any difficulty" hint="Draw the number of problems without caring about easy, medium or hard." /></div>
+                    <div className="anyrow"><Switch on={c.anyDiff} onClick={() => edit((cur) => ({ ...cur, anyDiff: !cur.anyDiff }))} title="Any difficulty" /></div>
                     <dl className="kv">
                         <div><dt>Time at suggested pace</dt><dd>{perTotal} min</dd></div>
                         <div><dt>Timer</dt><dd>{timerName}</dd></div>
@@ -736,7 +748,7 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
                     <a className="open" href={leetcode(problem.slug)} target="_blank" rel="noopener noreferrer">Open on LeetCode ↗</a>
                     <div className="ptime">
                         <div className="row"><span><b>{mmss(spent)}</b> on this problem</span><span>{mmss(sug)} suggested</span></div>
-                        <div className="track"><i className={spent > sug ? "over" : ""} style={{ width: `${Math.min(100, (spent / Math.max(1, sug)) * 100)}%` }} /></div>
+                        <div className="split"><i className={spent > sug ? "over" : ""} style={{ width: `${Math.min(100, (spent / Math.max(1, sug)) * 100)}%` }} /></div>
                     </div>
                     {showMeta ? (
                         <div className="meta">
@@ -876,7 +888,7 @@ function Result({ data, round, onAgain, onChange }: { data: MockData; round: Rou
                             </div>
                             <div className="tm">
                                 <div className="row"><span><b>{it.seconds ? mmss(it.seconds) : "–"}</b> {it.seconds ? "used" : "not opened"}</span><span>{mmss(sug)} suggested</span></div>
-                                <div className="track"><i className={it.seconds > sug ? "over" : ""} style={{ width: `${Math.min(100, (it.seconds / Math.max(1, sug)) * 100)}%` }} /></div>
+                                <div className="split"><i className={it.seconds > sug ? "over" : ""} style={{ width: `${Math.min(100, (it.seconds / Math.max(1, sug)) * 100)}%` }} /></div>
                             </div>
                             <span className="next">{!it.grade ? "Not logged" : practice ? "No review (practice)" : mark?.due ? `Review ${niceDate(mark.due, data.today)}` : "Logged"}</span>
                         </div>
