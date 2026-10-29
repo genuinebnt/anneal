@@ -3,6 +3,7 @@
 // bar across the top, a condensed header and a back-to-top ring that appear as you scroll.
 
 import { Link, useNavigate } from "@tanstack/react-router";
+import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, type CourseStagePage as Page, type CourseRun } from "../api";
@@ -345,7 +346,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                 <Header area="courses" stats={false} />
                 <main className="page">
                     <div className="wrap">
-                        <p className="notice">Loading…</p>
+                        <Skeleton lines={5} />
                     </div>
                 </main>
             </>

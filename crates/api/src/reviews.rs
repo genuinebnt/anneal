@@ -87,6 +87,37 @@ pub struct Capacity {
     pub sun: u32,
 }
 
+/// How many new problems each weekday takes; 0 means the usual number (`new_per_day`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PerDay {
+    pub mon: u32,
+    pub tue: u32,
+    pub wed: u32,
+    pub thu: u32,
+    pub fri: u32,
+    pub sat: u32,
+    pub sun: u32,
+}
+
+impl PerDay {
+    pub fn on(&self, day: Weekday) -> u32 {
+        match day {
+            Weekday::Mon => self.mon,
+            Weekday::Tue => self.tue,
+            Weekday::Wed => self.wed,
+            Weekday::Thu => self.thu,
+            Weekday::Fri => self.fri,
+            Weekday::Sat => self.sat,
+            Weekday::Sun => self.sun,
+        }
+    }
+
+    pub fn all(&self) -> [u32; 7] {
+        [self.mon, self.tue, self.wed, self.thu, self.fri, self.sat, self.sun]
+    }
+}
+
 impl Default for Capacity {
     /// One older problem a day on weekdays, a little practice on Saturday, and Sunday for the week's new problems plus
     /// a few older ones. No day takes more than 12: the plan is meant to never feel like a wall.
@@ -143,6 +174,8 @@ pub struct Settings {
     pub new_days: Vec<String>,
     /// New problems on each solve day, for the pace tracker.
     pub new_per_day: u32,
+    /// New problems on a particular weekday, when it differs from `new_per_day` (0 keeps the usual number).
+    pub new_by_day: PerDay,
     /// When the plan should be finished, e.g. the NeetCode 150.
     pub target_date: Option<NaiveDate>,
     /// When more is due than a day can take, put the important problems first (see [`importance`]). Off: the most
@@ -185,7 +218,7 @@ impl Default for Settings {
         // The owner's routine: a new problem every day but Sunday; Sunday reviews the week's problems; one older
         // problem a day in between; the NeetCode 150 by the end of March.
         Settings { retention: 0.85, capacity: Capacity::default(), consolidate_on: Some("sun".into()),
-            new_days: ["mon", "tue", "wed", "thu", "fri", "sat"].map(String::from).to_vec(), new_per_day: 1, target_date: NaiveDate::from_ymd_opt(2027, 3, 31), prioritise: true, core_retention: None, goal: Goal::default() }
+            new_days: ["mon", "tue", "wed", "thu", "fri", "sat"].map(String::from).to_vec(), new_per_day: 1, new_by_day: PerDay::default(), target_date: NaiveDate::from_ymd_opt(2027, 3, 31), prioritise: true, core_retention: None, goal: Goal::default() }
     }
 }
 
@@ -209,6 +242,9 @@ impl Settings {
                 return Err(format!("{day} is the consolidation day but has no room for reviews"));
             }
         }
+        if self.new_by_day.all().iter().any(|&n| n > 20) {
+            return Err("new problems on a weekday: at most 20".into());
+        }
         if self.new_per_day > 20 {
             return Err("new problems per day must be 20 or fewer".into());
         }
@@ -230,6 +266,14 @@ impl Settings {
     }
 
     /// Whether a new problem is planned for this day. Other days are for practice (reviews) or rest.
+    /// How many new problems a solve day of this weekday takes: its own number, or the usual one.
+    pub fn new_on_weekday(&self, day: Weekday) -> u32 {
+        match self.new_by_day.on(day) {
+            0 => self.new_per_day.max(1),
+            n => n,
+        }
+    }
+
     pub fn is_solve_day(&self, day: NaiveDate) -> bool {
         self.new_days.iter().filter_map(|d| weekday(d)).any(|w| w == day.weekday())
     }
@@ -420,8 +464,8 @@ pub struct Pace {
 /// The pace needed to finish `remaining` problems by the target date, and the finish date at the current settings.
 /// The target is a soft goal: nothing in the schedule depends on it, this only informs the display.
 pub fn pace(remaining: u32, today: NaiveDate, settings: &Settings) -> Pace {
-    let per_day = settings.new_per_day.max(1);
-    let finish_at_current = finish_date(remaining, today, settings.new_days.len().min(7) as u32 * per_day, |d| settings.is_solve_day(d) as u32 * per_day);
+    let weekly: u32 = settings.new_days.iter().filter_map(|d| weekday(d)).map(|w| settings.new_on_weekday(w)).sum();
+    let finish_at_current = finish_date(remaining, today, weekly, |d| if settings.is_solve_day(d) { settings.new_on_weekday(d.weekday()) } else { 0 });
     let (solve_days_left, per_solve_day, per_week) = match settings.target_date {
         Some(target) if target >= today => {
             let days = settings.solve_days_between(today, target);

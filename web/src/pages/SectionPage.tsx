@@ -442,9 +442,6 @@ export function SectionPage({ area }: { area: NavArea }) {
                 {copy.title[0]}
                 <em>{copy.title[1]}</em>
               </h1>
-              <p className="s-lead s-rv" style={rise(2).style}>
-                {copy.lead}
-              </p>
             </div>
             <div className="s-stats s-rv" style={rise(3).style}>
               <div>

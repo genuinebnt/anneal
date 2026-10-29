@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
+import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, type DsaOverview, type SrsSettings, type Weekday } from "../api";
 import { Header } from "../components/Header";
-import { WEEKDAYS, goalRemaining, niceDate, pacePreview } from "../dsa";
+import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
 type Mode = "solve" | "practice" | "rest";
 const NEXT: Record<Mode, Mode> = { solve: "practice", practice: "rest", rest: "solve" };
@@ -25,8 +26,7 @@ export function DsaPlanPage() {
             <span>PLAN</span>
           </div>
           <h1 className="h1 md">Your plan</h1>
-          <p className="lead">Pick a target date and what each weekday is for. The target is a goal, not a deadline.</p>
-          {o ? <Editor key={o.today} o={o} /> : <p className="rempty">{overview.isError ? "Couldn't reach the API." : "Loading…"}</p>}
+          {o ? <Editor key={o.today} o={o} /> : overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}
         </div>
       </main>
     </>
@@ -63,6 +63,9 @@ function Editor({ o }: { o: DsaOverview }) {
   const pace = useMemo(() => pacePreview(goal.remaining, o.today, s), [goal.remaining, o.today, s]);
   const room = WEEKDAYS.reduce((n, d) => n + (modeOf(s, d) === "rest" ? 0 : s.capacity[d]), 0);
   const solveDays = s.new_days.length;
+  const newByDay = WEEKDAYS.map((d) => (s.new_days.includes(d) ? newOn(s, d) : 0));
+  const newPerWeek = newByDay.reduce((a, b) => a + b, 0);
+  const busiest = Math.max(1, ...WEEKDAYS.map((d, i) => (modeOf(s, d) === "rest" ? 0 : s.capacity[d]) + (newByDay[i] ?? 0)));
 
   const setMode = (d: Weekday, m: Mode) =>
     setS((cur) => {
@@ -91,7 +94,7 @@ function Editor({ o }: { o: DsaOverview }) {
       ? "Under about 14 reviews a week, recall of what you learned starts to slip (86% in the simulation). Add room on a practice day."
       : solveDays === 0
         ? "With no solve days, anneal only schedules reviews."
-        : `A week: ${solveDays * s.new_per_day} new, up to ${room} reviews, ${WEEKDAYS.filter((d) => modeOf(s, d) === "rest").length} rest.`;
+        : `A week: ${newPerWeek} new, up to ${room} reviews, ${WEEKDAYS.filter((d) => modeOf(s, d) === "rest").length} rest.`;
 
   return (
     <div className="p-grid">
@@ -140,16 +143,35 @@ function Editor({ o }: { o: DsaOverview }) {
                   <span className="n">{d.toUpperCase()}</span>
                   <button className="mode" onClick={() => setMode(d, NEXT[m])}>{m}</button>
                   <div className={`p-cap${m === "rest" ? " off" : ""}`}>
-                    <span>reviews</span>
+                    <span>practice</span>
                     <Stepper value={m === "rest" ? 0 : s.capacity[d]} min={m === "solve" ? 0 : 1} max={30} onChange={(n) => setS({ ...s, capacity: { ...s.capacity, [d]: n } })} />
+                  </div>
+                  <div className={`p-cap${m === "solve" ? "" : " off"}`}>
+                    <span>solve</span>
+                    <Stepper value={m === "solve" ? newOn(s, d) : 0} min={1} max={20} onChange={(n) => setS({ ...s, new_by_day: { ...s.new_by_day, [d]: n } })} />
                   </div>
                 </div>
               );
             })}
           </div>
-          <div className="p-key"><span><i style={{ background: "var(--acc)" }} />solve: a new problem, plus reviews</span><span><i style={{ background: "var(--vio)" }} />practice: reviews only</span><span><i style={{ background: "var(--line)" }} />rest: nothing</span></div>
+          <div className="p-load" aria-label="Problems per day">
+            {WEEKDAYS.map((d, i) => {
+              const n = newByDay[i] ?? 0;
+              const r = modeOf(s, d) === "rest" ? 0 : s.capacity[d];
+              return (
+                <div key={d} className="p-bar" title={`${d}: ${n} new, ${r} practice`}>
+                  <div className="stack">
+                    <i className="rv" style={{ height: `${(r / busiest) * 100}%` }} />
+                    <i className="nw" style={{ height: `${(n / busiest) * 100}%` }} />
+                  </div>
+                  <b>{n + r}</b>
+                </div>
+              );
+            })}
+          </div>
+          <div className="p-key"><span><i style={{ background: "var(--acc)" }} />solve: new problems, plus practice</span><span><i style={{ background: "var(--vio)" }} />practice: reviews only</span><span><i style={{ background: "var(--line)" }} />rest: nothing</span></div>
           <div className="p-row" style={{ alignItems: "center" }}>
-            <div className="p-fld"><span>New problems on a solve day</span><Stepper value={s.new_per_day} min={1} max={5} onChange={(new_per_day) => setS({ ...s, new_per_day })} /></div>
+            <div className="p-fld"><span>Usual new problems on a solve day</span><Stepper value={s.new_per_day} min={1} max={5} onChange={(new_per_day) => setS({ ...s, new_per_day })} /></div>
             <label className="p-fld">
               <span>First reviews go to</span>
               <select value={s.consolidate_on ?? ""} onChange={(e) => setS({ ...s, consolidate_on: (e.target.value || null) as Weekday | null })}>
@@ -174,8 +196,6 @@ function Editor({ o }: { o: DsaOverview }) {
               </select>
             </label>
           </div>
-          <p className="p-hint">Important: Blind 75 first, then the 150 and 250, then technique problems. It only picks which reviews a full day keeps.</p>
-          <p className="p-hint">The number under each day is how many reviews it takes; the rest wait for the next day with room.</p>
         </section>
       </div>
 
@@ -188,7 +208,9 @@ function Editor({ o }: { o: DsaOverview }) {
             <div><dt>Solve days left</dt><dd>{pace.solveDaysLeft}</dd></div>
             <div><dt>Needed per week</dt><dd>{pace.perWeek != null ? pace.perWeek.toFixed(1) : "—"}</dd></div>
             <div><dt>Finish at your pace</dt><dd>{pace.finish ? niceDate(pace.finish, o.today) + (pace.finish > o.today ? `, ${pace.finish.slice(0, 4)}` : "") : "never"}</dd></div>
-            <div><dt>Review room per week</dt><dd>{room}</dd></div>
+            <div><dt>New problems per week</dt><dd>{newPerWeek}</dd></div>
+            <div><dt>Practice room per week</dt><dd>{room}</dd></div>
+            <div><dt>Problems in a busy day</dt><dd>{busiest}</dd></div>
           </dl>
           <p className="p-hint">{note}</p>
           <div className="p-save">

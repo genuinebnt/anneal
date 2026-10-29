@@ -203,9 +203,6 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                             <h1 className="k-rv" style={{ "--i": 1 } as CSSProperties}>
                                 {c ? <MockTitle title={c.title} /> : "Build a DBMS."}
                             </h1>
-                            <p className="k-lead k-rv" style={{ "--i": 2 } as CSSProperties}>
-                                BusTub's projects, module by module, in Rust. Every stage is a real piece of the system with tests that mirror BusTub's own, and the last stage of each module is BusTub's own test file, ported.
-                            </p>
                         </div>
                         <div className="k-stats k-rv" style={{ "--i": 3 } as CSSProperties}>
                             <div>

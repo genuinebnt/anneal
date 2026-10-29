@@ -451,6 +451,9 @@ a.tr:hover{background:var(--sel)}
 .hd-pal .hd-opt small{margin-left:auto;font:500 11px var(--mono);color:var(--dim);white-space:nowrap}
 .hd-pal .hd-opt.hd-sel{background:var(--raise);color:var(--fg)}
 .hd-pal .hd-opt .d{width:7px;height:7px;border-radius:50%;background:var(--c);flex:none}
+.hd-pal .hd-kind{font:500 11px var(--mono);font-style:normal;color:var(--dim);margin-left:auto}
+.hd-pal .hd-opt small+.hd-kind{margin-left:0}
+.hd-pal .hd-enter{font:600 11px var(--mono);color:var(--dim);border:1px solid var(--line);border-radius:4px;padding:0 5px;flex:none}
 .hd-pal .hd-lab{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hd-pal mark{background:transparent;color:var(--acc);font-weight:700}
 .hd-pal ul{max-height:min(420px,56vh)}
@@ -464,6 +467,12 @@ a.tr:hover{background:var(--sel)}
 .nt-pop::-webkit-scrollbar{display:none}
 .nt-lab{display:flex;justify-content:space-between;align-items:center;margin-top:6px;font:600 11px var(--mono);letter-spacing:.14em;color:var(--dim)}
 .nt-clear{font:600 11px var(--mono);color:var(--dim);letter-spacing:.06em;text-transform:uppercase}.nt-clear:hover:not(:disabled){color:var(--fg)}.nt-clear:disabled{opacity:.4}
+.nt-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.nt-sum>div{border:1px solid var(--line2);border-radius:8px;background:var(--bg);padding:7px 4px;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
+.nt-sum b{font:600 15px var(--mono);color:var(--fg)}.nt-sum b small{font-size:11px;color:var(--dim)}
+.nt-sum span{font:500 11px var(--mono);color:var(--dim);white-space:nowrap}
+.nt-links{display:flex;gap:6px;flex-wrap:wrap}
+.nt-links a{font:500 12px var(--mono);color:var(--mut);border:1px solid var(--line2);border-radius:8px;padding:4px 9px;text-decoration:none}.nt-links a:hover{color:var(--acc);border-color:var(--acc)}
 .nt-empty{margin:2px 0 4px;font-size:12px;color:var(--dim)}
 .nt-item{display:flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);padding:8px 10px}
 .nt-item a{flex:1;min-width:0;font-size:13px;color:var(--fg);text-decoration:none}.nt-item a:hover{color:var(--acc)}

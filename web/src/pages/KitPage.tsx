@@ -366,6 +366,8 @@ export function KitPage() {
 function SharedControls() {
     const [sw, setSw] = useState(true);
     const [seg, setSeg] = useState<"a" | "b" | "c">("a");
+    const [boom, setBoom] = useState(false);
+    if (boom) throw new Error("kit: this crash is on purpose, to show the error screen");
     return (
         <section style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", display: "flex", flexDirection: "column", gap: 18 }} aria-label="Shared controls">
             <h2 style={{ margin: 0 }}>Shared controls</h2>
@@ -383,6 +385,7 @@ function SharedControls() {
                 <Segmented label="Example" value={seg} options={[["a", "One"], ["b", "Two"], ["c", "Three"]] as const} onChange={setSeg} />
                 <ConfirmButton label="Delete something" confirm="Yes, delete it" note="It cannot be undone here." onConfirm={() => undefined} />
             </div>
+            <div><UiBtn variant="quiet" onClick={() => setBoom(true)}>Show the error screen</UiBtn></div>
             <div style={{ display: "flex", gap: 22, fontSize: 22 }} aria-label="Log icons">
                 <span style={{ color: "var(--grn)" }}><GradeGlyph grade="good" /></span>
                 <span style={{ color: "var(--warn)" }}><GradeGlyph grade="hard" /></span>

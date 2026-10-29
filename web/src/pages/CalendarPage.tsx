@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Skeleton } from "../components/Skeleton";
 import { ConfirmButton } from "../components/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
@@ -50,7 +51,11 @@ function impact(diff: PlanPreview["diff"], finish: string | null, late: number):
 
 export function CalendarPage() {
     const qc = useQueryClient();
-    const [month, setMonth] = useState("");
+    // the month is in the address bar (#2026-11), so a refresh, Back and a shared link keep it
+    const [month, setMonth] = useState(() => (/^#\d{4}-\d{2}$/.test(location.hash) ? location.hash.slice(1) : ""));
+    useEffect(() => {
+        if (month) window.history.replaceState(window.history.state, "", `#${month}`);
+    }, [month]);
     const [view, setView] = useState<View>("calendar");
     const [tab, setTab] = useState<Tab>("rules");
     const [open, setOpen] = useState({ scope: false, order: false, targets: true });
@@ -211,7 +216,7 @@ export function CalendarPage() {
                 <Header area="dsa" />
                 <main className="page">
                     <div className="wrap" style={{ paddingBlock: 32 }}>
-                        <p className="rempty">{planQ.isError || first.isError ? "Couldn't reach the API." : "Loading the plan…"}</p>
+                        {planQ.isError || first.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}
                     </div>
                 </main>
             </>
@@ -460,7 +465,6 @@ function Bar({ p, sel, note, hover, busy, onKind, onHover, onQuick, kindOfRoutin
             <div className="c-bar">
                 {noteEl}
                 <div className="ln">
-                    <div className="empty">Click a day, drag across several, or shift-click a range. <b>WEEK</b> takes a whole week. Past days can't change.</div>
                     <div className="c-seg q">
                         <button disabled={busy} onClick={() => onQuick("wp")}>Next week: practice</button>
                         <button disabled={busy} onClick={() => onQuick("wb")}>Next week: break</button>
@@ -571,7 +575,6 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
             </Acc>
             <Acc id="order" title="Order" summary={orderName} open={open} setOpen={setOpen}>
                 <Seg value={r.order} options={[["curriculum", "Curriculum"], ["ramp", "Easy → hard"], ["company", "Most asked"], ["important", "Most important"]]} onPick={(v) => setRules((x) => ({ ...x, order: v }), "Order")} />
-                <p className="cap">{{ curriculum: "NeetCode's order, topic by topic, from where you started.", ramp: "Within each topic, easy before hard.", company: "By how often your chosen companies ask it, recent counting double.", important: "Core problems and the widely asked first." }[r.order]}</p>
             </Acc>
             <Acc id="targets" title="Targets" summary={`${nt ? `${nt} topic target${nt > 1 ? "s" : ""} · ` : ""}all by ${finishBy ? short(finishBy) : "—"}`} open={open} setOpen={setOpen}>
                 <div className="fl row1"><span>Everything done by</span><input type="date" aria-label="Everything done by" value={finishBy} onChange={(e) => setRules((x) => ({ ...x, finish_by: e.target.value || null }), "Final target")} /></div>
@@ -588,7 +591,6 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                         </div>
                     ))}
                 </div>
-                <p className="cap">A target also covers the topics before it.</p>
                 {sg && (
                     <div className="c-sg">
                         <span><b>{sg.name}</b> is {sg.late >= 9999 ? "out of reach" : `${sg.late} days late`}. {sg.remedy.kind === "add_days" ? <>Make {sg.remedy.days.map(long).join(" and ")} problem day{sg.remedy.days.length > 1 ? "s" : ""} and it lands <b>{short(sg.remedy.end)}</b>.</> : <>The days you have free aren't enough.{sg.remedy.end && sg.late < 9999 ? <> At this pace it lands <b>{short(sg.remedy.end)}</b>.</> : null}</>}</span>
@@ -620,7 +622,6 @@ function DayDetail({ p, date, today, byDate }: { p: PlanView; date: string; toda
                         <Link key={q.problem.id} className={`li ${q.grade === "again" ? "f" : q.grade === "hard" ? "h" : "g"}`} to="/d/$slug" params={{ slug: q.problem.slug }}><b>{GLYPH[q.grade]}</b><span>{q.problem.title}</span><small>{(p.topics.find((t) => t.id === q.problem.topic)?.name ?? "").toUpperCase()}</small></Link>
                     ))}
                     {x?.reviews ? <div className="cap">{x.reviews} review{x.reviews > 1 ? "s" : ""} done</div> : null}
-                    {x?.state === "missed" && <div className="cap">Nothing was lost: the next problem just moved up a day.</div>}
                 </>
             ) : (
                 <>

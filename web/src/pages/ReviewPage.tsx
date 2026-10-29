@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { api, type Grade, type ReviewItem, type ReviewQueue } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
-import { Md, PyCode } from "../components/dsaBits";
+import { Companies, Md, PyCode } from "../components/dsaBits";
+import { RecallCurve } from "../components/RecallCurve";
 import { DIFF, inDays, leetcode, niceDate, videoUrl } from "../dsa";
 import { mmss } from "../mock";
 import { getPref, setPref } from "../prefs";
@@ -72,8 +73,84 @@ function Ahead({ items, today, onPick, open = false }: { items: ReviewItem[]; to
           </button>
         ))}
       </div>
-      <span className="rv-note">Reviewing early still counts. It moves the next date out a little less.</span>
     </details>
+  );
+}
+
+/** How well this one is remembered: the numbers behind it, and the forecast. */
+function MemoryCard({ item, today }: { item: ReviewItem; today: string }) {
+  const s = item.problem.state;
+  return (
+    <div className="rv-card" style={{ gap: 12 }}>
+      <span className="rv-lab">MEMORY</span>
+      <div className="rv-facts">
+        <div><b>{Math.round(item.recall * 100)}%</b><span>recall now</span></div>
+        <div><b>{item.stability >= 10 ? Math.round(item.stability) : item.stability.toFixed(1)} d</b><span>memory holds</span></div>
+        <div><b>{s.reps}</b><span>review{s.reps === 1 ? "" : "s"}</span></div>
+        <div><b>{s.lapses}</b><span>lapse{s.lapses === 1 ? "" : "s"}</span></div>
+        <div><b>{ago(s.last_review, today) || "–"}</b><span>last reviewed</span></div>
+        <div><b>{dueLabel(item.due, today)}</b><span>next</span></div>
+      </div>
+      <RecallCurve id={item.problem.id} version={s.reps} />
+    </div>
+  );
+}
+
+/** The problem, as LeetCode words it, so a review can start from the statement. It is the question, not the answer. */
+function StatementCard({ id, slug }: { id: string; slug: string }) {
+  const q = useQuery({ queryKey: ["dsa-statement", id], queryFn: () => api.statement(id), staleTime: Infinity, retry: false });
+  const [all, setAll] = useState(false);
+  return (
+    <div className="rv-card" style={{ gap: 10 }}>
+      <span className="rv-lab">THE PROBLEM</span>
+      {q.isLoading && <Skeleton lines={4} />}
+      {(q.isError || q.data?.locked) && <p className="rv-note">LeetCode does not share this statement here. <a href={leetcode(slug)} target="_blank" rel="noreferrer">Open it on LeetCode ↗</a></p>}
+      {q.data?.html && (
+        <>
+          <div className={`rv-stmt${all ? " all" : ""}`}>
+            <div className="d-statement" dangerouslySetInnerHTML={{ __html: q.data.html }} />
+          </div>
+          <button className="rv-ghost" style={{ alignSelf: "flex-start" }} onClick={() => setAll(!all)}>{all ? "Show less" : "Show all"}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** After the reveal: the traps, what it is asked with, and what you saved for it. */
+function CheckExtras({ item, lesson }: { item: ReviewItem; lesson: Awaited<ReturnType<typeof api.dsaPage>> | null }) {
+  const p = item.problem;
+  const mine = useQuery({ queryKey: ["dsa-solutions", p.id], queryFn: () => api.solutions(p.id) });
+  return (
+    <>
+      {lesson && lesson.tips.length > 0 && (
+        <div className="rv-card" style={{ gap: 8 }}>
+          <span className="rv-lab">TIPS AND PITFALLS</span>
+          <ul className="rv-tips">
+            {lesson.tips.map((t) => (
+              <li key={t}><Md inline text={t} /></li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="rv-card" style={{ gap: 10 }}>
+        <span className="rv-lab">TOPICS AND COMPANIES</span>
+        <div className="rv-chips">{p.tags.map((t) => <span key={t} className="rv-pill">{t}</span>)}</div>
+        <Companies companies={p.companies} limit={8} />
+      </div>
+      {(mine.data ?? []).length > 0 && (
+        <div className="rv-card" style={{ gap: 10 }}>
+          <span className="rv-lab">YOUR SOLUTIONS</span>
+          {(mine.data ?? []).map((m, i) => (
+            <details key={m.id} className="rv-mine">
+              <summary>{m.label || `Solution ${i + 1}`}</summary>
+              {m.notes && <Md text={m.notes} />}
+              <PyCode code={m.code} lineNumbers />
+            </details>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -91,8 +168,18 @@ function Session({ queue }: { queue: ReviewQueue }) {
   const qc = useQueryClient();
   const all = useMemo(() => new Map([...queue.items, ...queue.ahead].map((i) => [i.problem.id, i])), [queue.items, queue.ahead]);
   // The session's own list: today's reviews to begin with, and any "review ahead" picked later. Grading takes one out.
-  const [pending, setPending] = useState<string[]>(() => queue.items.map((i) => i.problem.id));
-  const [current, setCurrent] = useState<string | undefined>(() => queue.items[0]?.problem.id);
+  const [pending, setPending] = useState<string[]>(() => {
+    const ids = queue.items.map((i) => i.problem.id);
+    const slug = new URLSearchParams(location.search).get("p");
+    const asked = slug ? queue.ahead.find((i) => i.problem.slug === slug) : undefined;
+    return asked && !ids.includes(asked.problem.id) ? [...ids, asked.problem.id] : ids;
+  });
+  // the review that is open is in the address bar (?p=two-sum): a refresh or a shared link comes back to it
+  const [current, setCurrent] = useState<string | undefined>(() => {
+    const slug = new URLSearchParams(location.search).get("p");
+    const asked = slug ? [...queue.items, ...queue.ahead].find((i) => i.problem.slug === slug) : undefined;
+    return asked?.problem.id ?? queue.items[0]?.problem.id;
+  });
   const [sort, setSortState] = useState<SortKey>(() => getPref<SortKey>("review.sort", "forgotten"));
   const [results, setResults] = useState<(Result & { seconds: number })[]>([]);
   const [step, setStep] = useState<"recall" | "check">("recall");
@@ -120,6 +207,10 @@ function Session({ queue }: { queue: ReviewQueue }) {
   };
 
   const item = current ? all.get(current) : undefined;
+  useEffect(() => {
+    const slug = item?.problem.slug;
+    window.history.replaceState(window.history.state, "", slug ? `?p=${slug}` : location.pathname);
+  }, [item?.problem.slug]);
   const total = results.length + pending.length;
   const done = results.length;
 
@@ -252,7 +343,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
         <span className="rv-cap">{queue.due} due · room for {queue.capacity} today</span>
         <Link className="rv-ghost" to="/dsa">Exit</Link>
       </div>
-      <div className="wrap rv-stage">
+      <div className="rv-wide rv-stage">
         <aside className="rv-side">
           <div className="rv-card" style={{ gap: 12 }} aria-label="Reviews">
             <div className="rv-qh">
@@ -295,8 +386,12 @@ function Session({ queue }: { queue: ReviewQueue }) {
             <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
           )}
         </div>
+        <aside className="rv-ctx" aria-label="About this problem">
+          <MemoryCard item={item} today={queue.today} />
+          {step === "check" ? <CheckExtras item={item} lesson={lesson.data ?? null} /> : <StatementCard id={item.problem.id} slug={item.problem.slug} />}
+        </aside>
       </div>
-      <div className="wrap rv-strip" aria-label="This session">
+      <div className="rv-wide rv-strip" aria-label="This session">
         <div className="rv-sg">
           <span className="rv-lab">THIS SESSION</span>
           <span><b>{done}</b> done</span>
@@ -338,7 +433,6 @@ function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today
       <h2 className="rv-title">{p.title}</h2>
       <div className="rv-meta">
         <span className="rv-pill" style={{ color: DIFF[p.difficulty][1] }}>{DIFF[p.difficulty][0]}</span>
-        <span>The technique, tags and companies stay hidden until you check.</span>
       </div>
       <div className="rv-prior">
         <div><b>{s.last_grade ? LAST[s.last_grade] : "—"}</b><span>{ago(s.last_review, today)}</span></div>
@@ -398,7 +492,7 @@ function Check({ item, spent, lesson, loading, tab, setTab, grade, busy, error }
           {a && (
             <div className="rv-ap">
               <PyCode code={a.code} />
-              <p className="rv-note">time {a.time} · space {a.space}. <Link to="/d/$slug" params={{ slug: p.slug }}>The full page</Link> has the tips and every approach.</p>
+              <p className="rv-note">time {a.time} · space {a.space}. <Link to="/d/$slug" params={{ slug: p.slug }}>Full page</Link></p>
             </div>
           )}
         </>
@@ -427,7 +521,6 @@ function Check({ item, spent, lesson, loading, tab, setTab, grade, busy, error }
           ))}
         </div>
         {error && <p className="rv-err">{error}</p>}
-        <p className="rv-note" style={{ marginTop: 10 }}>Couldn't recall it? Solve it again, then press Again. It returns tomorrow.</p>
       </div>
     </>
   );

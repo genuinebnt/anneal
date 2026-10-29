@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
@@ -76,7 +77,7 @@ export function Workspace({ id }: { id: string }) {
         <Header area="dsa" compact />
         <main className="page">
           <div className="wrap">
-            <p className="notice">{q.isError ? `Couldn't load ${id}: ${(q.error as Error).message}` : "Loading…"}</p>
+            {q.isError ? <p className="notice bad">{`Couldn't load ${id}: ${(q.error as Error).message}`}</p> : <Skeleton lines={6} />}
           </div>
         </main>
       </>

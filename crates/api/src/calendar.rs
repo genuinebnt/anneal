@@ -101,7 +101,7 @@ pub(crate) async fn all_overrides(db: &sqlx::PgPool) -> sqlx::Result<HashMap<Str
 
 /// The weekly routine the settings describe: which weekdays are solve days and how many reviews each day takes.
 pub(crate) fn routine_of(settings: &reviews::Settings) -> Routine {
-    Routine { solve_days: settings.new_days.iter().filter_map(|d| reviews::weekday(d)).collect(), capacity: settings.capacity.all(), practice_floor: PRACTICE_FLOOR, new_per_day: settings.new_per_day.max(1) }
+    Routine { solve_days: settings.new_days.iter().filter_map(|d| reviews::weekday(d)).collect(), capacity: settings.capacity.all(), practice_floor: PRACTICE_FLOOR, new_per_day: settings.new_per_day.max(1), new_by_day: settings.new_by_day.all() }
 }
 
 /// Whether a day is a planned solve day, from the settings and the active plan's edits. The streak follows it: a rest,

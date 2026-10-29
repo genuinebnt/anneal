@@ -83,3 +83,18 @@ kbd{font:500 11px var(--mono);color:var(--dim);border:1px solid var(--line);bord
 .rv-keys dt{font-size:12px;color:var(--dim)}.rv-keys dd{margin:0}
 .rv-weak{display:flex;gap:8px;align-items:baseline;font:500 12px var(--mono);color:var(--mut);flex-wrap:wrap}.rv-weak input{accent-color:var(--acc)}.rv-weak small{color:var(--dim);font:500 11px var(--mono)}
 .rv-side>.rv-card>*{flex-shrink:0}
+
+/* Review fills the window: the queue, the review, and a column about the problem (memory, statement, and after the reveal the tips, topics and your solutions) */
+.rv-wide{max-width:none;margin:0;padding-inline:clamp(16px,2.4vw,44px)}
+.rv-stage{grid-template-columns:minmax(260px,20%) minmax(0,1fr) minmax(320px,29%);min-height:calc(100vh - 230px)}
+.rv-ctx{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media (max-width:1280px){.rv-stage{grid-template-columns:minmax(260px,26%) minmax(0,1fr)}.rv-ctx{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-items:start}}
+@media (max-width:900px){.rv-stage{grid-template-columns:1fr;min-height:0}}
+.rv-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.rv-facts div{border:1px solid var(--line2);border-radius:8px;background:var(--bg);padding:9px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.rv-facts b{font:700 14px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rv-facts span{font-size:11px;color:var(--dim)}
+.rv-stmt{max-height:300px;overflow:hidden;position:relative}.rv-stmt.all{max-height:none}
+.rv-stmt:not(.all)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(transparent,var(--panel))}
+.rv-tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--mut);line-height:1.5}
+.rv-chips{display:flex;gap:6px;flex-wrap:wrap}
+.rv-mine summary{cursor:pointer;font-weight:600;font-size:13px;padding:4px 0}.rv-mine[open] summary{margin-bottom:8px}

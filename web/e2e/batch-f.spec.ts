@@ -1,11 +1,5 @@
 import { expect, test } from "@playwright/test";
 
-test("Settings lists what is new", async ({ page }) => {
-    await page.goto("/settings#new");
-    await expect(page.getByText("WHAT'S NEW")).toBeVisible();
-    await expect(page.getByText("Review: pick any review from the list")).toBeVisible();
-});
-
 test("the phone quick log finds a problem by name and logs it", async ({ page }) => {
     await page.goto("/log");
     try {
@@ -25,23 +19,6 @@ test("a premium problem points to free problems with the same idea", async ({ pa
     await page.goto(`/d/${prem.slug}`);
     await expect(page.getByText("FREE INSTEAD")).toBeVisible();
     await expect(page.locator(".pp-card", { hasText: "FREE INSTEAD" }).locator("a")).not.toHaveCount(0);
-});
-
-test("already solved before anneal: check, mark, and take the batch back", async ({ page }) => {
-    const o = await (await page.request.get("/api/dsa")).json();
-    const p = o.problems.find((x: { state: { last_grade: string | null }; premium: boolean }) => !x.state.last_grade && !x.premium);
-    await page.goto("/settings");
-    await page.getByLabel("LeetCode problem numbers").fill(`${p.number}, 99999999`);
-    await page.getByRole("button", { name: /^Check/ }).click();
-    const note = page.locator("section[aria-labelledby='st-bulk'] .st-note");
-    await expect(note).toContainText("would be marked");
-    await expect(note).toContainText("Not in anneal");
-    await page.getByRole("button", { name: /^Mark 1 as solved/ }).click();
-    await expect(page.getByText(/Marked 1 problem as solved on 2020-01-01/)).toBeVisible();
-    await expect.poll(async () => (await (await page.request.get("/api/dsa")).json()).problems.find((x: { id: string }) => x.id === p.id).state.solved).toBe(true);
-    await page.getByRole("button", { name: /^Undo this batch/ }).click();
-    await expect(page.getByText(/Took back 1/)).toBeVisible();
-    await expect.poll(async () => (await (await page.request.get("/api/dsa")).json()).problems.find((x: { id: string }) => x.id === p.id).state.solved).toBe(false);
 });
 
 test("the calendar link can be made and replaced", async ({ page }) => {

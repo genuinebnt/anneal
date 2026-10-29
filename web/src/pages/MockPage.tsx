@@ -354,7 +354,6 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                                             </button>
                                         ))}
                                     </div>
-                                    <p className="mi-hint">Practice = problems outside the lists. Premium is always left out.</p>
                                 </div>
                                 <div className="mi-sec">
                                     <span className="t">YOUR HISTORY <em>which of those can be drawn</em></span>
@@ -380,7 +379,6 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                                         );
                                     })}
                                 </div>
-                                <p className="mi-hint">No topic included = all topics except the excluded.</p>
                             </div>
                         )}
 
@@ -529,7 +527,6 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                         ) : (
                             <button className="mi-ghost" onClick={() => setNaming(true)}>Save as a preset</button>
                         )}
-                        <p className="mi-note">The settings of your last round are remembered the next time you open this page.</p>
                     </div>
                 </aside>
             </div>
@@ -730,7 +727,9 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
             {banner && <div className="mi-banner" role="status">{banner}</div>}
             {round.pausedAt != null && <div className="mi-banner" role="status">Paused. The clock is stopped until you resume.</div>}
 
+            <RoundKeys logged={logged} onLog={(g) => void log(g)} onNext={next} onSkip={skip} />
             <div className="mi-stage">
+                <div className="mi-main">
                 <section className="mi-card mi-prob">
                     <span className="lab">PROBLEM {index + 1} OF {round.ids.length} · {DIFF[problem.difficulty][0].toUpperCase()} · SUGGESTED {Math.round(sug / 60)} MIN</span>
                     <h2 className="pt">{showMeta ? `#${problem.number} ` : ""}{problem.title}</h2>
@@ -749,25 +748,6 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
                         <div className="blind"><span className="lock" aria-hidden="true">🔒</span><span><b>Blind mode.</b> Number, topic and companies stay hidden until you log it.</span></div>
                     )}
                 </section>
-
-                <div className="mi-side">
-                    <section className="mi-card">
-                        <h3 className="mi-h3"><span>LOG PROBLEM {index + 1}</span><em>same as a normal attempt</em></h3>
-                        <div className="mi-log3">
-                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "!", "attempted", "no"], ["easy", "⚡", "instant", "fast"]] as const).map(([g, , label, cls]) => (
-                                <button key={g} className={`lg ${cls}${mark?.grade === g && logged ? " on" : ""}`} disabled={logged || busy} onClick={() => void log(g)}>
-                                    <b><GradeGlyph grade={g} /></b><span>{label}</span>
-                                </button>
-                            ))}
-                        </div>
-                        {error && <div className="mi-bad">{error}</div>}
-                        {logged && mark && mark.grade && (
-                            <div className="mi-logged">Logged {glyphOf(mark.grade)}. {mark.due ? `Review ${niceDate(mark.due, data.today)}.` : "Practice problems schedule no reviews."}</div>
-                        )}
-                        <button className="mi-go" disabled={!logged} onClick={next}>{lastOne ? "Finish the round →" : "Next problem →"}</button>
-                        {!logged && <button className="mi-ghost" onClick={skip}>Skip this problem</button>}
-                        <p className="mi-note">Logging stops the clock and shows the topic. Skipping logs nothing.</p>
-                    </section>
                     <section className="mi-card">
                         <h3 className="mi-h3"><span>THIS ROUND</span><em>{round.marks.filter((m) => m.grade).length} of {round.ids.length} logged</em></h3>
                         <ol className="mi-rr">
@@ -793,9 +773,44 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
                         </ol>
                     </section>
                 </div>
+
+                <div className="mi-side">
+                    <section className="mi-card">
+                        <h3 className="mi-h3"><span>LOG PROBLEM {index + 1}</span><em>same as a normal attempt</em></h3>
+                        <div className="mi-log3">
+                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "!", "attempted", "no"], ["easy", "⚡", "instant", "fast"]] as const).map(([g, , label, cls]) => (
+                                <button key={g} className={`lg ${cls}${mark?.grade === g && logged ? " on" : ""}`} disabled={logged || busy} onClick={() => void log(g)}>
+                                    <b><GradeGlyph grade={g} /></b><span>{label}</span><kbd>{["good", "hard", "again", "easy"].indexOf(g) + 1}</kbd>
+                                </button>
+                            ))}
+                        </div>
+                        {error && <div className="mi-bad">{error}</div>}
+                        {logged && mark && mark.grade && (
+                            <div className="mi-logged">Logged {glyphOf(mark.grade)}. {mark.due ? `Review ${niceDate(mark.due, data.today)}.` : "Practice problems schedule no reviews."}</div>
+                        )}
+                        <button className="mi-go" disabled={!logged} onClick={next}>{lastOne ? "Finish the round →" : "Next problem →"}</button>
+                        {!logged && <button className="mi-ghost" onClick={skip}>Skip this problem <kbd>S</kbd></button>}
+                    </section>
+                </div>
             </div>
         </div>
     );
+}
+
+/** Keys in a round: 1 to 4 log how it went, N moves on once it is logged, S skips. Ignored while typing. */
+function RoundKeys({ logged, onLog, onNext, onSkip }: { logged: boolean; onLog: (g: Grade) => void; onNext: () => void; onSkip: () => void }) {
+    useEffect(() => {
+        const f = (e: KeyboardEvent) => {
+            if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.closest?.("input,textarea,select,[contenteditable]")) return;
+            const grade = (["good", "hard", "again", "easy"] as const)[Number(e.key) - 1];
+            if (grade && !logged) onLog(grade);
+            else if ((e.key === "n" || e.key === "N" || e.key === "Enter") && logged) onNext();
+            else if ((e.key === "s" || e.key === "S") && !logged) onSkip();
+        };
+        window.addEventListener("keydown", f);
+        return () => window.removeEventListener("keydown", f);
+    }, [logged, onLog, onNext, onSkip]);
+    return null;
 }
 
 // ---------------------------------------------------------------- result
@@ -873,7 +888,6 @@ function Result({ data, round, onAgain, onChange }: { data: MockData; round: Rou
                 <button className="mi-go wide" onClick={onAgain}>Another round, same settings →</button>
                 <button className="mi-ghost tall" onClick={onChange}>Change settings</button>
             </div>
-            <p className="mi-note">Problems you logged with help or as attempted become more likely when you choose "Favour my weak ones".</p>
         </div>
     );
 }

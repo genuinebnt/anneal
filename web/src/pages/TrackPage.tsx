@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Skeleton } from "../components/Skeleton";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -97,7 +98,7 @@ export function TrackPage({ slug }: { slug: string }) {
                 </p>
               </div>
             ) : (
-              <p className="notice">{q.isError ? `Couldn't load track ${slug}.` : "Loading…"}</p>
+              q.isError ? <p className="notice bad">{`Couldn't load track ${slug}.`}</p> : <Skeleton lines={6} />
             )}
           </div>
         </main>

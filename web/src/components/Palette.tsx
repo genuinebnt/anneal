@@ -2,7 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api } from "../api";
-import { statusOf } from "../dsa";
+import { counted, newOn, statusOf, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { THEMES, applyTheme, storedTheme } from "../theme";
 import { toast } from "./toasts";
@@ -11,8 +11,8 @@ import { useDialog } from "./useDialog";
 type Hit = { key: string; label: string; kind: string; color: string; go: () => void; meta?: string };
 
 /** The order the groups are shown in. */
-const GROUPS = ["Recent", "Log", "Action", "Page", "Problem", "Stage", "Challenge", "Track"];
-const HEADINGS: Record<string, string> = { Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
+const GROUPS = ["Now", "Recent", "Log", "Action", "Page", "Problem", "Stage", "Challenge", "Track"];
+const HEADINGS: Record<string, string> = { Now: "DO NEXT", Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
 
 /** 0 for no match. Every word must be found: at the start of the text or of a word scores most, anywhere inside less, and as scattered
  *  letters (a typo or an abbreviation, "twsm" for "two sum") least. */
@@ -81,6 +81,17 @@ export function Palette({ onClose }: { onClose: () => void }) {
             { key: "a-backup", label: "Download a backup of everything", kind: "Action", color: "var(--fg)", go: go("a-backup", () => window.location.assign("/api/export")) },
             { key: "a-theme", label: "Change the theme (dark, light, system)", kind: "Action", color: "var(--fg)", go: go("a-theme", () => applyTheme(THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length]!)) },
         ];
+        // what the plan asks for today, on top of an empty search
+        const o = dsa.data;
+        if (o) {
+            const p = o.plan;
+            const next = o.problems.find((x) => x.id === p.next_up[0]);
+            if (p.due > 0) hits.unshift({ key: "n-review", label: `Review ${p.due} due problem${p.due === 1 ? "" : "s"}`, kind: "Now", color: "var(--vio)", meta: p.overdue ? `${p.overdue} overdue` : "today", go: go("n-review", () => nav({ to: "/dsa/review" })) });
+            if (p.solve_day && next && counted(o, next)) {
+                const n = newOn(o.settings, WEEKDAYS[(new Date(`${o.today}T00:00`).getDay() + 6) % 7] ?? "mon");
+                hits.unshift({ key: "n-next", label: `Today's problem: ${next.number} · ${next.title}`, kind: "Now", color: "var(--acc)", meta: `${next.difficulty} · ${n} today`, go: go("n-next", () => nav({ to: "/d/$slug", params: { slug: next.slug } })) });
+            }
+        }
         for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", color: "var(--vio)", go: go(`t-${t.slug}`, () => nav({ to: "/t/$track", params: { track: t.slug } })) });
         for (const p of course.data?.projects ?? [])
             for (const m of p.modules)
@@ -89,7 +100,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
         const today = dsa.data?.today ?? "";
         for (const p of dsa.data?.problems ?? []) {
             const st = today ? statusOf(p, today) : "new";
-            hits.push({ key: `d-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Problem", color: "var(--acc)", meta: `${st === "solved" ? "solved · " : st === "due" ? "review due · " : st === "retry" ? "attempted · " : ""}${p.difficulty}`, go: go(`d-${p.id}`, () => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
+            hits.push({ key: `d-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Problem", color: st === "solved" ? "var(--grn)" : "var(--acc)", meta: `${st === "solved" ? "solved · " : st === "due" ? "review due · " : st === "retry" ? "attempted · " : ""}${p.difficulty}`, go: go(`d-${p.id}`, () => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
         }
         return hits;
     }, [tracks.data, dsa.data, course.data, nav, onClose, recent]);
@@ -99,7 +110,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
         if (!raw) {
             const byKey = new Map(all.map((h) => [h.key, h]));
             const rec = recent.map((k) => byKey.get(k)).filter((h): h is Hit => !!h).map((h) => ({ ...h, kind: "Recent" }));
-            return [...rec, ...all.filter((h) => (h.kind === "Page" || h.kind === "Action") && !rec.some((r) => r.key === h.key))].slice(0, 16);
+            const now = all.filter((h) => h.kind === "Now");
+            return [...now, ...rec, ...all.filter((h) => (h.kind === "Page" || h.kind === "Action") && !rec.some((r) => r.key === h.key))].slice(0, 18);
         }
         // "log two sum": the four outcomes for the best matches, logged straight from here
         const words0 = raw.split(/\s+/);
@@ -184,6 +196,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
                                 <span className="d" />
                                 <span className="hd-lab">{marked(h.label, words)}</span>
                                 {h.meta && <small>{h.meta}</small>}
+                                {words.length > 0 && ["Page", "Action", "Track", "Stage", "Challenge"].includes(h.kind) && <em className="hd-kind">{h.kind.toLowerCase()}</em>}
+                                {i === sel && <kbd className="hd-enter" aria-hidden="true">↵</kbd>}
                             </div>
                         </li>
                     ))}

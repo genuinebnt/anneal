@@ -6,6 +6,7 @@ import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../componen
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
 import { GradeGlyph } from "../components/icons";
+import { RecallCurve } from "../components/RecallCurve";
 import { ConfirmButton } from "../components/ui";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
@@ -123,7 +124,7 @@ function MySolutions({ p, template }: { p: DsaProblem; template: string }) {
                             )}
                         </div>
                         {s.notes && <Md text={s.notes} />}
-                        <PyCode code={s.code} />
+                        <PyCode code={s.code} lineNumbers />
                     </div>
                 ),
             )}
@@ -169,6 +170,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const [revealIdea, setRevealIdea] = useState(false);
     useEffect(() => setRevealIdea(false), [p?.id]);
     const ideaShown = showIdeas || revealIdea;
+    const [reading, setReading] = useState(() => getPref("pp.reading", false));
     const [hintsShown, setHintsShown] = useState(0);
     useEffect(() => setHintsShown(0), [p?.id]);
     const [more, setMore] = useState(false);
@@ -210,7 +212,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const frame = (body: ReactNode) => (
         <>
             <Header area="dsa" />
-            <main className="page pp" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+            <main className={`page pp${reading ? " reading" : ""}`} style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
                 {body}
             </main>
             {toast}
@@ -290,11 +292,12 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         {technique && ideaShown && <span className="pp-b tech">{technique.name}</span>}
                     </div>
                     {p.tags.length > 0 && <div className="pp-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</div>}
-                    {p.insight && (ideaShown ? <p className="pp-ins"><b>Key insight</b>{p.insight}</p> : <p className="pp-ins"><b>Key insight</b>hidden so it does not spoil the problem <button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></p>)}
+                    {p.insight && (ideaShown ? <p className="pp-ins"><b>Key insight</b>{p.insight}</p> : <p className="pp-ins"><b>Key insight</b><button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></p>)}
                     <nav className="pp-subnav" aria-label="Sections">
                         {sections.map((x) => (
                             <button key={x.id} className={section === x.id ? "on" : ""} aria-current={section === x.id} onClick={() => go(x.id)}>{x.label}</button>
                         ))}
+                        <button className="pp-read" aria-pressed={reading} title="Hide the side column and read at a comfortable width" onClick={() => { setReading(!reading); setPref("pp.reading", !reading); }}>Reading mode</button>
                     </nav>
                 </div>
             </div>
@@ -369,7 +372,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                         <div key={a.name} className="d-ap">
                                             <h3 className="pp-apname">{a.name}</h3>
                                             <Md text={a.idea} />
-                                            <PyCode code={a.code} />
+                                            <PyCode code={a.code} lineNumbers />
                                             <div className="pp-cx">
                                                 <span>time <b>{a.time}</b></span>
                                                 <span>space <b>{a.space}</b></span>
@@ -420,7 +423,6 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                     <button className={practising ? "" : "on"} aria-pressed={!practising} onClick={() => setPracticeMode(false)}>Try {tryNo}<small>scheduled review</small></button>
                                     <button className={practising ? "on" : ""} aria-pressed={practising} onClick={() => setPracticeMode(true)}>Practice<small>extra repeat, +1</small></button>
                                 </div>
-                                <p className="pp-what">{practising ? "An extra repeat. It adds 1 to your practice count and keeps the streak going, and changes no review date, recall figure or plan." : "A scheduled review. It moves the next review date and your recall."}</p>
                             </>
                         )}
                         <div className="pp-log">
@@ -442,8 +444,6 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                 {practised > 0 && <em>practised {practised}×</em>}
                             </div>
                         )}
-                        {hintsShown > 0 && <p className="pp-streak">You opened {hintsShown} hint{hintsShown === 1 ? "" : "s"}. With help is usually the honest log; the choice is yours.</p>}
-                        <p className="pp-streak">On my own, With help and Instant count towards your streak. Attempted doesn't.</p>
                         <div className="pp-status">
                             <div className="pp-gauge" style={{ "--p": `${recall ?? 0}%` } as CSSProperties}><span>{recall != null ? `${recall}%` : "–"}</span></div>
                             <div><b>{standing[0]}</b><small>{standing[1]}{s.last_grade && recall != null && status !== "due" ? ` · ${recall}% recall now` : ""}</small></div>
@@ -492,6 +492,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                     })()}
 
                     <NotesLink id={p.id} />
+
+                    {s.last_grade && previews !== null && <RecallCurve id={p.id} version={s.reps} />}
 
                     <FocusTimer suggest={MINUTES[p.difficulty]} />
 

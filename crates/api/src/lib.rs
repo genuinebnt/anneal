@@ -40,6 +40,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use sqlx::PgPool;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
@@ -92,8 +93,7 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/problems/{id}/log", post(dsa::log).delete(dsa::reset))
         .route("/dsa/problems/{id}/undo", post(dsa::undo))
         .route("/dsa/problems/{id}/why", post(dsa::why))
-        .route("/dsa/bulk-solved", post(dsa::bulk_solved))
-        .route("/dsa/bulk-solved/undo", post(dsa::bulk_solved_undo))
+        .route("/dsa/problems/{id}/forecast", get(dsa::forecast))
         .route("/dsa/problems/{id}/restore", post(dsa::restore))
         .route("/dsa/problems/{id}/statement", get(statement::get))
         .route("/dsa/problems/{id}/preview", get(review::preview))
@@ -165,7 +165,8 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
             .layer(middleware::from_fn(revalidate));
         router = router.merge(assets).merge(pages);
     }
-    router.layer(TraceLayer::new_for_http())
+    // Large answers (the problem list is over a megabyte of JSON, the app itself over one of script) are sent compressed.
+    router.layer(CompressionLayer::new()).layer(TraceLayer::new_for_http())
 }
 
 const INSTALL_SH: &str = include_str!("install.sh");

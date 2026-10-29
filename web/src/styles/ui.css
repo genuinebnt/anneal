@@ -29,3 +29,37 @@
 
 /* ---- icons */
 .icon{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none}
+
+/* ---- when the server cannot be reached, and when a page crashes */
+.cn-bar{position:fixed;top:0;left:0;right:0;z-index:160;display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;padding:8px 16px;background:var(--warn-bg);border-bottom:1px solid var(--warn);color:var(--fg);font-size:13px;backdrop-filter:blur(6px)}
+.es-wrap{max-width:720px;margin:0 auto;padding:64px 24px;display:flex;flex-direction:column;gap:14px}
+.es-wrap h1{margin:0;font-size:32px;letter-spacing:-.02em}.es-wrap p{margin:0;color:var(--mut)}
+.es-acts{display:flex;gap:10px;flex-wrap:wrap}
+.es-detail{margin:6px 0 0;padding:12px 14px;border:1px solid var(--line2);border-radius:var(--r-2,8px);background:var(--panel);color:var(--dim);font:12px/1.55 var(--mono);white-space:pre-wrap;overflow-x:auto}
+
+/* ---- comfort settings (Settings > Appearance): less motion, a larger interface, stronger contrast */
+html[data-motion="reduce"] *,html[data-motion="reduce"] *::before,html[data-motion="reduce"] *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+html[data-zoom="110"]{zoom:1.1}html[data-zoom="125"]{zoom:1.25}
+/* high contrast: pure text, firmer lines and dimmer-than-text colours that are still easy to read, in both themes */
+html[data-contrast="high"]{--fg:oklch(1 0 0);--mut:oklch(0.93 0.005 255);--dim:oklch(0.83 0.01 255);--com:oklch(0.80 0.01 255);--line:oklch(0.62 0.014 255);--line2:oklch(0.48 0.014 255);--inlay:oklch(0.83 0.01 255)}
+html[data-contrast="high"][data-theme="light"]{--fg:oklch(0.12 0.015 255);--mut:oklch(0.27 0.015 255);--dim:oklch(0.36 0.015 255);--com:oklch(0.38 0.012 255);--line:oklch(0.55 0.01 255);--line2:oklch(0.66 0.008 255);--acc:oklch(0.43 0.13 50);--inlay:oklch(0.36 0.012 255)}
+@media (prefers-color-scheme:light){html[data-contrast="high"]:not([data-theme="dark"]){--fg:oklch(0.12 0.015 255);--mut:oklch(0.27 0.015 255);--dim:oklch(0.36 0.015 255);--com:oklch(0.38 0.012 255);--line:oklch(0.55 0.01 255);--line2:oklch(0.66 0.008 255);--acc:oklch(0.43 0.13 50);--inlay:oklch(0.36 0.012 255)}}
+html[data-contrast="high"] :where(button,a,input,select,textarea):focus-visible{outline-width:3px}
+
+/* ---- working pages get a compact headline (the two home pages keep their large one); the colour is the text colour everywhere */
+.h1,.h1.md{font-size:clamp(28px,3.4vw,42px);line-height:1.05;margin-top:16px;color:var(--fg)}
+.cm-wrap{max-width:var(--pw,1100px)}
+
+/* ---- problem lists: density, and which lines show (Filters > Options) */
+html[data-density="compact"] .d-pcard{padding-top:9px;padding-bottom:9px}
+html[data-density="compact"] .d-pcard .d-cos,html[data-density="compact"] .d-pcard .d-topics{display:none}
+html[data-hide-companies] .d-cos{display:none}
+html[data-hide-topics] .d-topics{display:none}
+/* a pattern's heading folds its list, and stays in view while you scroll through it */
+.d-fold{position:sticky;top:calc(var(--hdr-h,102px) + 4px);z-index:4;display:flex;align-items:center;gap:8px;width:100%;padding:8px 0;background:var(--bg);text-align:left;cursor:pointer}
+.d-fold:hover{color:var(--fg)}.d-chev{display:inline-block;width:14px;color:var(--dim)}
+.d-foldall{display:flex;gap:14px;margin:0 0 6px}
+
+/* the toast stack sits at the bottom, so it never covers the buttons on the page */
+.k-root .k-tstack{top:auto;bottom:52px;right:auto;left:50%;transform:translateX(-50%);width:min(420px,calc(100% - 32px))}
+@media (max-width:700px){.k-root .k-tstack{bottom:92px}}

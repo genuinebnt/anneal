@@ -106,7 +106,12 @@ export interface PacePreview {
   daysVsTarget: number | null;
 }
 
-export function pacePreview(remaining: number, today: string, s: Pick<SrsSettings, "new_days" | "new_per_day" | "target_date">): PacePreview {
+/** New problems a solve day of this weekday takes: its own number, or the usual one. */
+export function newOn(s: Pick<SrsSettings, "new_per_day" | "new_by_day">, day: Weekday): number {
+  return s.new_by_day?.[day] || Math.max(1, s.new_per_day);
+}
+
+export function pacePreview(remaining: number, today: string, s: Pick<SrsSettings, "new_days" | "new_per_day" | "new_by_day" | "target_date">): PacePreview {
   const start = parseDay(today);
   const solve = (d: Date) => s.new_days.includes(dayName(d));
   let finish: Date | null = null;
@@ -115,7 +120,7 @@ export function pacePreview(remaining: number, today: string, s: Pick<SrsSetting
     let left = remaining;
     for (let i = 0; i < 3660 && !finish; i++) {
       const d = addDays(start, i);
-      if (solve(d)) left -= Math.max(1, s.new_per_day);
+      if (solve(d)) left -= newOn(s, dayName(d));
       if (left <= 0) finish = d;
     }
   }

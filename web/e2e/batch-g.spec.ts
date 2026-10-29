@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("the Next up card hides the idea until asked, and Settings can show it always", async ({ page }) => {
     await page.goto("/dsa");
     const card = page.locator(".s-next");
-    await expect(card).toContainText("The idea is hidden");
+    await expect(card.getByRole("button", { name: "Show the idea" })).toBeVisible();
     // neither the technique nor the pattern's name is shown: both name the approach
     await expect(card.locator(".s-kick")).toHaveText(/^\s*NEXT UP\s*$/);
     await expect(card.locator(".s-pills .s-pill")).toHaveCount(await card.locator(".s-pills .s-pill").count());
@@ -66,7 +66,7 @@ test("⌘K groups results, highlights the match, and a number finds a LeetCode p
     await expect(page).toHaveURL(/\/d\//);
     // what was chosen is first the next time
     await page.keyboard.press("Control+k");
-    await expect(page.locator(".hd-pal .hd-grp").first()).toHaveText("RECENT");
+    await expect(page.locator(".hd-pal .hd-grp", { hasText: "RECENT" })).toBeVisible();
 });
 
 test("interview mode: pick a company, make it the plan, and go back to the main plan", async ({ page }) => {

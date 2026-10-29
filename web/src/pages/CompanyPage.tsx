@@ -85,7 +85,6 @@ export function CompanyPage() {
             <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
                 <div className="cm-wrap">
                     <h1>Interview mode</h1>
-                    <p className="lead">Pick the company and the day. anneal plans the problems that company asks, the most asked first and the last six months counting double, at the pace the day needs. Your main plan is left as it is.</p>
 
                     {onCompanyPlan && (
                         <div className="cm-now" role="status">

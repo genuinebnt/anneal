@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { Skeleton } from "../components/Skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../api";
@@ -47,7 +48,7 @@ export function CourseConceptPage({ course, id }: { course: string; id: string }
                 <Header area="courses" stats={false} />
                 <main className="page">
                     <div className="wrap">
-                        <p className={q.isError ? "notice bad" : "notice"}>{q.isError ? `Couldn't load ${id}: ${(q.error as Error).message}` : "Loading…"}</p>
+                        {q.isError ? <p className="notice bad">{`Couldn't load ${id}: ${(q.error as Error).message}`}</p> : <Skeleton lines={6} />}
                     </div>
                 </main>
             </>

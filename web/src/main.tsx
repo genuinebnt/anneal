@@ -23,9 +23,11 @@ import { installPressEffects } from "./components/kit";
 import { KitPage } from "./pages/KitPage";
 import { ToastHost } from "./components/toasts";
 import { hydratePrefs } from "./prefs";
+import { applyUi } from "./uiprefs";
 import { ShortcutHelp } from "./components/ShortcutHelp";
-import { WhatsNewToast } from "./components/WhatsNewToast";
 import { WelcomeBack } from "./components/WelcomeBack";
+import { ConnectionBanner } from "./components/ConnectionBanner";
+import { ErrorScreen } from "./components/ErrorScreen";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LogPage } from "./pages/LogPage";
 import { CompanyPage } from "./pages/CompanyPage";
@@ -55,8 +57,8 @@ const rootRoute = createRootRoute({
       <Outlet />
       <ToastHost />
       <ShortcutHelp />
-      <WhatsNewToast />
       <WelcomeBack />
+      <ConnectionBanner />
     </>
   ),
 });
@@ -160,7 +162,8 @@ const courseStageRoute = routes[16];
 const courseConceptRoute = routes[17];
 const patternProblemsRoute = routes[18];
 
-const router = createRouter({ routeTree: rootRoute.addChildren([...routes]) });
+// Pages are preloaded when their link is hovered, scroll positions come back with Back, and a page that throws shows a way out instead of a blank screen.
+const router = createRouter({ routeTree: rootRoute.addChildren([...routes]), defaultPreload: "intent", defaultPreloadStaleTime: 30_000, scrollRestoration: true, defaultErrorComponent: ErrorScreen });
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -168,15 +171,18 @@ declare module "@tanstack/react-router" {
   }
 }
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } } });
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } },
+});
 
 installPressEffects();
-void hydratePrefs().then(() =>
-  createRoot(document.getElementById("root")!).render(
+void hydratePrefs().then(() => {
+  applyUi();
+  return createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>
     </StrictMode>,
-  ),
-);
+  );
+});

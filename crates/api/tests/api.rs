@@ -524,7 +524,7 @@ async fn passphrase_login_gates_the_api(db: PgPool) {
     let pair = cookie.split(';').next().unwrap().to_owned();
 
     // The routes that hand out or take in everything the owner has made are behind the login too.
-    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/feed"), (Method::POST, "/api/feed"), (Method::GET, "/api/week-summary"), (Method::GET, "/api/day/2026-10-29"), (Method::POST, "/api/dsa/bulk-solved"), (Method::POST, "/api/plans/company"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
+    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/feed"), (Method::POST, "/api/feed"), (Method::GET, "/api/week-summary"), (Method::GET, "/api/day/2026-10-29"), (Method::POST, "/api/plans/company"), (Method::GET, "/api/dsa/problems/lc-two-sum/forecast"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
         assert_eq!(raw(&app, method, path, None, Some(json!({}))).await.0, StatusCode::UNAUTHORIZED, "{path} must need the login");
     }
     assert_eq!(raw(&app, Method::GET, "/api/tracks", Some(&pair), None).await.0, StatusCode::OK);
@@ -951,6 +951,15 @@ async fn the_plan_follows_the_settings(db: PgPool) {
     let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
     assert_eq!(o["plan"]["goal_total"], 6);
     assert_eq!(o["settings"]["new_days"], json!(["mon", "wed"]));
+
+    // A weekday can take its own number of new problems; 0 keeps the usual two, and more than 20 is refused.
+    settings["new_by_day"] = json!({ "wed": 4 });
+    assert_eq!(call(&app, Method::PUT, "/api/settings/srs", Some(settings.clone())).await.0, StatusCode::OK);
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!((o["settings"]["new_by_day"]["wed"].as_u64(), o["settings"]["new_by_day"]["mon"].as_u64()), (Some(4), Some(0)));
+    settings["new_by_day"] = json!({ "wed": 21 });
+    assert_eq!(call(&app, Method::PUT, "/api/settings/srs", Some(settings.clone())).await.0, StatusCode::BAD_REQUEST);
+    settings["new_by_day"] = json!({});
 
     settings["goal"]["list"] = json!("everything");
     assert_eq!(call(&app, Method::PUT, "/api/settings/srs", Some(settings.clone())).await.0, StatusCode::BAD_REQUEST);
@@ -2109,42 +2118,6 @@ async fn a_reason_is_kept_with_the_latest_attempt_and_a_day_lists_what_was_solve
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
-async fn problems_solved_before_anneal_are_marked_without_touching_today_and_can_be_taken_back(db: PgPool) {
-    let root = dsa_root(None);
-    let app = test_app_with(db.clone(), root.path());
-    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
-    let n1 = problem_of(&o, "lc-two-sum")["number"].as_u64().unwrap();
-    let n2 = problem_of(&o, "lc-valid-palindrome")["number"].as_u64().unwrap();
-    // something already logged is left alone
-    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "good" }))).await;
-
-    let (_, dry) = call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1, n2, 999999], "dry_run": true }))).await;
-    assert_eq!((dry["matched"].as_array().unwrap().len(), dry["already_logged"].as_array().unwrap().len(), dry["unknown"].as_array().unwrap().len()), (1, 1, 1));
-    let none: (i64,) = sqlx::query_as("SELECT count(*) FROM attempts WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
-    assert_eq!(none.0, 0, "a dry run writes nothing");
-
-    let (status, done) = call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1, n2] }))).await;
-    assert_eq!(status, StatusCode::OK, "{done}");
-    let ids = done["attempts"].clone();
-    assert_eq!(ids.as_array().unwrap().len(), 1);
-    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
-    assert_eq!(problem_of(&o, "lc-two-sum")["state"]["solved"], true);
-    let reviews: (i64,) = sqlx::query_as("SELECT count(*) FROM reviews WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
-    assert_eq!(reviews.0, 0, "no review is started");
-    // it is recorded on a past day, so it adds nothing to the week
-    let (_, a) = call(&app, Method::GET, "/api/activity?sections=D", None).await;
-    assert_eq!(a["week_solved"], 1, "only the problem logged today counts this week: {a}");
-    assert_eq!(call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1], "date": "2999-01-01" }))).await.0, StatusCode::BAD_REQUEST);
-
-    let (_, undone) = call(&app, Method::POST, "/api/dsa/bulk-solved/undo", Some(json!({ "attempts": ids }))).await;
-    assert_eq!(undone["removed"], 1);
-    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
-    assert_eq!(problem_of(&o, "lc-two-sum")["state"]["solved"], false);
-    let kept: (i64,) = sqlx::query_as("SELECT count(*) FROM data_archive WHERE source = 'undo_bulk_solved'").fetch_one(&db).await.unwrap();
-    assert_eq!(kept.0, 1, "the undo archived what it removed");
-}
-
-#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn the_calendar_feed_needs_its_token_and_lists_the_coming_reviews(db: PgPool) {
     let root = dsa_root(None);
     let app = test_app_with(db.clone(), root.path());
@@ -2225,4 +2198,40 @@ async fn a_company_plan_is_made_beside_the_main_plan_and_is_not_duplicated(db: P
     assert_eq!(call(&app, Method::PUT, "/api/plans/active", Some(json!({ "id": "default" }))).await.0, StatusCode::OK);
     let (_, v) = view(&app).await;
     assert_eq!(v["active"], "default");
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_forecast_follows_the_review_and_is_empty_without_one(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let (_, none) = call(&app, Method::GET, "/api/dsa/problems/lc-two-sum/forecast", None).await;
+    assert_eq!(none["points"], Value::Null);
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    let (status, f) = call(&app, Method::GET, "/api/dsa/problems/lc-two-sum/forecast", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let points: Vec<f64> = f["points"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert_eq!(points.len(), 61);
+    assert!(points[0] > 0.9 && points.windows(2).all(|w| w[1] <= w[0] + 1e-6), "memory only fades while nothing is reviewed: {points:?}");
+    assert!(f["due_in"].as_i64().unwrap() >= 1 && f["retention"].as_f64().unwrap() > 0.5);
+    assert_eq!(call(&app, Method::GET, "/api/dsa/problems/lc-nothing/forecast", None).await.0, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn large_answers_are_compressed_for_a_client_that_accepts_it(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let ask = |encoding: Option<&str>| {
+        let mut req = Request::builder().uri("/api/dsa/mock");
+        if let Some(e) = encoding {
+            req = req.header("accept-encoding", e);
+        }
+        app.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let plain = ask(None).await.unwrap();
+    assert!(plain.headers().get("content-encoding").is_none());
+    let plain_len = plain.into_body().collect().await.unwrap().to_bytes().len();
+    let zipped = ask(Some("gzip")).await.unwrap();
+    assert_eq!(zipped.headers()["content-encoding"], "gzip");
+    let zipped_len = zipped.into_body().collect().await.unwrap().to_bytes().len();
+    assert!(zipped_len * 2 < plain_len, "{zipped_len} bytes compressed against {plain_len}");
 }

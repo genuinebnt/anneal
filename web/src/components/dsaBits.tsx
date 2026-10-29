@@ -195,7 +195,7 @@ const BUILTINS = "range|len|set|dict|list|tuple|deque|sum|any|all|min|max|enumer
 const TOKEN = new RegExp(`(#[^\\n]*)|("""[\\s\\S]*?"""|"(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*')|\\b(${KEYWORDS})\\b|\\b(${BUILTINS})\\b|\\b(\\d[\\d_]*)\\b|(\\w+)(?=\\()`, "g");
 
 /** Python with light highlighting and a copy button. */
-export function PyCode({ code }: { code: string }) {
+export function PyCode({ code, lineNumbers = false }: { code: string; lineNumbers?: boolean }) {
   const [copied, setCopied] = useState(false);
   const parts: ReactNode[] = [];
   let last = 0;
@@ -224,7 +224,14 @@ export function PyCode({ code }: { code: string }) {
       >
         {copied ? "copied" : "copy"}
       </button>
-      <pre>{parts}</pre>
+      <div className="d-codebody">
+        {lineNumbers && (
+          <div className="d-ln" aria-hidden="true">
+            {code.replace(/\n$/, "").split("\n").map((_, i) => i + 1).join("\n")}
+          </div>
+        )}
+        <pre>{parts}</pre>
+      </div>
     </div>
   );
 }

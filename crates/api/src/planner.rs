@@ -89,11 +89,21 @@ pub struct Routine {
     /// A practice day takes at least this many reviews.
     pub practice_floor: u32,
     pub new_per_day: u32,
+    /// A weekday's own number of new problems, Monday first; 0 keeps `new_per_day`.
+    pub new_by_day: [u32; 7],
 }
 
 pub const PRACTICE_FLOOR: u32 = 6;
 
 impl Routine {
+    /// How many new problems a solve day takes.
+    pub fn new_on(&self, day: NaiveDate) -> u32 {
+        match self.new_by_day[day.weekday().num_days_from_monday() as usize] {
+            0 => self.new_per_day.max(1),
+            n => n,
+        }
+    }
+
     pub fn kind_of(&self, day: NaiveDate, ov: &BTreeMap<NaiveDate, Kind>) -> Kind {
         ov.get(&day).copied().unwrap_or(if self.solve_days.contains(&day.weekday()) { Kind::Solve } else { Kind::Practice })
     }
@@ -292,7 +302,7 @@ pub fn build_queue(rules: &Rules, ctx: &Ctx) -> Queue {
     for n in 0..HORIZON {
         let d = ctx.today + Days::new(n);
         if ctx.routine.kind_of(d, ctx.overrides) == Kind::Solve {
-            for _ in 0..ctx.routine.new_per_day.max(1) {
+            for _ in 0..ctx.routine.new_on(d) {
                 slots.push(d);
             }
         }
@@ -506,7 +516,19 @@ mod tests {
     }
 
     fn routine() -> Routine {
-        Routine { solve_days: vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri, Weekday::Sat], capacity: [1, 1, 1, 1, 1, 3, 12], practice_floor: PRACTICE_FLOOR, new_per_day: 1 }
+        Routine { solve_days: vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri, Weekday::Sat], capacity: [1, 1, 1, 1, 1, 3, 12], practice_floor: PRACTICE_FLOOR, new_per_day: 1, new_by_day: [0; 7] }
+    }
+
+    #[test]
+    fn a_weekday_takes_its_own_number_of_new_problems() {
+        let mut r = routine();
+        r.new_per_day = 2;
+        r.new_by_day[2] = 4; // Wednesday
+        let wed = d("2026-11-04");
+        assert_eq!((r.new_on(wed), r.new_on(d("2026-11-03"))), (4, 2));
+        r.new_by_day = [0; 7];
+        r.new_per_day = 0;
+        assert_eq!(r.new_on(wed), 1);
     }
 
     /// topic, main problems, practice problems; everything before `graph` plus two graph problems is solved.

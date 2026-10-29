@@ -2,9 +2,8 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { counted, niceDate } from "../dsa";
+import { counted, newOn, niceDate, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
-import { LATEST, WHATS_NEW } from "../whatsnew";
 import { clearNotes, useNotes } from "./toasts";
 import { useDialog } from "./useDialog";
 
@@ -32,7 +31,6 @@ export function NotificationBell() {
         const d = getPref<{ day: string; ids: string[] }>("notif.dismissed", { day: "", ids: [] });
         return d.day === today() ? d.ids : [];
     });
-    const [seenNew, setSeenNew] = useState(() => getPref("whatsnew.seen", "") === LATEST);
 
     useEffect(() => {
         if (!open) return;
@@ -53,23 +51,18 @@ export function NotificationBell() {
         const doneToday = activity.data?.week[activity.data.week.length - 1]?.solved ?? 0;
         const next = o.problems.find((x) => x.id === p.next_up[0]);
         if (p.due > 0) needs.push({ id: "due", text: `${p.due} review${p.due === 1 ? "" : "s"} due${p.overdue ? `, ${p.overdue} overdue` : ""}`, to: "/dsa/review" });
-        if (p.solve_day && next && counted(o, next) && doneToday < o.settings.new_per_day) needs.push({ id: "today", text: `Today's problem: ${next.title}`, to: "/d/$slug", slug: next.slug });
+        if (p.solve_day && next && counted(o, next) && doneToday < newOn(o.settings, WEEKDAYS[(new Date().getDay() + 6) % 7] ?? "mon")) needs.push({ id: "today", text: `Today's problem: ${next.title}`, to: "/d/$slug", slug: next.slug });
         const streak = progress.data?.streak ?? 0;
         if (p.solve_day && streak > 0 && doneToday === 0 && new Date().getHours() >= 17) needs.push({ id: "streak", text: `Your ${streak}-day streak needs a solve today`, to: next ? "/d/$slug" : "/dsa", slug: next?.slug });
         if (plan.data && plan.data.summary.late > 0) needs.push({ id: "late", text: `Your plan is ${plan.data.summary.late} problem${plan.data.summary.late === 1 ? "" : "s"} late${plan.data.summary.finish ? `, finishing ${niceDate(plan.data.summary.finish, plan.data.today)}` : ""}`, to: "/dsa/calendar" });
     }
     const live = needs.filter((n) => !dismissed.includes(n.id));
-    const showNew = !seenNew;
-    const count = live.filter((n) => n.id !== "late").length + (showNew ? 1 : 0);
+    const count = live.filter((n) => n.id !== "late").length;
 
     const dismiss = (id: string) => {
         const ids = [...dismissed, id];
         setDismissed(ids);
         setPref("notif.dismissed", { day: today(), ids });
-    };
-    const markNewSeen = () => {
-        setSeenNew(true);
-        setPref("whatsnew.seen", LATEST);
     };
 
     return (
@@ -83,6 +76,14 @@ export function NotificationBell() {
             </button>
             {open && (
                 <div className="nt-pop" ref={pop} role="dialog" aria-label="Notifications">
+                    {o && (
+                        <div className="nt-sum" aria-label="Today at a glance">
+                            <div><b>{progress.data?.streak ?? 0}</b><span>day streak</span></div>
+                            <div><b>{o.plan.due}</b><span>reviews due</span></div>
+                            <div><b>{activity.data?.week[activity.data.week.length - 1]?.solved ?? 0}</b><span>solved today</span></div>
+                            <div><b>{o.plan.goal_done}<small>/{o.plan.goal_total}</small></b><span>of the goal</span></div>
+                        </div>
+                    )}
                     <span className="nt-lab">NEEDS YOU</span>
                     {live.length === 0 && <p className="nt-empty">Nothing needs you right now.</p>}
                     {live.map((n) => (
@@ -91,15 +92,12 @@ export function NotificationBell() {
                             <button className="nt-x" aria-label={`Dismiss: ${n.text}`} title="Dismiss for today" onClick={() => dismiss(n.id)}>×</button>
                         </div>
                     ))}
-                    {showNew && (
-                        <>
-                            <span className="nt-lab">NEW</span>
-                            <div className="nt-item">
-                                <Link to="/settings" hash="new" onClick={() => { markNewSeen(); setOpen(false); }}>anneal was updated: {WHATS_NEW[0]!.title}</Link>
-                                <button className="nt-x" aria-label="Dismiss what's new" title="Mark as seen" onClick={markNewSeen}>×</button>
-                            </div>
-                        </>
-                    )}
+                    <div className="nt-links">
+                        <Link to="/dsa/plan" onClick={() => setOpen(false)}>Plan</Link>
+                        <Link to="/dsa/calendar" onClick={() => setOpen(false)}>Calendar</Link>
+                        <Link to="/dsa/review" onClick={() => setOpen(false)}>Review</Link>
+                        <Link to="/settings" onClick={() => setOpen(false)}>Settings</Link>
+                    </div>
                     <span className="nt-lab">RECENT <button className="nt-clear" onClick={clearNotes} disabled={notes.length === 0}>clear</button></span>
                     {notes.length === 0 && <p className="nt-empty">Nothing yet. What you log, undo and change shows up here.</p>}
                     {notes.slice(0, 8).map((n) => (

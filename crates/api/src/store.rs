@@ -378,33 +378,6 @@ pub async fn archive_course_rows(tx: &mut sqlx::PgConnection, source: &str, tabl
     Ok(())
 }
 
-/// One solved attempt per problem on `day`, for problems solved before anneal. No review. Returns the attempt ids.
-pub async fn mark_solved_before(db: &PgPool, ids: &[String], day: chrono::NaiveDate) -> sqlx::Result<Vec<i64>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let at = chrono::TimeZone::from_local_datetime(&chrono::Local, &day.and_hms_opt(12, 0, 0).expect("noon exists")).earliest().map_or_else(Utc::now, |t| t.with_timezone(&Utc));
-    sqlx::query_scalar("INSERT INTO attempts (problem_id, kind, started_at, solved_at, assisted) SELECT p, 'practice', $2, $2, false FROM unnest($1::text[]) AS p RETURNING id")
-        .bind(ids)
-        .bind(at)
-        .fetch_all(db)
-        .await
-}
-
-/// Takes back [`mark_solved_before`]: the listed attempts, only while they are still a plain solved first try with no runs, archived first.
-pub async fn unmark_solved_before(db: &PgPool, attempts: &[i64]) -> sqlx::Result<u64> {
-    let mut tx = db.begin().await?;
-    let keys: Vec<String> = sqlx::query_scalar("SELECT a.id::text FROM attempts a WHERE a.id = ANY($1) AND a.kind = 'practice' AND a.solved_at IS NOT NULL AND NOT a.assisted AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.attempt_id = a.id) AND NOT EXISTS (SELECT 1 FROM reviews v WHERE v.problem_id = a.problem_id)")
-        .bind(attempts)
-        .fetch_all(&mut *tx)
-        .await?;
-    archive_rows(&mut tx, "undo_bulk_solved", "attempts", "id", &keys).await?;
-    let ids: Vec<i64> = keys.iter().filter_map(|k| k.parse().ok()).collect();
-    let n = sqlx::query("DELETE FROM attempts WHERE id = ANY($1)").bind(&ids).execute(&mut *tx).await?.rows_affected();
-    tx.commit().await?;
-    Ok(n)
-}
-
 /// What undoing a problem's latest log changes besides deleting that attempt.
 enum Undo {
     /// A repeat for practice or a problem without reviews: the schedule was not touched.

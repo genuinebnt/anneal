@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
+import { Skeleton } from "../components/Skeleton";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
@@ -7,12 +8,14 @@ import { Header } from "../components/Header";
 import { GradeGlyph } from "../components/icons";
 import { getPref, setPref } from "../prefs";
 import { usePremiumSwitch } from "../premium";
+import { Segmented } from "../components/ui";
+import { readUi, setUi } from "../uiprefs";
 import { useShowIdeas } from "../spoilers";
 import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
 import { PracticeRow } from "./PracticePage";
 import { pad2, pctColor } from "../components/bits";
-import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, counted, daysUntil, hours, inList, leetcode, niceDate, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
+import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, counted, daysUntil, hours, inList, leetcode, newOn, niceDate, WEEKDAYS, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
 
 type Role = "must_learn" | "practice";
 type View = "patterns" | "problems" | "practice";
@@ -72,13 +75,41 @@ function useStored<T extends string>(key: string, initial: T): [T, (v: T) => voi
 const activeCount = (f: Filters) =>
   f.status.size + f.role.size + f.diff.size + f.patterns.size + f.groups.size + f.companies.size + (f.recent ? 1 : 0) + f.tags.size + (f.q ? 1 : 0);
 
+const SET_KEYS: SetKey[] = ["status", "role", "diff", "patterns", "groups", "companies", "tags"];
+
+/** The filters as a query string, so a refresh, Back and a shared link keep them. */
+function toQuery(f: Filters): string {
+  const p = new URLSearchParams();
+  if (f.list !== "neetcode150") p.set("list", f.list);
+  if (f.q) p.set("q", f.q);
+  if (f.recent) p.set("recent", "1");
+  for (const k of SET_KEYS) if ((f[k] as Set<string>).size) p.set(k, [...(f[k] as Set<string>)].join("~"));
+  return p.toString();
+}
+
+function fromQuery(search: string): Partial<Filters> {
+  const p = new URLSearchParams(search);
+  const out: Record<string, unknown> = {};
+  const list = p.get("list");
+  if (list && LISTS.some(([k]) => k === list)) out.list = list;
+  if (p.get("q")) out.q = p.get("q");
+  if (p.get("recent")) out.recent = true;
+  for (const k of SET_KEYS) if (p.get(k)) out[k] = new Set(p.get(k)!.split("~"));
+  return out as Partial<Filters>;
+}
+
 export function DsaPage() {
   const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
   const activity = useQuery({ queryKey: ["activity", "dsa"], queryFn: () => api.activity(["D"]) });
   const tracks = useQuery({ queryKey: ["tracks"], queryFn: api.tracks });
   const o = overview.data;
   const { log, toast } = useLogger(o?.today);
-  const [f, setF] = useState<Filters>(() => fresh());
+  const [f, setF] = useState<Filters>(() => ({ ...fresh(), ...fromQuery(location.search) }));
+  useEffect(() => {
+    const q = toQuery(f);
+    // keeps the router's own history state, so Back still works
+    window.history.replaceState(window.history.state, "", q ? `?${q}` : location.pathname);
+  }, [f]);
   // `view` is the saved choice, changed only by the toggle. Shortcuts that open the list (a pattern's problems, the due
   // reviews) borrow it for this visit through `drill`, so they never overwrite what was chosen.
   const [view, setView] = useStored<View>("anneal-dsa-view", "patterns");
@@ -122,7 +153,7 @@ export function DsaPage() {
       <>
         <Header area="dsa" />
         <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-          <div className="wrap">{overview.isError ? <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p> : <p className="rempty">Loading…</p>}</div>
+          <div className="wrap">{overview.isError ? <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p> : <Skeleton lines={6} />}</div>
         </main>
       </>
     );
@@ -141,9 +172,6 @@ export function DsaPage() {
               <h1 className="s-rv" style={rise(1).style}>
                 Every NeetCode problem, <em>tracked.</em>
               </h1>
-              <p className="s-lead s-rv" style={rise(2).style}>
-                Solve on LeetCode, log it here. Anneal keeps the schedule: reviews, streak and readiness. Learn each pattern once, then practise it.
-              </p>
             </div>
             <div className="s-stats s-rv" style={rise(3).style}>
               <div>
@@ -170,6 +198,7 @@ export function DsaPage() {
           <div className="s-main">
             <div className="cat-main">
               <WeeklySummary today={o.today} />
+              <TodayStrip o={o} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
               <NextUp o={o} streak={activity.data?.streak ?? 0} />
               <Goals o={o} f={f} setList={(list) => update({ list })} />
               <div className="s-tools s-rv" style={rise(5).style}>
@@ -345,6 +374,44 @@ function Goals({ o, f, setList }: { o: DsaOverview; f: Filters; setList: (l: Lis
   );
 }
 
+/** Today as three steps: the reviews that are due, the new problem, and done. Each says where it stands; the first not finished is marked as the one to do. */
+function TodayStrip({ o, doneToday }: { o: DsaOverview; doneToday: number }) {
+  const p = o.plan;
+  const next = o.problems.find((x) => x.id === p.next_up[0]);
+  const target = p.solve_day ? newOn(o.settings, WEEKDAYS[(new Date(`${o.today}T00:00`).getDay() + 6) % 7] ?? "mon") : 0;
+  const reviewsDone = p.due === 0;
+  const problemDone = target === 0 || doneToday >= target;
+  type Step = { key: string; label: string; detail: string; state: "done" | "now" | "wait" | "off"; to?: { to: "/dsa/review" } | { to: "/d/$slug"; params: { slug: string } } };
+  const steps: Step[] = [
+    { key: "rev", label: "Reviews", detail: reviewsDone ? "none due" : `${p.due} due${p.overdue ? `, ${p.overdue} overdue` : ""}`, state: reviewsDone ? "done" : "now", to: { to: "/dsa/review" } },
+    {
+      key: "new",
+      label: "New problem",
+      detail: target === 0 ? (p.solve_day ? "none planned" : "a practice day") : problemDone ? `${doneToday} of ${target} done` : next ? next.title : "nothing left",
+      state: target === 0 ? "off" : problemDone ? "done" : reviewsDone ? "now" : "wait",
+      to: next && target > 0 && !problemDone ? { to: "/d/$slug", params: { slug: next.slug } } : undefined,
+    },
+    { key: "end", label: "Done for today", detail: reviewsDone && problemDone ? "all done" : "not yet", state: reviewsDone && problemDone ? "done" : "wait" },
+  ];
+  return (
+    <nav className="d-today s-rv" aria-label="Today">
+      {steps.map((s, i) => {
+        const body = (
+          <>
+            <i className={`d-ts ${s.state}`} aria-hidden="true">{s.state === "done" ? "✓" : i + 1}</i>
+            <span><b>{s.label}</b><small>{s.detail}</small></span>
+          </>
+        );
+        return s.to ? (
+          <Link key={s.key} className={`d-step ${s.state}`} {...(s.to as { to: "/dsa/review" })}>{body}</Link>
+        ) : (
+          <div key={s.key} className={`d-step ${s.state}`}>{body}</div>
+        );
+      })}
+    </nav>
+  );
+}
+
 /** On Monday: how last week went, from data already stored. Closed once for the week (remembered). */
 function WeeklySummary({ today }: { today: string }) {
   const monday = new Date(`${today}T00:00`).getDay() === 1;
@@ -452,10 +519,7 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
       </div>
       <h3>{next.title}</h3>
       {technique && !ideaShown ? (
-        <p>
-          The idea is hidden so it does not give the problem away.{" "}
-          <button className="d-reveal" onClick={() => setReveal(true)}>Show the idea</button>
-        </p>
+        <p><button className="d-reveal" onClick={() => setReveal(true)}>Show the idea</button></p>
       ) : (
         <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>
       )}
@@ -559,7 +623,7 @@ function PracticeGrid({ o, log }: { o: DsaOverview; log: ReturnType<typeof useLo
               <span>{pat.name.toUpperCase()} · {pat.practice_solved}/{pat.practice_total}</span>
               <Link to="/dsa/practice/$code" params={{ code: pat.code }}>open the pattern ›</Link>
             </h4>
-            {lists[i]?.isLoading && <p className="rempty">Loading…</p>}
+            {lists[i]?.isLoading && <Skeleton lines={3} />}
             {next.map(({ p, from }) => (
               <div key={p.id} className="pg-row">
                 <PracticeRow p={p} today={o.today} log={log} />
@@ -650,6 +714,14 @@ function PatternGrid({ o, f, model }: { o: DsaOverview; f: Filters; model: Model
 
 function ProblemGroups({ o, model, pickCompany, picked, uncapped, openGroups, openGroup, log, clearAll }: { o: DsaOverview; pickCompany: (name: string) => void; picked: ReadonlySet<string>; uncapped: boolean; model: Model; openGroups: Set<string>; openGroup: (code: string) => void; log: ReturnType<typeof useLogger>["log"]; clearAll: () => void }) {
   const { items } = model;
+  // which patterns are folded is remembered (and follows you to another laptop)
+  const [folded, setFolded] = useState<string[]>(() => getPref<string[]>("groups.folded", []));
+  const saveFolded = (v: string[]) => {
+    setFolded(v);
+    setPref("groups.folded", v);
+  };
+  const fold = (code: string) => saveFolded(folded.includes(code) ? folded.filter((c) => c !== code) : [...folded, code]);
+  const foldAll = (on: boolean) => saveFolded(on ? o.patterns.map((p) => p.code) : []);
   if (!items.length)
     return (
       <div className="cat-empty">
@@ -662,6 +734,10 @@ function ProblemGroups({ o, model, pickCompany, picked, uncapped, openGroups, op
   return (
     <>
       <StateLegend />
+      <div className="d-foldall">
+        <button className="pp-link" onClick={() => foldAll(true)}>Collapse all</button>
+        <button className="pp-link" onClick={() => foldAll(false)}>Expand all</button>
+      </div>
       {o.patterns.map((pat) => {
         const inPat = items.filter((p) => p.pattern === pat.code);
         if (!inPat.length) return null;
@@ -669,19 +745,22 @@ function ProblemGroups({ o, model, pickCompany, picked, uncapped, openGroups, op
         const cap = openGroups.has(pat.code) || uncapped ? roots.length : 15;
         return (
           <div className="d-group" key={pat.code}>
-            <div className="s-flab d-flabel">
+            <button className="s-flab d-flabel d-fold" aria-expanded={!folded.includes(pat.code)} onClick={() => fold(pat.code)}>
+              <span className="d-chev" aria-hidden="true">{folded.includes(pat.code) ? "›" : "⌄"}</span>
               {pat.name.toUpperCase()} · {inPat.length}
-            </div>
-            <div className="d-plist" style={{ marginTop: 14 }}>
-              {roots.slice(0, cap).map((p) => (
-                <ProblemCard key={p.id} p={p} o={o} model={model} log={log} pickCompany={pickCompany} picked={picked} />
-              ))}
-              {roots.length > cap && (
-                <button className="d-more" onClick={() => openGroup(pat.code)}>
-                  show {roots.length - cap} more
-                </button>
-              )}
-            </div>
+            </button>
+            {!folded.includes(pat.code) && (
+              <div className="d-plist" style={{ marginTop: 14 }}>
+                {roots.slice(0, cap).map((p) => (
+                  <ProblemCard key={p.id} p={p} o={o} model={model} log={log} pickCompany={pickCompany} picked={picked} />
+                ))}
+                {roots.length > cap && (
+                  <button className="d-more" onClick={() => openGroup(pat.code)}>
+                    show {roots.length - cap} more
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -716,7 +795,7 @@ function ProblemCard({ p, o, model, log, pickCompany, picked }: { p: DsaProblem;
         <Insight text={p.insight} />
         <div className="d-pmeta">
           <ProblemTags p={p} />
-          <span>{p.tags.slice(0, 3).join(" · ")}</span>
+          <span className="d-topics">{p.tags.slice(0, 3).join(" · ")}</span>
           {teacher && (
             <span className="d-of">
               · practice of{" "}
@@ -752,6 +831,7 @@ function ProblemCard({ p, o, model, log, pickCompany, picked }: { p: DsaProblem;
 const OUTCOME_COLOR = { solved: "var(--grn)", assisted: "var(--acc)", failing: "var(--bad)", started: "var(--dim)" } as const;
 
 function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activity?: Activity; tracks: TrackSummary[]; showDue: () => void }) {
+  const byId0 = new Map(o.problems.map((p) => [p.id, p]));
   const ready = useReady();
   const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
   const rec = progress.data?.record;
@@ -817,7 +897,16 @@ function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activi
             ))}
           </div>
         ) : (
-          <p className="s-none">Nothing yet. What you log shows up here.</p>
+          <p className="s-none">
+            Nothing logged yet.{" "}
+            {byId0.get(o.plan.next_up[0] ?? "") ? (
+              <>
+                Open <Link to="/d/$slug" params={{ slug: byId0.get(o.plan.next_up[0]!)!.slug }} style={{ color: "var(--ca)" }}>{byId0.get(o.plan.next_up[0]!)!.title}</Link>, solve it on LeetCode, and log how it went.
+              </>
+            ) : (
+              "Log a problem and it shows up here."
+            )}
+          </p>
         )}
       </div>
       <div className="s-card s-rv" style={rise(6).style}>
@@ -838,7 +927,10 @@ function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activi
             ))}
           </div>
         ) : (
-          <p className="s-none">{o.plan.capacity === 0 ? "A rest day." : "Nothing due. Nice."}</p>
+          <p className="s-none">
+            {o.plan.capacity === 0 ? "A rest day." : "Nothing due. Nice."}{" "}
+            <Link to="/dsa/review" style={{ color: "var(--ca)" }}>Review something ahead ›</Link>
+          </p>
         )}
         {o.plan.overdue > 0 && <p className="s-none" style={{ marginTop: 8 }}>{o.plan.overdue} overdue, in line for the next days with room.</p>}
         <div className="s-links" style={{ marginTop: 10 }}>
@@ -903,6 +995,7 @@ function count<T>(items: DsaProblem[], key: (p: DsaProblem) => T | T[]): Map<T, 
 
 function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f: Filters; model: Model; flip: <T>(k: SetKey, v: T) => void; update: (p: Partial<Filters>) => void; clearAll: () => void }) {
   const premium = usePremiumSwitch();
+  const [ui, setUiState] = useState(readUi);
   const [moreTags, setMoreTags] = useState(false);
   const [morePatterns, setMorePatterns] = useState(false);
   const [tagQ, setTagQ] = useState("");
@@ -1028,6 +1121,12 @@ function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f
         <h4>
           <span>OPTIONS</span>
         </h4>
+        <div className="d-tog">
+          <span>Density<small>Compact trims the rows</small></span>
+          <Segmented label="Density" value={ui.density} options={[["comfortable", "Comfortable"], ["compact", "Compact"]] as const} onChange={(v) => { setUi("ui.density", v); setUiState(readUi()); }} />
+        </div>
+        <Tog label="Show companies" on={ui.companies} onClick={() => { setUi("ui.companies", !ui.companies); setUiState(readUi()); }} />
+        <Tog label="Show topics" on={ui.topics} onClick={() => { setUi("ui.topics", !ui.topics); setUiState(readUi()); }} />
         <Tog label="Hide LeetCode Premium" hint={`${o.problems.filter((p) => p.premium).length} problems need it. Hidden ones are not counted either`} on={premium.hidden} onClick={() => premium.set(!premium.hidden)} />
       </div>
     </div>

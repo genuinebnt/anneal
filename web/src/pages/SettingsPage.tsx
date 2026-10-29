@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { api } from "../api";
 import { Header } from "../components/Header";
 import { Segmented, Switch } from "../components/ui";
@@ -8,7 +8,7 @@ import { Skeleton } from "../components/Skeleton";
 import { getPref, setPref } from "../prefs";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
-import { LATEST, WHATS_NEW } from "../whatsnew";
+import { readUi, setUi } from "../uiprefs";
 import { COUNT_KEYS, usePremiumSwitch } from "../premium";
 import { useShowIdeas } from "../spoilers";
 
@@ -24,7 +24,7 @@ function FeedLink() {
     return (
         <div className="st-row">
             <b>Calendar link</b>
-            <p>Subscribe in your phone's calendar app to see which days reviews are due and which are solve days. Anyone with the link can see problem titles and dates, so keep it private; making a new link stops the old one.</p>
+            <p>Anyone with the link can see problem titles and dates.</p>
             <div className="st-ctl st-actions">
                 {url && (
                     <>
@@ -35,60 +35,6 @@ function FeedLink() {
                 <button className="st-btn" disabled={make.isPending} onClick={() => make.mutate()}>{url ? "New link" : "Make a link"}</button>
             </div>
         </div>
-    );
-}
-
-/** Problems solved before anneal: paste their LeetCode numbers, see what would be marked, then mark them. They count as solved on a past day (so
- *  today's activity and the streak are untouched) and start no reviews; the whole batch can be taken back. */
-function BulkSolved() {
-    const qc = useQueryClient();
-    const [text, setText] = useState("");
-    const [date, setDate] = useState("");
-    const [result, setResult] = useState<Awaited<ReturnType<typeof api.bulkSolved>> | null>(null);
-    const [done, setDone] = useState<{ attempts: number[]; n: number } | null>(null);
-    const [message, setMessage] = useState<string | null>(null);
-    const numbers = [...new Set((text.match(/\d+/g) ?? []).map(Number))];
-    const refresh = () => COUNT_KEYS.forEach((k) => void qc.invalidateQueries({ queryKey: [k] }));
-    const check = useMutation({ mutationFn: () => api.bulkSolved({ numbers, date: date || null, dry_run: true }), onSuccess: (r) => { setResult(r); setMessage(null); }, onError: (e: Error) => setMessage(e.message) });
-    const mark = useMutation({
-        mutationFn: () => api.bulkSolved({ numbers, date: date || null }),
-        onSuccess: (r) => {
-            setDone({ attempts: r.attempts, n: r.attempts.length });
-            setResult(null);
-            setMessage(`Marked ${r.attempts.length} problem${r.attempts.length === 1 ? "" : "s"} as solved on ${r.date}.`);
-            refresh();
-        },
-        onError: (e: Error) => setMessage(e.message),
-    });
-    const undo = useMutation({
-        mutationFn: () => api.bulkSolvedUndo(done?.attempts ?? []),
-        onSuccess: (r) => { setDone(null); setMessage(`Took back ${r.removed}.`); refresh(); },
-        onError: (e: Error) => setMessage(e.message),
-    });
-    return (
-        <section className="st-card" aria-labelledby="st-bulk">
-            <h2 id="st-bulk">ALREADY SOLVED BEFORE ANNEAL</h2>
-            <p className="rempty" style={{ margin: 0 }}>Paste LeetCode problem numbers (commas, spaces or lines). They are marked solved on a past day, so today's activity and your streak do not change, and no review is started. A problem you already logged here is left alone.</p>
-            <textarea id="st-bulk-numbers" className="st-ta" rows={3} placeholder="1, 49, 128, 217 …" value={text} onChange={(e) => { setText(e.target.value); setResult(null); }} aria-label="LeetCode problem numbers" />
-            <div className="st-row">
-                <b>Solved on</b>
-                <p>Leave empty for "before anneal" (1 January 2020).</p>
-                <input id="st-bulk-date" className="st-date st-ctl" type="date" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)} aria-label="Day they were solved" />
-            </div>
-            <div className="st-actions">
-                <button className="st-btn" disabled={!numbers.length || check.isPending} onClick={() => check.mutate()}>Check {numbers.length || ""} number{numbers.length === 1 ? "" : "s"}</button>
-                {result && result.matched.length > 0 && <button className="st-btn" disabled={mark.isPending} onClick={() => mark.mutate()}>Mark {result.matched.length} as solved</button>}
-                {done && <button className="st-btn" disabled={undo.isPending} onClick={() => undo.mutate()}>Undo this batch ({done.n})</button>}
-            </div>
-            {result && (
-                <div className="st-note">
-                    <b>{result.matched.length}</b> would be marked{result.matched.length ? `: ${result.matched.slice(0, 8).map((m) => m.title).join(", ")}${result.matched.length > 8 ? ` and ${result.matched.length - 8} more` : ""}` : ""}.
-                    {result.already_logged.length ? <> {result.already_logged.length} already logged, left alone.</> : null}
-                    {result.unknown.length ? <> Not in anneal: {result.unknown.slice(0, 10).join(", ")}{result.unknown.length > 10 ? "…" : ""}.</> : null}
-                </div>
-            )}
-            {message && <span className={message.startsWith("Marked") || message.startsWith("Took") ? "st-ok" : "st-bad"} role="status">{message}</span>}
-        </section>
     );
 }
 
@@ -105,10 +51,7 @@ export function SettingsPage() {
     const [imported, setImported] = useState<string | null>(null);
     const file = useRef<HTMLInputElement>(null);
 
-    // opening the list of what is new marks it seen (the bell's "new" line goes away)
-    useEffect(() => {
-        if (location.hash === "#new") setPref("whatsnew.seen", LATEST);
-    }, []);
+    const [ui, setUiState] = useState(readUi);
     const premiumSwitch = usePremiumSwitch();
     const [showIdeas, setShowIdeas] = useShowIdeas();
     const doImport = useMutation({
@@ -139,7 +82,6 @@ export function SettingsPage() {
             <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
                 <div className="st-wrap">
                     <h1>Settings</h1>
-                    <p className="lead">What anneal counts and shows. Nothing here deletes anything you have logged.</p>
                     {!srs ? (
                         <Skeleton lines={6} />
                     ) : (
@@ -148,7 +90,7 @@ export function SettingsPage() {
                                 <h2 id="st-count">COUNTING</h2>
                                 <div className="st-row">
                                     <b>Show and count premium problems</b>
-                                    <p>Off by default. When off, LeetCode Premium problems are hidden from the problem lists and left out of the totals, the progress bars and readiness; the same switch is "Hide LeetCode Premium" in the filters on the DSA home. What you logged on them is kept, and a premium problem you complete still counts toward your streak and activity. Switch it on and they all come back, with what you logged.</p>
+                                    <p>When off, premium problems are hidden and not counted. What you logged on them is kept.</p>
                                     <Switch className="st-ctl" on={countPremium} label="Show and count premium problems" onChange={(v) => premiumSwitch.set(!v)} />
                                 </div>
                                 {preview && (
@@ -167,62 +109,61 @@ export function SettingsPage() {
                                 <h2 id="st-look">APPEARANCE</h2>
                                 <div className="st-row">
                                     <b>Theme</b>
-                                    <p>System follows your device.</p>
+                                    
                                     <Segmented className="st-ctl" label="Theme" value={theme} options={THEMES.map((t) => [t, t[0]!.toUpperCase() + t.slice(1)] as const)} onChange={(t) => { applyTheme(t); setTheme(t); }} />
                                 </div>
                                 <div className="st-row">
                                     <b>Accent colour</b>
-                                    <p />
+                                    
                                     <Segmented className="st-ctl" label="Accent colour" value={accent} options={ACCENTS.map((x) => [x.id, x.label] as const)} onChange={setAccent} />
                                 </div>
                                 <div className="st-row">
                                     <b>Page width</b>
-                                    <p>Centred keeps lines readable; wide uses more of the window.</p>
+                                    
                                     <Segmented className="st-ctl" label="Page width" value={width} options={[["narrow", "Centred"], ["wide", "Wide"]] as const} onChange={setWidth} />
                                 </div>
                                 <div className="st-row">
+                                    <b>Text size</b>
+                                    
+                                    <Segmented className="st-ctl" label="Text size" value={ui.zoom} options={[["100", "100%"], ["110", "110%"], ["125", "125%"]] as const} onChange={(v) => { setUi("ui.zoom", v); setUiState(readUi()); }} />
+                                </div>
+                                <div className="st-row">
+                                    <b>High contrast</b>
+                                    
+                                    <Switch className="st-ctl" on={ui.contrast === "high"} label="High contrast" onChange={(v) => { setUi("ui.contrast", v ? "high" : "normal"); setUiState(readUi()); }} />
+                                </div>
+                                <div className="st-row">
+                                    <b>Reduce motion</b>
+                                    
+                                    <Switch className="st-ctl" on={ui.motion === "reduce"} label="Reduce motion" onChange={(v) => { setUi("ui.motion", v ? "reduce" : "system"); setUiState(readUi()); }} />
+                                </div>
+                                <div className="st-row">
                                     <b>Show the key idea</b>
-                                    <p>Off by default. The one-line idea and the technique name give a problem away, so lists, the Next up card and a problem's header hide them until you click Show.</p>
+                                    
                                     <Switch className="st-ctl" on={showIdeas} label="Show the key idea" onChange={setShowIdeas} />
                                 </div>
                                 <div className="st-row">
                                     <b>Numbers bar at the bottom</b>
-                                    <p>The slow ticker of your numbers. Hiding it gives the pages its 30 pixels back.</p>
+                                    
                                     <Switch className="st-ctl" on={!barHidden} label="Show the numbers bar" onChange={(v) => { setBarHidden(!v); setPref("statusbar.hidden", !v); }} />
                                 </div>
                                 <div className="st-row">
                                     <b>Timer chime</b>
-                                    <p>A short two-note sound when a focus session or the countdown ends. The timer itself never starts by itself.</p>
+                                    
                                     <Switch className="st-ctl" on={chime} label="Timer chime" onChange={(v) => { setChime(v); setPref("focus.cfg", { ...getPref<Record<string, unknown>>("focus.cfg", {}), chime: v }); }} />
                                 </div>
                             </section>
-
-                            <section className="st-card" id="new" aria-labelledby="st-new">
-                                <h2 id="st-new">WHAT'S NEW</h2>
-                                {WHATS_NEW.map((e) => (
-                                    <div key={e.id} className="st-new">
-                                        <b>{e.title}</b> <small>{e.date}</small>
-                                        <ul>
-                                            {e.items.map((t) => (
-                                                <li key={t}>{t}</li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                ))}
-                            </section>
-
-                            <BulkSolved />
 
                             <section className="st-card" aria-labelledby="st-data">
                                 <h2 id="st-data">YOUR DATA</h2>
                                 <div className="st-row">
                                     <b>Back up everything</b>
-                                    <p>One file with your attempts, reviews, saved solutions, settings, plans and course runs, and the archive of anything you reset or deleted.</p>
+                                    
                                     <a className="st-btn st-ctl" href="/api/export" download>Download backup</a>
                                 </div>
                                 <div className="st-row">
                                     <b>Restore from a backup</b>
-                                    <p>Only adds what is missing. Nothing already here is changed or removed, so an old backup is safe to import.</p>
+                                    
                                     <div className="st-ctl">
                                         <input ref={file} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) { setImported(null); doImport.mutate(f); } e.target.value = ""; }} />
                                         <button className="st-btn" disabled={doImport.isPending} onClick={() => file.current?.click()}>{doImport.isPending ? "Importing…" : "Choose a file"}</button>

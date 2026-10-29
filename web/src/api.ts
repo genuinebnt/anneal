@@ -1,3 +1,4 @@
+import { markDown, markUp } from "./connection";
 // Types mirror crates/api/src/views.rs and crates/runner/src/result.rs.
 
 export type Band = "easy" | "medium" | "hard";
@@ -256,6 +257,8 @@ export interface SrsSettings {
   /** The weekdays a new problem is solved on; the other days are practice or rest. */
   new_days: Weekday[];
   new_per_day: number;
+  /** New problems on a particular weekday; 0 (or missing) keeps `new_per_day`. */
+  new_by_day: Record<Weekday, number>;
   target_date: string | null;
   /** When more is due than a day takes, the important problems go first. */
   prioritise: boolean;
@@ -811,11 +814,19 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    // no answer at all (the server is down or the network dropped): the connection bar says so at once, not after the retries
+    markDown();
+    throw e;
+  }
+  markUp();
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "unknown", message: res.statusText }));
     // Signed out (or the session expired): go to the login page and come back afterwards.
@@ -1003,9 +1014,7 @@ export const api = {
   resetDsa: (id: string) => request<{ id: string; archived: boolean }>("DELETE", `/dsa/problems/${id}/log`),
   restoreDsa: (id: string) => request<{ id: string; restored: boolean }>("POST", `/dsa/problems/${id}/restore`),
   weekSummary: () => request<{ from: string; to: string; solved: number; unassisted: number; reviews: number; active_days: number; attempted: number; weakest: { name: string; misses: number } | null }>("GET", "/week-summary"),
-  bulkSolved: (body: { numbers: number[]; date?: string | null; dry_run?: boolean }) =>
-    request<{ matched: { number: number; id: string; title: string }[]; already_logged: { number: number; title: string }[]; unknown: number[]; attempts: number[]; date: string }>("POST", "/dsa/bulk-solved", body),
-  bulkSolvedUndo: (attempts: number[]) => request<{ removed: number }>("POST", "/dsa/bulk-solved/undo", { attempts }),
+  forecast: (id: string) => request<{ points: number[] | null; due_in?: number; retention?: number }>("GET", `/dsa/problems/${id}/forecast`),
   feed: () => request<{ path: string | null }>("GET", "/feed"),
   makeFeed: () => request<{ path: string }>("POST", "/feed"),
   companyPlan: (body: { company: string; interview?: string | null; recent_only?: boolean }) => request<{ id: string; created: boolean }>("POST", "/plans/company", body),
