@@ -98,6 +98,35 @@ export function Mark({ p, today }: { p: DsaProblem; today: string }) {
   );
 }
 
+/** What the round state icons of a problem mean, once, above a list of them. */
+export function StateLegend() {
+  const items: [string, string][] = [
+    ["none", "Not started"],
+    ["solo", "Solved on my own"],
+    ["help", "Solved with help"],
+    ["fail", "Attempted"],
+    ["due", "Review due"],
+  ];
+  return (
+    <div className="d-legend" aria-label="What the icons mean">
+      {items.map(([kind, label]) => (
+        <span key={kind}>
+          <span className={`d-st ${kind === "due" || kind === "none" ? "" : kind} k-${kind}`} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <circle className="r" cx="12" cy="12" r="10" />
+              {kind === "solo" && <path className="g" d="M7.2 12.4l3.2 3.2 6.4-6.8" />}
+              {kind === "help" && <path className="h" d="M12 2a10 10 0 0 0 0 20z" />}
+              {kind === "fail" && <path className="g" d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2" />}
+              {kind === "due" && <path className="g" d="M12 6.8V12l3.4 2" />}
+            </svg>
+          </span>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Company pills: the ones asked in the last six months highlighted, and "+n" opens the rest in place.
  *  With `onPick`, a pill filters the list by that company. */
 export function Companies({ companies, limit = 5, onPick, picked }: { companies: DsaCompany[]; limit?: number; onPick?: (name: string) => void; picked?: ReadonlySet<string> }) {

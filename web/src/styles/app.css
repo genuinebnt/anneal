@@ -450,3 +450,9 @@ a.tr.kb, .tr.kb { background: var(--sel); box-shadow: inset 3px 0 0 var(--vio); 
 .ps-tabs .ps-reset{margin-left:auto;margin-right:14px;padding:6px 12px;font:600 11.5px var(--mono);letter-spacing:.04em;color:var(--bad);border:1px solid color-mix(in oklab,var(--bad) 45%,var(--line));border-radius:6px;background:none;cursor:pointer}
 .ps-tabs .ps-reset:hover{background:var(--bad-bg)}
 .ps-tabs .ps-reset + .hintkeys{margin-left:0}
+.ps-tabs .ps-next{margin-left:auto;margin-right:14px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 11.5px var(--mono);color:var(--ca)}.ps-tabs .ps-next:hover{color:var(--fg)}
+.ps-tabs .ps-reset ~ .ps-next{margin-left:0}
+/* a placeholder while a page loads: the shape of what will appear */
+.sk{display:flex;flex-direction:column;gap:12px;padding:8px 0}.sk i{display:block;height:14px;border-radius:7px;background:linear-gradient(90deg,var(--raise) 25%,var(--line2) 50%,var(--raise) 75%);background-size:200% 100%;animation:sk-s 1.4s linear infinite}.sk i:nth-child(3n+1){width:86%}.sk i:nth-child(3n+2){width:64%}.sk i:nth-child(3n){width:78%}.sk i.h{height:34px;width:46%;border-radius:10px}
+@keyframes sk-s{to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.sk i{animation:none}}

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header } from "../components/Header";
+import { Skeleton } from "../components/Skeleton";
 import { DIFF, leetcode, niceDate } from "../dsa";
 import {
     BANDS,
@@ -62,7 +63,7 @@ export function MockPage() {
                     <MockApp data={q.data} />
                 ) : (
                     <div className="wrap" style={{ paddingBlock: 28 }}>
-                        <p className="rempty">{q.isError ? "Couldn't reach the API." : "Loading…"}</p>
+                        {q.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={5} />}
                     </div>
                 )}
             </main>

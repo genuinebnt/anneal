@@ -61,6 +61,8 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
         ["practice", "Practice", pattern ? `${pattern.practice_solved}/${pattern.practice_total}` : "", !pattern || pattern.practice_total > 0],
     ];
     const linkTo = (c: string, t: PatternTab) => (t === "learn" ? { to: "/dsa/patterns/$code" as const, params: { code: c } } : t === "problems" ? { to: "/dsa/patterns/$code/problems" as const, params: { code: c } } : { to: "/dsa/practice/$code" as const, params: { code: c } });
+    // The first problem of this pattern that is not solved yet, in the list's order: where to go next.
+    const nextProblem = pattern && o ? o.problems.filter((p) => p.pattern === pattern.code && p.lists.includes("neetcode150") && !p.state.solved).sort((a, b) => a.order - b.order)[0] : undefined;
     const prev = patterns.length ? patterns[(at + patterns.length - 1) % patterns.length] : undefined;
     const next = patterns.length ? patterns[(at + 1) % patterns.length] : undefined;
 
@@ -104,10 +106,21 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
                                 Reset progress
                             </button>
                         )}
+                        {nextProblem && (
+                            <Link className="ps-next" to="/d/$slug" params={{ slug: nextProblem.slug }} title={`Next unsolved problem in ${pattern?.name}`}>
+                                Next: {nextProblem.title} ›
+                            </Link>
+                        )}
                         <span className="hintkeys"><kbd>[</kbd> <kbd>]</kbd> change pattern</span>
                     </div>
                     {pattern && resetOpen && <ResetTrack slug={pattern.slug} name={pattern.name} onDone={() => setResetOpen(false)} />}
-                    {children}
+                    {o && !pattern ? (
+                        <p className="notice bad">
+                            There is no pattern called "{code}". <Link to="/dsa">Back to the problems</Link>
+                        </p>
+                    ) : (
+                        children
+                    )}
                 </div>
             </main>
         </>

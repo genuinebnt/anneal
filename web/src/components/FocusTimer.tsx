@@ -12,9 +12,11 @@ interface Cfg {
     focus: number;
     brk: number;
     timer: number;
+    /** A short two-note chime when a phase or the countdown ends. Off unless chosen. */
+    chime: boolean;
 }
 
-const DEFAULTS: Cfg = { mode: "pom", focus: 25, brk: 5, timer: 45 };
+const DEFAULTS: Cfg = { mode: "pom", focus: 25, brk: 5, timer: 45, chime: false };
 const MODES: [Mode, string][] = [
     ["pom", "POMODORO"],
     ["timer", "TIMER"],
@@ -59,6 +61,25 @@ export function advance(s: State, dt: number, c: Cfg, mode: Mode): State {
     return { ...s, phase: "focus", cycle, done: s.phase === "long" ? 0 : s.done, secs: total, total, note: "Break over. Back to it." };
 }
 
+/** Two soft notes. The context is made on a click (browsers refuse sound before one), so a chime is only possible once the timer was used. */
+function beep(ctx: AudioContext | null) {
+    if (!ctx) return;
+    void ctx.resume();
+    const t = ctx.currentTime;
+    [660, 880].forEach((freq, i) => {
+        const at = t + i * 0.25;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(0.2, at + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(at);
+        osc.stop(at + 0.25);
+    });
+}
+
 const mmss = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
 
 export function FocusTimer() {
@@ -72,6 +93,32 @@ export function FocusTimer() {
     const phaseRef = useRef<Phase>("focus");
     phaseRef.current = s.phase;
     const last = useRef(0);
+    const audio = useRef<AudioContext | null>(null);
+    const baseTitle = useRef<string | null>(null);
+    const wake = () => {
+        if (cfgRef.current.chime && !audio.current && typeof AudioContext !== "undefined") audio.current = new AudioContext();
+    };
+
+    // While the timer runs the tab title carries the time, so it can be read from the LeetCode tab. It never starts the timer.
+    useEffect(() => {
+        if (s.running) {
+            baseTitle.current ??= document.title;
+            document.title = `${mmss(s.secs)} ${cfg.mode === "sw" ? "elapsed" : "left"} · ${baseTitle.current}`;
+        } else if (baseTitle.current !== null) {
+            document.title = baseTitle.current;
+            baseTitle.current = null;
+        }
+    }, [s.running, s.secs, cfg.mode]);
+    useEffect(
+        () => () => {
+            if (baseTitle.current !== null) document.title = baseTitle.current;
+        },
+        [],
+    );
+    // A phase or the countdown ended (`note` is set only then).
+    useEffect(() => {
+        if (s.note && cfgRef.current.chime) beep(audio.current);
+    }, [s.note]);
 
     useEffect(() => {
         if (!s.running) return;
@@ -133,7 +180,7 @@ export function FocusTimer() {
                     </span>
                 </div>
                 <div className="ft-ctl">
-                    <button className="ft-go" onClick={() => setS((x) => (finished ? { ...fresh(cfg), running: true } : { ...x, running: !x.running, note: "" }))}>
+                    <button className="ft-go" onClick={() => { wake(); setS((x) => (finished ? { ...fresh(cfg), running: true } : { ...x, running: !x.running, note: "" })); }}>
                         {s.running ? "Pause" : finished ? "Restart" : fresh0 ? "Start" : "Resume"}
                     </button>
                     <div className="ft-btns">
@@ -171,6 +218,10 @@ export function FocusTimer() {
                             <b>{cfg.brk} min</b>
                         </span>
                         <input type="range" min={3} max={20} value={cfg.brk} style={range(3, 20, cfg.brk)} onChange={(e) => setLen("brk", +e.target.value)} />
+                    </label>
+                    <label className="ft-chk">
+                        <input type="checkbox" checked={cfg.chime} onChange={(e) => { save({ ...cfg, chime: e.target.checked }); if (e.target.checked && !audio.current && typeof AudioContext !== "undefined") audio.current = new AudioContext(); }} />
+                        <span>Chime when time is up</span>
                     </label>
                     {cfg.mode === "timer" && (
                         <label className="ft-rng">

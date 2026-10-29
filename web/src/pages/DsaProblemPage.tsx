@@ -4,6 +4,7 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { Skeleton } from "../components/Skeleton";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
@@ -157,7 +158,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
             {toast}
         </>
     );
-    if (!o || (!p && outside.isLoading)) return frame(<p className="rempty pp-pad">{overview.isError ? "Couldn't reach the API." : "Loading…"}</p>);
+    if (!o || (!p && outside.isLoading)) return frame(<div className="pp-pad">{overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}</div>);
     if (!p) return frame(<p className="notice bad pp-pad">No problem called {slug}. <Link to="/dsa">Back to the list</Link></p>);
 
     const pattern = o.patterns.find((x) => x.code === p.pattern);

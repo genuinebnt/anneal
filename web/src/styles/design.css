@@ -71,6 +71,7 @@ html[data-width="wide"]{--pw:1560px;--pw-lg:1760px}
 .hd-ib.wdt.wide .pane{transform:scaleX(1.7)}
 .hd-ib.wdt.wide{color:var(--acc);border-color:color-mix(in oklab,var(--acc) 45%,var(--line2))}
 @media (max-width:900px){.hd-ib.wdt{display:none}}
+.thm-auto{font:600 9.5px var(--mono);letter-spacing:.08em;color:var(--dim);margin-left:-6px;text-transform:uppercase}
 .thm svg{position:absolute;transition:transform .5s var(--ease),opacity .3s}
 .thm .sun{transform:rotate(-90deg) scale(.4);opacity:0}
 :root[data-theme="light"] .thm .sun{transform:none;opacity:1}

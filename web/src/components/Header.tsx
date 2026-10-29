@@ -50,15 +50,31 @@ const areaFromPath = (path: string): AreaId | null => {
     return null;
 };
 
-function toggleTheme() {
-    const root = document.documentElement;
-    const current = root.dataset.theme ?? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-    const next = current === "dark" ? "light" : "dark";
-    root.dataset.theme = next;
+type Theme = "dark" | "light" | "system";
+const THEMES: Theme[] = ["dark", "light", "system"];
+
+function storedTheme(): Theme {
     try {
-        localStorage.setItem("anneal-theme", next);
+        const t = localStorage.getItem("anneal-theme");
+        return t === "light" || t === "dark" ? t : "system";
     } catch {
-        // Private windows can refuse storage; the toggle still works for this visit.
+        return "system";
+    }
+}
+
+/** Dark and light are explicit choices; System follows the device and clears the stored choice. */
+function applyTheme(theme: Theme) {
+    const root = document.documentElement;
+    try {
+        if (theme === "system") {
+            delete root.dataset.theme;
+            localStorage.removeItem("anneal-theme");
+        } else {
+            root.dataset.theme = theme;
+            localStorage.setItem("anneal-theme", theme);
+        }
+    } catch {
+        // Private windows can refuse storage; the choice still applies for this visit.
     }
 }
 
@@ -88,6 +104,12 @@ function Ring({ p, color }: { p: number; color: string }) {
 
 export function Header({ area, compact = false, stats = true }: { area?: AreaId; compact?: boolean; stats?: boolean }) {
     const path = useRouterState({ select: (s) => s.location.pathname });
+    const [theme, setTheme] = useState<Theme>(storedTheme);
+    const cycleTheme = () => {
+        const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]!;
+        applyTheme(next);
+        setTheme(next);
+    };
     const detected = areaFromPath(path);
     const stored = (() => {
         try {
@@ -179,7 +201,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                     <div className="hdr-r">
                         <Continue current={current} course={course.data} dsa={dsa.data} />
                         <WidthToggle />
-                        <button className="hd-ib thm" onClick={toggleTheme} title="Toggle theme" aria-label="Toggle theme">
+                        <button className="hd-ib thm" onClick={cycleTheme} title={`Theme: ${theme}. Click for ${THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]}`} aria-label={`Theme: ${theme}`}>
                             <svg className="moon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                                 <path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" />
                             </svg>
@@ -188,6 +210,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                                 <path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
                             </svg>
                         </button>
+                        {theme === "system" && <span className="thm-auto" title="Following your device">auto</span>}
                         <Account />
                     </div>
                 </div>

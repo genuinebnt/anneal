@@ -58,10 +58,14 @@ function Heatmap({ start, counts }: { start: string; counts: number[] }) {
   const dateOf = (i: number) => new Date(first.getFullYear(), first.getMonth(), first.getDate() + i);
   const months: ReactNode[] = [];
   let lastMonth = -1;
+  let lastWeek = -9;
   for (let wk = 0; wk < weeks - 2; wk++) {
     const d = dateOf(wk * 7);
     if (d.getMonth() !== lastMonth) {
       lastMonth = d.getMonth();
+      // a label this close to the one before it would print over it
+      if (wk - lastWeek < 3) continue;
+      lastWeek = wk;
       months.push(
         <text key={`m${wk}`} x={left + wk * (cell + gap)} y="11">
           {d.toLocaleDateString(undefined, { month: "short" })}

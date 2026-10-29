@@ -115,3 +115,22 @@ test("the same timer is at the bottom of the Rust workspace's Tests panel, above
     await expect(page.getByText("Last run").first()).toBeVisible();
     await expect(page.locator(".ft")).toHaveCount(0);
 });
+
+test("it never starts by itself: not on load, not when the mode changes, not as time passes", async ({ page }) => {
+    await jump(page, "01:00");
+    await expect(time(page)).toHaveText("25:00");
+    for (const mode of ["TIMER", "STOPWATCH", "POMODORO"]) {
+        await page.locator(".ft .ft-modes").getByRole("button", { name: mode }).click();
+        await jump(page, "00:20");
+        await expect(go(page, "Start")).toBeVisible();
+    }
+});
+
+test("while it runs the tab title carries the time, and pausing restores the title", async ({ page }) => {
+    const before = await page.title();
+    await go(page, "Start").click();
+    await jump(page, "00:05");
+    await expect(page).toHaveTitle(/^\d\d:\d\d left · /);
+    await go(page, "Pause").click();
+    await expect(page).toHaveTitle(before);
+});

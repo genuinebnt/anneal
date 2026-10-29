@@ -2,7 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
-import { Companies, Insight, Mark, ProblemTags, useLogger } from "../components/dsaBits";
+import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
 import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
@@ -622,6 +622,7 @@ function ProblemGroups({ o, model, pickCompany, picked, uncapped, openGroups, op
     );
   return (
     <>
+      <StateLegend />
       {o.patterns.map((pat) => {
         const inPat = items.filter((p) => p.pattern === pat.code);
         if (!inPat.length) return null;

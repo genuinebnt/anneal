@@ -148,6 +148,8 @@ export function CalendarPage() {
         const k = e.key.toLowerCase();
         if (k === "escape") setSel([]);
         else if (k === "z") void doUndo();
+        else if (view === "calendar" && (k === "arrowleft" || k === "arrowright")) setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5) - 1 + (k === "arrowright" ? 1 : -1), 1)).slice(0, 7));
+        else if (view === "calendar" && k === "t" && today) { setMonth(today.slice(0, 7)); setSel([today]); setTab("day"); }
         else if (sel.length && (k === "s" || k === "p" || k === "b" || k === "r")) setKind({ s: "solve", p: "practice", b: "break", r: "routine" }[k] as DayKind | "routine");
     };
     useEffect(() => {
@@ -291,6 +293,17 @@ export function CalendarPage() {
 
                     <div className="c-top">
                         <h2>{view === "calendar" ? fmt(`${m}-01`, { month: "long", year: "numeric" }) : "Topics"}</h2>
+                        {view === "calendar" && (() => {
+                            let n = 0, r = 0, off = 0;
+                            for (let i = 0; i < new Date(Date.UTC(+m.slice(0, 4), +m.slice(5), 0)).getUTCDate(); i++) {
+                                const d = byDate.get(add(`${m}-01`, i));
+                                if (!d) continue;
+                                n += d.new?.length ?? d.past?.problems?.length ?? 0;
+                                r += d.reviews?.length ?? d.past?.reviews ?? 0;
+                                if (d.kind === "break") off++;
+                            }
+                            return <span className="c-msum" title="Problems and reviews planned or done this month">{n} problem{n === 1 ? "" : "s"} · {r} review{r === 1 ? "" : "s"}{off ? ` · ${off} day${off === 1 ? "" : "s"} off` : ""}</span>;
+                        })()}
                         {view === "calendar" && (
                             <span className="c-nav">
                                 <button className="c-nb" aria-label="Previous month" onClick={() => setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5) - 2, 1)).slice(0, 7))}>‹</button>
@@ -303,6 +316,7 @@ export function CalendarPage() {
                             <button className={view === "timeline" ? "on" : ""} onClick={() => setView("timeline")}>Timeline</button>
                         </div>
                         <span className="sp" />
+                        <span className="c-hint"><kbd>←</kbd><kbd>→</kbd> month <kbd>T</kbd> today <kbd>Z</kbd> undo</span>
                         <button className="c-tb" disabled={!undo.length || busy} onClick={() => void doUndo()}>↶ Undo</button>
                         <button className="c-tb" disabled={!Object.keys(p.overrides).length || busy} onClick={() => void commit(p.rules, {}, "Calendar")}>Clear day edits</button>
                     </div>
@@ -361,7 +375,7 @@ function Grid({ p, byDate, month, gridStart, today, sel, onPick, onDown, onOver,
                 const wn = Math.ceil(((ts(ws) - Date.UTC(new Date(ts(ws)).getUTCFullYear(), 0, 1)) / DAY + 4) / 7);
                 return (
                     <div key={ws} className="c-row">
-                        <button className="c-wk" title="Select this week" onClick={() => onWeek(ws)}><b>W{wn}</b><span>{n}<i className="g" /></span><span>{r}<i className="r" /></span></button>
+                        <button className="c-wk" title={`Select this week: ${n} new problem${n === 1 ? "" : "s"}, ${r} review${r === 1 ? "" : "s"}`} onClick={() => onWeek(ws)}><b>W{wn}</b><span>{n}<i className="g" /></span><span>{r}<i className="r" /></span></button>
                         {Array.from({ length: 7 }, (_, i) => {
                             const date = add(ws, i);
                             const d = byDate.get(date);
@@ -564,7 +578,7 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                     {rows.map((t, i) => (
                         <div key={t.id} className={`c-tr${t.status ? "" : " dim"}`}>
                             <span className="mv"><button disabled={i === 0} aria-label="Move up" onClick={() => move(t.id, -1)}>↑</button><button disabled={i === rows.length - 1} aria-label="Move down" onClick={() => move(t.id, 1)}>↓</button></span>
-                            <span className="nm"><i style={{ background: hue(t.id) }} /><b>{t.name}</b><small>{t.status ? `${t.status.n} left` : "none in scope"}</small></span>
+                            <span className="nm"><i style={{ background: hue(t.id) }} /><b title={t.name}>{t.name}</b><small>{t.status ? `${t.status.n} left` : "none in scope"}</small></span>
                             {!t.status ? <span className="st muted">—</span> : t.status.due && (t.target || t.covered) ? (t.status.late ? <span className="st bad">⚠ {t.status.late >= 9999 ? "not in time" : `${t.status.late}d late`}</span> : <span className="st ok">✓ {t.status.slack}d spare</span>) : null}
                             <span className="dt">
                                 <input type="date" value={t.target ?? ""} aria-label={`${t.name} target`} onChange={(e) => setRules((x) => { const targets = { ...x.targets }; if (e.target.value) targets[t.id] = e.target.value; else delete targets[t.id]; return { ...x, targets }; }, `${t.name} target`)} />
@@ -633,7 +647,7 @@ function History({ p }: { p: PlanView }) {
         <div className="c-hist">
             <div className="c-stats">
                 <div className="stat"><b>{h.problems}</b><small>problems in 8 weeks</small></div>
-                <div className="stat"><b>{h.streak}d</b><small>current streak</small></div>
+                <div className="stat" title="Days in a row that kept the plan: every planned solve day had a solve. Rest and practice days neither break it nor add to it."><b>{h.streak}d</b><small>days kept in a row</small></div>
                 <div className="stat"><b>{h.kept_percent === null ? "—" : `${h.kept_percent}%`}</b><small>of planned solve days</small></div>
                 <div className="stat"><b>{h.clean_percent === null ? "—" : `${h.clean_percent}%`}</b><small>solved without failing</small></div>
             </div>
