@@ -177,8 +177,7 @@ is never purged.
 ## 10. UI polish pass (planned 2026-10-30; nothing built)
 
 Scope set by the owner: **UI improvements only**, no new features. Three rounds of ideas were sorted into the list below. Anything that adds
-behaviour, data or a new screen's purpose is parked at the end. Picks so far: round 2 items 1, 3, 4 and 5 (marked ★); the owner has not
-yet said whether the rest of round 1 is wanted (assumed yes unless told otherwise) and has not answered round 3.
+behaviour, data or a new screen's purpose is parked at the end. **The owner accepted all of this section on 2026-10-30** (every item below, including round 1's and the recall curve, C4). The ★ marks the items picked first.
 
 **A. Audit first**
 - A1. Screenshot and write up the pages not yet looked at: the Rust workspace, course stage and concept pages, pattern Learn pages, the Mock round screen. Both themes, 390 / 1440 / 1920 px, all four accents. Findings go into this file before any fix.
