@@ -210,3 +210,22 @@ behaviour, data or a new screen's purpose is parked at the end. **The owner acce
 **Parked (features, not UI):** "Why is this next?", a skill map, a weak-spots view, burn-down and load forecast, focus time per problem, a smarter Continue and a combined timeline, a "recently deleted" viewer and a data health card, holiday mode, milestones, saved filters, stars, multi-select logging, reordering home cards, key chords.
 
 **Suggested order:** A1; then B1 to B5 with the first batch of fixes across pages; then D and E; then C and F; C1 and C7 only after a mockup is approved.
+
+### Audit findings (A1, 2026-10-30)
+
+Method: 19 pages plus the Mock round screen, each loaded at 390, 1440 and 1920 px in dark and light (118 loads, default accent), with a script that
+measures horizontal overflow, console errors, unlabeled controls, tap-target sizes, text contrast, and the spread of radii and font sizes, and
+screenshots that were then looked at (Rust workspace, course stage and concept, pattern Learn, Mock round, home at phone and wide). Not done: the other three
+accents, a keyboard-only walk, a screen reader.
+
+**Real problems, most serious first**
+1. **The Rust workspace does not work on a phone.** The page is 310 px wider than the screen; the three panes (problem, editor, tests) do not collapse and there is nothing to switch between them. (Plan: E3, C6.)
+2. **Mock round and its results still use the old words and look.** "not yet" with a red ✗ and three outcomes, where everything else says Attempted with a yellow ! and has Instant. The round screen's left card also leaves a large empty space under it beside the taller right column. (Plan: B2, C6.)
+3. **Contrast near-misses.** Light theme, 4.0 to 4.3 against the 4.5 target: the small badges (level, list, recent, priority), `s-pill`, the editor's Run tests button, active chips and the mode buttons (accent text on a tint). Dark theme, 4.1 to 4.4: small counters like "0/85", "now", code comments in the editor and the numbers in the course's section markers. Fix by nudging a few tokens (`--acc` in light, `--dim` in dark, the comment colours), not per component. (Plan: E1.)
+4. **One control with no accessible name:** the "Everything done by" date box in the Calendar's rules. (Plan: E2.)
+5. **Tap targets under 32 px on a phone.** Counts per page: practice list 522, pattern Learn 413, course home 53, calendar 46, pattern problems 59, Rust track 57, settings 15, home 12 and the logo link on every page. Most are dense chips and list rows. (Plan: E3.)
+6. **No shared scale.** 9 to 14 different corner radii and 11 to 20 font sizes on a single page; a green switch ("show passed stages") that looks unlike every other switch; the headline on pattern, Plan and Progress pages looks dimmer than the DSA home's. (Plan: B1 to B5.)
+
+**Checked and fine:** no console or page errors in 118 loads; no horizontal overflow on any other page at 390 px; both themes render consistently; the 1920 px layout is centred and tidy; the course and concept pages read well. The script also flagged the active area tab, gradient headline text, the blurred spoiler and the intentionally dim "Readiness" and "lanes" items; those are false alarms (the script cannot see their background layers).
+
+**What this changes in the order:** the phone workspace (1) moves up with the other phone work, and the Mock wording (2) goes into the first batch since it is a visible inconsistency with what was just built.
