@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { GradeGlyph } from "../components/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type DsaProblem, type PracticeTechnique } from "../api";
@@ -100,7 +101,7 @@ export function PracticeRow({ p, today, log }: { p: DsaProblem; today: string; l
         <div className="d-acts">
           {GRADES.map((g) => (
             <button key={g.grade} className={g.cls} title={g.label} onClick={() => log(p, g.grade)}>
-              {g.glyph}
+              <GradeGlyph grade={g.grade} />
             </button>
           ))}
         </div>

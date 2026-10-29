@@ -1,7 +1,7 @@
 // The mockup's toast stack (docs/mockups/course-motion.html, ".tstack" / ".tt"): a card slides in at the top right, a line runs down along its
 // bottom edge for how long it stays, and it can be closed. `toast()` can be called from anywhere.
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 
 export type ToastKind = "ok" | "in" | "er";
 export interface ToastItem {
@@ -10,6 +10,8 @@ export interface ToastItem {
     title: string;
     text?: string;
     action?: { label: string; run: () => void };
+    /** More inside the toast: a link, a few choices. It can be set later with `updateToast`. */
+    extra?: ReactNode;
     leaving?: boolean;
 }
 
@@ -73,14 +75,26 @@ function remove(id: number) {
     }, 300);
 }
 
-/** Shows a toast. It stays four seconds (longer with an action), unless it is closed first. */
-export function toast(kind: ToastKind, title: string, text?: string, action?: ToastItem["action"]) {
+/** Shows a toast. It stays four seconds (longer with an action or extra content), unless it is closed first. Returns its id. */
+export function toast(kind: ToastKind, title: string, text?: string, action?: ToastItem["action"], extra?: ReactNode) {
     const id = next++;
     record(kind, title, text);
-    items = [...items.slice(-3), { id, kind, title, text, action }];
+    items = [...items.slice(-3), { id, kind, title, text, action, extra }];
     emit();
-    setTimeout(() => remove(id), action ? 9000 : 4000);
+    setTimeout(() => remove(id), action || extra ? 9000 : 4000);
     return id;
+}
+
+/** Changes a toast that is still showing (the next problem, once it is known). */
+export function updateToast(id: number, patch: Partial<Pick<ToastItem, "extra" | "text" | "action">>) {
+    if (!items.some((t) => t.id === id)) return;
+    items = items.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    emit();
+}
+
+/** Closes a toast. */
+export function dismissToast(id: number) {
+    remove(id);
 }
 
 /** Mounted once, near the root of the app. */
@@ -99,6 +113,7 @@ export function ToastHost() {
                         <div>
                             <b>{t.title}</b>
                             {t.text && <span>{t.text}</span>}
+                            {t.extra}
                             {t.action && (
                                 <button className="k-tact" onClick={() => (t.action?.run(), remove(t.id))}>
                                     {t.action.label}

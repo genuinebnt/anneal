@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { ConfirmButton } from "../components/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
@@ -598,7 +599,7 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                     </div>
                 )}
             </Acc>
-            {onDelete && <button className="c-link bad" onClick={onDelete}>Delete this plan</button>}
+            {onDelete && <ConfirmButton label="Delete this plan" confirm="Yes, delete it" note="The plan and its calendar edits go. A copy is kept." onConfirm={onDelete} />}
         </>
     );
 }

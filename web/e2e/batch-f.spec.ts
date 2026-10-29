@@ -12,7 +12,7 @@ test("the phone quick log finds a problem by name and logs it", async ({ page })
         await page.getByLabel("Find a problem").fill("valid sudoku");
         const row = page.locator(".lg-row", { hasText: "Valid Sudoku" });
         await row.getByRole("button", { name: "On my own" }).click();
-        await expect(page.locator(".d-toast")).toContainText("Valid Sudoku");
+        await expect(page.locator(".k-tstack")).toContainText("Valid Sudoku");
         await expect.poll(async () => (await (await page.request.get("/api/dsa")).json()).problems.find((p: { id: string }) => p.id === "lc-valid-sudoku").state.solved).toBe(true);
     } finally {
         await page.request.delete("/api/dsa/problems/lc-valid-sudoku/log");

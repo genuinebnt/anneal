@@ -24,7 +24,7 @@ test("after a log the toast names the next problem and links to it", async ({ pa
     try {
         await expect(page.locator(".pp-status")).toContainText("Not started");
         await page.keyboard.press("1");
-        const next = page.locator(".d-toast .d-next");
+        const next = page.locator(".k-tstack .d-next");
         await expect(next).toContainText("Next up:");
         await next.click();
         await expect(page).toHaveURL(/\/d\/(?!longest-consecutive-sequence)/);

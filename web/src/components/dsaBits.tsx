@@ -1,121 +1,105 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { api, type DsaCompany, type DsaOverview, type DsaProblem, type Grade } from "../api";
 import { DIFF, markOf, niceDate } from "../dsa";
 import { useShowIdeas } from "../spoilers";
-import { record } from "./toasts";
+import { toast, updateToast } from "./toasts";
 
 const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "attempted", easy: "instant" };
 
-/** Logs a problem and says when it comes back. Render `toast` once on the page. */
+/** Logs a problem and says when it comes back, in the one toast stack (`toasts.tsx`). `toast` is kept so pages can still render it; it is empty. */
 export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean, hints?: number) => void; reset: (p: DsaProblem) => void; undo: () => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
-  const [message, setMessage] = useState<string | null>(null);
-  // What the toast offers to take back (Undo after a log, Restore after a reset), while it is up.
-  const [action, setAction] = useState<{ label: string; run: () => void } | null>(null);
-  // The problem to do next, offered in the toast once the overview has been refreshed after a log.
-  const [next, setNext] = useState<{ title: string; slug: string } | null>(null);
-  // After Attempted or With help: optionally say why (one click). It is kept with the attempt and feeds the weak spots.
-  const [whyFor, setWhyFor] = useState<DsaProblem | null>(null);
-  const timer = useRef<number>(0);
-  const say = (m: string, act: { label: string; run: () => void } | null = null) => {
-    record("ok", m);
-    setMessage(m);
-    setAction(act);
-    setNext(null);
-    setWhyFor(null);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => { setMessage(null); setAction(null); setNext(null); setWhyFor(null); }, act ? 9000 : 3200);
+  // The button of the toast that is showing (Undo after a log, Restore after a reset), so a key can press it.
+  const pending = useRef<{ run: () => void; until: number } | null>(null);
+  const say = (m: string, act: { label: string; run: () => void } | null = null, extra?: ReactNode, kind: "ok" | "er" = "ok") => {
+    pending.current = act ? { run: act.run, until: Date.now() + 9000 } : null;
+    return toast(kind, m, undefined, act ?? undefined, extra);
   };
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const refresh = (keys: string[]) => keys.forEach((key) => void qc.invalidateQueries({ queryKey: [key] }));
+  const ALL = ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"];
   const m = useMutation({
     mutationFn: ({ p, grade, practice, hints }: { p: DsaProblem; grade: Grade; practice: boolean; hints: number }) => api.logDsa(p.id, grade, practice, hints),
     onSuccess: (r, { p, grade, practice }) => {
-      say(
+      // After Attempted or With help: optionally say why (one click). It is kept with the attempt.
+      const why =
+        !practice && (grade === "again" || grade === "hard") ? (
+          <span className="d-why" role="group" aria-label="Why did it go badly?">
+            Why?
+            {(["idea", "implementation", "edge_cases", "complexity"] as const).map((w) => (
+              <button key={w} onClick={() => void api.setWhy(p.id, w).then(() => say(`${p.title}: noted, ${w.replace("_", " ")}.`), () => undefined)}>
+                {w.replace("_", " ")}
+              </button>
+            ))}
+          </span>
+        ) : undefined;
+      const id = say(
         practice
           ? `${p.title}: practice, ${SAID[grade]}. ${grade === "again" ? "Logged as a miss." : "Counts toward your streak."} The review schedule is unchanged.`
           : r.due
             ? `${p.title}: ${SAID[grade]}. Back for review ${today ? niceDate(r.due, today) : r.due}.`
             : `${p.title}: ${SAID[grade]}. Practice schedules no review.`,
         r.undoable ? { label: "Undo", run: () => u.mutate(p) } : null,
+        why,
       );
-      if (!practice && (grade === "again" || grade === "hard")) setWhyFor(p);
-      for (const key of ["activity", "tracks", "reviews", "progress", "stats", "dsa-preview", "practice"]) void qc.invalidateQueries({ queryKey: [key] });
+      refresh(["activity", "tracks", "reviews", "progress", "stats", "dsa-preview", "practice"]);
       // After the overview is fresh, say which problem is next (never the one just logged)
       if (!practice) {
         void qc.refetchQueries({ queryKey: ["dsa"] }).then(() => {
           const o = qc.getQueryData<DsaOverview>(["dsa"]);
-          const id = o?.plan.next_up.find((x) => x !== p.id);
-          const n = id ? o?.problems.find((x) => x.id === id) : undefined;
-          if (n) setNext({ title: n.title, slug: n.slug });
+          const nid = o?.plan.next_up.find((x) => x !== p.id);
+          const n = nid ? o?.problems.find((x) => x.id === nid) : undefined;
+          if (n)
+            updateToast(id, {
+              extra: (
+                <>
+                  {why}
+                  <Link className="d-next" to="/d/$slug" params={{ slug: n.slug }}>
+                    Next up: {n.title} ›
+                  </Link>
+                </>
+              ),
+            });
         });
-      } else void qc.invalidateQueries({ queryKey: ["dsa"] });
+      } else refresh(["dsa"]);
     },
-    onError: (e: Error) => say(`Couldn't log it: ${e.message}`),
+    onError: (e: Error) => say(`Couldn't log it: ${e.message}`, null, undefined, "er"),
   });
   const r = useMutation({
     mutationFn: (p: DsaProblem) => api.resetDsa(p.id),
     onSuccess: (out, p) => {
       say(`${p.title}: progress reset.`, out.archived ? { label: "Restore", run: () => rs.mutate(p) } : null);
-      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+      refresh(ALL);
     },
-    onError: (e: Error) => say(`Couldn't reset it: ${e.message}`),
+    onError: (e: Error) => say(`Couldn't reset it: ${e.message}`, null, undefined, "er"),
   });
   const rs = useMutation({
     mutationFn: (p: DsaProblem) => api.restoreDsa(p.id),
     onSuccess: (out, p) => {
       say(out.restored ? `${p.title}: progress restored.` : `${p.title}: nothing to restore, it has been logged since.`);
-      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+      refresh(ALL);
     },
-    onError: (e: Error) => say(`Couldn't restore it: ${e.message}`),
+    onError: (e: Error) => say(`Couldn't restore it: ${e.message}`, null, undefined, "er"),
   });
   const u = useMutation({
     mutationFn: (p: DsaProblem) => api.undoDsa(p.id),
     onSuccess: (r, p) => {
       say(r.undone ? `${p.title}: log undone.` : `${p.title}: that log can't be undone. Use Reset progress on its page.`);
-      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+      refresh(ALL);
     },
-    onError: (e: Error) => say(`Couldn't undo it: ${e.message}`),
+    onError: (e: Error) => say(`Couldn't undo it: ${e.message}`, null, undefined, "er"),
   });
   return {
     log: (p, grade, practice = false, hints = 0) => m.mutate({ p, grade, practice, hints }),
     reset: (p) => r.mutate(p),
     // the toast's own button (Undo after a log, Restore after a reset), for a key
-    undo: () => action?.run(),
+    undo: () => {
+      if (pending.current && pending.current.until > Date.now()) pending.current.run();
+    },
     busy: m.isPending || r.isPending || u.isPending || rs.isPending,
-    toast: message ? (
-      <div className="d-toast" role="status">
-        {message}
-        {next && (
-          <Link className="d-next" to="/d/$slug" params={{ slug: next.slug }}>
-            Next up: {next.title} ›
-          </Link>
-        )}
-        {whyFor && (
-          <span className="d-why" role="group" aria-label="Why did it go badly?">
-            Why?
-            {(["idea", "implementation", "edge_cases", "complexity"] as const).map((w) => (
-              <button
-                key={w}
-                onClick={() => {
-                  const p = whyFor;
-                  void api.setWhy(p.id, w).then(() => say(`${p.title}: noted, ${w.replace("_", " ")}.`), () => undefined);
-                }}
-              >
-                {w.replace("_", " ")}
-              </button>
-            ))}
-          </span>
-        )}
-        {action && (
-          <button className="d-undo" disabled={u.isPending || rs.isPending} onClick={action.run}>
-            {action.label}
-          </button>
-        )}
-      </div>
-    ) : null,
+    toast: null,
   };
 }
 

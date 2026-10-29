@@ -6,6 +6,7 @@ import { counted, niceDate } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { LATEST, WHATS_NEW } from "../whatsnew";
 import { clearNotes, useNotes } from "./toasts";
+import { useDialog } from "./useDialog";
 
 type Need = { id: string; text: string; to: string; slug?: string };
 
@@ -20,6 +21,8 @@ const ago = (t: number) => {
 export function NotificationBell() {
     const [open, setOpen] = useState(false);
     const box = useRef<HTMLDivElement>(null);
+    const pop = useRef<HTMLDivElement>(null);
+    useDialog(pop, open, () => setOpen(false));
     const notes = useNotes();
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]) });
@@ -79,7 +82,7 @@ export function NotificationBell() {
                 {count > 0 && <span className="nt-n" aria-hidden="true">{count}</span>}
             </button>
             {open && (
-                <div className="nt-pop" role="dialog" aria-label="Notifications">
+                <div className="nt-pop" ref={pop} role="dialog" aria-label="Notifications">
                     <span className="nt-lab">NEEDS YOU</span>
                     {live.length === 0 && <p className="nt-empty">Nothing needs you right now.</p>}
                     {live.map((n) => (

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api";
 import { Header } from "../components/Header";
+import { Segmented, Switch } from "../components/ui";
 import { Skeleton } from "../components/Skeleton";
 import { getPref, setPref } from "../prefs";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
@@ -12,9 +13,6 @@ import { COUNT_KEYS, usePremiumSwitch } from "../premium";
 import { useShowIdeas } from "../spoilers";
 
 
-function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
-    return <button role="switch" aria-checked={on} aria-label={label} className="st-sw st-ctl" onClick={() => onChange(!on)} />;
-}
 
 /** A calendar address for a phone: the reviews that fall due and the weekly solve days. The address holds a random token; making a new one stops the old. */
 function FeedLink() {
@@ -151,7 +149,7 @@ export function SettingsPage() {
                                 <div className="st-row">
                                     <b>Show and count premium problems</b>
                                     <p>Off by default. When off, LeetCode Premium problems are hidden from the problem lists and left out of the totals, the progress bars and readiness; the same switch is "Hide LeetCode Premium" in the filters on the DSA home. What you logged on them is kept, and a premium problem you complete still counts toward your streak and activity. Switch it on and they all come back, with what you logged.</p>
-                                    <Switch on={countPremium} label="Show and count premium problems" onChange={(v) => premiumSwitch.set(!v)} />
+                                    <Switch className="st-ctl" on={countPremium} label="Show and count premium problems" onChange={(v) => premiumSwitch.set(!v)} />
                                 </div>
                                 {preview && (
                                     <div className="st-note">
@@ -170,50 +168,32 @@ export function SettingsPage() {
                                 <div className="st-row">
                                     <b>Theme</b>
                                     <p>System follows your device.</p>
-                                    <div className="st-seg st-ctl" role="radiogroup" aria-label="Theme">
-                                        {THEMES.map((t) => (
-                                            <button key={t} role="radio" aria-checked={theme === t} className={theme === t ? "on" : ""} onClick={() => { applyTheme(t); setTheme(t); }}>
-                                                {t[0]!.toUpperCase() + t.slice(1)}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <Segmented className="st-ctl" label="Theme" value={theme} options={THEMES.map((t) => [t, t[0]!.toUpperCase() + t.slice(1)] as const)} onChange={(t) => { applyTheme(t); setTheme(t); }} />
                                 </div>
                                 <div className="st-row">
                                     <b>Accent colour</b>
                                     <p />
-                                    <div className="st-seg st-ctl" role="radiogroup" aria-label="Accent colour">
-                                        {ACCENTS.map((a) => (
-                                            <button key={a.id} role="radio" aria-checked={accent === a.id} className={accent === a.id ? "on" : ""} onClick={() => setAccent(a.id)}>
-                                                {a.label}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <Segmented className="st-ctl" label="Accent colour" value={accent} options={ACCENTS.map((x) => [x.id, x.label] as const)} onChange={setAccent} />
                                 </div>
                                 <div className="st-row">
                                     <b>Page width</b>
                                     <p>Centred keeps lines readable; wide uses more of the window.</p>
-                                    <div className="st-seg st-ctl" role="radiogroup" aria-label="Page width">
-                                        {(["narrow", "wide"] as const).map((w) => (
-                                            <button key={w} role="radio" aria-checked={width === w} className={width === w ? "on" : ""} onClick={() => setWidth(w)}>
-                                                {w === "narrow" ? "Centred" : "Wide"}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <Segmented className="st-ctl" label="Page width" value={width} options={[["narrow", "Centred"], ["wide", "Wide"]] as const} onChange={setWidth} />
                                 </div>
                                 <div className="st-row">
                                     <b>Show the key idea</b>
                                     <p>Off by default. The one-line idea and the technique name give a problem away, so lists, the Next up card and a problem's header hide them until you click Show.</p>
-                                    <Switch on={showIdeas} label="Show the key idea" onChange={setShowIdeas} />
+                                    <Switch className="st-ctl" on={showIdeas} label="Show the key idea" onChange={setShowIdeas} />
                                 </div>
                                 <div className="st-row">
                                     <b>Numbers bar at the bottom</b>
                                     <p>The slow ticker of your numbers. Hiding it gives the pages its 30 pixels back.</p>
-                                    <Switch on={!barHidden} label="Show the numbers bar" onChange={(v) => { setBarHidden(!v); setPref("statusbar.hidden", !v); }} />
+                                    <Switch className="st-ctl" on={!barHidden} label="Show the numbers bar" onChange={(v) => { setBarHidden(!v); setPref("statusbar.hidden", !v); }} />
                                 </div>
                                 <div className="st-row">
                                     <b>Timer chime</b>
                                     <p>A short two-note sound when a focus session or the countdown ends. The timer itself never starts by itself.</p>
-                                    <Switch on={chime} label="Timer chime" onChange={(v) => { setChime(v); setPref("focus.cfg", { ...getPref<Record<string, unknown>>("focus.cfg", {}), chime: v }); }} />
+                                    <Switch className="st-ctl" on={chime} label="Timer chime" onChange={(v) => { setChime(v); setPref("focus.cfg", { ...getPref<Record<string, unknown>>("focus.cfg", {}), chime: v }); }} />
                                 </div>
                             </section>
 

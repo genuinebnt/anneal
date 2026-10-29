@@ -1,6 +1,8 @@
 // The component kit (docs/mockups/course-motion.html, screen 3): every button, slider, bar and popup the app is built from, live.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Btn as UiBtn, ConfirmButton, Segmented, Switch } from "../components/ui";
+import { GradeGlyph } from "../components/icons";
 import { Header } from "../components/Header";
 import { Celebration, Modal } from "../components/kit";
 import { MockRoot, reducedMotion, rise, useReady } from "../components/mock";
@@ -355,7 +357,39 @@ export function KitPage() {
                     </div>
                 </MockRoot>
             )}
+            <SharedControls />
         </>
+    );
+}
+
+/** The shared controls of components/ui.tsx and components/icons.tsx, with every state, as the reference for the rest of the app. */
+function SharedControls() {
+    const [sw, setSw] = useState(true);
+    const [seg, setSeg] = useState<"a" | "b" | "c">("a");
+    return (
+        <section style={{ maxWidth: 900, margin: "40px auto", padding: "0 24px", display: "flex", flexDirection: "column", gap: 18 }} aria-label="Shared controls">
+            <h2 style={{ margin: 0 }}>Shared controls</h2>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <UiBtn variant="primary">Primary</UiBtn>
+                <UiBtn>Secondary</UiBtn>
+                <UiBtn variant="quiet">Quiet</UiBtn>
+                <UiBtn variant="danger">Danger</UiBtn>
+                <UiBtn disabled>Disabled</UiBtn>
+            </div>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+                <Switch on={sw} onChange={setSw} label="Example switch" />
+                <Switch on={false} onChange={() => undefined} label="Off" />
+                <Switch on disabled onChange={() => undefined} label="Disabled" />
+                <Segmented label="Example" value={seg} options={[["a", "One"], ["b", "Two"], ["c", "Three"]] as const} onChange={setSeg} />
+                <ConfirmButton label="Delete something" confirm="Yes, delete it" note="It cannot be undone here." onConfirm={() => undefined} />
+            </div>
+            <div style={{ display: "flex", gap: 22, fontSize: 22 }} aria-label="Log icons">
+                <span style={{ color: "var(--grn)" }}><GradeGlyph grade="good" /></span>
+                <span style={{ color: "var(--warn)" }}><GradeGlyph grade="hard" /></span>
+                <span style={{ color: "var(--warn)" }}><GradeGlyph grade="again" /></span>
+                <span style={{ color: "var(--vio)" }}><GradeGlyph grade="easy" /></span>
+            </div>
+        </section>
     );
 }
 

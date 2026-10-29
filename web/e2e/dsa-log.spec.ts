@@ -35,9 +35,9 @@ test("the toast after a log offers Undo, which takes the log back", async ({ pag
     await page.goto("/d/valid-anagram");
     await page.locator(".pp-log").getByRole("button", { name: /With help/ }).click();
     await expect(page.locator(".pp-status")).toContainText("Solved with help");
-    await page.locator(".d-toast").getByRole("button", { name: "Undo" }).click();
+    await page.locator(".k-tstack").getByRole("button", { name: "Undo" }).click();
     await expect(page.locator(".pp-status")).toContainText("Not started");
-    await expect(page.locator(".d-toast")).toContainText("log undone");
+    await expect(page.locator(".k-tstack")).toContainText("log undone");
 });
 
 test("Reset archives the log first and the toast's Restore brings it back", async ({ page }) => {
@@ -47,7 +47,7 @@ test("Reset archives the log first and the toast's Restore brings it back", asyn
     await page.getByRole("button", { name: "Reset progress" }).click();
     await page.getByRole("button", { name: "Yes, reset" }).click();
     await expect(page.locator(".pp-status")).toContainText("Not started");
-    await page.locator(".d-toast").getByRole("button", { name: "Restore" }).click();
+    await page.locator(".k-tstack").getByRole("button", { name: "Restore" }).click();
     await expect(page.locator(".pp-status")).toContainText("Solved on my own");
     // leave the database as it was, for the tests that follow
     await page.request.delete("/api/dsa/problems/lc-contains-duplicate/log");

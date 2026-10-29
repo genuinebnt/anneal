@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { GradeGlyph } from "../components/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type DsaProblem } from "../api";
@@ -72,7 +73,7 @@ function Row({ p, today, log }: { p: DsaProblem; today: string; log: ReturnType<
             <div className="d-pside">
                 <div className="d-acts">
                     {REVIEW_GRADES.map((g) => (
-                        <button key={g.grade} className={g.cls} title={g.label} onClick={() => log(p, g.grade)}>{g.glyph}</button>
+                        <button key={g.grade} className={g.cls} title={g.label} onClick={() => log(p, g.grade)}><GradeGlyph grade={g.grade} /></button>
                     ))}
                 </div>
             </div>

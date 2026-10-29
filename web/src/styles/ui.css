@@ -1,0 +1,31 @@
+/* The shared look of switches, segmented controls and buttons, in one place. The older one-off classes are listed here too, so they match without each
+   page being rewritten; new code uses the components in components/ui.tsx. Loaded after every other stylesheet. */
+
+/* ---- switch */
+.ui-sw,.st-sw,.d-sw,.k-root .k-sw{position:relative;flex:none;width:44px;height:25px;padding:0;border-radius:999px;background:var(--raise);border:1px solid var(--line);cursor:pointer;transition:background .2s,border-color .2s}
+.ui-sw::after,.st-sw::after,.d-sw::after,.k-root .k-sw::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;border-radius:50%;background:var(--dim);transition:transform .2s,background .2s}
+.ui-sw[aria-checked="true"],.st-sw[aria-checked="true"],.d-sw.on,.k-root .k-sw.k-on{background:var(--acc-bg);border-color:var(--acc)}
+.ui-sw[aria-checked="true"]::after,.st-sw[aria-checked="true"]::after,.d-sw.on::after,.k-root .k-sw.k-on::after{transform:translateX(19px);background:var(--acc);width:17px}
+.k-root .k-sw:active::after{width:17px}
+.ui-sw:disabled{opacity:.5;cursor:default}
+
+/* ---- segmented control */
+.ui-seg,.st-seg,.rv-sort,.acct-seg{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line2);border-radius:var(--r-2,8px);background:var(--bg)}
+.ui-seg button,.st-seg button,.rv-sort button{height:28px;padding:0 12px;border-radius:6px;font:600 12px var(--mono);color:var(--dim);white-space:nowrap}
+.ui-seg button.on,.st-seg button.on,.rv-sort button.on{background:var(--raise);color:var(--fg)}
+.ui-seg button:hover:not(.on),.st-seg button:hover:not(.on),.rv-sort button:hover:not(.on){color:var(--fg)}
+
+/* ---- button */
+.ui-btn,.st-btn,.cm-btn,.rv-ghost,.mi-ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:34px;padding:0 14px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);color:var(--fg);font:600 12px var(--mono);text-decoration:none;white-space:nowrap;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+.ui-btn:hover:not(:disabled),.st-btn:hover:not(:disabled),.cm-btn:hover:not(:disabled),.rv-ghost:hover,.mi-ghost:hover{border-color:var(--dim)}
+.ui-btn:disabled,.st-btn:disabled,.cm-btn:disabled{opacity:.5;cursor:default}
+.ui-btn.primary,.cm-btn.pri{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font:700 13px var(--sans);height:40px;padding:0 20px}
+.ui-btn.primary:hover:not(:disabled){filter:brightness(1.06);border-color:var(--acc)}
+.ui-btn.quiet{border-color:transparent;background:transparent;color:var(--mut)}
+.ui-btn.quiet:hover:not(:disabled){color:var(--fg);background:var(--raise);border-color:transparent}
+.ui-btn.danger{border-color:var(--bad);color:var(--bad)}
+.ui-btn.danger:hover:not(:disabled){background:var(--bad-bg);border-color:var(--bad)}
+.ui-confirm{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.ui-confirm small{font-size:12px;color:var(--dim);max-width:34ch}
+
+/* ---- icons */
+.icon{width:1.15em;height:1.15em;vertical-align:-.2em;flex:none}

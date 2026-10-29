@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useDialog } from "./useDialog";
 
 const GROUPS: { title: string; keys: [string[], string][] }[] = [
     { title: "Everywhere", keys: [[["⌘", "K"], "Search tracks, stages, concepts and problems"], [["?"], "This list"]] },
@@ -54,6 +55,8 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
 export function ShortcutHelp() {
     const [open, setOpen] = useState(false);
     const close = useRef<HTMLButtonElement>(null);
+    const box = useRef<HTMLDivElement>(null);
+    useDialog(box, open, () => setOpen(false));
     useEffect(() => {
         const f = (e: KeyboardEvent) => {
             if (e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement | null)?.closest?.("input,textarea,select,[contenteditable],.cm-editor")) return;
@@ -76,7 +79,7 @@ export function ShortcutHelp() {
     if (!open) return null;
     return (
         <div className="sh-back" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-            <div className="sh-box" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+            <div className="sh-box" ref={box} role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
                 <div className="sh-head">
                     <h2>Keyboard shortcuts</h2>
                     <button ref={close} className="sh-x" aria-label="Close" onClick={() => setOpen(false)}>✕</button>

@@ -123,8 +123,6 @@
 .d-sw{width:32px;height:18px;border-radius:8px;background:var(--line);position:relative;flex:none}
 .d-sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg);transition:left .15s}
 .d-sw.on{background:var(--ca)}.d-sw.on::after{left:16px;background:var(--on-acc)}
-.d-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:10px 16px;font:500 12px var(--mono);color:var(--fg);box-shadow:0 12px 32px var(--shadow);z-index:60}
-.d-toast{display:flex;align-items:center;gap:14px}.d-undo{font:700 12px var(--mono);color:var(--acc);padding:2px 4px}.d-undo:hover{color:var(--fg)}
 .d-tip{position:fixed;pointer-events:none;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:500 11px var(--mono);color:var(--fg);box-shadow:0 8px 20px var(--shadow);z-index:50;max-width:320px}
 @media (max-width:900px){.d-goals{grid-template-columns:1fr}.d-pcard{grid-template-columns:34px minmax(0,1fr)}.d-pside{grid-column:2;flex-direction:row;align-items:center;justify-content:space-between}}
 
@@ -290,7 +288,6 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 
 .d-legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font:500 11px var(--mono);color:var(--dim);margin:0 0 12px}.d-legend>span{display:inline-flex;align-items:center;gap:6px}.d-legend .d-st{width:16px;height:16px;flex:none}
 .d-next{font:700 12px var(--mono);color:var(--acc);white-space:nowrap}.d-next:hover{color:var(--fg)}
-.d-toast{max-width:min(92vw,720px);flex-wrap:wrap}
 .d-why{display:inline-flex;gap:6px;align-items:center;font:500 11px var(--mono);color:var(--dim)}.d-why button{height:24px;padding:0 9px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font:600 11px var(--mono)}.d-why button:hover{border-color:var(--acc);color:var(--fg)}
 .d-week{padding:16px 20px}.d-week-h{display:flex;justify-content:space-between;align-items:center;gap:12px}.d-week p{margin:8px 0 0;color:var(--mut);font-size:14px;line-height:1.6}.d-week b{color:var(--fg)}
 .d-ins-hide{display:block;text-align:left;color:var(--dim);font:500 12px var(--mono);padding:2px 0;cursor:pointer}.d-ins-hide span{color:var(--acc)}.d-ins-hide:hover span{text-decoration:underline}

@@ -6,6 +6,7 @@ import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
 import { Palette } from "./Palette";
+import { useDialog } from "./useDialog";
 import { NotificationBell } from "./Notifications";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
@@ -397,6 +398,8 @@ function Account() {
     const { width, set: setWidth } = usePageWidth();
     const [open, setOpen] = useState(false);
     const box = useRef<HTMLDivElement>(null);
+    const menu = useRef<HTMLDivElement>(null);
+    useDialog(menu, open, () => setOpen(false));
     useEffect(() => {
         if (!open) return;
         const close = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
@@ -414,7 +417,7 @@ function Account() {
                 gb
             </button>
             {open && (
-                <div className="acct-menu" role="menu">
+                <div className="acct-menu" ref={menu} role="menu">
                     <span className="acct-lab">ACCENT</span>
                     <div className="swatches" role="radiogroup" aria-label="Accent colour">
                         {ACCENTS.map((a) => (

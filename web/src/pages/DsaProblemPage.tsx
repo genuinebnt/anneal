@@ -5,6 +5,8 @@ import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
+import { GradeGlyph } from "../components/icons";
+import { ConfirmButton } from "../components/ui";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
@@ -153,7 +155,6 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const o = overview.data;
     const { log, reset, undo, toast, busy } = useLogger(o?.today);
-    const [confirmReset, setConfirmReset] = useState(false);
     // a problem outside the NeetCode lists is not in the overview: ask for it by itself
     const listed = o?.problems.find((x) => x.slug === slug);
     const outside = useQuery({ queryKey: ["dsa-row", slug], queryFn: () => api.dsaRow(`lc-${slug}`), enabled: !!o && !listed, retry: false });
@@ -425,7 +426,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         <div className="pp-log">
                             {TILES.map((g) => (
                                 <button key={g.grade} className={`lg ${g.cls}${!practising && s.last_grade === g.grade ? " on" : ""}${hintsShown > 0 && g.grade === "hard" ? " sug" : ""}`} disabled={busy || (practising && g.grade === "easy")} onClick={() => log(p, g.grade, practising, hintsShown)}>
-                                    <b>{g.glyph}</b><span>{g.label}</span><small>{gradeNote(g.grade)}</small><kbd>{TILES.indexOf(g) + 1}</kbd>
+                                    <b><GradeGlyph grade={g.grade} /></b><span>{g.label}</span><small>{gradeNote(g.grade)}</small><kbd>{TILES.indexOf(g) + 1}</kbd>
                                 </button>
                             ))}
                         </div>
@@ -449,15 +450,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         </div>
                         {(s.last_grade || history.length > 0) && (
                             <div className="pp-reset">
-                                {confirmReset ? (
-                                    <>
-                                        <small>Remove this problem's log and review? Your saved solutions stay.</small>
-                                        <button className="pp-link bad" disabled={busy} onClick={() => { reset(p); setConfirmReset(false); }}>Yes, reset</button>
-                                        <button className="pp-link" onClick={() => setConfirmReset(false)}>Keep</button>
-                                    </>
-                                ) : (
-                                    <button className="pp-link" onClick={() => setConfirmReset(true)}>Reset progress</button>
-                                )}
+                                <ConfirmButton label="Reset progress" confirm="Yes, reset" note="Remove this problem's log and review? Your saved solutions stay." onConfirm={() => reset(p)} />
                             </div>
                         )}
                     </div>

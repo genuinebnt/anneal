@@ -6,6 +6,7 @@ import { statusOf } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { THEMES, applyTheme, storedTheme } from "../theme";
 import { toast } from "./toasts";
+import { useDialog } from "./useDialog";
 
 type Hit = { key: string; label: string; kind: string; color: string; go: () => void; meta?: string };
 
@@ -53,6 +54,8 @@ export function Palette({ onClose }: { onClose: () => void }) {
     const [sel, setSel] = useState(0);
     const input = useRef<HTMLInputElement>(null);
     const list = useRef<HTMLUListElement>(null);
+    const dialog = useRef<HTMLDivElement>(null);
+    useDialog(dialog, true, onClose);
     const [recent] = useState<string[]>(() => getPref<string[]>("palette.recent", []));
     useEffect(() => input.current?.focus(), []);
 
@@ -147,7 +150,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
 
     return (
         <div className="hd-pal-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="hd-pal" role="dialog" aria-label="Search" aria-modal="true">
+            <div className="hd-pal" ref={dialog} role="dialog" aria-label="Search" aria-modal="true">
                 <input
                     ref={input}
                     value={q}

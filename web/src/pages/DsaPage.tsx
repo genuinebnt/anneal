@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { GradeGlyph } from "../components/icons";
 import { getPref, setPref } from "../prefs";
 import { usePremiumSwitch } from "../premium";
 import { useShowIdeas } from "../spoilers";
@@ -737,7 +738,7 @@ function ProblemCard({ p, o, model, log, pickCompany, picked }: { p: DsaProblem;
           )}
           {REVIEW_GRADES.map((g) => (
             <button key={g.grade} className={g.cls} title={g.label} onClick={() => log(p, g.grade)}>
-              {g.glyph}
+              <GradeGlyph grade={g.grade} />
             </button>
           ))}
         </div>

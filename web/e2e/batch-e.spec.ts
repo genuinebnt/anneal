@@ -34,7 +34,7 @@ test("after Attempted the toast asks why, and the answer is kept with the attemp
         await expect(page.locator(".pp-status")).toContainText("Not started");
         await page.keyboard.press("3");
         await page.locator(".d-why").getByRole("button", { name: "edge cases" }).click();
-        await expect(page.locator(".d-toast")).toContainText("noted, edge cases");
+        await expect(page.locator(".k-tstack")).toContainText("noted, edge cases");
         const file = await (await page.request.get("/api/export")).json();
         expect(file.tables.attempts.some((a: { problem_id: string; why: string | null }) => a.problem_id === "lc-valid-sudoku" && a.why === "edge_cases")).toBe(true);
     } finally {

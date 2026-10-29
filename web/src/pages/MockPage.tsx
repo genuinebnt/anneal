@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
+import { GradeGlyph } from "../components/icons";
 import { DIFF, leetcode, niceDate } from "../dsa";
 import {
     BANDS,
@@ -753,9 +754,9 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
                     <section className="mi-card">
                         <h3 className="mi-h3"><span>LOG PROBLEM {index + 1}</span><em>same as a normal attempt</em></h3>
                         <div className="mi-log3">
-                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "!", "attempted", "no"], ["easy", "⚡", "instant", "fast"]] as const).map(([g, glyph, label, cls]) => (
+                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "!", "attempted", "no"], ["easy", "⚡", "instant", "fast"]] as const).map(([g, , label, cls]) => (
                                 <button key={g} className={`lg ${cls}${mark?.grade === g && logged ? " on" : ""}`} disabled={logged || busy} onClick={() => void log(g)}>
-                                    <b>{glyph}</b><span>{label}</span>
+                                    <b><GradeGlyph grade={g} /></b><span>{label}</span>
                                 </button>
                             ))}
                         </div>
