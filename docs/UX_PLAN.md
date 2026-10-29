@@ -1,6 +1,6 @@
 # UX plan: ideas waiting for the owner's pick
 
-Status: **planning, 2026-10-29. Nothing here is built.** The owner said yes to every item below ("add all") and asked for more ideas (section 6); the order and the two open decisions (4.1, 4.3) are still to settle before any build. per CLAUDE.md, new screens and big UI changes get an
+Status: **planning, 2026-10-29. Nothing here is built.** The owner said yes to every item below ("add all", twice) and keeps asking for more ideas (sections 6 and 7). For the two open decisions the plan assumes my recommendation unless the owner says otherwise: **4.1 = options (b) and (c), 4.3 = option (b)**. No build starts before the mockups in step 2 of the order are approved. per CLAUDE.md, new screens and big UI changes get an
 HTML mockup and approval first. Effort: S under an hour, M a few hours, L a day or more. Each item says what was seen, so a later agent
 does not have to rediscover it. Screens were checked at 1440x900 against a throwaway database on 2026-10-29.
 
@@ -74,11 +74,29 @@ sort, "Review ahead", the manual timer and the four grades.
 | 6.10 | Interview-company mode: pick a company and a date, the plan prefers its recent problems | L | Companies and "recent" flags already exist on every problem; needs the planner to take a weight. Mockup first. |
 | 6.11 | Accessibility pass: focus rings, tab order on the new Review queue, contrast of the dim text in light theme | S | Do alongside the Review rebuild. |
 
+## 7. More ideas (third round, 2026-10-29)
+
+Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review, Rust home. **Not yet looked at:** the Rust workspace, course stage and concept pages, Mock interview, Pattern pages. Item 7.1 closes that gap.
+
+| # | Item | Effort | Note |
+|---|---|---|---|
+| 7.1 | **UX audit of the pages not yet looked at** (workspace, course stage, concept, Mock, Pattern), written up in this file before any fix | S | Same method: 1440x900 screenshots on a throwaway database. |
+| 7.2 | Check what a bad pattern code shows | S | `/dsa/patterns/two-pointers` rendered an empty page under the header (the real codes may be different); an unknown code should say "no such pattern" and link back. To verify first; may not be a bug. |
+| 7.3 | After a log, the toast offers "Next up: <title> ->" beside Undo | S | Today you log, then go back to the home page to find the next problem. |
+| 7.4 | Hints and "With help" connected: the problem page remembers how many LeetCode hints you opened, and With help is preselected once one is open | M | Also records hints used per log; feeds 5.2 and 6.7. The log stays your choice. |
+| 7.5 | "My notes" link on a problem: one URL field (Notion, Obsidian, a file) shown as a link on the page | S | The owner keeps their own notes elsewhere; this only points to them, it stores no notes. |
+| 7.6 | Weekly summary on the home page on Monday: solved, lapses, weakest topic, reviews kept | M | Built from data already stored; no new logging. |
+| 7.7 | Calendar feed (`.ics` URL) of due reviews and solve days, to subscribe to in a phone calendar | M | Reminders without a notification service. Needs the login token in the URL; check how login is set up first. |
+| 7.8 | Copy button on every Python solution block, if `PyCode` lacks one | S | The approaches say "pastes into LeetCode". To verify first. |
+| 7.9 | Per-pattern completion ring and a "next problem in this pattern" button on the pattern page | S | The problem page has previous and next already. |
+| 7.10 | A proper "not found" and error screen across the app (unknown problem, API down), with a way back | S | The problem page has one; confirm the others do. |
+
 ## Suggested order
 
 1. Owner settles the two open decisions: 4.1 (status bar) and 4.3 (streak).
-2. Mockups: Review page (with 1.6, the session strip) and the DSA home (3.1). Nothing is built before they are approved.
+2. Mockups: Review page (with 1.6, the session strip) and the DSA home (3.1). Nothing is built before they are approved. In parallel, 7.1 (the audit of the pages not yet looked at) so its findings can join the plan.
 3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together).
 4. Review rebuild (section 1, with 6.3 and 6.11), then the problem page (2.1, 2.2, 6.4), then the DSA home (3.1, 3.2).
 5. 6.5, 6.6, 5.2 and 6.7 together (what you did today, where you are weak), then 4.6.
-6. Largest last: 5.3 (Today screen), 6.8 (phone), 6.10 (company mode).
+6. Then 7.2 to 7.5, 7.8 to 7.10 (small), then 7.6 and 7.7.
+7. Largest last: 5.3 (Today screen), 6.8 (phone), 6.10 (company mode).
