@@ -1,6 +1,6 @@
 # UX plan: ideas waiting for the owner's pick
 
-Status: **planning, 2026-10-29. Nothing here is built.** The owner said yes to every item below ("add all", twice) and keeps asking for more ideas (sections 6 and 7). For the two open decisions the plan assumes my recommendation unless the owner says otherwise: **4.1 = options (b) and (c), 4.3 = option (b)**. No build starts before the mockups in step 2 of the order are approved. per CLAUDE.md, new screens and big UI changes get an
+Status: **planning, 2026-10-29. Nothing here is built.** The owner said yes to every idea in every section, including the ones first parked, and delegated the two open decisions (4.1, 4.3); the premium answers are in section 9. **Every item is in scope.** No build starts before the owner says go; mockups come first for screens (see "Suggested order").
 HTML mockup and approval first. Effort: S under an hour, M a few hours, L a day or more. Each item says what was seen, so a later agent
 does not have to rediscover it. Screens were checked at 1440x900 against a throwaway database on 2026-10-29.
 
@@ -43,9 +43,9 @@ sort, "Review ahead", the manual timer and the four grades.
 
 | # | Item | Effort | Note |
 |---|---|---|---|
-| 4.1 | **Bottom status bar** | S | **Corrected:** it is a deliberate slow ticker that pauses under the pointer (`StatsBar.tsx`), so text leaving the right edge is by design, not clipping. What is left to decide: it repeats the streak the header already shows, and it covers 30px of every page. Options: (a) leave it, (b) drop the repeated streak item, (c) a small hide/show choice remembered in the browser. **Owner to choose.** |
+| 4.1 | **Bottom status bar** | S | **Decided (owner delegated): (b) + (c).** It is a deliberate slow ticker that pauses under the pointer (`StatsBar.tsx`), so text leaving the edge is by design. Drop the streak item (the header already shows it) and add a hide/show choice, which lives on the Settings page (9.7) and is remembered (9.8). |
 | 4.2 | Smaller page headlines | S | Plan, Progress, Patterns, Rust and the DSA home spend 150-250px on a headline before any tool. A compact variant (or one-line title) on the working pages (Plan, Calendar, Review, Progress) and keep the big one on the two home pages. |
-| 4.3 | Two different streaks | M | **Owner to choose; read this first.** The header and bottom bar show a *solve streak* (`activity::streak`: consecutive days with at least one solve, so a planned rest day breaks it). The calendar's History shows a *plan streak* (`calendar.rs`: days since tracking began until a planned solve day was missed, rest and practice days do not break it and are counted). They are different measures with the same name. Options: (a) keep both and label them ("solve streak", "plan streak"); (b) make the header plan-aware: count consecutive *planned solve days* that were kept, skipping rest days without counting them; (c) leave as is. Recommended: (b), because a streak that breaks on a day the plan says to rest punishes the plan. It changes a number on the live site, so it needs the owner's word. |
+| 4.3 | Two different streaks | M | **Decided (owner delegated): the header streak becomes plan-aware.** Today the header and bottom bar show a *solve streak* (`activity::streak`: consecutive days with a solve, so a planned rest day breaks it) while the calendar's History shows a *plan streak* (`calendar.rs`: rest and practice days do not break it and are counted). New rule everywhere, with one function: count consecutive *planned solve days* that had a solve; rest and practice days neither break the streak nor add to it; today never breaks it before the day is over. A completed premium problem always counts (section 9). Label it "streak" once, in one place, and keep the calendar's History line as "days kept". It changes a number on the live site, so the change note says old and new values side by side. |
 | 4.4 | Progress heatmap month labels collide ("OctNov" at the left) | S | Skip the label when the gap is under two columns. |
 | 4.5 | Calendar targets: native `dd/mm/yyyy` date boxes and names cut to "Arrays &...", "Two Poi..." | S | Wider name column; a compact date picker in the app's own style. |
 | 4.6 | Command palette actions (`Cmd K`): "log two sum on my own", "open review", "start timer" | M | The palette already searches tracks, stages and problems; add verbs. |
@@ -76,7 +76,7 @@ sort, "Review ahead", the manual timer and the four grades.
 
 ## 7. More ideas (third round, 2026-10-29)
 
-**Owner's picks from this round (2026-10-29): 7.3, 7.4, 7.6, 7.8, 7.9, 7.10. Parked, not chosen: 7.1, 7.2, 7.5, 7.7** (kept below so they are not lost). Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review, Rust home, Mock interview (setup screen), Courses home. Not looked at: the Rust workspace, course stage and concept pages, Pattern pages.
+**Owner's picks: all of this round, 7.1 to 7.10** (7.3, 7.4, 7.6, 7.8, 7.9, 7.10 first, then 7.1, 7.2, 7.5, 7.7 added later the same day). Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review, Rust home, Mock interview (setup screen), Courses home. Not looked at: the Rust workspace, course stage and concept pages, Pattern pages.
 
 | # | Item | Effort | Note |
 |---|---|---|---|
@@ -93,7 +93,7 @@ sort, "Review ahead", the manual timer and the four grades.
 
 ## 8. More ideas (fourth round, 2026-10-29)
 
-**Owner's picks from this round (2026-10-29): 8.1, 8.4, 8.5, 8.6, 8.8. Parked, not chosen: 8.2, 8.3, 8.7.** (8.3's DSA part is covered by section 9: with premium not counted, 143, 150 and 943 stop disagreeing; its Rust and course labels stay parked.) New findings from the Mock interview and Courses screens, and from how the owner works (solves on LeetCode in another tab, with anneal open beside it).
+**Owner's picks: all of this round, 8.1 to 8.8.** (8.3's DSA part is largely solved by section 9: with premium not counted, 143, 150 and 943 stop disagreeing; its Rust and course labels still need doing.) New findings from the Mock interview and Courses screens, and from how the owner works (solves on LeetCode in another tab, with anneal open beside it).
 
 | # | Item | Effort | Note |
 |---|---|---|---|
@@ -103,7 +103,7 @@ sort, "Review ahead", the manual timer and the four grades.
 | 8.4 | Mock interview: **Start round visible without scrolling** (the summary card with the Start button runs below the fold at 1440x900) | S | Sticky summary card, or move Start up. |
 | 8.5 | Mock interview: a round history under the setup (date, shape, solved, time used against allowed) with a simple trend | M | The page says "0 rounds taken" but shows nothing of earlier rounds; verify what appears after one. |
 | 8.6 | Phone-width pass (390px) of Review, problem page, Home, Mock | S | Not looked at yet; relevant because of 6.8. |
-| 8.7 | Bulk "mark as already solved" on the Problems page (tick several, one confirm, logged as On my own with today's date) | M | For problems the owner solved before anneal. Needs a decision: does it start reviews at once, or only mark the problem solved? Owner to choose. |
+| 8.7 | Bulk "mark as already solved" on the Problems page (tick several, one confirm) | M | For problems the owner solved before anneal. **Decided (my call, owner can veto):** they are marked solved on a past date the owner picks (default: "before anneal", not today), so they do not add to today's activity or the streak, and they start no reviews; any one can be logged normally later to start its reviews. Undo for the whole batch. |
 | 8.8 | Keep the timer manual everywhere: opening a problem, clicking Solve on LeetCode or switching modes must not start it | S | A rule to keep, with an e2e test, since the owner has asked twice that nothing starts by itself. |
 
 ## 9. Count premium problems or not (owner asked 2026-10-29)
@@ -118,12 +118,18 @@ sort, "Review ahead", the manual timer and the four grades.
 |---|---|---|---|
 | 9.1 | One setting "Count premium problems", stored in the existing `goal.free_only` (inverted, so default off needs **no migration and no change to any stored data**) | M | The plan page and calendar switches stay and edit the same value; none is removed. |
 | 9.2 | Every total, solved count, percentage and bar respects it: goal cards, hero stats, header chip, bottom bar, track summaries and readiness, Progress page, pattern pages, activity week, Next up, plan and calendar (already) | L | Server side first (one helper that says whether a problem counts, used by `views`, `progress`, `activity`, `dsa`), then the web's own totals (`dsa.ts`, `DsaPage`, `PatternPage`, `PatternProblems`). Mock interview already never draws premium. |
-| 9.3 | Premium problems still appear in lists with the PREM badge and keep any progress already logged; they just are not counted. The home's "Hide LeetCode Premium" filter stays a view filter whose starting value follows the setting | S | Owner to confirm: not counted but still listed, or hidden when off? Assumed: listed. |
-| 9.4 | Switching shows what changes before it applies ("goal 150 -> 161, 4 premium solved would count") and never touches reviews, attempts or the plan's saved days | S | Reviews on a premium problem keep coming due either way; owner to confirm that is wanted. |
+| 9.3 | Premium problems still appear in lists with the PREM badge and keep any progress already logged; they just are not in the completion totals. The home's "Hide LeetCode Premium" filter stays a view filter, off by default | S | Confirmed by the owner. |
+| 9.4 | Switching shows what changes before it applies ("goal 150 -> 161, 4 premium solved would count") and never touches reviews, attempts or the plan's saved days | S | Reviews are unaffected, as decided. |
 | 9.5 | Free substitute: on a premium problem's page and card, link the closest free problem of the same technique | S | Techniques and problem lists already exist; no new data. |
-| 9.6 | A test pinning it: with the setting off, no premium problem is in any total on any endpoint; on, all are | M | Throwaway database, as always. |
+| 9.6 | A test pinning it: with the setting off, no premium problem is in any *completion* total on any endpoint while a completed premium problem still counts toward the streak, heatmap and reviews; with it on, all are in the totals | M | Throwaway database, as always. |
 
-**Open questions for the owner.** (a) Listed but not counted, or hidden, when off (9.3)? (b) Do reviews of premium problems keep running (9.4)? (c) Where does the switch live: the plan page only, or the new Settings page (9.7)?
+**Decided by the owner (2026-10-29).**
+1. **Listed, not hidden.** Premium problems stay in every list with the PREM badge and can be logged.
+2. **What you complete always counts as activity.** A premium problem that is completed counts toward the streak, the heatmap, "solved this year" and the week, whatever the setting says. The setting only decides whether premium problems are in the *totals and bars* (goal, readiness, track and pattern percentages, header chip). Progress logged on premium problems is kept either way, so switching the setting on later makes it count in the totals too.
+3. **Reviews follow what you did.** A premium problem you completed keeps coming back for review; one you never did has none. Nothing about reviews depends on the setting.
+4. **The switch lives on the new Settings page (9.7)**, and the plan page and calendar switches stay and edit the same value (nothing is removed).
+
+This splits every number into two kinds, which the build must keep apart: *activity* (what you did: streak, heatmap, week, year, focus, reviews; premium always included) and *completion* (progress against a list or goal: totals, bars, readiness; premium only when the setting is on). 9.2's test pins both.
 
 | # | More ideas (fifth round) | Effort | Note |
 |---|---|---|---|
@@ -132,12 +138,15 @@ sort, "Review ahead", the manual timer and the four grades.
 | 9.9 | Theme choice with a third option, "System" | S | The header toggle only flips dark and light. |
 | 9.10 | A "what changed" line after a deploy: the app shows once "New since you last visited: ..." from the commit titles | S | The owner ships after every batch and cannot tell what is live. |
 
-## Suggested order
+## Suggested order (everything is in scope; this is the sequence)
 
-1. Owner settles the open decisions: 4.1 (status bar), 4.3 (streak) and the three premium questions in section 9.
-2. Mockups: Review page (with 1.6, the session strip), the DSA home (3.1) and the welcome-back bar (8.2). Nothing is built before they are approved.
-3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together). **Premium counting (section 9) next, because it changes every number the other screens show**, then 9.7 (Settings page, mockup first).
-4. Review rebuild (section 1, with 6.3 and 6.11), then the problem page (2.1, 2.2, 6.4), then the DSA home (3.1, 3.2).
-5. 6.5, 6.6, 5.2 and 6.7 together (what you did today, where you are weak), then 4.6.
-6. Then the picked 7.x items: 7.3, 7.8, 7.9, 7.10 (small), 7.4, then 7.6. With 8.1, 8.3, 8.4, 8.6, 8.8 (small), then 8.2, 8.5, 8.7.
-7. Largest last: 5.3 (Today screen), 6.8 (phone), 6.10 (company mode).
+0. Nothing is built until the owner says go. Mockups below are made first and approved.
+1. **Mockups, one message:** Review page (with the session strip 1.6), DSA home (3.1), Settings page (9.7), welcome-back bar (8.2), phone quick log (6.8), Mock round history (8.5). Plus the page audit (7.1) written into this file.
+2. **Batch A, safe fixes (no design question):** 4.4 heatmap labels, 4.5 calendar targets, 2.3 icon legend, 6.9 skeletons, 7.8 copy button, 7.10 error screens, 7.2 bad pattern code, 8.4 Start visible in Mock, 8.8 plus 8.1 timer rule and tab-title countdown, 9.9 System theme.
+3. **Batch B, data safety:** 5.1 export, 6.2 import, 6.1 reset archive.
+4. **Batch C, counting:** 9.1 to 9.6 (premium), then 4.3 (streak rule) in the same pass because both decide what a number means; 4.1 status bar; 9.7 Settings page; 9.8 prefs on the server.
+5. **Batch D, Review and problem page:** section 1 (with 6.3 shortcut help, 6.11 accessibility), 2.1, 2.2, 6.4, 7.3 next-up in the toast, 7.4 hints and With help, 7.9 pattern ring.
+6. **Batch E, home and across:** 3.1, 3.2 and 8.3 counts, 6.5 daily ring, 6.6 heatmap day, 5.2 weak spots with 6.7 why chip, 4.6 palette actions, 7.5 notes link, 8.6 phone fixes.
+7. **Batch F, larger:** 7.6 weekly summary, 7.7 calendar feed, 8.2 welcome-back bar, 8.5 Mock history, 8.7 bulk mark solved, 6.8 phone quick log, 6.10 company mode, 9.5 free substitutes, 9.10 deploy note, 5.3 Today screen.
+
+Each batch ships on its own (commit, push, CI deploys) with the progress file updated, as before.
