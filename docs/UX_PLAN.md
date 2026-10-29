@@ -150,3 +150,26 @@ This splits every number into two kinds, which the build must keep apart: *activ
 7. **Batch F, larger:** 7.6 weekly summary, 7.7 calendar feed, 8.2 welcome-back bar, 8.5 Mock history, 8.7 bulk mark solved, 6.8 phone quick log, 6.10 company mode, 9.5 free substitutes, 9.10 deploy note, 5.3 Today screen.
 
 Each batch ships on its own (commit, push, CI deploys) with the progress file updated, as before.
+
+## Status after the build run (2026-10-29)
+
+The owner asked for everything to be built while away, without review, deciding minor things and noting open ones. Shipped in batches A to F
+(see PROGRESS.md). The mockup-first rule was waived by the owner for this run. Everything below that is not listed as open is built and has a test.
+
+**Open or only partly done, for the owner:**
+
+| Item | State | Why / what is needed |
+|---|---|---|
+| 6.10 Company mode (plan prefers a company's recent problems) | not built | A planner change with a design question (how strongly to weight, what happens to the curriculum order). Needs the owner's wish and a mockup. |
+| 5.3 Today screen | not built | The DSA home now opens on Next up with the day's chip, due reviews and the Monday summary, which is most of it. Say if a separate screen is still wanted. |
+| 8.3 Rust and Courses counts | not done | The Courses hero says 317 stages while the header chip says 169 (planned modules counted in one place, see `withoutPlanned` in CoursePage); the Rust hero says 596 problems against 197 written. DSA is settled by the premium setting. Needs a decision on which number each place should show. |
+| 2.4 Time spent on a log | not built | Optional and needs a table (additive). The timer's elapsed time is not yet offered when logging. |
+| 4.5 Calendar target dates | partly | Names no longer cut off; the native date boxes are unchanged. |
+| 7.1 Page audit | partly | Looked at: DSA home, problem, Plan, Calendar, Progress, Review, Mock setup, Courses home, Rust home. Not looked at: the Rust workspace, course stage and concept pages. |
+| 6.8 Phone app | partly | `/log` and a web manifest (add to the home screen from the browser menu). No service worker, so no offline use. |
+| 4.3 Streak | built, check the number | The header streak is now plan-aware, so it can differ from before. The calendar's own number is called "days kept in a row". |
+
+**Decisions I took (the owner can veto any):** the numbers bar keeps everything but the streak and can be hidden; bulk "already solved" records
+problems on 1 Jan 2020 by default and starts no reviews; a premium problem you complete always counts toward activity, the setting only changes
+totals and bars; server-synced preferences are skipped in automated browsers so tests stay isolated; every delete archives to `data_archive` and
+is never purged.

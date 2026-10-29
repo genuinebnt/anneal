@@ -6,6 +6,7 @@ mod backup;
 pub mod auth;
 pub mod cli_updates;
 mod dsa;
+mod feed;
 pub mod dsa_next;
 mod error;
 mod format;
@@ -61,7 +62,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
     let protected = Router::new()
         .route("/activity", get(routes::activity))
         .route("/export", get(backup::export))
+        .route("/feed", get(feed::get).post(feed::make))
         .route("/day/{date}", get(routes::day))
+        .route("/week-summary", get(routes::week_summary))
         .route("/import", post(backup::import).layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)))
         .route("/prefs", get(settings::get_prefs).post(settings::put_pref))
         .route("/progress", get(routes::progress))
@@ -89,6 +92,8 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/problems/{id}/log", post(dsa::log).delete(dsa::reset))
         .route("/dsa/problems/{id}/undo", post(dsa::undo))
         .route("/dsa/problems/{id}/why", post(dsa::why))
+        .route("/dsa/bulk-solved", post(dsa::bulk_solved))
+        .route("/dsa/bulk-solved/undo", post(dsa::bulk_solved_undo))
         .route("/dsa/problems/{id}/restore", post(dsa::restore))
         .route("/dsa/problems/{id}/statement", get(statement::get))
         .route("/dsa/problems/{id}/preview", get(review::preview))
@@ -131,6 +136,8 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/auth/session", get(auth::session))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        // the calendar feed: public, but only with its long random token
+        .route("/feed/{file}", get(feed::ics))
         .merge(protected)
         .with_state(state);
     let mut router = Router::new().nest("/api", api);

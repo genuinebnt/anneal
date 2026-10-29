@@ -416,6 +416,9 @@ function Account() {
                     <Link role="menuitem" className="acct-out" to="/settings" onClick={() => setOpen(false)}>
                         All settings
                     </Link>
+                    <Link role="menuitem" className="acct-out" to="/log" onClick={() => setOpen(false)}>
+                        Quick log (phone)
+                    </Link>
                     {session.data?.required && (
                         <button
                             role="menuitem"

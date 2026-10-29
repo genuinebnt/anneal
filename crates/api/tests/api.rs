@@ -524,7 +524,7 @@ async fn passphrase_login_gates_the_api(db: PgPool) {
     let pair = cookie.split(';').next().unwrap().to_owned();
 
     // The routes that hand out or take in everything the owner has made are behind the login too.
-    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
+    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/feed"), (Method::POST, "/api/feed"), (Method::GET, "/api/week-summary"), (Method::GET, "/api/day/2026-10-29"), (Method::POST, "/api/dsa/bulk-solved"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
         assert_eq!(raw(&app, method, path, None, Some(json!({}))).await.0, StatusCode::UNAUTHORIZED, "{path} must need the login");
     }
     assert_eq!(raw(&app, Method::GET, "/api/tracks", Some(&pair), None).await.0, StatusCode::OK);
@@ -2106,4 +2106,85 @@ async fn a_reason_is_kept_with_the_latest_attempt_and_a_day_lists_what_was_solve
     let titles: Vec<&str> = day["solves"].as_array().unwrap().iter().map(|s| s["title"].as_str().unwrap()).collect();
     assert_eq!(titles.len(), 1, "the attempted one is not a solve: {day}");
     assert_eq!(call(&app, Method::GET, "/api/day/not-a-date", None).await.0, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn problems_solved_before_anneal_are_marked_without_touching_today_and_can_be_taken_back(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    let n1 = problem_of(&o, "lc-two-sum")["number"].as_u64().unwrap();
+    let n2 = problem_of(&o, "lc-valid-palindrome")["number"].as_u64().unwrap();
+    // something already logged is left alone
+    call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/log", Some(json!({ "grade": "good" }))).await;
+
+    let (_, dry) = call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1, n2, 999999], "dry_run": true }))).await;
+    assert_eq!((dry["matched"].as_array().unwrap().len(), dry["already_logged"].as_array().unwrap().len(), dry["unknown"].as_array().unwrap().len()), (1, 1, 1));
+    let none: (i64,) = sqlx::query_as("SELECT count(*) FROM attempts WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
+    assert_eq!(none.0, 0, "a dry run writes nothing");
+
+    let (status, done) = call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1, n2] }))).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let ids = done["attempts"].clone();
+    assert_eq!(ids.as_array().unwrap().len(), 1);
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!(problem_of(&o, "lc-two-sum")["state"]["solved"], true);
+    let reviews: (i64,) = sqlx::query_as("SELECT count(*) FROM reviews WHERE problem_id = 'lc-two-sum'").fetch_one(&db).await.unwrap();
+    assert_eq!(reviews.0, 0, "no review is started");
+    // it is recorded on a past day, so it adds nothing to the week
+    let (_, a) = call(&app, Method::GET, "/api/activity?sections=D", None).await;
+    assert_eq!(a["week_solved"], 1, "only the problem logged today counts this week: {a}");
+    assert_eq!(call(&app, Method::POST, "/api/dsa/bulk-solved", Some(json!({ "numbers": [n1], "date": "2999-01-01" }))).await.0, StatusCode::BAD_REQUEST);
+
+    let (_, undone) = call(&app, Method::POST, "/api/dsa/bulk-solved/undo", Some(json!({ "attempts": ids }))).await;
+    assert_eq!(undone["removed"], 1);
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!(problem_of(&o, "lc-two-sum")["state"]["solved"], false);
+    let kept: (i64,) = sqlx::query_as("SELECT count(*) FROM data_archive WHERE source = 'undo_bulk_solved'").fetch_one(&db).await.unwrap();
+    assert_eq!(kept.0, 1, "the undo archived what it removed");
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_calendar_feed_needs_its_token_and_lists_the_coming_reviews(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    let (_, none) = call(&app, Method::GET, "/api/feed", None).await;
+    assert_eq!(none["path"], Value::Null);
+    assert_eq!(call(&app, Method::GET, "/api/feed/guess.ics", None).await.0, StatusCode::NOT_FOUND, "no token yet, no feed");
+
+    let (_, made) = call(&app, Method::POST, "/api/feed", None).await;
+    let path = made["path"].as_str().unwrap().to_owned();
+    let res = app.clone().oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/calendar; charset=utf-8");
+    let text = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(text.starts_with("BEGIN:VCALENDAR") && text.contains("Two Sum") && text.contains("1 review due") && text.contains("RRULE:FREQ=WEEKLY"), "{text}");
+    assert_eq!(call(&app, Method::GET, "/api/feed/not-the-token.ics", None).await.0, StatusCode::NOT_FOUND);
+
+    // A new token replaces the old one: the old address stops working.
+    let (_, again) = call(&app, Method::POST, "/api/feed", None).await;
+    assert_ne!(again["path"], made["path"]);
+    let old = app.oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(old.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn the_week_summary_describes_last_monday_to_sunday(db: PgPool) {
+    use chrono::{Datelike, Days, TimeZone};
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let today = chrono::Local::now().date_naive();
+    let monday = today - Days::new(u64::from(today.weekday().num_days_from_monday()));
+    let at = |d: chrono::NaiveDate| chrono::Local.from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap()).earliest().unwrap().with_timezone(&chrono::Utc);
+    let wed = at(monday - Days::new(5));
+    for (problem, solved, assisted) in [("lc-two-sum", true, false), ("lc-valid-palindrome", true, true), ("lc-contains-duplicate", false, true)] {
+        sqlx::query("INSERT INTO attempts (problem_id, kind, started_at, solved_at, assisted) VALUES ($1, 'practice', $2, CASE WHEN $3 THEN $2 END, $4)").bind(problem).bind(wed).bind(solved).bind(assisted).execute(&db).await.unwrap();
+    }
+    // this week's solve is not part of last week
+    call(&app, Method::POST, "/api/dsa/problems/lc-encode-and-decode-strings/log", Some(json!({ "grade": "good" }))).await;
+    let (status, w) = call(&app, Method::GET, "/api/week-summary", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((w["solved"].clone(), w["unassisted"].clone(), w["attempted"].clone(), w["active_days"].clone()), (json!(2), json!(1), json!(1), json!(1)), "{w}");
+    assert!(w["weakest"]["name"].is_string(), "{w}");
 }

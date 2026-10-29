@@ -442,6 +442,20 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                     {data.rounds.length > 0 && (
                         <section className="mi-card">
                             <h3 className="mi-h3"><span>PAST ROUNDS</span><em>repeat any of them</em></h3>
+                            {(() => {
+                                // the share of each round's problems solved on your own, oldest to newest, over the last ten rounds
+                                const last = [...data.rounds].slice(0, 10).reverse();
+                                const share = last.map((r) => (r.items.length ? r.items.filter((i) => i.grade === "good" || i.grade === "easy").length / r.items.length : 0));
+                                if (last.length < 2) return null;
+                                const avg = Math.round((100 * share.reduce((a, b) => a + b, 0)) / share.length);
+                                const mins = Math.round(last.reduce((n, r) => n + r.seconds, 0) / last.length / 60);
+                                return (
+                                    <div className="mi-trend" aria-label="Trend over your last rounds">
+                                        <span className="bars" aria-hidden="true">{share.map((v, k) => <i key={k} style={{ height: `${8 + v * 28}px` }} />)}</span>
+                                        <span>Over your last {last.length} rounds: <b>{avg}%</b> solved on your own, <b>{mins} min</b> on average. First {Math.round(share[0]! * 100)}%, latest {Math.round(share[share.length - 1]! * 100)}%.</span>
+                                    </div>
+                                );
+                            })()}
                             <div className="mi-tbl">
                                 <div className="mi-tr th"><span>DATE</span><span>ROUND</span><span>RESULT</span><span>TIME</span><span /></div>
                                 {data.rounds.map((r) => (

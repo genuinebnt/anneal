@@ -292,3 +292,4 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 .d-next{font:700 12px var(--mono);color:var(--acc);white-space:nowrap}.d-next:hover{color:var(--fg)}
 .d-toast{max-width:min(92vw,720px);flex-wrap:wrap}
 .d-why{display:inline-flex;gap:6px;align-items:center;font:500 11.5px var(--mono);color:var(--dim)}.d-why button{height:24px;padding:0 9px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font:600 11px var(--mono)}.d-why button:hover{border-color:var(--acc);color:var(--fg)}
+.d-week{padding:16px 20px}.d-week-h{display:flex;justify-content:space-between;align-items:center;gap:12px}.d-week p{margin:8px 0 0;color:var(--mut);font-size:14px;line-height:1.6}.d-week b{color:var(--fg)}

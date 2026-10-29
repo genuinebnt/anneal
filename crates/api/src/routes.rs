@@ -58,6 +58,39 @@ pub async fn activity(
     Ok(Json(activity::build(&s.catalog, &sections, &progress, &rows, activity::today(), count_premium, &is_solve_day)))
 }
 
+/// `GET /api/week-summary`: last week (Monday to Sunday before this one): what was solved and how, the days that had a solve,
+/// reviews done, attempts that did not solve, and the topic that took the most misses and help.
+pub async fn week_summary(State(s): State<AppState>) -> ApiResult<Json<Value>> {
+    use chrono::{Datelike, Days};
+    let today = activity::today();
+    let this_monday = today - Days::new(u64::from(today.weekday().num_days_from_monday()));
+    let (from, to) = (this_monday - Days::new(7), this_monday - Days::new(1));
+    let local = |t: chrono::DateTime<chrono::Utc>| t.with_timezone(&chrono::Local).date_naive();
+    let rows = store::activity(&s.db).await?;
+    let in_week = |d: chrono::NaiveDate| d >= from && d <= to;
+    let solved: Vec<_> = rows.iter().filter(|r| r.solved_at.is_some_and(|t| in_week(local(t)))).collect();
+    let attempted = rows.iter().filter(|r| r.solved_at.is_none() && r.kind != "mock" && in_week(local(r.started_at))).count();
+    let mut days: Vec<chrono::NaiveDate> = solved.iter().filter_map(|r| r.solved_at.map(local)).collect();
+    days.sort_unstable();
+    days.dedup();
+    let mut trouble: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for r in rows.iter().filter(|r| r.kind != "mock" && in_week(local(r.solved_at.unwrap_or(r.started_at))) && (r.solved_at.is_none() || r.assisted)) {
+        if let Some((t, _)) = s.catalog.problem(&r.problem_id) {
+            *trouble.entry(t.name.clone()).or_default() += 1;
+        }
+    }
+    let weakest = trouble.into_iter().max_by_key(|(_, n)| *n).map(|(name, misses)| json!({ "name": name, "misses": misses }));
+    Ok(Json(json!({
+        "from": from, "to": to,
+        "solved": solved.len(),
+        "unassisted": solved.iter().filter(|r| !r.assisted).count(),
+        "reviews": solved.iter().filter(|r| r.kind == "resolve").count(),
+        "active_days": days.len(),
+        "attempted": attempted,
+        "weakest": weakest,
+    })))
+}
+
 /// `GET /api/day/{date}`: what was solved on a day (a local date, `2026-10-29`), for the heatmap's click.
 pub async fn day(State(s): State<AppState>, Path(date): Path<String>) -> ApiResult<Json<Value>> {
     let day: chrono::NaiveDate = date.parse().map_err(|_| ApiError::BadRequest("a date looks like 2026-10-29".into()))?;

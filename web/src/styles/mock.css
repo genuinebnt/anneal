@@ -146,3 +146,4 @@
 @media (max-width:640px){
     .mi-hero{grid-template-columns:1fr;padding:20px}.mi-stats{grid-template-columns:1fr}.mi-log3{grid-template-columns:1fr}.mi-segbar .segs{flex-wrap:wrap}.mi-prob{padding:18px}.mi-seg button{flex:1 1 40%}
 }
+.mi-trend{display:flex;gap:14px;align-items:flex-end;font:500 12px var(--mono);color:var(--mut);margin:4px 0 12px;flex-wrap:wrap}.mi-trend b{color:var(--fg)}.mi-trend .bars{display:flex;gap:3px;align-items:flex-end;height:36px}.mi-trend .bars i{width:8px;border-radius:2px;background:var(--grn)}

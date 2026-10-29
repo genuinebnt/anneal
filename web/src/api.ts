@@ -1002,6 +1002,12 @@ export const api = {
   practice: (pattern: string) => request<PracticeList>("GET", `/dsa/practice/${pattern}`),
   resetDsa: (id: string) => request<{ id: string; archived: boolean }>("DELETE", `/dsa/problems/${id}/log`),
   restoreDsa: (id: string) => request<{ id: string; restored: boolean }>("POST", `/dsa/problems/${id}/restore`),
+  weekSummary: () => request<{ from: string; to: string; solved: number; unassisted: number; reviews: number; active_days: number; attempted: number; weakest: { name: string; misses: number } | null }>("GET", "/week-summary"),
+  bulkSolved: (body: { numbers: number[]; date?: string | null; dry_run?: boolean }) =>
+    request<{ matched: { number: number; id: string; title: string }[]; already_logged: { number: number; title: string }[]; unknown: number[]; attempts: number[]; date: string }>("POST", "/dsa/bulk-solved", body),
+  bulkSolvedUndo: (attempts: number[]) => request<{ removed: number }>("POST", "/dsa/bulk-solved/undo", { attempts }),
+  feed: () => request<{ path: string | null }>("GET", "/feed"),
+  makeFeed: () => request<{ path: string }>("POST", "/feed"),
   setWhy: (id: string, why: string) => request<{ id: string; why: string }>("POST", `/dsa/problems/${id}/why`, { why }),
   day: (date: string) => request<{ date: string; solves: { problem_id: string; title: string; slug: string | null; kind: string; assisted: boolean; at: string }[] }>("GET", `/day/${date}`),
   undoDsa: (id: string) => request<{ id: string; undone: boolean }>("POST", `/dsa/problems/${id}/undo`),

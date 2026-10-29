@@ -24,7 +24,10 @@ import { KitPage } from "./pages/KitPage";
 import { ToastHost } from "./components/toasts";
 import { hydratePrefs } from "./prefs";
 import { ShortcutHelp } from "./components/ShortcutHelp";
+import { WhatsNewToast } from "./components/WhatsNewToast";
+import { WelcomeBack } from "./components/WelcomeBack";
 import { SettingsPage } from "./pages/SettingsPage";
+import { LogPage } from "./pages/LogPage";
 import "./styles/design.css";
 import "./styles/app.css";
 import "./styles/catalog.css";
@@ -50,6 +53,8 @@ const rootRoute = createRootRoute({
       <Outlet />
       <ToastHost />
       <ShortcutHelp />
+      <WhatsNewToast />
+      <WelcomeBack />
     </>
   ),
 });
@@ -140,6 +145,7 @@ const routes = [
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/kit", component: KitPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/log", component: LogPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

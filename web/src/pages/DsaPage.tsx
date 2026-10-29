@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { getPref, setPref } from "../prefs";
 import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
 import { PracticeRow } from "./PracticePage";
@@ -167,6 +168,7 @@ export function DsaPage() {
 
           <div className="s-main">
             <div className="cat-main">
+              <WeeklySummary today={o.today} />
               <NextUp o={o} streak={activity.data?.streak ?? 0} />
               <Goals o={o} f={f} setList={(list) => update({ list })} />
               <div className="s-tools s-rv" style={rise(5).style}>
@@ -339,6 +341,33 @@ function Goals({ o, f, setList }: { o: DsaOverview; f: Filters; setList: (l: Lis
         );
       })}
     </section>
+  );
+}
+
+/** On Monday: how last week went, from data already stored. Closed once for the week (remembered). */
+function WeeklySummary({ today }: { today: string }) {
+  const monday = new Date(`${today}T00:00`).getDay() === 1;
+  const [seen, setSeen] = useState(() => getPref("weekly.seen", ""));
+  const q = useQuery({ queryKey: ["week-summary", today], queryFn: api.weekSummary, enabled: monday && seen !== today });
+  const w = q.data;
+  if (!monday || seen === today || !w || (w.solved === 0 && w.attempted === 0)) return null;
+  const close = () => {
+    setSeen(today);
+    setPref("weekly.seen", today);
+  };
+  return (
+    <article className="s-card d-week" aria-label="Last week">
+      <div className="d-week-h">
+        <span className="s-kick">LAST WEEK · {niceDate(w.from, today).toUpperCase()} TO {niceDate(w.to, today).toUpperCase()}</span>
+        <button className="pp-link" onClick={close}>Close</button>
+      </div>
+      <p>
+        You solved <b>{w.solved}</b> problem{w.solved === 1 ? "" : "s"} on <b>{w.active_days}</b> day{w.active_days === 1 ? "" : "s"}, <b>{w.unassisted}</b> on your own
+        {w.reviews ? <>, and kept <b>{w.reviews}</b> review{w.reviews === 1 ? "" : "s"}</> : null}.
+        {w.attempted ? <> {w.attempted} attempt{w.attempted === 1 ? "" : "s"} did not solve.</> : null}
+        {w.weakest ? <> The topic that took the most help or misses was <b>{w.weakest.name}</b>.</> : null}
+      </p>
+    </article>
   );
 }
 

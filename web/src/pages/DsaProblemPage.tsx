@@ -11,6 +11,7 @@ import { FocusTimer } from "../components/FocusTimer";
 import { getPref, setPref } from "../prefs";
 import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
 
+const DIFFS = ["easy", "medium", "hard"];
 const LIST_NAME = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "NeetCode All", practice: "Practice" };
 const SAME_IDEA_SHOWN = 7;
 /** The four log tiles: short labels, since each one also says when the problem comes back. */
@@ -473,6 +474,24 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                             )}
                         </div>
                     )}
+
+                    {p.premium && (() => {
+                        const free = (technique ? o.problems.filter((x) => x.technique === technique.id && !x.premium && x.id !== p.id) : o.problems.filter((x) => x.pattern === p.pattern && !x.premium && x.id !== p.id)).sort((a, b) => Math.abs(DIFFS.indexOf(a.difficulty) - DIFFS.indexOf(p.difficulty)) - Math.abs(DIFFS.indexOf(b.difficulty) - DIFFS.indexOf(p.difficulty)) || a.order - b.order).slice(0, 3);
+                        return free.length ? (
+                            <div className="pp-card">
+                                <h3><span>FREE INSTEAD</span><span>same idea, no Premium</span></h3>
+                                <div className="pp-rel">
+                                    {free.map((x) => (
+                                        <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }}>
+                                            <i className={dotOf(x)} />
+                                            <span>{x.title}</span>
+                                            <small>{DIFF[x.difficulty][0][0]}</small>
+                                        </Link>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null;
+                    })()}
 
                     <NotesLink id={p.id} />
 

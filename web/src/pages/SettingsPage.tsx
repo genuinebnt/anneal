@@ -7,12 +7,91 @@ import { Skeleton } from "../components/Skeleton";
 import { getPref, setPref } from "../prefs";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
+import { WHATS_NEW } from "../whatsnew";
 
 /** The keys of every query that shows a count, so a change to what counts is seen everywhere at once. */
 const COUNT_KEYS = ["settings", "dsa", "dsa-row", "tracks", "progress", "activity", "stats", "reviews", "dsa-review", "practice"];
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
     return <button role="switch" aria-checked={on} aria-label={label} className="st-sw st-ctl" onClick={() => onChange(!on)} />;
+}
+
+/** A calendar address for a phone: the reviews that fall due and the weekly solve days. The address holds a random token; making a new one stops the old. */
+function FeedLink() {
+    const qc = useQueryClient();
+    const feed = useQuery({ queryKey: ["feed"], queryFn: api.feed });
+    const make = useMutation({ mutationFn: api.makeFeed, onSuccess: () => void qc.invalidateQueries({ queryKey: ["feed"] }) });
+    const [copied, setCopied] = useState(false);
+    const url = feed.data?.path ? `${location.origin}${feed.data.path}` : null;
+    return (
+        <div className="st-row">
+            <b>Calendar link</b>
+            <p>Subscribe in your phone's calendar app to see which days reviews are due and which are solve days. Anyone with the link can see problem titles and dates, so keep it private; making a new link stops the old one.</p>
+            <div className="st-ctl st-actions">
+                {url && (
+                    <>
+                        <input className="st-date" style={{ width: 220 }} readOnly value={url} aria-label="Calendar link" onFocus={(e) => e.currentTarget.select()} />
+                        <button className="st-btn" onClick={() => void navigator.clipboard?.writeText(url).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); }, () => undefined)}>{copied ? "Copied" : "Copy"}</button>
+                    </>
+                )}
+                <button className="st-btn" disabled={make.isPending} onClick={() => make.mutate()}>{url ? "New link" : "Make a link"}</button>
+            </div>
+        </div>
+    );
+}
+
+/** Problems solved before anneal: paste their LeetCode numbers, see what would be marked, then mark them. They count as solved on a past day (so
+ *  today's activity and the streak are untouched) and start no reviews; the whole batch can be taken back. */
+function BulkSolved() {
+    const qc = useQueryClient();
+    const [text, setText] = useState("");
+    const [date, setDate] = useState("");
+    const [result, setResult] = useState<Awaited<ReturnType<typeof api.bulkSolved>> | null>(null);
+    const [done, setDone] = useState<{ attempts: number[]; n: number } | null>(null);
+    const [message, setMessage] = useState<string | null>(null);
+    const numbers = [...new Set((text.match(/\d+/g) ?? []).map(Number))];
+    const refresh = () => COUNT_KEYS.forEach((k) => void qc.invalidateQueries({ queryKey: [k] }));
+    const check = useMutation({ mutationFn: () => api.bulkSolved({ numbers, date: date || null, dry_run: true }), onSuccess: (r) => { setResult(r); setMessage(null); }, onError: (e: Error) => setMessage(e.message) });
+    const mark = useMutation({
+        mutationFn: () => api.bulkSolved({ numbers, date: date || null }),
+        onSuccess: (r) => {
+            setDone({ attempts: r.attempts, n: r.attempts.length });
+            setResult(null);
+            setMessage(`Marked ${r.attempts.length} problem${r.attempts.length === 1 ? "" : "s"} as solved on ${r.date}.`);
+            refresh();
+        },
+        onError: (e: Error) => setMessage(e.message),
+    });
+    const undo = useMutation({
+        mutationFn: () => api.bulkSolvedUndo(done?.attempts ?? []),
+        onSuccess: (r) => { setDone(null); setMessage(`Took back ${r.removed}.`); refresh(); },
+        onError: (e: Error) => setMessage(e.message),
+    });
+    return (
+        <section className="st-card" aria-labelledby="st-bulk">
+            <h2 id="st-bulk">ALREADY SOLVED BEFORE ANNEAL</h2>
+            <p className="rempty" style={{ margin: 0 }}>Paste LeetCode problem numbers (commas, spaces or lines). They are marked solved on a past day, so today's activity and your streak do not change, and no review is started. A problem you already logged here is left alone.</p>
+            <textarea id="st-bulk-numbers" className="st-ta" rows={3} placeholder="1, 49, 128, 217 …" value={text} onChange={(e) => { setText(e.target.value); setResult(null); }} aria-label="LeetCode problem numbers" />
+            <div className="st-row">
+                <b>Solved on</b>
+                <p>Leave empty for "before anneal" (1 January 2020).</p>
+                <input id="st-bulk-date" className="st-date st-ctl" type="date" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)} aria-label="Day they were solved" />
+            </div>
+            <div className="st-actions">
+                <button className="st-btn" disabled={!numbers.length || check.isPending} onClick={() => check.mutate()}>Check {numbers.length || ""} number{numbers.length === 1 ? "" : "s"}</button>
+                {result && result.matched.length > 0 && <button className="st-btn" disabled={mark.isPending} onClick={() => mark.mutate()}>Mark {result.matched.length} as solved</button>}
+                {done && <button className="st-btn" disabled={undo.isPending} onClick={() => undo.mutate()}>Undo this batch ({done.n})</button>}
+            </div>
+            {result && (
+                <div className="st-note">
+                    <b>{result.matched.length}</b> would be marked{result.matched.length ? `: ${result.matched.slice(0, 8).map((m) => m.title).join(", ")}${result.matched.length > 8 ? ` and ${result.matched.length - 8} more` : ""}` : ""}.
+                    {result.already_logged.length ? <> {result.already_logged.length} already logged, left alone.</> : null}
+                    {result.unknown.length ? <> Not in anneal: {result.unknown.slice(0, 10).join(", ")}{result.unknown.length > 10 ? "…" : ""}.</> : null}
+                </div>
+            )}
+            {message && <span className={message.startsWith("Marked") || message.startsWith("Took") ? "st-ok" : "st-bad"} role="status">{message}</span>}
+        </section>
+    );
 }
 
 /** One place for the switches that change what anneal counts and shows. Everything here is kept on the server. */
@@ -131,6 +210,22 @@ export function SettingsPage() {
                                 </div>
                             </section>
 
+                            <section className="st-card" id="new" aria-labelledby="st-new">
+                                <h2 id="st-new">WHAT'S NEW</h2>
+                                {WHATS_NEW.map((e) => (
+                                    <div key={e.id} className="st-new">
+                                        <b>{e.title}</b> <small>{e.date}</small>
+                                        <ul>
+                                            {e.items.map((t) => (
+                                                <li key={t}>{t}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                ))}
+                            </section>
+
+                            <BulkSolved />
+
                             <section className="st-card" aria-labelledby="st-data">
                                 <h2 id="st-data">YOUR DATA</h2>
                                 <div className="st-row">
@@ -146,6 +241,7 @@ export function SettingsPage() {
                                         <button className="st-btn" disabled={doImport.isPending} onClick={() => file.current?.click()}>{doImport.isPending ? "Importing…" : "Choose a file"}</button>
                                     </div>
                                 </div>
+                                <FeedLink />
                                 {imported && <span className={imported.startsWith("Couldn't") ? "st-bad" : "st-ok"} role="status">{imported}</span>}
                                 <p className="rempty" style={{ margin: 0 }}>A reset or a deleted solution is archived first and kept forever, and the production database is backed up before every deploy.</p>
                             </section>

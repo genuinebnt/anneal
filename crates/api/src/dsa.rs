@@ -408,6 +408,60 @@ pub async fn why(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     Ok(Json(serde_json::json!({ "id": id, "why": body.why })))
 }
 
+#[derive(Deserialize)]
+pub struct BulkBody {
+    /// LeetCode problem numbers.
+    numbers: Vec<u32>,
+    /// The day to record them as solved on. Defaults to 2020-01-01, "before anneal", so they never touch today's activity or the streak.
+    date: Option<NaiveDate>,
+    /// Only report what would be marked.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /api/dsa/bulk-solved`: marks problems solved before anneal existed, by LeetCode number. Each becomes one attempt solved on a
+/// past day with no review scheduled (log one normally later to start its reviews); a problem that already has anything logged is left
+/// alone. With `dry_run` it only reports. The attempts are returned so `POST .../bulk-solved/undo` can take exactly them back.
+pub async fn bulk_solved(State(s): State<AppState>, Json(body): Json<BulkBody>) -> ApiResult<Json<serde_json::Value>> {
+    if body.numbers.len() > 2000 {
+        return Err(ApiError::BadRequest("at most 2000 numbers at a time".into()));
+    }
+    let date = body.date.unwrap_or_else(|| NaiveDate::from_ymd_opt(2020, 1, 1).expect("a valid date"));
+    if date > crate::activity::today() {
+        return Err(ApiError::BadRequest("the day must not be in the future".into()));
+    }
+    let by_number: HashMap<u32, (&str, &str)> = dsa_tracks(&s.catalog).flat_map(|t| t.problems.iter()).map(|p| (dsa_of(p).number, (p.id.as_str(), p.meta.title.as_str()))).collect();
+    let logged: std::collections::HashSet<String> = store::attempted_dsa(&s.db).await?.into_iter().collect();
+    let (mut matched, mut already, mut unknown) = (Vec::new(), Vec::new(), Vec::new());
+    let mut seen = std::collections::HashSet::new();
+    for n in &body.numbers {
+        if !seen.insert(*n) {
+            continue;
+        }
+        match by_number.get(n) {
+            None => unknown.push(*n),
+            Some((id, title)) if logged.contains(*id) => already.push(serde_json::json!({ "number": n, "id": id, "title": title })),
+            Some((id, title)) => matched.push(serde_json::json!({ "number": n, "id": id, "title": title })),
+        }
+    }
+    let mut attempts = Vec::new();
+    if !body.dry_run {
+        attempts = store::mark_solved_before(&s.db, &matched.iter().filter_map(|m| m["id"].as_str().map(str::to_owned)).collect::<Vec<_>>(), date).await?;
+    }
+    Ok(Json(serde_json::json!({ "matched": matched, "already_logged": already, "unknown": unknown, "attempts": attempts, "date": date })))
+}
+
+#[derive(Deserialize)]
+pub struct BulkUndoBody {
+    attempts: Vec<i64>,
+}
+
+/// `POST /api/dsa/bulk-solved/undo`: takes back a bulk mark. Only the listed attempts that are still plain solved attempts go, and they are
+/// archived first.
+pub async fn bulk_solved_undo(State(s): State<AppState>, Json(body): Json<BulkUndoBody>) -> ApiResult<Json<serde_json::Value>> {
+    Ok(Json(serde_json::json!({ "removed": store::unmark_solved_before(&s.db, &body.attempts).await? })))
+}
+
 /// Takes back the latest log of a problem (the review goes back as it was). `undone` is false when it cannot be done.
 pub async fn undo(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
     let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
