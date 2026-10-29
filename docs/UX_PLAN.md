@@ -1,6 +1,6 @@
 # UX plan: ideas waiting for the owner's pick
 
-Status: **proposed 2026-10-29, nothing here is built.** The owner picks the order; per CLAUDE.md, new screens and big UI changes get an
+Status: **planning, 2026-10-29. Nothing here is built.** The owner said yes to every item below ("add all") and asked for more ideas (section 6); the order and the two open decisions (4.1, 4.3) are still to settle before any build. per CLAUDE.md, new screens and big UI changes get an
 HTML mockup and approval first. Effort: S under an hour, M a few hours, L a day or more. Each item says what was seen, so a later agent
 does not have to rediscover it. Screens were checked at 1440x900 against a throwaway database on 2026-10-29.
 
@@ -43,9 +43,9 @@ sort, "Review ahead", the manual timer and the four grades.
 
 | # | Item | Effort | Note |
 |---|---|---|---|
-| 4.1 | **Bottom status bar**: it scrolls text off the right edge ("FINISH AT THIS", "PROBLEMS" clipped), repeats the streak and solved counts the header already shows, and covers 30px of every page | S | Options: drop the duplicates, or let the owner hide it (a setting). Recommended: drop the duplicates and keep what only it shows (reviews due, today, next up, pace). |
+| 4.1 | **Bottom status bar** | S | **Corrected:** it is a deliberate slow ticker that pauses under the pointer (`StatsBar.tsx`), so text leaving the right edge is by design, not clipping. What is left to decide: it repeats the streak the header already shows, and it covers 30px of every page. Options: (a) leave it, (b) drop the repeated streak item, (c) a small hide/show choice remembered in the browser. **Owner to choose.** |
 | 4.2 | Smaller page headlines | S | Plan, Progress, Patterns, Rust and the DSA home spend 150-250px on a headline before any tool. A compact variant (or one-line title) on the working pages (Plan, Calendar, Review, Progress) and keep the big one on the two home pages. |
-| 4.3 | Streaks disagree | M | **Needs the owner's decision.** The header streak (`activity::streak`) counts consecutive days with a solve, so a planned rest day breaks it; the calendar's streak (`calendar.rs`) skips planned rest and practice days. Pick one rule and use it everywhere. Recommended: the calendar's (a planned rest day does not break it). |
+| 4.3 | Two different streaks | M | **Owner to choose; read this first.** The header and bottom bar show a *solve streak* (`activity::streak`: consecutive days with at least one solve, so a planned rest day breaks it). The calendar's History shows a *plan streak* (`calendar.rs`: days since tracking began until a planned solve day was missed, rest and practice days do not break it and are counted). They are different measures with the same name. Options: (a) keep both and label them ("solve streak", "plan streak"); (b) make the header plan-aware: count consecutive *planned solve days* that were kept, skipping rest days without counting them; (c) leave as is. Recommended: (b), because a streak that breaks on a day the plan says to rest punishes the plan. It changes a number on the live site, so it needs the owner's word. |
 | 4.4 | Progress heatmap month labels collide ("OctNov" at the left) | S | Skip the label when the gap is under two columns. |
 | 4.5 | Calendar targets: native `dd/mm/yyyy` date boxes and names cut to "Arrays &...", "Two Poi..." | S | Wider name column; a compact date picker in the app's own style. |
 | 4.6 | Command palette actions (`Cmd K`): "log two sum on my own", "open review", "start timer" | M | The palette already searches tracks, stages and problems; add verbs. |
@@ -58,10 +58,27 @@ sort, "Review ahead", the manual timer and the four grades.
 | 5.2 | Weak spots: a review mode over problems with two or more lapses or the lowest recall | M | `lapses` and recall are already stored per review. |
 | 5.3 | The designed but unbuilt **Today** screen (see HANDOFF.md, `anneal-screens.html`): reviews due, the next problem, the timer, the week | L | Mockup exists; the home's Next up card is most of it. |
 
+## 6. More ideas (second round, 2026-10-29)
+
+| # | Item | Effort | Note |
+|---|---|---|---|
+| 6.1 | **Safety net for Reset**: keep what Reset deletes in an archive table for 30 days, with a Restore link in the toast | M | Reset is the one action that destroys logged data. Undo covers a log; nothing covers a reset after the confirm. |
+| 6.2 | Import for the data export (5.1), so a backup can be restored | S | Only after 5.1. |
+| 6.3 | Shortcut help overlay on `?` listing every key of every page | S | Pairs with 1.4 and 2.2. |
+| 6.4 | Focus timer defaults to the problem's time estimate (~25 / 45 / 60 min) in Timer mode | S | The estimate is already on every card; today the timer is 25 min Pomodoro whatever the problem. Still never starts by itself. |
+| 6.5 | Daily goal ring in the header: today's solves and reviews done against the plan | S | The plan already knows what today is (solve, practice, rest) and its capacity. |
+| 6.6 | Heatmap: click a day to see what was solved or reviewed that day | M | Today only a hover count. |
+| 6.7 | Optional "why" chip when logging Attempted or With help: idea, implementation, edge cases, complexity | M | One click, skippable, off by default. Feeds 5.2 (weak spots) and fills the gap PROGRESS.md names (no learning signal). Not a notes field; the owner keeps their own notes. |
+| 6.8 | Log from a phone: installable app (PWA) with a one-screen "log a problem" (search, tap the outcome) | M | The owner solves on LeetCode, often away from the laptop; the header already has a mobile dock. Mockup first. |
+| 6.9 | Loading skeletons in place of the plain "Loading..." text | S | Visible on the Review, problem and Progress pages. |
+| 6.10 | Interview-company mode: pick a company and a date, the plan prefers its recent problems | L | Companies and "recent" flags already exist on every problem; needs the planner to take a weight. Mockup first. |
+| 6.11 | Accessibility pass: focus rings, tab order on the new Review queue, contrast of the dim text in light theme | S | Do alongside the Review rebuild. |
+
 ## Suggested order
 
-1. 4.1 and 4.4 (small, visible everywhere), then 5.1.
-2. Decide 4.3 (streak rule), then build it.
-3. Review rebuild (section 1), after the owner approves the mockup with 1.6 in it.
-4. 2.1 and 2.2, then 3.1 and 3.2 (needs a home mockup).
-5. The rest by the owner's taste.
+1. Owner settles the two open decisions: 4.1 (status bar) and 4.3 (streak).
+2. Mockups: Review page (with 1.6, the session strip) and the DSA home (3.1). Nothing is built before they are approved.
+3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together).
+4. Review rebuild (section 1, with 6.3 and 6.11), then the problem page (2.1, 2.2, 6.4), then the DSA home (3.1, 3.2).
+5. 6.5, 6.6, 5.2 and 6.7 together (what you did today, where you are weak), then 4.6.
+6. Largest last: 5.3 (Today screen), 6.8 (phone), 6.10 (company mode).
