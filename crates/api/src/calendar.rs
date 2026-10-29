@@ -626,7 +626,7 @@ pub async fn delete(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
     if let Some(plan) = book.list.iter().find(|p| p.id == id) {
         sqlx::query("INSERT INTO data_archive (source, table_name, rows) VALUES ('delete_plan', 'plans', $1)").bind(sqlx::types::Json(serde_json::json!([plan]))).execute(&mut *tx).await?;
     }
-    crate::store::archive_rows(&mut tx, "delete_plan", "plan_overrides", "plan_id", &[id.clone()]).await?;
+    crate::store::archive_rows(&mut tx, "delete_plan", "plan_overrides", "plan_id", std::slice::from_ref(&id)).await?;
     tx.commit().await?;
     book.list.retain(|p| p.id != id);
     if book.active == id {
