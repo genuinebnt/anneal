@@ -97,7 +97,10 @@ pub async fn update(State(s): State<AppState>, Path(sid): Path<i64>, Json(body):
 }
 
 pub async fn delete(State(s): State<AppState>, Path(sid): Path<i64>) -> ApiResult<Json<serde_json::Value>> {
-    let gone = sqlx::query("DELETE FROM dsa_solutions WHERE id = $1").bind(sid).execute(&s.db).await?.rows_affected();
+    let mut tx = s.db.begin().await?;
+    crate::store::archive_rows(&mut tx, "delete_solution", "dsa_solutions", "id", &[sid.to_string()]).await?;
+    let gone = sqlx::query("DELETE FROM dsa_solutions WHERE id = $1").bind(sid).execute(&mut *tx).await?.rows_affected();
+    tx.commit().await?;
     if gone == 0 {
         return Err(ApiError::NotFound(format!("solution {sid}")));
     }

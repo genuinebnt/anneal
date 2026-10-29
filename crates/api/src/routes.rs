@@ -117,6 +117,10 @@ pub async fn reset_track(State(s): State<AppState>, Path(slug): Path<String>) ->
     let t = s.catalog.track(&slug).ok_or_else(|| ApiError::NotFound(format!("track {slug}")))?;
     let ids: Vec<String> = t.problems.iter().map(|p| p.id.clone()).collect();
     let mut tx = s.db.begin().await?;
+    let source = format!("reset_track:{slug}");
+    for table in ["runs", "attempts", "drafts", "scratch", "reviews", "focus_time"] {
+        store::archive_rows(&mut tx, &source, table, "problem_id", &ids).await?;
+    }
     let attempts = sqlx::query("DELETE FROM attempts WHERE problem_id = ANY($1)").bind(&ids).execute(&mut *tx).await?.rows_affected();
     let drafts = sqlx::query("DELETE FROM drafts WHERE problem_id = ANY($1)").bind(&ids).execute(&mut *tx).await?.rows_affected();
     sqlx::query("DELETE FROM scratch WHERE problem_id = ANY($1)").bind(&ids).execute(&mut *tx).await?;

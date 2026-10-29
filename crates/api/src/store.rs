@@ -143,10 +143,13 @@ pub async fn save_draft(db: &PgPool, problem_id: &str, code: &str) -> sqlx::Resu
 }
 
 pub async fn delete_draft(db: &PgPool, problem_id: &str) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    archive_rows(&mut tx, "discard_draft", "drafts", "problem_id", &[problem_id.to_owned()]).await?;
     sqlx::query("DELETE FROM drafts WHERE problem_id = $1")
         .bind(problem_id)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -193,6 +196,7 @@ pub async fn start_resolve(db: &PgPool, problem_id: &str) -> sqlx::Result<()> {
         .bind(problem_id)
         .execute(&mut *tx)
         .await?;
+    archive_rows(&mut tx, "start_resolve", "drafts", "problem_id", &[problem_id.to_owned()]).await?;
     sqlx::query("DELETE FROM drafts WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
     tx.commit().await
 }
@@ -349,6 +353,27 @@ pub async fn attempt_history(db: &PgPool, problem_id: &str) -> sqlx::Result<Vec<
         .bind(problem_id)
         .fetch_all(db)
         .await
+}
+
+/// Copies the rows a delete is about to remove into `data_archive` (which nothing deletes from), in the caller's
+/// transaction. `column` is cast to text, so it can be a text or integer key; `keys` are the values to match. A delete
+/// of anything the owner made goes through this first, so it can always be recovered with SQL.
+pub async fn archive_rows(tx: &mut sqlx::PgConnection, source: &str, table: &'static str, column: &'static str, keys: &[String]) -> sqlx::Result<()> {
+    let sql = format!("INSERT INTO data_archive (source, table_name, rows) SELECT $1, '{table}', jsonb_agg(to_jsonb(t)) FROM {table} t WHERE t.{column}::text = ANY($2) HAVING count(*) > 0");
+    sqlx::query(&sql).bind(source).bind(keys).execute(tx).await?;
+    Ok(())
+}
+
+/// Like [`archive_rows`] for the course tables, which are keyed by course and, for stage tables, by stage id.
+pub async fn archive_course_rows(tx: &mut sqlx::PgConnection, source: &str, table: &'static str, course: &str, stages: Option<&[String]>) -> sqlx::Result<()> {
+    let filter = if stages.is_some() { "t.course = $2 AND t.stage_id = ANY($3)" } else { "t.course = $2" };
+    let sql = format!("INSERT INTO data_archive (source, table_name, rows) SELECT $1, '{table}', jsonb_agg(to_jsonb(t)) FROM {table} t WHERE {filter} HAVING count(*) > 0");
+    let q = sqlx::query(&sql).bind(source).bind(course);
+    match stages {
+        Some(ids) => q.bind(ids).execute(tx).await?,
+        None => q.execute(tx).await?,
+    };
+    Ok(())
 }
 
 /// What undoing a problem's latest log changes besides deleting that attempt.

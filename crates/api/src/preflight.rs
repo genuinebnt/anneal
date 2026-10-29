@@ -32,6 +32,8 @@ pub async fn apply_renames(db: &PgPool, catalog: &Catalog) -> sqlx::Result<u64> 
                  AND NOT EXISTS (SELECT 1 FROM {table} WHERE problem_id = $2)"
             );
             moved += sqlx::query(&q).bind(old).bind(new).execute(&mut *tx).await?.rows_affected();
+            // What did not move because the current problem already has a row is kept in the archive.
+            crate::store::archive_rows(&mut tx, "rename_conflict", table, "problem_id", &[old.to_string()]).await?;
             sqlx::query(&format!("DELETE FROM {table} WHERE problem_id = $1")).bind(old).execute(&mut *tx).await?;
         }
         // Focus time is per day: add the old seconds to the new problem's day.
@@ -60,7 +62,9 @@ pub async fn purge_retired(db: &PgPool, catalog: &Catalog) -> sqlx::Result<u64> 
     let ids: Vec<&str> = catalog.retired.iter().map(String::as_str).collect();
     let mut tx = db.begin().await?;
     let mut gone = 0;
+    let keys: Vec<String> = catalog.retired.iter().cloned().collect();
     for table in PROBLEM_TABLES {
+        crate::store::archive_rows(&mut tx, "purge_retired", table, "problem_id", &keys).await?;
         let q = format!("DELETE FROM {table} WHERE problem_id = ANY($1)");
         gone += sqlx::query(&q).bind(&ids).execute(&mut *tx).await?.rows_affected();
     }

@@ -421,6 +421,13 @@ pub async fn reset_progress(State(s): State<AppState>, Path(course): Path<String
         _ => return Err(ApiError::BadRequest("say what to reset: {\"all\": true}, {\"module\": \"1a\"} or {\"project\": 1}".into())),
     };
     let mut tx = s.db.begin().await?;
+    let source = format!("reset_course:{}", c.id);
+    for table in ["course_runs", "course_stage_state", "course_run_starts"] {
+        crate::store::archive_course_rows(&mut tx, &source, table, &c.id, Some(&ids)).await?;
+    }
+    if b.all {
+        crate::store::archive_course_rows(&mut tx, &source, "course_concept_state", &c.id, None).await?;
+    }
     let runs = sqlx::query("DELETE FROM course_runs WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?.rows_affected();
     let stages = sqlx::query("DELETE FROM course_stage_state WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?.rows_affected();
     sqlx::query("DELETE FROM course_run_starts WHERE course = $1 AND stage_id = ANY($2)").bind(&c.id).bind(&ids).execute(&mut *tx).await?;

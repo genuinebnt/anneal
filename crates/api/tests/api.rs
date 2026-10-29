@@ -1964,3 +1964,27 @@ async fn reset_archives_what_it_removes_and_restore_brings_it_back(db: PgPool) {
     assert_eq!(archive, (2, 1), "archives are never deleted");
     assert_eq!(call(&app, Method::DELETE, "/api/dsa/problems/lc-nothing/log", None).await.0, StatusCode::NOT_FOUND);
 }
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn deleting_something_the_owner_made_archives_it_first(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+
+    // A saved solution: deleting it keeps a copy of the code.
+    let (status, made) = call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/solutions", Some(json!({ "label": "mine", "code": "def f(): return 42", "notes": "n" }))).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let sid = made["id"].as_i64().unwrap();
+    assert_eq!(call(&app, Method::DELETE, &format!("/api/dsa/solutions/{sid}"), None).await.0, StatusCode::OK);
+    let kept: (String,) = sqlx::query_as("SELECT rows::text FROM data_archive WHERE source = 'delete_solution' AND table_name = 'dsa_solutions'").fetch_one(&db).await.unwrap();
+    assert!(kept.0.contains("def f(): return 42"), "{}", kept.0);
+
+    // A track reset: the attempts and the review are in the archive before they go.
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    let slug = o["patterns"][0]["slug"].as_str().unwrap().to_owned();
+    assert_eq!(call(&app, Method::POST, &format!("/api/tracks/{slug}/reset"), None).await.0, StatusCode::OK);
+    let live: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM attempts), (SELECT count(*) FROM reviews)").fetch_one(&db).await.unwrap();
+    assert_eq!(live, (0, 0));
+    let tables: Vec<(String,)> = sqlx::query_as("SELECT table_name FROM data_archive WHERE source = $1 ORDER BY table_name").bind(format!("reset_track:{slug}")).fetch_all(&db).await.unwrap();
+    assert_eq!(tables.into_iter().map(|t| t.0).collect::<Vec<_>>(), ["attempts", "reviews"]);
+}
