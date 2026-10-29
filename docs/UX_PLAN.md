@@ -93,7 +93,7 @@ sort, "Review ahead", the manual timer and the four grades.
 
 ## 8. More ideas (fourth round, 2026-10-29)
 
-New findings from the Mock interview and Courses screens, and from how the owner works (solves on LeetCode in another tab, with anneal open beside it).
+**Owner's picks from this round (2026-10-29): 8.1, 8.4, 8.5, 8.6, 8.8. Parked, not chosen: 8.2, 8.3, 8.7.** (8.3's DSA part is covered by section 9: with premium not counted, 143, 150 and 943 stop disagreeing; its Rust and course labels stay parked.) New findings from the Mock interview and Courses screens, and from how the owner works (solves on LeetCode in another tab, with anneal open beside it).
 
 | # | Item | Effort | Note |
 |---|---|---|---|
@@ -106,11 +106,37 @@ New findings from the Mock interview and Courses screens, and from how the owner
 | 8.7 | Bulk "mark as already solved" on the Problems page (tick several, one confirm, logged as On my own with today's date) | M | For problems the owner solved before anneal. Needs a decision: does it start reviews at once, or only mark the problem solved? Owner to choose. |
 | 8.8 | Keep the timer manual everywhere: opening a problem, clicking Solve on LeetCode or switching modes must not start it | S | A rule to keep, with an e2e test, since the owner has asked twice that nothing starts by itself. |
 
+## 9. Count premium problems or not (owner asked 2026-10-29)
+
+**Ask:** a setting, **default off (premium not counted)**. Progress bars and every number are affected.
+
+**What exists today.** One stored flag, `goal.free_only` (default `true`, so premium is already left out of the *goal*). The server uses it only for the goal list, the next-up queue and the plan (`dsa.rs`, `planner.rs`, `calendar.rs`); the plan page and the calendar's Scope box each have a "Premium problems: Left out / Included" switch bound to it. The DSA home has a separate view filter, "Hide LeetCode Premium". Everything else counts premium problems: track summaries and readiness, the Progress page, the goal cards on the home (150, 31 and 943), the hero counts, the pattern pages, the header chip (143 because it follows the goal) and the bottom bar. That is why the numbers disagree today.
+
+**Plan.**
+
+| # | Item | Effort | Note |
+|---|---|---|---|
+| 9.1 | One setting "Count premium problems", stored in the existing `goal.free_only` (inverted, so default off needs **no migration and no change to any stored data**) | M | The plan page and calendar switches stay and edit the same value; none is removed. |
+| 9.2 | Every total, solved count, percentage and bar respects it: goal cards, hero stats, header chip, bottom bar, track summaries and readiness, Progress page, pattern pages, activity week, Next up, plan and calendar (already) | L | Server side first (one helper that says whether a problem counts, used by `views`, `progress`, `activity`, `dsa`), then the web's own totals (`dsa.ts`, `DsaPage`, `PatternPage`, `PatternProblems`). Mock interview already never draws premium. |
+| 9.3 | Premium problems still appear in lists with the PREM badge and keep any progress already logged; they just are not counted. The home's "Hide LeetCode Premium" filter stays a view filter whose starting value follows the setting | S | Owner to confirm: not counted but still listed, or hidden when off? Assumed: listed. |
+| 9.4 | Switching shows what changes before it applies ("goal 150 -> 161, 4 premium solved would count") and never touches reviews, attempts or the plan's saved days | S | Reviews on a premium problem keep coming due either way; owner to confirm that is wanted. |
+| 9.5 | Free substitute: on a premium problem's page and card, link the closest free problem of the same technique | S | Techniques and problem lists already exist; no new data. |
+| 9.6 | A test pinning it: with the setting off, no premium problem is in any total on any endpoint; on, all are | M | Throwaway database, as always. |
+
+**Open questions for the owner.** (a) Listed but not counted, or hidden, when off (9.3)? (b) Do reviews of premium problems keep running (9.4)? (c) Where does the switch live: the plan page only, or the new Settings page (9.7)?
+
+| # | More ideas (fifth round) | Effort | Note |
+|---|---|---|---|
+| 9.7 | **One Settings page**: count premium (9.1), the status-bar choice (4.1), timer defaults (6.4), export and import (5.1, 6.2), theme, editor and Vim, retention and capacity (today in the plan page) | M | Settings are scattered: the plan page, the editor, the calendar. A single page is where the new switches belong. Mockup first. |
+| 9.8 | **Preferences that follow the owner across laptops**: timer lengths, sort choices, filters, the status-bar choice, stored on the server instead of in the browser | M | `prefs.ts` is browser-only, and the owner continues work on other laptops. |
+| 9.9 | Theme choice with a third option, "System" | S | The header toggle only flips dark and light. |
+| 9.10 | A "what changed" line after a deploy: the app shows once "New since you last visited: ..." from the commit titles | S | The owner ships after every batch and cannot tell what is live. |
+
 ## Suggested order
 
-1. Owner settles the two open decisions: 4.1 (status bar) and 4.3 (streak).
+1. Owner settles the open decisions: 4.1 (status bar), 4.3 (streak) and the three premium questions in section 9.
 2. Mockups: Review page (with 1.6, the session strip), the DSA home (3.1) and the welcome-back bar (8.2). Nothing is built before they are approved.
-3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together).
+3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together). **Premium counting (section 9) next, because it changes every number the other screens show**, then 9.7 (Settings page, mockup first).
 4. Review rebuild (section 1, with 6.3 and 6.11), then the problem page (2.1, 2.2, 6.4), then the DSA home (3.1, 3.2).
 5. 6.5, 6.6, 5.2 and 6.7 together (what you did today, where you are weak), then 4.6.
 6. Then the picked 7.x items: 7.3, 7.8, 7.9, 7.10 (small), 7.4, then 7.6. With 8.1, 8.3, 8.4, 8.6, 8.8 (small), then 8.2, 8.5, 8.7.
