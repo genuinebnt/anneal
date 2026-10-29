@@ -76,7 +76,7 @@ sort, "Review ahead", the manual timer and the four grades.
 
 ## 7. More ideas (third round, 2026-10-29)
 
-Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review, Rust home. **Not yet looked at:** the Rust workspace, course stage and concept pages, Mock interview, Pattern pages. Item 7.1 closes that gap.
+**Owner's picks from this round (2026-10-29): 7.3, 7.4, 7.6, 7.8, 7.9, 7.10. Parked, not chosen: 7.1, 7.2, 7.5, 7.7** (kept below so they are not lost). Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review, Rust home, Mock interview (setup screen), Courses home. Not looked at: the Rust workspace, course stage and concept pages, Pattern pages.
 
 | # | Item | Effort | Note |
 |---|---|---|---|
@@ -91,12 +91,27 @@ Pages looked at so far: DSA home, problem page, Plan, Calendar, Progress, Review
 | 7.9 | Per-pattern completion ring and a "next problem in this pattern" button on the pattern page | S | The problem page has previous and next already. |
 | 7.10 | A proper "not found" and error screen across the app (unknown problem, API down), with a way back | S | The problem page has one; confirm the others do. |
 
+## 8. More ideas (fourth round, 2026-10-29)
+
+New findings from the Mock interview and Courses screens, and from how the owner works (solves on LeetCode in another tab, with anneal open beside it).
+
+| # | Item | Effort | Note |
+|---|---|---|---|
+| 8.1 | **Timer visible from the LeetCode tab**: the page title shows the countdown (`24:10 · Two Sum`) while the focus timer runs, and an optional chime when a phase ends | S | The owner solves in another tab; today the timer ends silently where nobody is looking. The timer still never starts by itself. |
+| 8.2 | **Welcome back from LeetCode**: after "Solve on LeetCode" is clicked and the anneal tab regains focus, a slim bar asks "Done with <problem>? On my own / With help / Attempted / Instant" and can be dismissed | M | Uses the tab's visibility change and one remembered problem id in browser storage. It never logs by itself and never starts the timer. Same log buttons and Undo as everywhere. Mockup first. |
+| 8.3 | **One honest count, every area**: DSA says 143, 150 and 943; Rust says 197 (header chip) and 596 (hero); the course says 169 (header chip) and 317 (hero) | S | Extends 3.2. Say what each number counts ("169 core stages, 148 optional challenges"). |
+| 8.4 | Mock interview: **Start round visible without scrolling** (the summary card with the Start button runs below the fold at 1440x900) | S | Sticky summary card, or move Start up. |
+| 8.5 | Mock interview: a round history under the setup (date, shape, solved, time used against allowed) with a simple trend | M | The page says "0 rounds taken" but shows nothing of earlier rounds; verify what appears after one. |
+| 8.6 | Phone-width pass (390px) of Review, problem page, Home, Mock | S | Not looked at yet; relevant because of 6.8. |
+| 8.7 | Bulk "mark as already solved" on the Problems page (tick several, one confirm, logged as On my own with today's date) | M | For problems the owner solved before anneal. Needs a decision: does it start reviews at once, or only mark the problem solved? Owner to choose. |
+| 8.8 | Keep the timer manual everywhere: opening a problem, clicking Solve on LeetCode or switching modes must not start it | S | A rule to keep, with an e2e test, since the owner has asked twice that nothing starts by itself. |
+
 ## Suggested order
 
 1. Owner settles the two open decisions: 4.1 (status bar) and 4.3 (streak).
-2. Mockups: Review page (with 1.6, the session strip) and the DSA home (3.1). Nothing is built before they are approved. In parallel, 7.1 (the audit of the pages not yet looked at) so its findings can join the plan.
+2. Mockups: Review page (with 1.6, the session strip), the DSA home (3.1) and the welcome-back bar (8.2). Nothing is built before they are approved.
 3. Small fixes with no design question: 4.4, 4.5, 2.3, 6.9; then 5.1 with 6.2 and 6.1 (data safety together).
 4. Review rebuild (section 1, with 6.3 and 6.11), then the problem page (2.1, 2.2, 6.4), then the DSA home (3.1, 3.2).
 5. 6.5, 6.6, 5.2 and 6.7 together (what you did today, where you are weak), then 4.6.
-6. Then 7.2 to 7.5, 7.8 to 7.10 (small), then 7.6 and 7.7.
+6. Then the picked 7.x items: 7.3, 7.8, 7.9, 7.10 (small), 7.4, then 7.6. With 8.1, 8.3, 8.4, 8.6, 8.8 (small), then 8.2, 8.5, 8.7.
 7. Largest last: 5.3 (Today screen), 6.8 (phone), 6.10 (company mode).
