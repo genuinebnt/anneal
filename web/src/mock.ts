@@ -15,14 +15,14 @@ export const MOCK_LISTS: [string, string][] = [
 export const MOCK_STATUS: [MockConfig["status"], string, string][] = [
   ["all", "Everything", "Includes problems you have never opened."],
   ["unseen", "Not attempted yet", "Only problems with no log yet, so each one is new to you."],
-  ["attempted", "Attempted", "Problems you have logged at least once with any result, including ½ and ✗."],
+  ["attempted", "Attempted", "Problems you have logged at least once with any result, including with help and attempted."],
   ["solved", "Solved on my own", "Problems you have logged ✓ on your own. Good for checking you still can."],
   ["due", "Due for review", "Problems the review schedule says you should revisit now. A mock round doubles as an unassisted review."],
 ];
 
 export const FAVOUR: [MockConfig["favour"], string, string][] = [
   ["random", "Uniformly random", "Every problem that matches has the same chance."],
-  ["weak", "Favour my weak ones", "Problems you logged ½ or ✗, and ones overdue for review, are drawn about three times as often."],
+  ["weak", "Favour my weak ones", "Problems you logged with help or as attempted, and ones overdue for review, are drawn about three times as often."],
   ["asked", "Favour often-asked", "Problems asked by more of the selected companies are drawn more often."],
 ];
 

@@ -573,7 +573,7 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                 <p className="cap">{{ curriculum: "NeetCode's order, topic by topic, from where you started.", ramp: "Within each topic, easy before hard.", company: "By how often your chosen companies ask it, recent counting double.", important: "Core problems and the widely asked first." }[r.order]}</p>
             </Acc>
             <Acc id="targets" title="Targets" summary={`${nt ? `${nt} topic target${nt > 1 ? "s" : ""} · ` : ""}all by ${finishBy ? short(finishBy) : "—"}`} open={open} setOpen={setOpen}>
-                <div className="fl row1"><span>Everything done by</span><input type="date" value={finishBy} onChange={(e) => setRules((x) => ({ ...x, finish_by: e.target.value || null }), "Final target")} /></div>
+                <div className="fl row1"><span>Everything done by</span><input type="date" aria-label="Everything done by" value={finishBy} onChange={(e) => setRules((x) => ({ ...x, finish_by: e.target.value || null }), "Final target")} /></div>
                 <div className="c-trs">
                     {rows.map((t, i) => (
                         <div key={t.id} className={`c-tr${t.status ? "" : " dim"}`}>

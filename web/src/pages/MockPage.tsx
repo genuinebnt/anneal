@@ -551,7 +551,7 @@ function describe(c: MockConfig, data: MockData): string {
     return parts.join(" · ");
 }
 
-const glyphOf = (g: Grade | null) => (g === "good" || g === "easy" ? "✓" : g === "hard" ? "½" : g === "again" ? "✗" : "–");
+const glyphOf = (g: Grade | null) => (g === "good" ? "✓" : g === "easy" ? "⚡" : g === "hard" ? "½" : g === "again" ? "!" : "–");
 
 // ---------------------------------------------------------------- live
 
@@ -753,7 +753,7 @@ function Live({ data, round, update, onFinish }: { data: MockData; round: Round;
                     <section className="mi-card">
                         <h3 className="mi-h3"><span>LOG PROBLEM {index + 1}</span><em>same as a normal attempt</em></h3>
                         <div className="mi-log3">
-                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "✗", "not yet", "no"]] as const).map(([g, glyph, label, cls]) => (
+                            {([["good", "✓", "on my own", "ok"], ["hard", "½", "with help", "half"], ["again", "!", "attempted", "no"], ["easy", "⚡", "instant", "fast"]] as const).map(([g, glyph, label, cls]) => (
                                 <button key={g} className={`lg ${cls}${mark?.grade === g && logged ? " on" : ""}`} disabled={logged || busy} onClick={() => void log(g)}>
                                     <b>{glyph}</b><span>{label}</span>
                                 </button>
@@ -810,7 +810,7 @@ function Result({ data, round, onAgain, onChange }: { data: MockData; round: Rou
     const pace = items.reduce((n, it) => n + suggested(c, byId.get(it.id)?.difficulty ?? "medium"), 0);
     const diff = seconds - pace;
     const spare = c.format === "total" ? c.total * 60 - seconds : null;
-    const parts = [own ? `${own} solved on your own` : "", help ? `${help} with help` : "", failed ? `${failed} not yet` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean);
+    const parts = [own ? `${own} solved on your own` : "", help ? `${help} with help` : "", failed ? `${failed} attempted` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean);
     const C = 2 * Math.PI * 62;
     return (
         <div className="mi-wrap">
@@ -837,7 +837,7 @@ function Result({ data, round, onAgain, onChange }: { data: MockData; round: Rou
 
             <div className="mi-stats">
                 <div className="stat"><small>TIME USED</small><b>{mmss(seconds)}</b><span>{c.format === "total" ? `of ${mmss(c.total * 60)}` : c.format === "per" ? "per-problem countdowns" : "stopwatch"}</span></div>
-                <div className="stat"><small>SOLVED ON MY OWN</small><b>{own} / {items.length}</b><span>{help} with help, {failed} not yet{skipped ? `, ${skipped} skipped` : ""}</span></div>
+                <div className="stat"><small>SOLVED ON MY OWN</small><b>{own} / {items.length}</b><span>{help} with help, {failed} attempted{skipped ? `, ${skipped} skipped` : ""}</span></div>
                 <div className="stat"><small>AGAINST SUGGESTED</small><b style={{ color: diff <= 0 ? "var(--grn)" : "var(--warn)" }}>{diff <= 0 ? "−" : "+"}{mmss(Math.abs(diff))}</b><span>{mmss(pace)} suggested in all</span></div>
                 <div className="stat"><small>SETTINGS</small><b style={{ fontSize: 16, paddingTop: 6 }}>{c.strict ? "strict" : "pausable"} · {c.blind ? "blind" : "open"}</b><span>{c.favour === "random" ? "uniform draw" : c.favour === "weak" ? "favoured weak ones" : "favoured often-asked"}</span></div>
             </div>
@@ -872,7 +872,7 @@ function Result({ data, round, onAgain, onChange }: { data: MockData; round: Rou
                 <button className="mi-go wide" onClick={onAgain}>Another round, same settings →</button>
                 <button className="mi-ghost tall" onClick={onChange}>Change settings</button>
             </div>
-            <p className="mi-note">Problems you logged ½ or ✗ become more likely when you choose "Favour my weak ones".</p>
+            <p className="mi-note">Problems you logged with help or as attempted become more likely when you choose "Favour my weak ones".</p>
         </div>
     );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
@@ -100,6 +100,15 @@ function Loaded({ p }: { p: ProblemDetail }) {
   const [consoleH, setConsoleH] = useStoredNumber("anneal-console-height", 260);
   const [leftW, setLeftW] = useStoredNumber("anneal-left-width", 360);
   const [rightW, setRightW] = useStoredNumber("anneal-right-width", 340);
+  // Under 900 px the panes (problem, code, tests) are shown one at a time, whatever the saved layout says.
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 900px)").matches);
+  useEffect(() => {
+    const m = window.matchMedia("(max-width: 900px)");
+    const f = () => setNarrow(m.matches);
+    m.addEventListener("change", f);
+    return () => m.removeEventListener("change", f);
+  }, []);
+  const [mobilePane, setMobilePane] = useState<"l" | "c" | "r">("l");
   const [leftOpen, setLeftOpen] = useStoredNumber("anneal-left-open", 1);
   const [rightOpen, setRightOpen] = useStoredNumber("anneal-right-open", 1);
   const [file, setFile] = useState<"lib" | "main" | "tests" | "hidden" | "solution">("lib");
@@ -400,9 +409,15 @@ function Loaded({ p }: { p: ProblemDetail }) {
           </div>
         </div>
 
-        <div className="ws" style={{ gridTemplateColumns: [leftOpen ? `${leftW}px` : "", "minmax(0, 1fr)", rightOpen ? `${rightW}px` : ""].join(" ").trim() }}>
+        {/* on a phone the three panes are one at a time */}
+        <div className="ws-tabs" role="tablist" aria-label="Workspace">
+          {([["l", "Problem"], ["c", "Code"], ["r", "Tests"]] as const).map(([k, label]) => (
+            <button key={k} role="tab" aria-selected={mobilePane === k} className={mobilePane === k ? "on" : ""} onClick={() => setMobilePane(k)}>{label}</button>
+          ))}
+        </div>
+        <div className="ws" data-pane={mobilePane} style={{ "--cols": [leftOpen ? `${leftW}px` : "", "minmax(0, 1fr)", rightOpen ? `${rightW}px` : ""].join(" ").trim() } as CSSProperties}>
           {/* ---------- left: problem, hints, solution ---------- */}
-          {leftOpen ? (
+          {leftOpen || narrow ? (
             <section className="pane l">
               <div className="lgrip" onPointerDown={(e) => dragWidth(e, leftW, setLeftW, 1)} title="Drag to resize" aria-hidden="true" />
               <div className="tabs" role="tablist">
@@ -840,7 +855,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
             </Console>
           </section>
 
-          {rightOpen ? (
+          {rightOpen || narrow ? (
             <section className="pane r">
               <div className="rgrip" onPointerDown={(e) => dragWidth(e, rightW, setRightW, -1)} title="Drag to resize" aria-hidden="true" />
               <div className="tabs" style={{ padding: "0 18px" }} role="tablist">

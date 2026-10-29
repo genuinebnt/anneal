@@ -1,8 +1,8 @@
 /* Pattern lessons (docs/DSA.md, decision 6): one card per technique. */
-.l-intro{margin:0;max-width:78ch;font-size:15.5px;line-height:1.65;color:var(--mut)}
+.l-intro{margin:0;max-width:78ch;font-size:14px;line-height:1.65;color:var(--mut)}
 .l-soon{margin:0;font-size:13px;color:var(--dim);line-height:1.5}
 .l-jump{display:flex;flex-wrap:wrap;gap:6px}
-.l-jump a{height:30px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;font-weight:500;color:var(--mut);background:var(--bg)}
+.l-jump a{height:30px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--bg)}
 .l-jump a:hover{border-color:var(--dim);color:var(--fg)}
 .l-pat{border:1px solid var(--line2);border-radius:12px;background:var(--panel);display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);overflow:hidden;scroll-margin-top:72px}
 @media (max-width:900px){.l-pat{grid-template-columns:1fr}.l-pat .l-lft{border-right:0;border-bottom:1px solid var(--line2)}}
@@ -12,27 +12,27 @@
 .l-pat h3 small{font:500 11px var(--mono);color:var(--dim)}
 .l-pb{flex:0 0 90px;height:5px;border-radius:3px;background:var(--raise);overflow:hidden}
 .l-pb i{display:block;height:100%;background:var(--grn)}
-.l-lab{font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
+.l-lab{font:600 11px var(--mono);letter-spacing:.16em;color:var(--dim)}
 .l-when{display:flex;flex-direction:column;gap:6px}
-.l-when span{position:relative;padding-left:14px;font-size:13.5px;line-height:1.5;color:var(--fg)}
+.l-when span{position:relative;padding-left:14px;font-size:13px;line-height:1.5;color:var(--fg)}
 .l-when span::before{content:"";position:absolute;left:0;top:.62em;width:5px;height:5px;border-radius:50%;background:var(--ca)}
-.l-pit{margin:0;padding-left:16px;color:var(--mut);font-size:12.5px;line-height:1.55;display:flex;flex-direction:column;gap:4px}
+.l-pit{margin:0;padding-left:16px;color:var(--mut);font-size:12px;line-height:1.55;display:flex;flex-direction:column;gap:4px}
 .l-plist{display:flex;flex-direction:column;gap:4px}
-.l-prow{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 8px;border:1px solid var(--line2);border-radius:7px;background:var(--bg);font-size:13px;min-width:0}
+.l-prow{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 8px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font-size:13px;min-width:0}
 .l-prow:hover{border-color:var(--line)}
 .l-pt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.l-more{font:600 11.5px var(--mono);color:var(--ca)}
+.l-more{font:600 11px var(--mono);color:var(--ca)}
 .l-more:hover{text-decoration:underline}
 .l-lft .d-code pre{padding-top:36px}
-@media (max-width:600px){.l-lft .d-code pre{font-size:11.5px}}
+@media (max-width:600px){.l-lft .d-code pre{font-size:11px}}
 
 /* Grouped pattern pages (decision 32): groups, version tabs, example-only cards, listed techniques. */
 .l-jumpg{display:grid;gap:10px}
 .l-jg{display:grid;grid-template-columns:230px minmax(0,1fr);gap:10px;align-items:start}
 @media (max-width:760px){.l-jg{grid-template-columns:1fr;gap:6px}}
-.l-jg>span{font:600 10px var(--mono);letter-spacing:.14em;color:var(--dim);padding-top:8px}
+.l-jg>span{font:600 11px var(--mono);letter-spacing:.14em;color:var(--dim);padding-top:8px}
 .l-chips{display:flex;flex-wrap:wrap;gap:6px}
-.l-chips a{height:30px;display:inline-flex;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;font-weight:500;color:var(--mut);background:var(--bg)}
+.l-chips a{height:30px;display:inline-flex;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--bg)}
 .l-chips a:hover{border-color:var(--dim);color:var(--fg)}
 .l-chips a i{width:7px;height:7px;border-radius:50%;background:var(--grn)}
 .l-chips a.ex i{background:var(--vio)}
@@ -40,35 +40,35 @@
 .l-grp{margin-top:18px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line2);padding-bottom:8px}
 .l-grp h2{margin:0;font-size:18px}
 .l-grp small{font:500 11px var(--mono);color:var(--dim)}
-.l-tag{font:600 10px var(--mono);letter-spacing:.1em;padding:2px 7px;border-radius:5px;border:1px solid var(--line)}
+.l-tag{font:600 11px var(--mono);letter-spacing:.1em;padding:2px 7px;border-radius:8px;border:1px solid var(--line)}
 .l-tag.ex{color:var(--vio);border-color:color-mix(in oklab,var(--vio) 50%,var(--line))}
 .l-tag.var{color:var(--acc);border-color:color-mix(in oklab,var(--acc) 50%,var(--line))}
 .l-tabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line2);margin-bottom:-4px}
 .l-tabs button{padding:8px 14px;font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);border:1px solid transparent;border-bottom:0;border-radius:7px 7px 0 0;background:none;cursor:pointer}
 .l-tabs button:hover{color:var(--fg)}
 .l-tabs button[aria-selected=true]{color:var(--fg);background:var(--bg);border-color:var(--line2);position:relative;top:1px}
-.l-nolesson{padding-top:6px;font:500 11.5px var(--mono);color:var(--dim)}
-.l-tabnote{margin:0;font-size:12.5px;color:var(--mut)}
-.l-exnote{margin:0;padding:8px 10px;border:1px dashed color-mix(in oklab,var(--vio) 45%,var(--line));border-radius:7px;font-size:12.5px;color:var(--mut)}
+.l-nolesson{padding-top:6px;font:500 11px var(--mono);color:var(--dim)}
+.l-tabnote{margin:0;font-size:12px;color:var(--mut)}
+.l-exnote{margin:0;padding:8px 10px;border:1px dashed color-mix(in oklab,var(--vio) 45%,var(--line));border-radius:8px;font-size:12px;color:var(--mut)}
 .l-exnote b{color:var(--vio)}
 .d-bdg.ex{color:var(--vio);border-color:color-mix(in oklab,var(--vio) 50%,var(--line))}
 .l-listed{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px dashed var(--line);border-radius:12px;background:var(--panel)}
-.l-lchip{display:inline-flex;align-items:baseline;gap:5px;padding:4px 10px;border:1px dashed var(--line);border-radius:999px;font-size:12.5px;color:var(--dim)}
-.l-lchip sup{font:600 8.5px var(--mono);letter-spacing:.08em;color:var(--acc);text-transform:uppercase}
+.l-lchip{display:inline-flex;align-items:baseline;gap:5px;padding:4px 10px;border:1px dashed var(--line);border-radius:999px;font-size:12px;color:var(--dim)}
+.l-lchip sup{font:600 11px var(--mono);letter-spacing:.08em;color:var(--acc);text-transform:uppercase}
 
 .l-tags{margin-left:auto;font:500 11px var(--mono);color:var(--dim)}
 .l-tags a{margin-left:8px;color:var(--ca);border-bottom:1px solid transparent}
 .l-tags a:hover{border-color:var(--ca)}
-.l-ltoggle{display:flex;align-items:baseline;gap:10px;background:none;border:0;padding:0;font:600 12.5px var(--mono);color:var(--mut);cursor:pointer;text-align:left}
+.l-ltoggle{display:flex;align-items:baseline;gap:10px;background:none;border:0;padding:0;font:600 12px var(--mono);color:var(--mut);cursor:pointer;text-align:left}
 .l-ltoggle:hover{color:var(--fg)}
 .l-ltoggle small{font:500 11px var(--mono);color:var(--dim)}
-button.l-lchip{background:none;font:inherit;font-size:12.5px;cursor:pointer;color:var(--dim)}
+button.l-lchip{background:none;font:inherit;font-size:12px;cursor:pointer;color:var(--dim)}
 button.l-lchip:hover{color:var(--fg);border-color:var(--dim)}
 button.l-lchip.has{color:var(--mut);border-style:solid}
 button.l-lchip.on{color:var(--fg);border-color:var(--ca);background:var(--cab)}
-.l-lchip sup{margin-left:2px;font:600 9.5px var(--mono);color:var(--ca)}
+.l-lchip sup{margin-left:2px;font:600 11px var(--mono);color:var(--ca)}
 button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.l-lpanel{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px;background:var(--bg)}
+.l-lpanel{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--line2);border-radius:12px;background:var(--bg)}
 .l-lpanel p{margin:0}
 .l-lnote{font-size:12px;color:var(--dim)}
 
@@ -81,7 +81,7 @@ button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space
 .pl-num{font:500 11px var(--mono);color:var(--dim)}
 .pl-tags{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
 .pl-sub{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-left:2px}
-.pl-topics{font:500 10.5px var(--mono);color:var(--dim);margin-left:4px}
+.pl-topics{font:500 11px var(--mono);color:var(--dim);margin-left:4px}
 .d-bdg.pri-must{border-color:transparent;background:var(--cab);color:var(--ca)}
 .d-bdg.pri-strong{border-color:color-mix(in oklab,var(--ca) 55%,var(--line));color:var(--ca)}
 .d-bdg.pri-practice{color:var(--dim)}
@@ -91,7 +91,7 @@ button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space
 .d-bdg.sol{color:var(--vio);border-color:color-mix(in oklab,var(--vio) 50%,var(--line))}
 .l-other{margin-top:18px;padding-top:14px;border-top:1px solid var(--line2);display:flex;flex-direction:column;gap:10px}
 .l-onames{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px}
-.l-onames li{padding:4px 10px;border:1px dashed var(--line);border-radius:999px;font-size:12.5px;color:var(--dim)}
+.l-onames li{padding:4px 10px;border:1px dashed var(--line);border-radius:999px;font-size:12px;color:var(--dim)}
 
 /* Polish of the small elements: one tag grammar (same height, same radius), clearer priority, tidier rows and buttons. */
 .d-bdg{height:20px;padding:0 7px;border-radius:4px;font-weight:700;letter-spacing:.08em}
@@ -101,8 +101,8 @@ button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space
 .d-bdg.lst{border-color:transparent;background:color-mix(in oklab,var(--grn) 14%,transparent)}
 .d-bdg.rec{border-color:transparent;background:color-mix(in oklab,var(--warn) 14%,transparent)}
 .d-bdg.sol{border-color:transparent;background:color-mix(in oklab,var(--vio) 14%,transparent)}
-.d-co{height:20px;padding:0 7px;border-radius:4px;font-size:10.5px}
-.pl{padding:9px 11px 9px 12px;gap:7px;border-radius:9px;position:relative;transition:border-color .15s,background .15s}
+.d-co{height:20px;padding:0 7px;border-radius:4px;font-size:11px}
+.pl{padding:9px 11px 9px 12px;gap:7px;border-radius:8px;position:relative;transition:border-color .15s,background .15s}
 .pl:hover{background:var(--raise);border-color:var(--line)}
 .pl.pl-must{box-shadow:inset 3px 0 0 var(--ca)}
 .pl.pl-strong{box-shadow:inset 3px 0 0 color-mix(in oklab,var(--ca) 45%,transparent)}
@@ -117,7 +117,7 @@ button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space
 .l-tabs button{height:26px}
 
 /* Details: keyboard focus, aligned digits, smooth jumps, selection, link hover. */
-:where(a,button,[role="tab"],summary):focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:6px}
+:where(a,button,[role="tab"],summary):focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
 .pl-num,.d-pnum,.d-tcount,.l-pat h3 small,.d-sum2,.d-bdg,.d-co{font-variant-numeric:tabular-nums}
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
 ::selection{background:var(--acc-bg);color:inherit}

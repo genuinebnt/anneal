@@ -41,7 +41,7 @@
 .s-root a.s-item:hover{background:var(--raise)}
 .s-root .s-item i{width:7px;height:7px;border-radius:50%}
 .s-root .s-item span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.s-root .s-item small{font:500 10.5px var(--mono);color:var(--dim)}
+.s-root .s-item small{font:500 11px var(--mono);color:var(--dim)}
 .s-root .s-none{margin:0;color:var(--dim);font-size:13px}
 .s-root a.s-trk,.s-root a.s-cta{text-decoration:none;color:inherit}
 .s-root a.s-cta{color:var(--on-acc)}
@@ -57,11 +57,11 @@
 .s-root .s-links{display:flex;gap:6px 16px;flex-wrap:wrap;margin-top:14px;font:500 12px var(--mono)}
 .s-root .s-links a{color:var(--mut)}
 .s-root .s-links a:hover{color:var(--fg)}
-.s-root .s-seg .vn{margin-left:6px;font:500 10.5px var(--mono);color:var(--dim)}
+.s-root .s-seg .vn{margin-left:6px;font:500 11px var(--mono);color:var(--dim)}
 .s-root .s-rail{position:static}
 .s-root .s-trk .tc-doors{margin-top:2px}
 
-.k-root .k-planned{margin-left:10px;font:600 9.5px var(--mono);letter-spacing:.14em;padding:3px 8px;border-radius:4px;border:1px solid var(--line2);color:var(--dim);vertical-align:2px}
+.k-root .k-planned{margin-left:10px;font:600 11px var(--mono);letter-spacing:.14em;padding:3px 8px;border-radius:4px;border:1px solid var(--line2);color:var(--dim);vertical-align:2px}
 /* The solution viewer: code lines never wrap or collapse, long lines scroll sideways (no scrollbar chrome), and no ligatures stretch `::`. */
 .k-root .k-sol pre{white-space:pre;overflow-x:auto;scrollbar-width:none;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;letter-spacing:0;tab-size:4}
 .k-root .k-sol pre::-webkit-scrollbar{display:none}
@@ -69,7 +69,7 @@
 /* Code, links and emphasis inside a hidden answer take the hidden colour too: they set their own, so they showed through. */
 .k-root .k-spoil:not(.k-on) :is(code,a,em,strong,b,i){color:transparent;background:transparent;border-color:transparent;text-shadow:none}
 /* A test's code under its result: a small toggle in the row, the code folded into the row's own card. */
-.k-root .k-tcb{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);background:none;border:1px solid var(--line2);border-radius:6px;padding:3px 8px;cursor:pointer;white-space:nowrap}
+.k-root .k-tcb{font:600 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);background:none;border:1px solid var(--line2);border-radius:8px;padding:3px 8px;cursor:pointer;white-space:nowrap}
 .k-root .k-tcb:hover,.k-root .k-tcb[aria-expanded="true"]{color:var(--fg);border-color:var(--mut)}
 .k-root .k-rth .k-tcb{margin-left:auto}
 .k-root .k-tcode{padding:4px 16px 14px;border-top:1px solid var(--line2)}
@@ -83,18 +83,18 @@
 /* The run strip while nothing has run yet: a slow, quiet pulse says the page is listening. */
 .k-root .k-sd.k-idle{background:var(--dim);animation:k-ping2 2.4s infinite}
 /* Reset progress: a quiet panel under the course toolbar, with the one dangerous button in the danger colour. */
-.k-root .k-reset{display:grid;gap:10px;max-width:560px;margin:0 0 16px;padding:14px 16px;border:1px solid color-mix(in oklab,var(--bad) 40%,var(--line2));border-radius:10px;background:var(--panel)}
+.k-root .k-reset{display:grid;gap:10px;max-width:560px;margin:0 0 16px;padding:14px 16px;border:1px solid color-mix(in oklab,var(--bad) 40%,var(--line2));border-radius:12px;background:var(--panel)}
 .k-root .k-reset label{display:grid;gap:6px;font:500 12px var(--mono);letter-spacing:.04em;color:var(--mut)}
 .k-root .k-reset select,.k-root .k-reset input{font:500 13px var(--mono);color:var(--fg);background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px}
 .k-root .k-reset p{margin:0;font-size:13px;color:var(--mut)}
 .k-root .k-reset button.k-del{justify-self:start;font:600 12px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--bad);background:none;border:1px solid var(--bad);border-radius:8px;padding:8px 14px;cursor:pointer}
 .k-root .k-reset button.k-del:disabled{opacity:.4;cursor:default}
 /* beyond BusTub: modules, challenges and stages the course adds (not in BusTub's own projects) */
-.k-root .k-btag{margin-left:10px;font:600 9.5px var(--mono);letter-spacing:.14em;padding:3px 8px;border-radius:4px;border:1px solid color-mix(in oklab,var(--blue,var(--accent)) 45%,transparent);color:var(--blue,var(--accent));vertical-align:2px}
+.k-root .k-btag{margin-left:10px;font:600 11px var(--mono);letter-spacing:.14em;padding:3px 8px;border-radius:4px;border:1px solid color-mix(in oklab,var(--blue,var(--accent)) 45%,transparent);color:var(--blue,var(--accent));vertical-align:2px}
 .k-root .k-boss.k-beyond{color:var(--blue,var(--accent));border-color:color-mix(in oklab,var(--blue,var(--accent)) 45%,transparent)}
 
 /* Get started notes (mock-course.css is generated and not edited by hand). */
-.k-root .k-sc .k-note{margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--dim)}
+.k-root .k-sc .k-note{margin:2px 0 0;font-size:11px;line-height:1.5;color:var(--dim)}
 .k-root .k-sc .k-note code{font:500 11px var(--code);color:var(--fg)}
 /* Reset is a danger action: its label says so before you open it. */
 .k-root .k-ea.k-danger{color:var(--bad);border-color:color-mix(in oklab,var(--bad) 45%,var(--line2))}
@@ -105,5 +105,5 @@
 /* the DSA home: a shorter headline, so the Next up card is in view without scrolling (the goals sit under it) */
 .s-root.s-dsa .s-hero{padding:26px 0 20px}
 .s-root.s-dsa h1{font-size:clamp(28px,3.4vw,42px);max-width:none;margin:6px 0 8px}
-.s-root.s-dsa .s-lead{font-size:14.5px}
+.s-root.s-dsa .s-lead{font-size:14px}
 .s-root.s-dsa .d-goals{padding-top:0}

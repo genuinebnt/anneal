@@ -18,13 +18,13 @@ html[data-width="wide"]{--pw:1680px;--pw-lg:1680px}
 .pp-b i{width:6px;height:6px}
 .pp-tags{gap:6px}
 .pp-tags span{height:22px;display:inline-flex;align-items:center;padding:0 9px;border-radius:var(--r-tag);font:500 11px var(--mono)}
-.p-pill{height:24px;align-items:center;padding:0 10px;border-radius:5px;font-size:11px;font-weight:700}
+.p-pill{height:24px;align-items:center;padding:0 10px;border-radius:8px;font-size:11px;font-weight:700}
 .d-chip{border-radius:var(--r-tag)}
 
 /* form fields: label above, control below, same height, a chevron on selects */
 .p-row{gap:18px 20px}
 .p-fld{gap:7px}
-.p-fld>span{font:700 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.p-fld>span{font:700 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
 .p-fld input,.p-fld select{height:38px;padding:0 12px;border-radius:var(--r-ctl);transition:border-color .15s,box-shadow .15s}
 .p-fld input:focus,.p-fld select:focus{box-shadow:0 0 0 3px var(--cab,var(--acc-bg))}
 .p-fld select{appearance:none;padding-right:32px;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238a93a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 12px center}
@@ -34,7 +34,7 @@ html[data-width="wide"]{--pw:1680px;--pw-lg:1680px}
 .p-step button{width:36px;font-size:17px;font-weight:500;transition:background .15s,color .15s}
 .p-step button:active{background:var(--line2)}
 .p-step b{min-width:40px;font-variant-numeric:tabular-nums}
-.p-cap .p-step{height:30px}.p-cap .p-step button{width:26px;font-size:15px}.p-cap .p-step b{min-width:28px}
+.p-cap .p-step{height:30px}.p-cap .p-step button{width:26px;font-size:14px}.p-cap .p-step b{min-width:28px}
 
 /* the plan's key-value list and save row */
 .p-kv{gap:0}
@@ -73,11 +73,11 @@ html[data-width="wide"]{--pw:1680px;--pw-lg:1680px}
 .sb:hover .sb-track{animation-play-state:paused}
 .sb-run{display:flex;align-items:center;flex:none}
 .sb-i{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;padding-left:22px}
-.sb-i i{font-style:normal;font-weight:700;font-size:9.5px;letter-spacing:.14em;color:var(--dim)}
+.sb-i i{font-style:normal;font-weight:700;font-size:11px;letter-spacing:.14em;color:var(--dim)}
 .sb-i b{font-weight:700;color:var(--fg);font-variant-numeric:tabular-nums}
 .sb-i small{font-size:11px;color:var(--dim);margin-left:-7px}
 .sb-i em{font-style:normal;color:var(--dim)}
-.sb-i s{text-decoration:none;font-size:7px;color:var(--line);margin-left:14px}
+.sb-i s{text-decoration:none;font-size:11px;color:var(--line);margin-left:14px}
 .sb-i.ok b{color:var(--grn)}.sb-i.warn b{color:var(--warn)}.sb-i.bad b{color:var(--bad)}.sb-i.hot b{color:var(--acc)}
 .sb-bar{width:44px;height:4px;border-radius:2px;background:var(--line2);overflow:hidden;display:inline-block}
 .sb-bar u{display:block;height:100%;background:var(--grn)}
@@ -93,11 +93,11 @@ html.has-sb body{padding-bottom:30px}
 .k-root .k-proj{grid-template-columns:200px minmax(0,1fr) auto;gap:16px;padding:11px 0;border-bottom:1px solid var(--line2)}
 .k-root .k-proj:last-child{border-bottom:0;padding-bottom:2px}
 .k-root .k-pl{display:flex;flex-direction:column;gap:2px;min-width:0}
-.k-root .k-pl b{font:700 11.5px var(--mono);color:var(--fg);letter-spacing:.02em}
+.k-root .k-pl b{font:700 11px var(--mono);color:var(--fg);letter-spacing:.02em}
 .k-root .k-pl em{font:500 11px var(--mono);font-style:normal;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .k-root .k-pc{font:600 11px var(--mono);color:var(--dim);font-variant-numeric:tabular-nums;min-width:34px;text-align:right}
 .k-root .k-nodes{gap:6px}
-.k-root .k-node{min-width:40px;height:30px;padding:0 10px;border-radius:var(--r-ctl);font-size:11.5px;overflow:hidden;background:linear-gradient(0deg,var(--grn-bg) calc(var(--f,0) * 100%),transparent 0)}
+.k-root .k-node{min-width:40px;height:30px;padding:0 10px;border-radius:var(--r-ctl);font-size:11px;overflow:hidden;background:linear-gradient(0deg,var(--grn-bg) calc(var(--f,0) * 100%),transparent 0)}
 .k-root .k-node.k-part{border-color:color-mix(in oklab,var(--grn) 55%,var(--line2));color:var(--fg)}
 .k-root .k-node.k-done{background:var(--grn)}
 @media (max-width:760px){.k-root .k-proj{grid-template-columns:1fr auto}.k-root .k-nodes{grid-column:1/-1;order:3}}
@@ -106,18 +106,18 @@ html.has-sb body{padding-bottom:30px}
 .s-root .s-tools{gap:10px;align-items:stretch}
 .s-root .s-search,.s-root .s-seg,.s-root .s-tools>.d-fbtn{height:40px;border-radius:8px}
 .s-root .s-seg{align-items:stretch;padding:3px}
-.s-root .s-seg button{padding:0 14px;display:inline-flex;align-items:center;gap:6px;border-radius:6px}
+.s-root .s-seg button{padding:0 14px;display:inline-flex;align-items:center;gap:6px;border-radius:8px}
 .d-fbtn{display:inline-flex;align-items:center;gap:8px;padding:0 14px;border:1px solid var(--line2);background:var(--panel);font:500 12px var(--mono);color:var(--mut);transition:border-color .15s,color .15s,background .15s}
 .d-fbtn:hover{border-color:var(--line);color:var(--fg)}
-.d-fbtn i{font-style:normal;min-width:18px;height:18px;padding:0 5px;display:inline-grid;place-items:center;border-radius:9px;background:var(--acc);color:var(--on-acc);font-weight:700;font-size:10.5px}
-.d-fbtn kbd{font:600 10px var(--mono);padding:1px 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;color:var(--dim);background:var(--bg)}
+.d-fbtn i{font-style:normal;min-width:18px;height:18px;padding:0 5px;display:inline-grid;place-items:center;border-radius:8px;background:var(--acc);color:var(--on-acc);font-weight:700;font-size:11px}
+.d-fbtn kbd{font:600 11px var(--mono);padding:1px 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;color:var(--dim);background:var(--bg)}
 .s-root .s-chips{gap:8px}
 .s-root .s-chip{height:30px;padding:0 12px;border-radius:999px;gap:6px}
 .s-root .s-flab{margin-bottom:12px}
 /* the filter rail: rows with room, counts that line up */
 .d-rail label,.d-fopt{min-height:34px}
 /* the key insight: one line under the title of a row, a labelled line on the problem page */
-.d-ins{margin:2px 0 4px;font-size:12.5px;line-height:1.45;color:var(--mut);text-wrap:pretty}
+.d-ins{margin:2px 0 4px;font-size:12px;line-height:1.45;color:var(--mut);text-wrap:pretty}
 .pl .d-ins{padding-left:28px;margin:0 0 4px}
 .pp-ins{margin:12px 0 0;display:flex;gap:10px;align-items:baseline;font-size:14px;line-height:1.5;color:var(--fg);max-width:78ch}
-.pp-ins b{flex:none;font:700 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.pp-ins b{flex:none;font:700 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}

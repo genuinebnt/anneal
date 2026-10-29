@@ -7,7 +7,7 @@
 @media (prefers-reduced-motion: reduce) { .fx-rip { display: none; } }
 
 /* ---- buttons ---- */
-.kbtn { position: relative; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: 42px; padding: 0 20px; border-radius: 9px; background: var(--grn); color: var(--on-acc); font: 700 14px var(--sans); white-space: nowrap; transition: transform 0.2s var(--kease, ease), box-shadow 0.25s, filter 0.2s; }
+.kbtn { position: relative; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: 42px; padding: 0 20px; border-radius:8px; background: var(--grn); color: var(--on-acc); font: 700 14px var(--sans); white-space: nowrap; transition: transform 0.2s var(--kease, ease), box-shadow 0.25s, filter 0.2s; }
 .kbtn:hover { transform: translateY(-1px); box-shadow: 0 10px 26px -12px var(--grn); filter: brightness(1.05); }
 .kbtn:active { transform: scale(0.985); }
 .kbtn .ar { transition: transform 0.25s var(--kease, ease); }
@@ -30,17 +30,17 @@
 /* ---- modal ---- */
 .kov { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 20px; background: color-mix(in oklab, var(--bg) 55%, transparent); backdrop-filter: blur(7px); animation: kov-in 0.25s ease both; }
 @keyframes kov-in { from { opacity: 0; backdrop-filter: blur(0); } }
-.kdlg { position: relative; width: min(460px, 100%); max-height: calc(100vh - 40px); overflow: auto; padding: 30px 30px 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 40px 80px -30px var(--shadow); text-align: center; animation: kdlg-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.kdlg { position: relative; width: min(460px, 100%); max-height: calc(100vh - 40px); overflow: auto; padding: 30px 30px 24px; border: 1px solid var(--line); border-radius:12px; background: var(--panel); box-shadow: 0 40px 80px -30px var(--shadow); text-align: center; animation: kdlg-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 @keyframes kdlg-in { from { opacity: 0; transform: translateY(24px) scale(0.94); } }
 @media (prefers-reduced-motion: reduce) { .kov, .kdlg { animation: none; } }
 .kdlg h2 { margin: 14px 0 6px; font-size: 26px; letter-spacing: -0.025em; }
-.kdlg p { margin: 0 0 4px; color: var(--mut); font-size: 14.5px; }
+.kdlg p { margin: 0 0 4px; color: var(--mut); font-size:14px; }
 .kdlg .x { position: absolute; right: 12px; top: 12px; width: 32px; height: 32px; border-radius: 8px; color: var(--dim); font-size: 18px; transition: background 0.2s, color 0.2s, transform 0.3s; }
 .kdlg .x:hover { background: var(--raise); color: var(--fg); transform: rotate(90deg); }
 .kdlg .acts { display: grid; gap: 10px; margin-top: 22px; }
 .kdlg .acts .kbtn { width: 100%; }
 .kdlg .acts .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.kdlg .chk { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 14px; font-size: 12.5px; color: var(--dim); }
+.kdlg .chk { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 14px; font-size:12px; color: var(--dim); }
 
 /* ---- congratulations ---- */
 .kseal { position: relative; width: 96px; height: 96px; margin: 0 auto; }
@@ -53,16 +53,16 @@
 .kseal::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--grn); opacity: 0; animation: khalo 1.2s var(--kease, ease) 0.8s; }
 @keyframes khalo { 0% { opacity: 0.7; transform: scale(0.85); } 100% { opacity: 0; transform: scale(1.5); } }
 @media (prefers-reduced-motion: reduce) { .kseal .f, .kseal path { animation-duration: 0.01s; animation-delay: 0s; } .kseal::after { animation: none; } }
-.kconf { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: 18px; }
+.kconf { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius:12px; }
 .kconf i { position: absolute; top: 30%; left: 50%; width: 7px; height: 11px; border-radius: 2px; opacity: 0; animation: kfly 1.5s cubic-bezier(0.2, 0.7, 0.3, 1) forwards; animation-delay: calc(0.7s + var(--d) * 1ms); }
 @keyframes kfly { 0% { opacity: 1; transform: translate(0, 0) rotate(0); } 100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--r)); } }
 @media (prefers-reduced-motion: reduce) { .kconf { display: none; } }
 .ksts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin: 18px 0 0; border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; background: var(--line2); }
 .ksts div { padding: 12px 6px; background: var(--panel); }
 .ksts b { display: block; font-size: 22px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.ksts span { font: 500 9.5px var(--mono); letter-spacing: 0.16em; color: var(--dim); text-transform: uppercase; }
-.knxt { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 11px 14px; border: 1px solid var(--line2); border-radius: 10px; text-align: left; background: var(--raise); }
-.knxt small { display: block; font: 500 10px var(--mono); letter-spacing: 0.16em; color: var(--dim); }
+.ksts span { font: 500 11px var(--mono); letter-spacing: 0.16em; color: var(--dim); text-transform: uppercase; }
+.knxt { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 11px 14px; border: 1px solid var(--line2); border-radius:12px; text-align: left; background: var(--raise); }
+.knxt small { display: block; font: 500 11px var(--mono); letter-spacing: 0.16em; color: var(--dim); }
 .knxt b { font-size: 14px; }
 .kdlg .acts .two:has(> :only-child) { grid-template-columns: 1fr; }
 .kdlg :focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
