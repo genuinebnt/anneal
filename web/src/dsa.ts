@@ -138,6 +138,11 @@ export function pacePreview(remaining: number, today: string, s: Pick<SrsSetting
   };
 }
 
+/** Whether a problem is in the completion totals and bars. A premium problem is only when the owner chose to count premium
+ *  (Settings; the plan's `free_only` flag, inverted). It is still listed, and what was logged on it is kept; the streak and the
+ *  heatmap include it either way. */
+export const counted = (o: Pick<DsaOverview, "settings">, p: DsaProblem): boolean => !(o.settings.goal.free_only && p.premium);
+
 /** Problems left for a goal, counted the way the server does. */
 export function goalRemaining(o: DsaOverview, goal: SrsSettings["goal"]): { total: number; done: number; remaining: number } {
   if (goal.custom_left != null) return { total: goal.custom_left, done: 0, remaining: goal.custom_left };

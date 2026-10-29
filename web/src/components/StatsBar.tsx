@@ -1,8 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { isRustSection, PLANNED, sectionOf } from "../curriculum";
 import { niceDate } from "../dsa";
+import { getPref } from "../prefs";
 
 type AreaId = "dsa" | "rust" | "courses";
 type Item = { key: string; label: string; value: string; of?: string; note?: string; bar?: number; tone?: "ok" | "warn" | "bad" | "hot"; spark?: number[] };
@@ -17,10 +18,18 @@ export function StatsBar({ area }: { area: AreaId }) {
     const tracks = useQuery({ queryKey: ["tracks"], queryFn: api.tracks });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
 
+    // Hidden from Settings; the choice is a preference, so it follows the owner to another laptop.
+    const [hidden, setHidden] = useState(() => getPref("statusbar.hidden", false));
     useEffect(() => {
+        const f = (e: Event) => (e as CustomEvent<string>).detail === "statusbar.hidden" && setHidden(getPref("statusbar.hidden", false));
+        window.addEventListener("anneal:pref", f);
+        return () => window.removeEventListener("anneal:pref", f);
+    }, []);
+    useEffect(() => {
+        if (hidden) return;
         document.documentElement.classList.add("has-sb");
         return () => document.documentElement.classList.remove("has-sb");
-    }, []);
+    }, [hidden]);
 
     const items = useMemo<Item[]>(() => {
         const out: Item[] = [];
@@ -30,7 +39,7 @@ export function StatsBar({ area }: { area: AreaId }) {
         if (area === "dsa" && o) {
             const plan = o.plan;
             out.push({ key: "goal", label: "NEETCODE 150", value: String(plan.goal_done), of: `/${plan.goal_total}`, bar: pct(plan.goal_done, plan.goal_total), tone: "ok" });
-            if (p) out.push({ key: "streak", label: "STREAK", value: plural(p.streak, "day"), note: `best ${p.longest_streak}`, tone: p.streak > 0 ? "hot" : undefined, spark });
+            // the streak is not repeated here: the header above already shows it
             out.push({ key: "due", label: "REVIEWS DUE", value: String(plan.due), note: plan.overdue ? `${plan.overdue} overdue` : "none overdue", tone: plan.overdue ? "bad" : plan.due ? "warn" : "ok" });
             out.push({ key: "today", label: "TODAY", value: plan.solve_day ? "solve day" : "practice day", note: `room for ${plan.capacity} reviews` });
             const next = o.problems.find((x) => x.id === plan.next_up[0]);
@@ -63,7 +72,7 @@ export function StatsBar({ area }: { area: AreaId }) {
         return out;
     }, [area, dsa.data, progress.data, tracks.data, course.data]);
 
-    if (items.length === 0) return null;
+    if (hidden || items.length === 0) return null;
     const render = (copy: number) =>
         items.map((it) => (
             <span className={`sb-i${it.tone ? ` ${it.tone}` : ""}`} key={`${copy}-${it.key}`} aria-hidden={copy > 0}>

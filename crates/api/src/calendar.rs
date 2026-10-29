@@ -99,6 +99,19 @@ pub(crate) async fn all_overrides(db: &sqlx::PgPool) -> sqlx::Result<HashMap<Str
     Ok(out)
 }
 
+/// The weekly routine the settings describe: which weekdays are solve days and how many reviews each day takes.
+pub(crate) fn routine_of(settings: &reviews::Settings) -> Routine {
+    Routine { solve_days: settings.new_days.iter().filter_map(|d| reviews::weekday(d)).collect(), capacity: settings.capacity.all(), practice_floor: PRACTICE_FLOOR, new_per_day: settings.new_per_day.max(1) }
+}
+
+/// Whether a day is a planned solve day, from the settings and the active plan's edits. The streak follows it: a rest,
+/// practice or break day neither breaks the streak nor adds to it.
+pub(crate) async fn solve_day_fn(db: &sqlx::PgPool) -> sqlx::Result<impl Fn(NaiveDate) -> bool + use<>> {
+    let routine = routine_of(&crate::settings::srs(db).await?);
+    let overrides = active_overrides(db).await?;
+    Ok(move |day| routine.kind_of(day, &overrides) == Kind::Solve)
+}
+
 /// The days the active plan has made a break, for keeping reviews off them when they are scheduled.
 pub(crate) async fn active_overrides(db: &sqlx::PgPool) -> sqlx::Result<Overrides> {
     let book = book(db).await?;
@@ -209,7 +222,7 @@ impl<'a> World<'a> {
                 owed.push(Owed { item, n: m, due });
             }
         }
-        let routine = Routine { solve_days: settings.new_days.iter().filter_map(|d| reviews::weekday(d)).collect(), capacity: settings.capacity.all(), practice_floor: PRACTICE_FLOOR, new_per_day: settings.new_per_day.max(1) };
+        let routine = routine_of(settings);
         let start_topic = start.and_then(|id| catalog.problem(id)).map(|(t, _)| t.code.clone());
         World { catalog, items, ids, index, solved, owed, with_reviews, today, routine, settings: settings.clone(), start_topic, topics }
     }

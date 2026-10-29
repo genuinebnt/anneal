@@ -2,6 +2,7 @@
 //! progress lives in Postgres, and code runs through [`anneal_runner`].
 
 mod activity;
+mod backup;
 pub mod auth;
 pub mod cli_updates;
 mod dsa;
@@ -59,6 +60,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
     // Everything but health and the auth routes needs a session when auth is on.
     let protected = Router::new()
         .route("/activity", get(routes::activity))
+        .route("/export", get(backup::export))
+        .route("/import", post(backup::import).layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024)))
+        .route("/prefs", get(settings::get_prefs).post(settings::put_pref))
         .route("/progress", get(routes::progress))
         .route("/stats", get(routes::stats))
         .route("/reviews", get(routes::reviews))

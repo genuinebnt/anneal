@@ -261,6 +261,7 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Json<serde_json::V
     let reviews = dsa_reviews(&s.catalog, store::reviews(&s.db).await?);
     let by_problem: HashMap<&str, &ReviewRow> = reviews.iter().map(|r| (r.problem_id.as_str(), r)).collect();
 
+    let count_premium = !settings.goal.free_only;
     let patterns = dsa_tracks(&s.catalog)
         .map(|t| {
             let extras = s.catalog.practice_tracks.iter().find(|x| x.code == t.code).map(|x| x.problems.as_slice()).unwrap_or_default();
@@ -270,9 +271,9 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Json<serde_json::V
             code: &t.code,
             slug: &t.slug,
             name: &t.name,
-            total: t.problems.len(),
-            in_150: t.problems.iter().filter(|p| dsa_of(p).lists.iter().any(|l| l == "neetcode150")).count(),
-            solved: t.problems.iter().filter(|p| progress.get(&p.id).is_some_and(|r| r.solved)).count(),
+            total: t.problems.iter().filter(|p| crate::views::counts(p, count_premium)).count(),
+            in_150: t.problems.iter().filter(|p| crate::views::counts(p, count_premium) && dsa_of(p).lists.iter().any(|l| l == "neetcode150")).count(),
+            solved: t.problems.iter().filter(|p| crate::views::counts(p, count_premium) && progress.get(&p.id).is_some_and(|r| r.solved)).count(),
             practice_total,
             practice_solved,
             }

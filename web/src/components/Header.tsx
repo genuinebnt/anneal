@@ -5,6 +5,7 @@ import { api } from "../api";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
+import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
 // The header has two tiers (docs/mockups/navbar-v2.html). The first answers "where in the product am I": the three areas as one switcher
 // with their progress, a search field, Continue, and the tools. The second answers "what can I do here": the pages of the current area,
@@ -49,34 +50,6 @@ const areaFromPath = (path: string): AreaId | null => {
     if (path.startsWith("/dsa") || path.startsWith("/d/")) return "dsa";
     return null;
 };
-
-type Theme = "dark" | "light" | "system";
-const THEMES: Theme[] = ["dark", "light", "system"];
-
-function storedTheme(): Theme {
-    try {
-        const t = localStorage.getItem("anneal-theme");
-        return t === "light" || t === "dark" ? t : "system";
-    } catch {
-        return "system";
-    }
-}
-
-/** Dark and light are explicit choices; System follows the device and clears the stored choice. */
-function applyTheme(theme: Theme) {
-    const root = document.documentElement;
-    try {
-        if (theme === "system") {
-            delete root.dataset.theme;
-            localStorage.removeItem("anneal-theme");
-        } else {
-            root.dataset.theme = theme;
-            localStorage.setItem("anneal-theme", theme);
-        }
-    } catch {
-        // Private windows can refuse storage; the choice still applies for this visit.
-    }
-}
 
 /** Centred or wide pages: a two-state switch beside the theme button. The same setting is in the account menu. */
 function WidthToggle() {
@@ -427,6 +400,9 @@ function Account() {
                             </button>
                         ))}
                     </div>
+                    <Link role="menuitem" className="acct-out" to="/settings" onClick={() => setOpen(false)}>
+                        All settings
+                    </Link>
                     {session.data?.required && (
                         <button
                             role="menuitem"

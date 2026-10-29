@@ -22,6 +22,8 @@ import { Workspace } from "./workspace/Workspace";
 import { installPressEffects } from "./components/kit";
 import { KitPage } from "./pages/KitPage";
 import { ToastHost } from "./components/toasts";
+import { hydratePrefs } from "./prefs";
+import { SettingsPage } from "./pages/SettingsPage";
 import "./styles/design.css";
 import "./styles/app.css";
 import "./styles/catalog.css";
@@ -39,6 +41,7 @@ import "./styles/mock-section.css";
 import "./styles/mock-extra.css";
 import "./styles/polish.css";
 import "./styles/focus-timer.css";
+import "./styles/settings.css";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -134,6 +137,7 @@ const routes = [
     },
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/kit", component: KitPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];
@@ -156,10 +160,12 @@ declare module "@tanstack/react-router" {
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } } });
 
 installPressEffects();
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </StrictMode>,
+void hydratePrefs().then(() =>
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </StrictMode>,
+  ),
 );

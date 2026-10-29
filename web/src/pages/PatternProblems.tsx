@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type DsaProblem } from "../api";
 import { Companies, Insight, Mark, ProblemTags, useLogger } from "../components/dsaBits";
 import { PatternShell } from "../components/PatternShell";
-import { MINUTES, REVIEW_GRADES } from "../dsa";
+import { MINUTES, REVIEW_GRADES, counted } from "../dsa";
 
 const LISTS_HERE: [string, string][] = [["neetcode150", "NeetCode 150"], ["neetcode250", "NeetCode 250"], ["all", "All NeetCode"]];
 
@@ -18,14 +18,16 @@ export function PatternProblems({ code }: { code: string }) {
     const problems = o && pattern ? o.problems.filter((p) => p.pattern === pattern.code && (list === "all" || p.lists.includes(list as never))).sort((a, b) => a.order - b.order) : [];
     const groups = o ? o.techniques.filter((t) => t.pattern === pattern?.name).map((t) => ({ t, rows: problems.filter((p) => p.technique === t.id) })).filter((g) => g.rows.length) : [];
     const loose = problems.filter((p) => !groups.some((g) => g.rows.includes(p)));
+    // the rows show every problem; the totals and the bar count the ones the Settings say count (premium is optional)
+    const totals = o ? problems.filter((p) => counted(o, p)) : problems;
     return (
         <PatternShell code={code} tab="problems">
             {overview.isError && <p className="notice bad">Couldn't load the problems.</p>}
             {o && pattern && (
                 <>
                     <div className="d-sum2">
-                        <span><b>{problems.filter((p) => p.state.solved).length}</b> of {problems.length} solved</span>
-                        <span className="bar"><i style={{ width: `${problems.length ? (problems.filter((p) => p.state.solved).length / problems.length) * 100 : 0}%` }} /></span>
+                        <span><b>{totals.filter((p) => p.state.solved).length}</b> of {totals.length} solved</span>
+                        <span className="bar"><i style={{ width: `${totals.length ? (totals.filter((p) => p.state.solved).length / totals.length) * 100 : 0}%` }} /></span>
                         <div className="fchips" role="group" aria-label="List">
                             {LISTS_HERE.map(([k, label]) => (
                                 <button key={k} className={`fchip${list === k ? " on" : ""}`} aria-pressed={list === k} onClick={() => setList(k)}>{label}</button>

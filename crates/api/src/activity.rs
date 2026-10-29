@@ -66,12 +66,14 @@ pub fn build(
     progress: &HashMap<String, ProgressRow>,
     rows: &[ActivityRow],
     today: NaiveDate,
+    count_premium: bool,
+    is_solve_day: &dyn Fn(NaiveDate) -> bool,
 ) -> Activity {
     let local = |t: DateTime<Utc>| t.with_timezone(&Local).date_naive();
     let in_area = |id: &str| catalog.problem(id).is_some_and(|(t, _)| sections.contains(&t.section));
 
     let solve_days: Vec<NaiveDate> = rows.iter().filter_map(|r| r.solved_at.map(local)).collect();
-    let streak = streak(&solve_days, today);
+    let streak = streak_by_plan(&solve_days, today, is_solve_day);
 
     let week_start = today - Days::new(6);
     let mut week: Vec<Day> = (0..7).map(|i| Day { date: week_start + Days::new(i), solved: 0 }).collect();
@@ -123,16 +125,28 @@ pub fn build(
         week_solved,
         week_unassisted,
         recent,
-        next: next_up(catalog, sections, progress, rows),
+        next: next_up(catalog, sections, progress, rows, count_premium),
     }
 }
 
+/// Consecutive days with a solve, ending today (or yesterday if today has none yet).
+#[cfg(test)]
 pub(crate) fn streak(solve_days: &[NaiveDate], today: NaiveDate) -> u32 {
-    let has = |d: NaiveDate| solve_days.contains(&d);
-    let mut day = if has(today) { today } else { today - Days::new(1) };
-    let mut n = 0;
-    while has(day) {
-        n += 1;
+    streak_by_plan(solve_days, today, &|_| true)
+}
+
+/// The streak the plan keeps: walking back from `today`, every day with a solve adds one; a planned solve day with no solve
+/// breaks it (today never does, the day is not over); a rest, practice or break day neither breaks it nor adds to it.
+/// With every day a solve day this is the plain streak. A solve on any problem counts, premium or not.
+pub(crate) fn streak_by_plan(solve_days: &[NaiveDate], today: NaiveDate, is_solve_day: &dyn Fn(NaiveDate) -> bool) -> u32 {
+    let Some(first) = solve_days.iter().min().copied() else { return 0 };
+    let (mut day, mut n) = (today, 0);
+    while day >= first {
+        if solve_days.contains(&day) {
+            n += 1;
+        } else if day != today && is_solve_day(day) {
+            break;
+        }
         day = day - Days::new(1);
     }
     n
@@ -154,6 +168,7 @@ fn next_up(
     sections: &[Section],
     progress: &HashMap<String, ProgressRow>,
     rows: &[ActivityRow],
+    count_premium: bool,
 ) -> Option<NextUp> {
     // A fn, not a closure: closures don't tie their returned borrow to their argument.
     fn first_open<'t>(t: &'t Track, progress: &HashMap<String, ProgressRow>) -> Option<&'t Problem> {
@@ -188,7 +203,7 @@ fn next_up(
         stage_name: stage.map(|s| s.name.clone()).unwrap_or_default(),
         reason,
         excerpt: excerpt(problem.files.statement.as_deref().unwrap_or("")),
-        readiness: views::readiness(track, progress),
+        readiness: views::readiness(track, progress, count_premium),
         gain: (1000.0 * views::weight(problem.meta.level) / total).round() / 10.0,
     })
 }
@@ -231,6 +246,33 @@ mod tests {
 
     fn d(s: &str) -> NaiveDate {
         s.parse().unwrap()
+    }
+
+    /// Monday to Saturday are solve days, Sunday is not.
+    fn not_sunday(day: NaiveDate) -> bool {
+        chrono::Datelike::weekday(&day) != chrono::Weekday::Sun
+    }
+
+    #[test]
+    fn a_rest_day_neither_breaks_the_streak_nor_adds_to_it() {
+        // Fri 23, Sat 24, (Sun 25 is not a solve day), Mon 26.
+        let days = [d("2026-10-23"), d("2026-10-24"), d("2026-10-26")];
+        assert_eq!(streak_by_plan(&days, d("2026-10-26"), &not_sunday), 3, "Sunday is skipped, not counted");
+        assert_eq!(streak(&days, d("2026-10-26")), 1, "the plain streak broke on Sunday");
+    }
+
+    #[test]
+    fn a_missed_solve_day_breaks_it_but_today_does_not() {
+        let days = [d("2026-10-26"), d("2026-10-28")]; // Tue 27 was a solve day with no solve
+        assert_eq!(streak_by_plan(&days, d("2026-10-28"), &not_sunday), 1);
+        assert_eq!(streak_by_plan(&days, d("2026-10-29"), &not_sunday), 1, "Thursday has no solve yet, but it is not over");
+        assert_eq!(streak_by_plan(&[], d("2026-10-29"), &not_sunday), 0);
+    }
+
+    #[test]
+    fn a_solve_on_a_rest_day_still_counts() {
+        let days = [d("2026-10-24"), d("2026-10-25"), d("2026-10-26")];
+        assert_eq!(streak_by_plan(&days, d("2026-10-26"), &not_sunday), 3);
     }
 
     #[test]

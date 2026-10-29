@@ -838,7 +838,8 @@ async fn dsa_overview_lists_the_lists_with_their_techniques(db: PgPool) {
     let app = test_app_with(db, root.path());
     let (status, o) = call(&app, Method::GET, "/api/dsa", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(o["patterns"].as_array().unwrap().iter().map(|p| (p["code"].as_str().unwrap(), p["total"].as_u64().unwrap())).collect::<Vec<_>>(), [("D1", 3), ("D2", 3)]);
+    assert_eq!(o["patterns"].as_array().unwrap().iter().map(|p| (p["code"].as_str().unwrap(), p["total"].as_u64().unwrap())).collect::<Vec<_>>(), [("D1", 2), ("D2", 3)]);
+    // (D1 holds a premium problem: listed below, but not in the pattern total unless the owner chose to count premium)
     assert_eq!(o["problems"].as_array().unwrap().len(), 6);
     assert_eq!(o["techniques"].as_array().unwrap().len(), 4);
     let two_sum_ii = problem_of(&o, "lc-two-sum-ii-input-array-is-sorted");
@@ -1987,4 +1988,71 @@ async fn deleting_something_the_owner_made_archives_it_first(db: PgPool) {
     assert_eq!(live, (0, 0));
     let tables: Vec<(String,)> = sqlx::query_as("SELECT table_name FROM data_archive WHERE source = $1 ORDER BY table_name").bind(format!("reset_track:{slug}")).fetch_all(&db).await.unwrap();
     assert_eq!(tables.into_iter().map(|t| t.0).collect::<Vec<_>>(), ["attempts", "reviews"]);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_backup_restores_what_is_missing_and_never_overwrites_or_deletes(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/solutions", Some(json!({ "label": "mine", "code": "x = 1", "notes": "" }))).await;
+    call(&app, Method::POST, "/api/prefs", Some(json!({ "key": "focus.cfg", "value": { "focus": 30 } }))).await;
+
+    let (status, file) = call(&app, Method::GET, "/api/export", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(file["format"], "anneal-backup");
+    assert_eq!(file["tables"]["attempts"].as_array().unwrap().len(), 1);
+    assert_eq!(file["tables"]["dsa_solutions"].as_array().unwrap().len(), 1);
+
+    // Importing into a database that already has it all changes nothing.
+    let (_, same) = call(&app, Method::POST, "/api/import", Some(file.clone())).await;
+    assert_eq!(same["added"]["attempts"], 0);
+    assert_eq!(same["added"]["reviews"], 0);
+
+    // After losing the rows (by hand, in this test only), the import brings them back and a new log still works.
+    sqlx::query("DELETE FROM reviews").execute(&db).await.unwrap();
+    sqlx::query("DELETE FROM attempts").execute(&db).await.unwrap();
+    sqlx::query("DELETE FROM dsa_solutions").execute(&db).await.unwrap();
+    let (status, back) = call(&app, Method::POST, "/api/import", Some(file)).await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert_eq!((back["added"]["attempts"].clone(), back["added"]["reviews"].clone(), back["added"]["dsa_solutions"].clone()), (json!(1), json!(1), json!(1)));
+    let (_, log) = call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "hard" }))).await;
+    assert!(log["due"].is_string(), "a new attempt after an import must not collide with the imported ids: {log}");
+    let n: (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM attempts), (SELECT count(*) FROM dsa_solutions)").fetch_one(&db).await.unwrap();
+    assert_eq!(n, (2, 1));
+
+    assert_eq!(call(&app, Method::POST, "/api/import", Some(json!({ "format": "other" }))).await.0, StatusCode::BAD_REQUEST);
+    let (_, prefs) = call(&app, Method::GET, "/api/prefs", None).await;
+    assert_eq!(prefs["focus.cfg"]["focus"], 30);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn premium_is_listed_but_counted_only_when_chosen_while_what_was_done_always_counts(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let sum = |o: &Value, key: &str| o["patterns"].as_array().unwrap().iter().map(|p| p[key].as_u64().unwrap()).sum::<u64>();
+
+    // Default: premium is listed but not in the totals.
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!(o["problems"].as_array().unwrap().len(), 6, "still listed");
+    assert_eq!(sum(&o, "total"), 5, "the premium problem is not counted");
+
+    // Completing the premium problem counts toward the streak and the activity, but not toward the totals.
+    call(&app, Method::POST, "/api/dsa/problems/lc-encode-and-decode-strings/log", Some(json!({ "grade": "good" }))).await;
+    let (_, a) = call(&app, Method::GET, "/api/activity?sections=D", None).await;
+    assert_eq!((a["streak"].as_u64(), a["week_solved"].as_u64()), (Some(1), Some(1)));
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!((sum(&o, "solved"), sum(&o, "total")), (0, 5));
+    assert_eq!(problem_of(&o, "lc-encode-and-decode-strings")["state"]["solved"], true, "what was logged is kept");
+    let (_, tracks) = call(&app, Method::GET, "/api/tracks", None).await;
+    let dsa_solved: u64 = tracks.as_array().unwrap().iter().filter(|t| t["section"] == "D").map(|t| t["solved"].as_u64().unwrap()).sum();
+    assert_eq!(dsa_solved, 0);
+
+    // Counting premium puts it into the totals; the logged solve is there from the start.
+    let (_, s) = call(&app, Method::GET, "/api/settings", None).await;
+    let mut srs = s["srs"].clone();
+    srs["goal"]["free_only"] = json!(false);
+    assert_eq!(call(&app, Method::PUT, "/api/settings/srs", Some(srs)).await.0, StatusCode::OK);
+    let (_, o) = call(&app, Method::GET, "/api/dsa", None).await;
+    assert_eq!((sum(&o, "solved"), sum(&o, "total")), (1, 6));
 }

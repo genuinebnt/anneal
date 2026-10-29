@@ -2,6 +2,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api } from "../api";
+import { counted } from "../dsa";
 import { Header } from "./Header";
 import { ResetTrack } from "./ResetTrack";
 
@@ -50,7 +51,7 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
 
     // Progress is counted on the NeetCode 150, the same as the cards on the DSA home.
     const prog = (c: string): [number, number] => {
-        const ps = (o?.problems ?? []).filter((p) => p.pattern === c && p.lists.includes("neetcode150"));
+        const ps = (o?.problems ?? []).filter((p) => p.pattern === c && p.lists.includes("neetcode150") && counted(o!, p));
         return [ps.filter((p) => p.state.solved).length, ps.length];
     };
     const [done, total] = pattern ? prog(pattern.code) : [0, 0];

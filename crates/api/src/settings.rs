@@ -146,6 +146,42 @@ pub async fn srs(db: &sqlx::PgPool) -> sqlx::Result<crate::reviews::Settings> {
     Ok(stored.map(|j| j.0).unwrap_or_default())
 }
 
+/// Whether premium LeetCode problems are in the completion totals (progress bars, readiness, goals). Off by default. It is
+/// the inverse of the goal's `free_only` flag, so there is one stored value and the plan page's switch edits the same one.
+/// What the owner *did* (streak, heatmap, reviews) always includes premium, whatever this says.
+pub async fn count_premium(db: &sqlx::PgPool) -> sqlx::Result<bool> {
+    Ok(!srs(db).await?.goal.free_only)
+}
+
+/// `GET /api/prefs`: the small browser choices (panel sizes, timer lengths, what is hidden), kept on the server so they
+/// follow the owner to another laptop.
+pub async fn get_prefs(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let stored: Option<Jsonb<serde_json::Value>> = sqlx::query_scalar("SELECT value FROM settings WHERE key = 'ui_prefs'").fetch_optional(&s.db).await?;
+    Ok(Json(stored.map_or_else(|| serde_json::json!({}), |j| j.0)))
+}
+
+#[derive(serde::Deserialize)]
+pub struct PrefBody {
+    key: String,
+    value: serde_json::Value,
+}
+
+/// `POST /api/prefs`: sets one preference, leaving the others as they are.
+pub async fn put_pref(State(s): State<AppState>, Json(b): Json<PrefBody>) -> ApiResult<Json<serde_json::Value>> {
+    if b.key.is_empty() || b.key.len() > 80 || b.value.to_string().len() > 16 * 1024 {
+        return Err(ApiError::BadRequest("a preference key is 1 to 80 characters and its value at most 16 KB".into()));
+    }
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('ui_prefs', jsonb_build_object($1::text, $2::jsonb))
+         ON CONFLICT (key) DO UPDATE SET value = settings.value || jsonb_build_object($1::text, $2::jsonb), updated_at = now()",
+    )
+    .bind(&b.key)
+    .bind(Jsonb(&b.value))
+    .execute(&s.db)
+    .await?;
+    Ok(Json(serde_json::json!({ "saved": b.key })))
+}
+
 pub async fn put_srs(State(s): State<AppState>, Json(v): Json<crate::reviews::Settings>) -> ApiResult<Json<crate::reviews::Settings>> {
     v.validate().map_err(ApiError::BadRequest)?;
     store(&s, "srs", &v).await?;

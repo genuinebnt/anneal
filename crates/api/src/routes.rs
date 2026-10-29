@@ -27,11 +27,12 @@ pub async fn health(State(s): State<AppState>) -> Json<Value> {
 
 pub async fn tracks(State(s): State<AppState>) -> ApiResult<Json<Vec<TrackSummary>>> {
     let progress = store::progress(&s.db).await?;
+    let count_premium = crate::settings::count_premium(&s.db).await?;
     Ok(Json(
         s.catalog
             .tracks
             .iter()
-            .map(|t| views::track_summary(t, &progress))
+            .map(|t| views::track_summary(t, &progress, count_premium))
             .collect(),
     ))
 }
@@ -52,14 +53,18 @@ pub async fn activity(
     };
     let progress = store::progress(&s.db).await?;
     let rows = store::activity(&s.db).await?;
-    Ok(Json(activity::build(&s.catalog, &sections, &progress, &rows, activity::today())))
+    let count_premium = crate::settings::count_premium(&s.db).await?;
+    let is_solve_day = crate::calendar::solve_day_fn(&s.db).await?;
+    Ok(Json(activity::build(&s.catalog, &sections, &progress, &rows, activity::today(), count_premium, &is_solve_day)))
 }
 
 pub async fn progress(State(s): State<AppState>) -> ApiResult<Json<Overview>> {
     let rows = store::activity(&s.db).await?;
     let focus = store::focus(&s.db).await?;
     let progress = store::progress(&s.db).await?;
-    Ok(Json(progress::overview(&s.catalog, &rows, &focus, &progress, activity::today())))
+    let count_premium = crate::settings::count_premium(&s.db).await?;
+    let is_solve_day = crate::calendar::solve_day_fn(&s.db).await?;
+    Ok(Json(progress::overview(&s.catalog, &rows, &focus, &progress, activity::today(), count_premium, &is_solve_day)))
 }
 
 pub async fn stats(State(s): State<AppState>) -> ApiResult<Json<Stats>> {
@@ -108,7 +113,8 @@ pub async fn track(
         .track(&slug)
         .ok_or_else(|| ApiError::NotFound(format!("track {slug}")))?;
     let progress = store::progress(&s.db).await?;
-    Ok(Json(views::track_detail(t, &progress)))
+    let count_premium = crate::settings::count_premium(&s.db).await?;
+    Ok(Json(views::track_detail(t, &progress, count_premium)))
 }
 
 /// `POST /api/tracks/{track}/reset`: forgets the progress on every problem of one track: attempts and their runs, drafts, scratch files,

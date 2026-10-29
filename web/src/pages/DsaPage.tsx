@@ -8,7 +8,7 @@ import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
 import { PracticeRow } from "./PracticePage";
 import { pad2, pctColor } from "../components/bits";
-import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, daysUntil, hours, inList, leetcode, niceDate, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
+import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, counted, daysUntil, hours, inList, leetcode, niceDate, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
 
 type Role = "must_learn" | "practice";
 type View = "patterns" | "problems" | "practice";
@@ -152,7 +152,7 @@ export function DsaPage() {
               </div>
               <div>
                 <b>
-                  <CountUp value={o.problems.length} />
+                  <CountUp value={o.problems.filter((p) => counted(o, p)).length} />
                 </b>
                 <span>PROBLEMS</span>
               </div>
@@ -285,7 +285,7 @@ function build(o: DsaOverview, f: Filters): Model {
     q: (p) => !needle || `${p.title} ${p.number} ${p.tags.join(" ")}`.toLowerCase().includes(needle),
   };
   const passing = (except: string) => o.problems.filter((p) => Object.entries(tests).every(([k, t]) => k === except || t(p)));
-  const unsolved150 = o.problems.filter((p) => inList(p, "neetcode150") && !p.state.solved);
+  const unsolved150 = o.problems.filter((p) => inList(p, "neetcode150") && counted(o, p) && !p.state.solved);
   const listCounts = Object.fromEntries(LISTS.map(([k]) => [k, o.problems.filter((p) => inList(p, k) && Object.entries(tests).every(([t, test]) => t === "list" || test(p))).length])) as Record<ListKey, number>;
   return {
     tests,
@@ -310,13 +310,13 @@ function Goals({ o, f, setList }: { o: DsaOverview; f: Filters; setList: (l: Lis
   return (
     <section className="d-goals" aria-label="Goals">
       {defs.map(([k, label, color]) => {
-        const items = o.problems.filter((p) => inList(p, k));
+        const items = o.problems.filter((p) => inList(p, k) && counted(o, p));
         const done = items.filter((p) => p.state.solved).length;
         const left = items.filter((p) => p.role === "must_learn" && !p.state.solved).length;
         const note =
           k === "all" ? (
             <>
-              <b>{o.problems.filter((p) => p.premium).length}</b> need LeetCode Premium
+              <b>{o.problems.filter((p) => p.premium).length}</b> need LeetCode Premium{o.settings.goal.free_only ? ", not counted" : ""}
             </>
           ) : k === "new250" ? (
             <>must-learn problems the 150 doesn't cover</>
@@ -550,7 +550,7 @@ function PatternGrid({ o, f, model }: { o: DsaOverview; f: Filters; model: Model
         card.style.setProperty("--my", `${e.clientY - r.top}px`);
       }}>
         {o.patterns.map((pat, i) => {
-          const scope = o.problems.filter((p) => p.pattern === pat.code && model.tests.list?.(p));
+          const scope = o.problems.filter((p) => p.pattern === pat.code && model.tests.list?.(p) && counted(o, p));
           if (!scope.length) return null;
           const match = scope.filter((p) => model.items.includes(p));
           const done = scope.filter((p) => p.state.solved).length;
@@ -867,7 +867,7 @@ function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f
   const [morePatterns, setMorePatterns] = useState(false);
   const [tagQ, setTagQ] = useState("");
   const shown = model.items.length;
-  const inListN = o.problems.filter((p) => inList(p, f.list)).length;
+  const inListN = o.problems.filter((p) => inList(p, f.list) && counted(o, p)).length;
   const listName = LISTS.find(([k]) => k === f.list)?.[1] ?? "";
   const sc = count(model.passing("status"), (p) => statusOf(p, o.today));
   const rc = count(model.passing("role"), (p) => p.role);

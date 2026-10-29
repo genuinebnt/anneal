@@ -53,7 +53,7 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
 }
 
 /// Readiness of a set of sections: tracks with written problems, core tracks counted twice.
-fn area_readiness(catalog: &Catalog, sections: &[Section], progress: &HashMap<String, ProgressRow>) -> Option<f64> {
+fn area_readiness(catalog: &Catalog, sections: &[Section], progress: &HashMap<String, ProgressRow>, count_premium: bool) -> Option<f64> {
     let tracks: Vec<&Track> = catalog
         .tracks
         .iter()
@@ -62,7 +62,7 @@ fn area_readiness(catalog: &Catalog, sections: &[Section], progress: &HashMap<St
     let weight = |t: &Track| if t.tier == anneal_content::Tier::Core { 2.0 } else { 1.0 };
     let total: f64 = tracks.iter().map(|t| weight(t)).sum();
     (total > 0.0).then(|| {
-        let v: f64 = tracks.iter().map(|t| views::readiness(t, progress) * weight(t)).sum::<f64>() / total;
+        let v: f64 = tracks.iter().map(|t| views::readiness(t, progress, count_premium) * weight(t)).sum::<f64>() / total;
         (v * 10.0).round() / 10.0
     })
 }
@@ -200,18 +200,15 @@ pub fn overview(
     focus: &[(NaiveDate, String, i32)],
     progress: &HashMap<String, ProgressRow>,
     today: NaiveDate,
+    count_premium: bool,
+    is_solve_day: &dyn Fn(NaiveDate) -> bool,
 ) -> Overview {
     let solves: Vec<(NaiveDate, &ActivityRow)> = rows.iter().filter_map(|r| Some((local_day(r.solved_at?), r))).collect();
     let mut days: Vec<NaiveDate> = solves.iter().map(|(d, _)| *d).collect();
     days.sort_unstable();
     days.dedup();
-    let longest_streak = days
-        .iter()
-        .fold((0u32, 0u32, None::<NaiveDate>), |(best, run, prev), &d| {
-            let run = if prev.is_some_and(|p| p + Days::new(1) == d) { run + 1 } else { 1 };
-            (best.max(run), run, Some(d))
-        })
-        .0;
+    // The best streak is the best the plan-aware streak ever reached, measured at the end of each solve day.
+    let longest_streak = days.iter().map(|&d| activity::streak_by_plan(&days, d, is_solve_day)).max().unwrap_or(0);
 
     let heat_start = monday_of(today) - Days::new(52 * 7);
     let len = (today - heat_start).num_days() as usize + 1;
@@ -261,7 +258,7 @@ pub fn overview(
     let snapshots: Vec<HashMap<String, ProgressRow>> = week_ends.iter().map(|d| progress_as_of(rows, *d)).collect();
     let readiness_trend = AREAS
         .iter()
-        .map(|(area, sections)| AreaTrend { area, points: snapshots.iter().map(|p| area_readiness(catalog, sections, p)).collect() })
+        .map(|(area, sections)| AreaTrend { area, points: snapshots.iter().map(|p| area_readiness(catalog, sections, p, count_premium)).collect() })
         .collect();
 
     let this_week = (0..7u64)
@@ -286,19 +283,19 @@ pub fn overview(
     let by_section = sections
         .into_iter()
         .map(|s| {
-            let problems = catalog.tracks.iter().filter(|t| t.section == s).flat_map(|t| &t.problems);
+            let problems = catalog.tracks.iter().filter(|t| t.section == s).flat_map(|t| &t.problems).filter(|p| views::counts(p, count_premium));
             let ready: Vec<_> = problems.filter(|p| p.meta.status == Status::Ready).collect();
             SectionRow {
                 section: s,
                 solved: ready.iter().filter(|p| progress.get(&p.id).is_some_and(|r| r.solved)).count(),
                 written: ready.len(),
-                readiness: area_readiness(catalog, &[s], progress),
+                readiness: area_readiness(catalog, &[s], progress, count_premium),
             }
         })
         .collect();
 
     Overview {
-        streak: activity::streak(&days, today),
+        streak: activity::streak_by_plan(&days, today, is_solve_day),
         longest_streak,
         heat_start,
         heat,

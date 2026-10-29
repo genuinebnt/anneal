@@ -105,7 +105,13 @@ pub struct ProblemSummary {
     pub progress: Progress,
 }
 
-pub fn track_summary(t: &Track, progress: &HashMap<String, ProgressRow>) -> TrackSummary {
+/// Whether a problem is in the completion totals: a premium one only when the owner chose to count premium
+/// (`settings::count_premium`). Logged progress on it is kept either way.
+pub fn counts(p: &Problem, count_premium: bool) -> bool {
+    count_premium || !p.dsa.as_ref().is_some_and(|d| d.premium)
+}
+
+pub fn track_summary(t: &Track, progress: &HashMap<String, ProgressRow>, count_premium: bool) -> TrackSummary {
     let state = |p: &Problem| Progress::of(progress.get(&p.id));
     let stages = t
         .stages
@@ -114,7 +120,7 @@ pub fn track_summary(t: &Track, progress: &HashMap<String, ProgressRow>) -> Trac
             let ps: Vec<&Problem> = t
                 .problems
                 .iter()
-                .filter(|p| p.meta.stage == s.slug)
+                .filter(|p| p.meta.stage == s.slug && counts(p, count_premium))
                 .collect();
             StageView {
                 slug: s.slug.clone(),
@@ -135,14 +141,14 @@ pub fn track_summary(t: &Track, progress: &HashMap<String, ProgressRow>) -> Trac
         order: t.order,
         summary: t.summary.clone(),
         stages,
-        total: t.problems.len(),
+        total: t.problems.iter().filter(|p| counts(p, count_premium)).count(),
         ready: t
             .problems
             .iter()
-            .filter(|p| p.meta.status == Status::Ready)
+            .filter(|p| p.meta.status == Status::Ready && counts(p, count_premium))
             .count(),
-        solved: t.problems.iter().filter(|p| state(p).solved()).count(),
-        readiness: readiness(t, progress),
+        solved: t.problems.iter().filter(|p| counts(p, count_premium) && state(p).solved()).count(),
+        readiness: readiness(t, progress, count_premium),
     }
 }
 
@@ -158,14 +164,15 @@ pub fn weight(level: Band) -> f64 {
 /// Readiness for a track, 0–100: Σ weight × credit / Σ weight over every problem in the
 /// track, drafts included. Credit is 1 for an unassisted solve and 0.5 for an assisted one, times the
 /// overdue-review decay. (PLAN.md's tested-out credit isn't implemented.)
-pub fn readiness(t: &Track, progress: &HashMap<String, ProgressRow>) -> f64 {
-    let total: f64 = t.problems.iter().map(|p| weight(p.meta.level)).sum();
+pub fn readiness(t: &Track, progress: &HashMap<String, ProgressRow>, count_premium: bool) -> f64 {
+    let total: f64 = t.problems.iter().filter(|p| counts(p, count_premium)).map(|p| weight(p.meta.level)).sum();
     if total == 0.0 {
         return 0.0;
     }
     let earned: f64 = t
         .problems
         .iter()
+        .filter(|p| counts(p, count_premium))
         .map(|p| {
             let row = progress.get(&p.id);
             let credit = match Progress::of(row) {
@@ -179,9 +186,9 @@ pub fn readiness(t: &Track, progress: &HashMap<String, ProgressRow>) -> f64 {
     (1000.0 * earned / total).round() / 10.0
 }
 
-pub fn track_detail(t: &Track, progress: &HashMap<String, ProgressRow>) -> TrackDetail {
+pub fn track_detail(t: &Track, progress: &HashMap<String, ProgressRow>, count_premium: bool) -> TrackDetail {
     TrackDetail {
-        summary: track_summary(t, progress),
+        summary: track_summary(t, progress, count_premium),
         problems: t
             .problems
             .iter()
