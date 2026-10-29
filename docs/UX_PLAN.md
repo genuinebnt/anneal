@@ -173,3 +173,41 @@ The owner asked for everything to be built while away, without review, deciding 
 problems on 1 Jan 2020 by default and starts no reviews; a premium problem you complete always counts toward activity, the setting only changes
 totals and bars; server-synced preferences are skipped in automated browsers so tests stay isolated; every delete archives to `data_archive` and
 is never purged.
+
+## 10. UI polish pass (planned 2026-10-30; nothing built)
+
+Scope set by the owner: **UI improvements only**, no new features. Three rounds of ideas were sorted into the list below. Anything that adds
+behaviour, data or a new screen's purpose is parked at the end. Picks so far: round 2 items 1, 3, 4 and 5 (marked ★); the owner has not
+yet said whether the rest of round 1 is wanted (assumed yes unless told otherwise) and has not answered round 3.
+
+**A. Audit first**
+- A1. Screenshot and write up the pages not yet looked at: the Rust workspace, course stage and concept pages, pattern Learn pages, the Mock round screen. Both themes, 390 / 1440 / 1920 px, all four accents. Findings go into this file before any fix.
+
+**B. Shared pieces** (one component each, shown on `/kit`)
+- B1. Buttons: the ten one-off styles (`pp-act`, `cm-btn`, `st-btn`, `rv-ghost`, `mi-ghost`, `pp-link`, ...) become a small set (primary, secondary, quiet, danger).
+- B2. Switches and segmented controls (`d-sw`, `st-sw`, `st-seg`, `acct-seg`, `c-seg`, `rv-sort`).
+- B3. One toast system (the corner stack and the bottom `d-toast` become one).
+- B4. Popovers: account menu, bell, ⌘K and shortcut help share placement, focus and closing.
+- B5. A radius, spacing and type scale (radii are 8, 9, 10, 12 and 14 today) and one icon set (Unicode glyphs and hand-drawn SVGs are mixed).
+
+**C. Layout**
+- C1. ★ A "today" strip on the DSA home: reviews due, today's problem, logged, as steps (mockup first).
+- C2. ★ Density for problem lists: compact or comfortable, and which columns show; remembered.
+- C3. ★ Collapsible pattern groups with sticky headers.
+- C4. ★ A recall curve on a problem's page (a small chart, from review data already stored).
+- C5. Compact headers on working pages (Plan, Progress, Patterns, Review, Calendar); the big headline stays on the two home pages.
+- C6. The equal-height two-column rule (done for Calendar and Review) on the problem page rail, Company and Settings; check 1920 px and the width toggle on the new pages.
+- C7. Group Plan, Calendar and Company under one "Plan" tab with sub-pages (mockup first; the tab row is seven wide).
+
+**D. States**
+- D1. Skeletons on every page that loads. D2. Errors and empty states that say what to do next (a banner when the server cannot be reached or the login expired; a friendly screen if the app crashes). D3. One confirmation pattern for destructive actions.
+
+**E. Accessibility and devices**
+- E1. Contrast: dim text in light theme, the four accents, the per-topic hues. E2. Keyboard order, focus trapping in dialogs, labels on icon buttons and custom switches. E3. Phone: 44 px touch targets, the bottom dock against the numbers bar. E4. A reduce-motion override and a text-size setting. E5. A high-contrast theme.
+
+**F. Reading and feel**
+- F1. A reading mode for a problem (no rail, comfortable line width) and LeetCode's diagrams made to look right in dark theme. F2. Line numbers in solutions. F3. Plain-wording and hover explanations for metrics (recall, readiness, pace), and dismissible one-time tips for ⌘K, `?`, J/K. F4. Deep links and scroll restore (month, current review, filters, settings sections, list position). F5. Drag to reorder plan topics. F6. Preload a page when its link is hovered, and keep old content on screen while new data loads. F7. Screenshot tests of key pages in both themes, so a later change cannot silently break consistency.
+
+**Parked (features, not UI):** "Why is this next?", a skill map, a weak-spots view, burn-down and load forecast, focus time per problem, a smarter Continue and a combined timeline, a "recently deleted" viewer and a data health card, holiday mode, milestones, saved filters, stars, multi-select logging, reordering home cards, key chords.
+
+**Suggested order:** A1; then B1 to B5 with the first batch of fixes across pages; then D and E; then C and F; C1 and C7 only after a mockup is approved.
