@@ -4,6 +4,7 @@ import { api } from "../api";
 import { isRustSection, PLANNED, sectionOf } from "../curriculum";
 import { niceDate } from "../dsa";
 import { getPref } from "../prefs";
+import { useShowIdeas } from "../spoilers";
 
 type AreaId = "dsa" | "rust" | "courses";
 type Item = { key: string; label: string; value: string; of?: string; note?: string; bar?: number; tone?: "ok" | "warn" | "bad" | "hot"; spark?: number[] };
@@ -31,6 +32,7 @@ export function StatsBar({ area }: { area: AreaId }) {
         return () => document.documentElement.classList.remove("has-sb");
     }, [hidden]);
 
+    const [showIdeas] = useShowIdeas();
     const items = useMemo<Item[]>(() => {
         const out: Item[] = [];
         const o = dsa.data;
@@ -43,7 +45,8 @@ export function StatsBar({ area }: { area: AreaId }) {
             out.push({ key: "due", label: "REVIEWS DUE", value: String(plan.due), note: plan.overdue ? `${plan.overdue} overdue` : "none overdue", tone: plan.overdue ? "bad" : plan.due ? "warn" : "ok" });
             out.push({ key: "today", label: "TODAY", value: plan.solve_day ? "solve day" : "practice day", note: `room for ${plan.capacity} reviews` });
             const next = o.problems.find((x) => x.id === plan.next_up[0]);
-            if (next) out.push({ key: "next", label: "NEXT UP", value: next.title, note: o.patterns.find((x) => x.code === next.pattern)?.name ?? next.pattern });
+            // the pattern's name would give the approach away, so it is shown only when the key idea is
+            if (next) out.push({ key: "next", label: "NEXT UP", value: next.title, note: showIdeas ? (o.patterns.find((x) => x.code === next.pattern)?.name ?? next.pattern) : undefined });
             const pace = plan.pace;
             if (pace.per_week != null) out.push({ key: "pace", label: "PACE NEEDED", value: `${pace.per_week.toFixed(1)}/week`, note: `${pace.solve_days_left} solve days left` });
             if (pace.finish_at_current) {
@@ -70,7 +73,7 @@ export function StatsBar({ area }: { area: AreaId }) {
             if (c.last_run) out.push({ key: "run", label: "LAST RUN", value: c.last_run.stage_id, note: `${c.last_run.passed}/${c.last_run.total} passing`, tone: c.last_run.ok ? "ok" : "bad" });
         }
         return out;
-    }, [area, dsa.data, progress.data, tracks.data, course.data]);
+    }, [area, dsa.data, progress.data, tracks.data, course.data, showIdeas]);
 
     if (hidden || items.length === 0) return null;
     const render = (copy: number) =>

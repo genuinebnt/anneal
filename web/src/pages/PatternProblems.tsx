@@ -15,11 +15,11 @@ export function PatternProblems({ code }: { code: string }) {
     const { log, toast } = useLogger(o?.today);
     const [list, setList] = useState("neetcode150");
     const pattern = o?.patterns.find((p) => p.code.toLowerCase() === code.toLowerCase() || p.slug === code);
-    const problems = o && pattern ? o.problems.filter((p) => p.pattern === pattern.code && (list === "all" || p.lists.includes(list as never))).sort((a, b) => a.order - b.order) : [];
+    const problems = o && pattern ? o.problems.filter((p) => p.pattern === pattern.code && counted(o, p) && (list === "all" || p.lists.includes(list as never))).sort((a, b) => a.order - b.order) : [];
     const groups = o ? o.techniques.filter((t) => t.pattern === pattern?.name).map((t) => ({ t, rows: problems.filter((p) => p.technique === t.id) })).filter((g) => g.rows.length) : [];
     const loose = problems.filter((p) => !groups.some((g) => g.rows.includes(p)));
-    // the rows show every problem; the totals and the bar count the ones the Settings say count (premium is optional)
-    const totals = o ? problems.filter((p) => counted(o, p)) : problems;
+    // premium problems are in the rows and the totals together, or in neither (Settings, or the filter on the DSA home)
+    const totals = problems;
     return (
         <PatternShell code={code} tab="problems">
             {overview.isError && <p className="notice bad">Couldn't load the problems.</p>}

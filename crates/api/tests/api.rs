@@ -524,7 +524,7 @@ async fn passphrase_login_gates_the_api(db: PgPool) {
     let pair = cookie.split(';').next().unwrap().to_owned();
 
     // The routes that hand out or take in everything the owner has made are behind the login too.
-    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/feed"), (Method::POST, "/api/feed"), (Method::GET, "/api/week-summary"), (Method::GET, "/api/day/2026-10-29"), (Method::POST, "/api/dsa/bulk-solved"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
+    for (method, path) in [(Method::GET, "/api/export"), (Method::POST, "/api/import"), (Method::GET, "/api/feed"), (Method::POST, "/api/feed"), (Method::GET, "/api/week-summary"), (Method::GET, "/api/day/2026-10-29"), (Method::POST, "/api/dsa/bulk-solved"), (Method::POST, "/api/plans/company"), (Method::GET, "/api/prefs"), (Method::POST, "/api/prefs"), (Method::POST, "/api/dsa/problems/lc-two-sum/restore"), (Method::POST, "/api/dsa/problems/lc-two-sum/undo")] {
         assert_eq!(raw(&app, method, path, None, Some(json!({}))).await.0, StatusCode::UNAUTHORIZED, "{path} must need the login");
     }
     assert_eq!(raw(&app, Method::GET, "/api/tracks", Some(&pair), None).await.0, StatusCode::OK);
@@ -2187,4 +2187,42 @@ async fn the_week_summary_describes_last_monday_to_sunday(db: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!((w["solved"].clone(), w["unassisted"].clone(), w["attempted"].clone(), w["active_days"].clone()), (json!(2), json!(1), json!(1), json!(1)), "{w}");
     assert!(w["weakest"]["name"].is_string(), "{w}");
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_company_plan_is_made_beside_the_main_plan_and_is_not_duplicated(db: PgPool) {
+    use chrono::Days;
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    let today = chrono::Local::now().date_naive();
+    async fn view(app: &Router) -> (StatusCode, Value) {
+        call(app, Method::GET, "/api/plan?from=2026-01-01&to=2026-01-02", None).await
+    }
+
+    let interview = today + Days::new(30);
+    let (status, made) = call(&app, Method::POST, "/api/plans/company", Some(json!({ "company": "Amazon", "interview": interview }))).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(made["created"], true);
+    let (_, v) = view(&app).await;
+    assert_eq!(v["active"], made["id"], "the new plan is switched to");
+    let plans = v["plans"].as_array().unwrap();
+    let company = plans.iter().find(|p| p["name"] == "Interview: Amazon").expect("the company plan");
+    assert_eq!(company["rules"]["companies"], json!(["Amazon"]));
+    assert_eq!((company["rules"]["order"].clone(), company["rules"]["finish_by"].clone()), (json!("company"), json!(interview.to_string())));
+    assert!(plans.iter().any(|p| p["id"] == "default" && p["rules"]["companies"] == json!([])), "the main plan is untouched");
+
+    // Asking again updates it, it does not add a second.
+    let (_, again) = call(&app, Method::POST, "/api/plans/company", Some(json!({ "company": "Amazon", "recent_only": false }))).await;
+    assert_eq!((again["created"].clone(), again["id"].clone()), (json!(false), made["id"].clone()));
+    let (_, v) = view(&app).await;
+    assert_eq!(v["plans"].as_array().unwrap().len(), 2);
+    assert_eq!(v["plans"].as_array().unwrap().iter().find(|p| p["name"] == "Interview: Amazon").unwrap()["rules"]["recent_only"], false);
+
+    assert_eq!(call(&app, Method::POST, "/api/plans/company", Some(json!({ "company": "Nonesuch Ltd" }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(call(&app, Method::POST, "/api/plans/company", Some(json!({ "company": "Amazon", "interview": today }))).await.0, StatusCode::BAD_REQUEST);
+
+    // Back to the main plan.
+    assert_eq!(call(&app, Method::PUT, "/api/plans/active", Some(json!({ "id": "default" }))).await.0, StatusCode::OK);
+    let (_, v) = view(&app).await;
+    assert_eq!(v["active"], "default");
 }

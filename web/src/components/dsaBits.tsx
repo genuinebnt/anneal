@@ -4,6 +4,8 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type DsaCompany, type DsaOverview, type DsaProblem, type Grade } from "../api";
 import { DIFF, markOf, niceDate } from "../dsa";
+import { useShowIdeas } from "../spoilers";
+import { record } from "./toasts";
 
 const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "attempted", easy: "instant" };
 
@@ -19,6 +21,7 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
   const [whyFor, setWhyFor] = useState<DsaProblem | null>(null);
   const timer = useRef<number>(0);
   const say = (m: string, act: { label: string; run: () => void } | null = null) => {
+    record("ok", m);
     setMessage(m);
     setAction(act);
     setNext(null);
@@ -117,7 +120,7 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
 }
 
 /** The state icon of a problem: a filled disc with a check (solved on my own), a half-filled ring (solved with help),
- *  a red ring with a cross (attempted), a violet ring with a clock when a review is due, and a dashed ring when not started. */
+ *  a yellow ring with an exclamation mark (attempted), a violet ring with a clock when a review is due, and a dashed ring when not started. */
 export function Mark({ p, today }: { p: DsaProblem; today: string }) {
   const mark = markOf(p);
   const started = !!p.state.last_grade;
@@ -130,7 +133,7 @@ export function Mark({ p, today }: { p: DsaProblem; today: string }) {
         <circle className="r" cx="12" cy="12" r="10" />
         {kind === "solo" && <path className="g" d="M7.2 12.4l3.2 3.2 6.4-6.8" />}
         {kind === "help" && <path className="h" d="M12 2a10 10 0 0 0 0 20z" />}
-        {kind === "fail" && <path className="g" d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2" />}
+        {kind === "fail" && <path className="g" d="M12 6.8v6M12 16.6v.5" />}
         {kind === "due" && <path className="g" d="M12 6.8V12l3.4 2" />}
       </svg>
     </span>
@@ -155,7 +158,7 @@ export function StateLegend() {
               <circle className="r" cx="12" cy="12" r="10" />
               {kind === "solo" && <path className="g" d="M7.2 12.4l3.2 3.2 6.4-6.8" />}
               {kind === "help" && <path className="h" d="M12 2a10 10 0 0 0 0 20z" />}
-              {kind === "fail" && <path className="g" d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2" />}
+              {kind === "fail" && <path className="g" d="M12 6.8v6M12 16.6v.5" />}
               {kind === "due" && <path className="g" d="M12 6.8V12l3.4 2" />}
             </svg>
           </span>
@@ -271,7 +274,17 @@ export function ProblemTags({ p }: { p: DsaProblem }) {
  *  companies and LeetCode topics that are asked about it. */
 /** The key insight of a problem, one line (docs/DSA_LEARN_PAGE_SPEC.md section 8). */
 export function Insight({ text }: { text: string }) {
-  return text ? <p className="d-ins">{text}</p> : null;
+  const [show] = useShowIdeas();
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  // the idea is the solution's first move, so it stays hidden until asked for
+  return show || open ? (
+    <p className="d-ins">{text}</p>
+  ) : (
+    <button className="d-ins d-ins-hide" onClick={(e) => { e.preventDefault(); setOpen(true); }} aria-label="Show the key idea">
+      Key idea hidden · <span>show</span>
+    </button>
+  );
 }
 
 export function ProblemLine({ p, today }: { p: DsaProblem; today: string }) {

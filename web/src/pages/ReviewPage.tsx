@@ -327,7 +327,7 @@ const ago = (iso: string | null, today: string) => {
   const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${iso}T00:00`)) / 864e5);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 };
-const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "✗ attempted" };
+const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "! attempted" };
 
 function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
   const p = item.problem;

@@ -22,7 +22,7 @@ use sqlx::types::Json as Jsonb;
 use crate::AppState;
 use crate::dsa::dsa_tracks;
 use crate::error::{ApiError, ApiResult};
-use crate::planner::{self, Company, Ctx, Diff, Item, Kind, LADDER, Owed, PRACTICE_FLOOR, Planned, Remedy, Routine, Rules};
+use crate::planner::{self, Company, Ctx, Diff, Item, Kind, LADDER, Order, Owed, PRACTICE_FLOOR, Planned, Practice, Remedy, Routine, Rules};
 use crate::reviews::{self, Settings};
 use crate::store::{self, ProgressRow, ReviewRow};
 
@@ -610,6 +610,55 @@ pub async fn create(State(s): State<AppState>, Json(body): Json<NewPlan>) -> Api
     save_book(&s, &book).await?;
     replace_overrides(&s, &id, &ov).await?;
     Ok(Json(json!({ "id": id })))
+}
+
+#[derive(Deserialize)]
+pub struct CompanyPlan {
+    company: String,
+    /// The interview day; everything in scope is planned to be done by then.
+    interview: Option<NaiveDate>,
+    /// Only what the company asked in the last six months.
+    #[serde(default = "yes")]
+    recent_only: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// `POST /api/plans/company`: a plan for one company's interview, made fresh (the main plan and its calendar edits are not touched) and
+/// switched to, so Next up follows it. It takes every problem the company asks, most-asked first with the last six months counting
+/// double, and is paced to the interview day. Asking again for the same company updates that plan instead of making a second one.
+pub async fn company_plan(State(s): State<AppState>, Json(body): Json<CompanyPlan>) -> ApiResult<Json<Value>> {
+    if !anneal_content::COMPANIES.iter().any(|(name, _)| *name == body.company) {
+        return Err(ApiError::BadRequest(format!("{} is not a company anneal knows", body.company)));
+    }
+    if body.interview.is_some_and(|d| d <= crate::activity::today()) {
+        return Err(ApiError::BadRequest("the interview day must be in the future".into()));
+    }
+    let rules = Rules { companies: vec![body.company.clone()], recent_only: body.recent_only, order: Order::Company, practice: Practice::All, finish_by: body.interview, ..Rules::default() };
+    let name = format!("Interview: {}", body.company);
+    let mut book = book(&s.db).await?;
+    let (id, created) = match book.list.iter_mut().find(|p| p.name == name) {
+        Some(existing) => {
+            existing.rules = rules;
+            (existing.id.clone(), false)
+        }
+        None => {
+            if book.list.len() >= 12 {
+                return Err(ApiError::BadRequest("keep at most 12 plans; delete one first".into()));
+            }
+            let mut id = format!("p{}", chrono::Utc::now().timestamp_millis());
+            while book.list.iter().any(|p| p.id == id) {
+                id.push('x');
+            }
+            book.list.push(SavedPlan { id: id.clone(), name, rules });
+            (id, true)
+        }
+    };
+    book.active = id.clone();
+    save_book(&s, &book).await?;
+    Ok(Json(json!({ "id": id, "created": created })))
 }
 
 #[derive(Deserialize)]

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const premiumSwitch = (page: import("@playwright/test").Page) => page.getByRole("switch", { name: "Count premium problems" });
+const premiumSwitch = (page: import("@playwright/test").Page) => page.getByRole("switch", { name: "Show and count premium problems" });
 
 test("premium is not counted by default; switching it on raises the goal, switching it off restores it", async ({ page }) => {
     await page.goto("/dsa");
@@ -10,10 +10,10 @@ test("premium is not counted by default; switching it on raises the goal, switch
 
     await page.goto("/settings");
     await expect(premiumSwitch(page)).toHaveAttribute("aria-checked", "false");
-    await expect(page.locator(".st-note")).toContainText("Turning this on makes the goal");
+    await expect(page.locator(".st-note")).toContainText("Turning this on shows them and makes the goal");
     await premiumSwitch(page).click();
     await expect(premiumSwitch(page)).toHaveAttribute("aria-checked", "true");
-    await expect(page.locator(".st-note")).toContainText("All of them count now");
+    await expect(page.locator(".st-note")).toContainText("All of them are shown and count now");
 
     await page.goto("/dsa");
     await expect(page.locator(".d-goal").first().locator(":scope > b")).not.toHaveText(off);
@@ -64,4 +64,17 @@ test("the backup downloads as an anneal backup and the theme can be set to syste
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
     await page.getByRole("radio", { name: "System" }).click();
     expect(await page.evaluate(() => document.documentElement.dataset.theme ?? "system")).toBe("system");
+});
+
+test("Hide LeetCode Premium in the filters and the Settings switch are the same setting", async ({ page }) => {
+    await page.goto("/dsa");
+    await page.getByRole("button", { name: "Filters" }).first().click();
+    const hide = page.getByRole("button", { name: "Hide LeetCode Premium" });
+    await expect(hide).toHaveAttribute("aria-pressed", "true");
+    await hide.click();
+    await expect(hide).toHaveAttribute("aria-pressed", "false");
+    await page.goto("/settings");
+    await expect(premiumSwitch(page)).toHaveAttribute("aria-checked", "true");
+    await premiumSwitch(page).click();
+    await expect(premiumSwitch(page)).toHaveAttribute("aria-checked", "false");
 });

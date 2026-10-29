@@ -160,7 +160,7 @@ The owner asked for everything to be built while away, without review, deciding 
 
 | Item | State | Why / what is needed |
 |---|---|---|
-| 6.10 Company mode (plan prefers a company's recent problems) | not built | A planner change with a design question (how strongly to weight, what happens to the curriculum order). Needs the owner's wish and a mockup. |
+| 6.10 Company mode | **built 2026-10-30** | Interview mode: `/dsa/company` and `POST /api/plans/company` (uses the planner's existing company filter and "most asked" order). |
 | 5.3 Today screen | not built | The DSA home now opens on Next up with the day's chip, due reviews and the Monday summary, which is most of it. Say if a separate screen is still wanted. |
 | 8.3 Rust and Courses counts | not done | The Courses hero says 317 stages while the header chip says 169 (planned modules counted in one place, see `withoutPlanned` in CoursePage); the Rust hero says 596 problems against 197 written. DSA is settled by the premium setting. Needs a decision on which number each place should show. |
 | 2.4 Time spent on a log | not built | Optional and needs a table (additive). The timer's elapsed time is not yet offered when logging. |

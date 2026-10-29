@@ -10,6 +10,19 @@ export interface Entry {
 
 export const WHATS_NEW: Entry[] = [
     {
+        id: "2026-10-30",
+        date: "30 Oct 2026",
+        title: "Interview mode, a bell, a better search, and no spoilers",
+        items: [
+            "Interview mode (Company tab): pick a company and the day, see how much it asks and the pace that needs, and make it your plan. Next up follows it, and you can go back to your main plan at any time.",
+            "The bell in the header lists what needs you today (reviews due, today's problem, a streak at risk, a late plan) and what was said lately. Each item can be dismissed for the day.",
+            "⌘K is fuzzier and grouped: pages, actions, problems, stages, tracks. It marks what matched, shows a problem's status, puts what you chose last on top, and understands `>` for actions, a LeetCode number, and `log two sum`.",
+            "The key idea and the technique name are hidden on the home, in lists and in a problem's header until you click Show. Settings can show them always.",
+            "Hide LeetCode Premium in the filters and the premium switch in Settings are one setting: hidden problems are also left out of every total.",
+            "Attempted is a yellow ! now. The theme button has its own icon for System. A Settings gear sits in the header. The Calendar's rules panel and the Review queue are as tall as what is beside them.",
+        ],
+    },
+    {
         id: "2026-10-29",
         date: "29 Oct 2026",
         title: "Review, counting, safety and a lot of small things",

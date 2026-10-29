@@ -101,6 +101,7 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/plan/preview", post(calendar::preview))
         .route("/plan/state", put(calendar::put_state))
         .route("/plans", post(calendar::create))
+        .route("/plans/company", post(calendar::company_plan))
         .route("/plans/active", put(calendar::set_active))
         .route("/plans/{id}", axum::routing::delete(calendar::delete))
         .route("/dsa/problems/{id}/solutions", get(solutions::list).post(solutions::create))

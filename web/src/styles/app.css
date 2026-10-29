@@ -456,3 +456,9 @@ a.tr.kb, .tr.kb { background: var(--sel); box-shadow: inset 3px 0 0 var(--vio); 
 .sk{display:flex;flex-direction:column;gap:12px;padding:8px 0}.sk i{display:block;height:14px;border-radius:7px;background:linear-gradient(90deg,var(--raise) 25%,var(--line2) 50%,var(--raise) 75%);background-size:200% 100%;animation:sk-s 1.4s linear infinite}.sk i:nth-child(3n+1){width:86%}.sk i:nth-child(3n+2){width:64%}.sk i:nth-child(3n){width:78%}.sk i.h{height:34px;width:46%;border-radius:10px}
 @keyframes sk-s{to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.sk i{animation:none}}
+
+/* menu entries that are links (All settings, Quick log) look exactly like the menu's buttons */
+.acct-menu a.acct-link { display: block; width: 100%; padding: 9px 10px; border-radius: 5px; font: 500 12.5px var(--mono); color: var(--mut); text-align: left; text-decoration: none; box-sizing: border-box; }
+.acct-menu a.acct-link:hover { background: var(--raise); color: var(--fg); }
+.acct-menu a.acct-first { margin-top: 6px; border-top: 1px solid var(--line2); border-radius: 0 0 5px 5px; }
+.acct-menu a.acct-link + .acct-out { margin-top: 0; border-top: 0; }

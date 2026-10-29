@@ -1,11 +1,12 @@
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useRouterState } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
-import { toast } from "./toasts";
+import { Palette } from "./Palette";
+import { NotificationBell } from "./Notifications";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
 // The header has two tiers (docs/mockups/navbar-v2.html). The first answers "where in the product am I": the three areas as one switcher
@@ -20,7 +21,7 @@ const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses"; col
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
 ];
 
-type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/mock" | "/progress" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
+type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/progress" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
 
 const TABS: Record<AreaId, Tab[]> = {
     dsa: [
@@ -28,6 +29,7 @@ const TABS: Record<AreaId, Tab[]> = {
         { to: "/dsa/plan", label: "Plan", match: (p) => p.startsWith("/dsa/plan") },
         { to: "/dsa/review", label: "Review", match: (p) => p.startsWith("/dsa/review"), badge: "due" },
         { to: "/dsa/calendar", label: "Calendar", match: (p) => p.startsWith("/dsa/calendar") },
+        { to: "/dsa/company", label: "Company", match: (p) => p.startsWith("/dsa/company") },
         { to: "/dsa/mock", label: "Mock interview", match: (p) => p.startsWith("/dsa/mock") },
         { to: "/progress", label: "Progress", match: (p) => p.startsWith("/progress") },
     ],
@@ -176,16 +178,33 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                     <div className="hdr-r">
                         <Continue current={current} course={course.data} dsa={dsa.data} />
                         <WidthToggle />
+                        <NotificationBell />
+                        <Link className="hd-ib set" to="/settings" title="Settings" aria-label="Settings">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <circle cx="8" cy="8" r="2.3" />
+                                <path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2" />
+                            </svg>
+                        </Link>
                         <button className="hd-ib thm" onClick={cycleTheme} title={`Theme: ${theme}. Click for ${THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]}`} aria-label={`Theme: ${theme}`}>
-                            <svg className="moon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                                <path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" />
-                            </svg>
-                            <svg className="sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-                                <circle cx="8" cy="8" r="3" />
-                                <path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
-                            </svg>
+                            {theme === "dark" && (
+                                <svg className="moon on" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                    <path d="M13.5 9.6A6 6 0 0 1 6.4 2.5a6 6 0 1 0 7.1 7.1Z" />
+                                </svg>
+                            )}
+                            {theme === "light" && (
+                                <svg className="sun on" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                                    <circle cx="8" cy="8" r="3" />
+                                    <path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
+                                </svg>
+                            )}
+                            {theme === "system" && (
+                                <svg className="sys on" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <rect x="1.8" y="2.6" width="12.4" height="8.4" rx="1.6" />
+                                    <path d="M5.5 13.6h5M8 11v2.6" />
+                                    <path d="M8 4.6v4.4a2.2 2.2 0 0 1 0-4.4z" fill="currentColor" stroke="none" />
+                                </svg>
+                            )}
                         </button>
-                        {theme === "system" && <span className="thm-auto" title="Following your device">auto</span>}
                         <Account />
                     </div>
                 </div>
@@ -391,7 +410,7 @@ function Account() {
     }, [open]);
     return (
         <div className="acct" ref={box}>
-            <button className="av" aria-haspopup="menu" aria-expanded={open} aria-label="Settings" onClick={() => setOpen(!open)} title="Settings">
+            <button className="av" aria-haspopup="menu" aria-expanded={open} aria-label="Account menu" onClick={() => setOpen(!open)} title="Account">
                 gb
             </button>
             {open && (
@@ -413,10 +432,10 @@ function Account() {
                             </button>
                         ))}
                     </div>
-                    <Link role="menuitem" className="acct-out" to="/settings" onClick={() => setOpen(false)}>
+                    <Link role="menuitem" className="acct-link acct-first" to="/settings" onClick={() => setOpen(false)}>
                         All settings
                     </Link>
-                    <Link role="menuitem" className="acct-out" to="/log" onClick={() => setOpen(false)}>
+                    <Link role="menuitem" className="acct-link" to="/log" onClick={() => setOpen(false)}>
                         Quick log (phone)
                     </Link>
                     {session.data?.required && (
@@ -437,120 +456,3 @@ function Account() {
     );
 }
 
-type Hit = { key: string; label: string; kind: string; color: string; go: () => void };
-
-/** Search: pages, tracks, course stages and DSA problems by name. It reads what the app already loads. */
-function Palette({ onClose }: { onClose: () => void }) {
-    const nav = useNavigate();
-    const qc = useQueryClient();
-    const tracks = useQuery({ queryKey: ["tracks"], queryFn: api.tracks });
-    const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
-    const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
-    const [q, setQ] = useState("");
-    const [sel, setSel] = useState(0);
-    const input = useRef<HTMLInputElement>(null);
-    useEffect(() => input.current?.focus(), []);
-
-    const all = useMemo<Hit[]>(() => {
-        const go = (fn: () => unknown) => () => {
-            onClose();
-            void fn();
-        };
-        const hits: Hit[] = [
-            { key: "p-dsa", label: "DSA problems", kind: "Page", color: "var(--acc)", go: go(() => nav({ to: "/dsa" })) },
-            { key: "p-plan", label: "Plan", kind: "Page", color: "var(--acc)", go: go(() => nav({ to: "/dsa/plan" })) },
-            { key: "p-review", label: "Review", kind: "Page", color: "var(--acc)", go: go(() => nav({ to: "/dsa/review" })) },
-            { key: "p-cal", label: "Calendar", kind: "Page", color: "var(--acc)", go: go(() => nav({ to: "/dsa/calendar" })) },
-            { key: "p-mock", label: "Mock interview", kind: "Page", color: "var(--acc)", go: go(() => nav({ to: "/dsa/mock" })) },
-            { key: "p-rust", label: "Rust tracks", kind: "Page", color: "var(--vio)", go: go(() => nav({ to: "/rust" })) },
-            { key: "p-courses", label: "BusTub course", kind: "Page", color: "var(--grn)", go: go(() => nav({ to: "/courses" })) },
-            { key: "p-progress", label: "Progress", kind: "Page", color: "var(--fg)", go: go(() => nav({ to: "/progress" })) },
-        ];
-        hits.push(
-            { key: "a-settings", label: "Settings", kind: "Action", color: "var(--fg)", go: go(() => nav({ to: "/settings" })) },
-            { key: "a-help", label: "Keyboard shortcuts", kind: "Action", color: "var(--fg)", go: go(() => window.dispatchEvent(new Event("anneal:help"))) },
-            { key: "a-backup", label: "Download a backup of everything", kind: "Action", color: "var(--fg)", go: go(() => window.location.assign("/api/export")) },
-            { key: "a-theme", label: "Change the theme (dark, light, system)", kind: "Action", color: "var(--fg)", go: go(() => { const next = THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length]!; applyTheme(next); }) },
-        );
-        for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", color: "var(--vio)", go: go(() => nav({ to: "/t/$track", params: { track: t.slug } })) });
-        for (const p of course.data?.projects ?? [])
-            for (const m of p.modules)
-                for (const s of m.stages)
-                    hits.push({ key: `s-${s.id}`, label: `${s.id} · ${s.title}`, kind: s.kind === "challenge" ? "Challenge" : "Stage", color: "var(--grn)", go: go(() => nav({ to: "/courses/$course/$stage", params: { course: "bustub", stage: s.id } })) });
-        for (const p of dsa.data?.problems ?? []) hits.push({ key: `d-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Problem", color: "var(--acc)", go: go(() => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
-        return hits;
-    }, [tracks.data, dsa.data, course.data, nav, onClose]);
-
-    const shown = useMemo(() => {
-        const needle = q.trim().toLowerCase();
-        if (!needle) return all.slice(0, 10);
-        const words = needle.split(/\s+/);
-        // "log two sum": the four outcomes for the best matches, logged straight from here
-        if (words[0] === "log" && words.length > 1) {
-            const rest = words.slice(1);
-            const hits: Hit[] = [];
-            for (const p of (dsa.data?.problems ?? []).filter((x) => rest.every((w) => `${x.title} ${x.number}`.toLowerCase().includes(w))).slice(0, 2))
-                for (const [grade, label] of [["good", "on my own"], ["hard", "with help"], ["again", "attempted"], ["easy", "instant"]] as const)
-                    hits.push({
-                        key: `log-${p.id}-${grade}`,
-                        label: `Log ${p.title}: ${label}`,
-                        kind: "Log",
-                        color: "var(--acc)",
-                        go: () => {
-                            onClose();
-                            void api.logDsa(p.id, grade).then(
-                                () => {
-                                    for (const key of ["dsa", "activity", "tracks", "progress", "stats", "reviews", "dsa-preview", "practice"]) void qc.invalidateQueries({ queryKey: [key] });
-                                    toast("ok", `${p.title}: ${label}`, "Logged. Open its page to undo.");
-                                },
-                                (e: Error) => toast("er", "Couldn't log it", e.message),
-                            );
-                        },
-                    });
-            if (hits.length) return hits;
-        }
-        return all.filter((h) => words.every((w) => `${h.label} ${h.kind}`.toLowerCase().includes(w))).slice(0, 14);
-    }, [all, q]);
-    useEffect(() => setSel(0), [q]);
-
-    return (
-        <div className="hd-pal-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-            <div className="hd-pal" role="dialog" aria-label="Search" aria-modal="true">
-                <input
-                    ref={input}
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                    placeholder="Search tracks, stages, concepts, problems…"
-                    aria-label="Search"
-                    autoComplete="off"
-                    spellCheck={false}
-                    onKeyDown={(e) => {
-                        if (e.key === "Escape") onClose();
-                        else if (e.key === "ArrowDown") {
-                            e.preventDefault();
-                            setSel((s) => Math.min(s + 1, shown.length - 1));
-                        } else if (e.key === "ArrowUp") {
-                            e.preventDefault();
-                            setSel((s) => Math.max(s - 1, 0));
-                        } else if (e.key === "Enter") shown[sel]?.go();
-                    }}
-                />
-                <ul role="listbox">
-                    {shown.map((h, i) => (
-                        <li key={h.key} role="option" aria-selected={i === sel} className={i === sel ? "hd-sel" : ""} style={{ "--c": h.color } as React.CSSProperties} onMouseEnter={() => setSel(i)} onMouseDown={(e) => e.preventDefault()} onClick={h.go}>
-                            <span className="d" />
-                            {h.label}
-                            <small>{h.kind}</small>
-                        </li>
-                    ))}
-                    {shown.length === 0 && <li className="hd-none">No match</li>}
-                </ul>
-                <div className="hd-hint">
-                    <span>↑↓ move</span>
-                    <span>↵ open</span>
-                    <span>esc close</span>
-                </div>
-            </div>
-        </div>
-    );
-}

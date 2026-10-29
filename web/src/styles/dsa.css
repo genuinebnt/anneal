@@ -45,7 +45,7 @@
 .d-st.k-none .r{stroke-dasharray:2.6 3.4;stroke-width:1.6;opacity:.7}
 .d-st.k-solo{color:var(--grn)}.d-st.k-solo .r{fill:currentColor}.d-st.k-solo .g{stroke:var(--on-acc)}
 .d-st.k-help{color:var(--grn)}.d-st.k-help .r{fill:var(--grn-bg)}
-.d-st.k-fail{color:var(--bad)}.d-st.k-fail .r{fill:var(--bad-bg)}
+.d-st.k-fail{color:var(--warn)}.d-st.k-fail .r{fill:var(--warn-bg)}
 .d-st.k-due{color:var(--vio)}.d-st.k-due .r{fill:var(--vio-bg)}
 .d-pbody{display:flex;flex-direction:column;gap:8px;min-width:0}
 .d-ph{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
@@ -71,7 +71,7 @@
 .d-acts button,.d-acts a{height:30px;min-width:34px;padding:0 10px;display:inline-grid;place-items:center;border:1px solid var(--line);border-radius:7px;background:var(--bg);font:700 12.5px var(--mono);color:var(--mut);transition:background .15s,border-color .15s,color .15s}
 .d-acts button:hover,.d-acts a:hover{color:var(--fg);border-color:var(--ca)}
 .d-acts .solo:hover{color:var(--grn);border-color:var(--grn);background:var(--grn-bg)}
-.d-acts .fail:hover{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
+.d-acts .fail:hover{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
 .d-acts button:not(.solo):not(.fail):hover{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
 .d-prac{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-top:10px;border-top:1px dashed var(--line2)}
 .d-prac>span{font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim);margin-right:4px}
@@ -80,7 +80,7 @@
 .d-pp i{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--line);flex:none}
 .d-pp i.solo{background:var(--grn);border-color:var(--grn)}
 .d-pp i.help{border-color:var(--grn);background:var(--grn-bg)}
-.d-pp i.fail{border-color:var(--bad)}
+.d-pp i.fail{border-color:var(--warn)}
 .d-pp small{font:600 10.5px var(--mono)}
 .d-more{align-self:center;height:34px;padding:0 16px;border:1px dashed var(--line);border-radius:6px;font:500 12px var(--mono);color:var(--dim)}
 .d-more:hover{color:var(--ca);border-color:var(--ca)}
@@ -293,3 +293,5 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 .d-toast{max-width:min(92vw,720px);flex-wrap:wrap}
 .d-why{display:inline-flex;gap:6px;align-items:center;font:500 11.5px var(--mono);color:var(--dim)}.d-why button{height:24px;padding:0 9px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font:600 11px var(--mono)}.d-why button:hover{border-color:var(--acc);color:var(--fg)}
 .d-week{padding:16px 20px}.d-week-h{display:flex;justify-content:space-between;align-items:center;gap:12px}.d-week p{margin:8px 0 0;color:var(--mut);font-size:14px;line-height:1.6}.d-week b{color:var(--fg)}
+.d-ins-hide{display:block;text-align:left;color:var(--dim);font:500 12px var(--mono);padding:2px 0;cursor:pointer}.d-ins-hide span{color:var(--acc)}.d-ins-hide:hover span{text-decoration:underline}
+.d-reveal{color:var(--acc);font:600 12px var(--mono);text-decoration:underline;cursor:pointer;padding:0 2px}.d-reveal:hover{color:var(--fg)}

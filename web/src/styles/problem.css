@@ -74,8 +74,8 @@
 .pp-log .lg.ok b{color:var(--grn)}
 .pp-log .lg.half:hover:not(:disabled),.pp-log .lg.half.on{border-color:var(--warn);background:var(--warn-bg)}
 .pp-log .lg.half b{color:var(--warn)}
-.pp-log .lg.no:hover:not(:disabled),.pp-log .lg.no.on{border-color:var(--bad);background:var(--bad-bg)}
-.pp-log .lg.no b{color:var(--bad)}
+.pp-log .lg.no:hover:not(:disabled),.pp-log .lg.no.on{border-color:var(--warn);background:var(--warn-bg)}
+.pp-log .lg.no b{color:var(--warn)}
 .pp-log .lg.fast:hover:not(:disabled){border-color:var(--vio);background:var(--vio-bg)}
 .pp-log .lg.fast b{color:var(--vio)}
 .pp-status{display:grid;grid-template-columns:56px 1fr;gap:14px;align-items:center}
@@ -92,7 +92,7 @@
 .pp-rel a i{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--line)}
 .pp-rel a i.solo{background:var(--grn);border-color:var(--grn)}
 .pp-rel a i.help{border-color:var(--grn);background:var(--grn-bg)}
-.pp-rel a i.fail{border-color:var(--bad);background:var(--bad-bg)}
+.pp-rel a i.fail{border-color:var(--warn);background:var(--warn-bg)}
 .pp-rel a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pp-rel a small{font:600 10px var(--mono);color:var(--dim)}
 .pp-rel a.now{border-color:var(--acc);background:var(--acc-bg)}
@@ -130,7 +130,7 @@
 .pp-hist{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line2);font:500 11.5px var(--mono);color:var(--mut)}
 .pp-hist>span{width:100%;font-size:10.5px;letter-spacing:.14em;color:var(--dim)}
 .pp-hist i{font-style:normal;border:1px solid var(--line2);border-radius:14px;padding:3px 10px;white-space:nowrap}
-.pp-hist i.ok{color:var(--grn)}.pp-hist i.half{color:var(--warn)}.pp-hist i.no{color:var(--bad)}
+.pp-hist i.ok{color:var(--grn)}.pp-hist i.half{color:var(--warn)}.pp-hist i.no{color:var(--warn)}
 .pp-hist i.pr{border-color:var(--acc);background:var(--acc-bg);color:var(--acc)}
 .pp-hist em{font-style:normal;color:var(--dim)}
 

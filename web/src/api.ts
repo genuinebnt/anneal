@@ -1008,6 +1008,7 @@ export const api = {
   bulkSolvedUndo: (attempts: number[]) => request<{ removed: number }>("POST", "/dsa/bulk-solved/undo", { attempts }),
   feed: () => request<{ path: string | null }>("GET", "/feed"),
   makeFeed: () => request<{ path: string }>("POST", "/feed"),
+  companyPlan: (body: { company: string; interview?: string | null; recent_only?: boolean }) => request<{ id: string; created: boolean }>("POST", "/plans/company", body),
   setWhy: (id: string, why: string) => request<{ id: string; why: string }>("POST", `/dsa/problems/${id}/why`, { why }),
   day: (date: string) => request<{ date: string; solves: { problem_id: string; title: string; slug: string | null; kind: string; assisted: boolean; at: string }[] }>("GET", `/day/${date}`),
   undoDsa: (id: string) => request<{ id: string; undone: boolean }>("POST", `/dsa/problems/${id}/undo`),

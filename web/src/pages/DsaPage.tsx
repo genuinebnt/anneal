@@ -5,6 +5,8 @@ import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type 
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
 import { getPref, setPref } from "../prefs";
+import { usePremiumSwitch } from "../premium";
+import { useShowIdeas } from "../spoilers";
 import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
 import { PracticeRow } from "./PracticePage";
@@ -26,7 +28,6 @@ interface Filters {
   companies: Set<string>;
   recent: boolean;
   tags: Set<string>;
-  hidePremium: boolean;
   q: string;
 }
 
@@ -43,7 +44,6 @@ const fresh = (list: ListKey = "neetcode150"): Filters => ({
   companies: new Set(),
   recent: false,
   tags: new Set(),
-  hidePremium: false,
   q: "",
 });
 
@@ -69,7 +69,7 @@ function useStored<T extends string>(key: string, initial: T): [T, (v: T) => voi
 }
 
 const activeCount = (f: Filters) =>
-  f.status.size + f.role.size + f.diff.size + f.patterns.size + f.groups.size + f.companies.size + (f.recent ? 1 : 0) + f.tags.size + (f.hidePremium ? 1 : 0) + (f.q ? 1 : 0);
+  f.status.size + f.role.size + f.diff.size + f.patterns.size + f.groups.size + f.companies.size + (f.recent ? 1 : 0) + f.tags.size + (f.q ? 1 : 0);
 
 export function DsaPage() {
   const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
@@ -282,7 +282,7 @@ function build(o: DsaOverview, f: Filters): Model {
     patterns: (p) => !f.patterns.size || f.patterns.has(p.pattern),
     company: (p) => (!f.groups.size && !f.companies.size && !f.recent) || p.companies.some((c) => (f.companies.size ? f.companies.has(c.name) : f.groups.size ? f.groups.has(c.group) : true) && (!f.recent || c.recent)),
     tags: (p) => !f.tags.size || [...f.tags].every((t) => p.tags.includes(t)),
-    premium: (p) => !f.hidePremium || !p.premium,
+    premium: (p) => counted(o, p),
     q: (p) => !needle || `${p.title} ${p.number} ${p.tags.join(" ")}`.toLowerCase().includes(needle),
   };
   const passing = (except: string) => o.problems.filter((p) => Object.entries(tests).every(([k, t]) => k === except || t(p)));
@@ -385,6 +385,9 @@ function paceLine(o: DsaOverview): string {
 
 function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
   const ready = useReady();
+  const [showIdeas] = useShowIdeas();
+  const [reveal, setReveal] = useState(false);
+  const ideaShown = showIdeas || reveal;
   const navigate = useNavigate();
   const byId = new Map(o.problems.map((p) => [p.id, p]));
   const next = o.plan.next_up[0] ? byId.get(o.plan.next_up[0]) : undefined;
@@ -420,8 +423,9 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
         <div>
           <div className="s-kick">
             <span className="s-pulse" />
-            NEXT UP · {patternName(next.pattern).toUpperCase()}
-            {technique ? ` · ${technique.name.toUpperCase()}` : ""}
+            NEXT UP
+            {ideaShown ? ` · ${patternName(next.pattern).toUpperCase()}` : ""}
+            {technique && ideaShown ? ` · ${technique.name.toUpperCase()}` : ""}
           </div>
           <div style={{ marginTop: 4, color: "var(--mut)", fontSize: 14 }}>
             {streak > 0 ? (
@@ -446,7 +450,14 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
         </div>
       </div>
       <h3>{next.title}</h3>
-      <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>
+      {technique && !ideaShown ? (
+        <p>
+          The idea is hidden so it does not give the problem away.{" "}
+          <button className="d-reveal" onClick={() => setReveal(true)}>Show the idea</button>
+        </p>
+      ) : (
+        <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>
+      )}
       <div className="s-pills">
         <span className={`s-pill${next.difficulty === "easy" ? " s-g" : ""}`} style={next.difficulty === "easy" ? undefined : { color: DIFF[next.difficulty][1] }}>
           {next.difficulty}
@@ -454,7 +465,7 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
         <span className="s-pill" style={{ color: next.role === "must_learn" ? "var(--s-ac)" : undefined }}>
           {next.role === "must_learn" ? "must learn" : "practice"}
         </span>
-        <span className="s-pill">{patternName(next.pattern)}</span>
+        {ideaShown && <span className="s-pill">{patternName(next.pattern)}</span>}
         <span className="s-pill">~{MINUTES[next.difficulty]}m</span>
         {next.state.last_grade === "again" && (
           <span className="s-pill" style={{ color: "var(--bad)" }}>
@@ -509,7 +520,6 @@ function ActiveChips({ f, o, flip, update, clearAll }: { f: Filters; o: DsaOverv
   f.companies.forEach((v) => chips.push([v, () => flip("companies", v)]));
   if (f.recent) chips.push(["Asked in the last 6 months", () => update({ recent: false })]);
   f.tags.forEach((v) => chips.push([`#${v}`, () => flip("tags", v)]));
-  if (f.hidePremium) chips.push(["No Premium", () => update({ hidePremium: false })]);
   if (f.q) chips.push([`“${f.q}”`, () => update({ q: "" })]);
   if (!chips.length) return null;
   return (
@@ -891,6 +901,7 @@ function count<T>(items: DsaProblem[], key: (p: DsaProblem) => T | T[]): Map<T, 
 }
 
 function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f: Filters; model: Model; flip: <T>(k: SetKey, v: T) => void; update: (p: Partial<Filters>) => void; clearAll: () => void }) {
+  const premium = usePremiumSwitch();
   const [moreTags, setMoreTags] = useState(false);
   const [morePatterns, setMorePatterns] = useState(false);
   const [tagQ, setTagQ] = useState("");
@@ -1016,7 +1027,7 @@ function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f
         <h4>
           <span>OPTIONS</span>
         </h4>
-        <Tog label="Hide LeetCode Premium" hint={`${o.problems.filter((p) => p.premium).length} problems need it`} on={f.hidePremium} onClick={() => update({ hidePremium: !f.hidePremium })} />
+        <Tog label="Hide LeetCode Premium" hint={`${o.problems.filter((p) => p.premium).length} problems need it. Hidden ones are not counted either`} on={premium.hidden} onClick={() => premium.set(!premium.hidden)} />
       </div>
     </div>
   );

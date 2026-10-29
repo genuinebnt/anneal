@@ -1,16 +1,16 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type CSSProperties } from "react";
-import { api, type SrsSettings } from "../api";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { api } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
 import { getPref, setPref } from "../prefs";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
-import { WHATS_NEW } from "../whatsnew";
+import { LATEST, WHATS_NEW } from "../whatsnew";
+import { COUNT_KEYS, usePremiumSwitch } from "../premium";
+import { useShowIdeas } from "../spoilers";
 
-/** The keys of every query that shows a count, so a change to what counts is seen everywhere at once. */
-const COUNT_KEYS = ["settings", "dsa", "dsa-row", "tracks", "progress", "activity", "stats", "reviews", "dsa-review", "practice"];
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
     return <button role="switch" aria-checked={on} aria-label={label} className="st-sw st-ctl" onClick={() => onChange(!on)} />;
@@ -107,10 +107,12 @@ export function SettingsPage() {
     const [imported, setImported] = useState<string | null>(null);
     const file = useRef<HTMLInputElement>(null);
 
-    const saveSrs = useMutation({
-        mutationFn: (srs: SrsSettings) => api.saveSrs(srs),
-        onSuccess: () => COUNT_KEYS.forEach((k) => void qc.invalidateQueries({ queryKey: [k] })),
-    });
+    // opening the list of what is new marks it seen (the bell's "new" line goes away)
+    useEffect(() => {
+        if (location.hash === "#new") setPref("whatsnew.seen", LATEST);
+    }, []);
+    const premiumSwitch = usePremiumSwitch();
+    const [showIdeas, setShowIdeas] = useShowIdeas();
     const doImport = useMutation({
         mutationFn: async (f: File) => api.importBackup(JSON.parse(await f.text()) as unknown),
         onSuccess: (r) => {
@@ -122,7 +124,7 @@ export function SettingsPage() {
     });
 
     const srs = settings.data?.srs;
-    const countPremium = srs ? !srs.goal.free_only : false;
+    const countPremium = !premiumSwitch.hidden;
     // What flipping the switch would do to the goal the plan follows, shown before the owner flips it.
     const preview = (() => {
         const o = dsa.data;
@@ -147,20 +149,20 @@ export function SettingsPage() {
                             <section className="st-card" aria-labelledby="st-count">
                                 <h2 id="st-count">COUNTING</h2>
                                 <div className="st-row">
-                                    <b>Count premium problems</b>
-                                    <p>Off by default. When off, LeetCode Premium problems are still listed and can be logged, but they are not in the totals, the progress bars or readiness. A premium problem you complete always counts toward your streak and activity, and it stays logged if you switch this on later.</p>
-                                    <Switch on={countPremium} label="Count premium problems" onChange={(v) => saveSrs.mutate({ ...srs, goal: { ...srs.goal, free_only: !v } })} />
+                                    <b>Show and count premium problems</b>
+                                    <p>Off by default. When off, LeetCode Premium problems are hidden from the problem lists and left out of the totals, the progress bars and readiness; the same switch is "Hide LeetCode Premium" in the filters on the DSA home. What you logged on them is kept, and a premium problem you complete still counts toward your streak and activity. Switch it on and they all come back, with what you logged.</p>
+                                    <Switch on={countPremium} label="Show and count premium problems" onChange={(v) => premiumSwitch.set(!v)} />
                                 </div>
                                 {preview && (
                                     <div className="st-note">
                                         The goal list has <b>{preview.total}</b> problems: <b>{preview.free}</b> free and <b>{preview.premium}</b> premium
-                                        {preview.solvedPremium ? <> ({preview.solvedPremium} already solved)</> : null}. {countPremium ? "All of them count now." : `Turning this on makes the goal ${preview.total} instead of ${preview.free}.`}
+                                        {preview.solvedPremium ? <> ({preview.solvedPremium} already solved)</> : null}. {countPremium ? "All of them are shown and count now." : `Turning this on shows them and makes the goal ${preview.total} instead of ${preview.free}.`}
                                     </div>
                                 )}
                                 <p className="rempty" style={{ margin: 0 }}>
                                     Reviews, capacity and the target date are on <Link to="/dsa/plan" style={{ color: "var(--ca)" }}>the plan page</Link>; it has the same premium switch.
                                 </p>
-                                {saveSrs.isError && <span className="st-bad">Couldn't save: {(saveSrs.error as Error).message}</span>}
+                                {premiumSwitch.error && <span className="st-bad">Couldn't save: {premiumSwitch.error}</span>}
                             </section>
 
                             <section className="st-card" aria-labelledby="st-look">
@@ -197,6 +199,11 @@ export function SettingsPage() {
                                             </button>
                                         ))}
                                     </div>
+                                </div>
+                                <div className="st-row">
+                                    <b>Show the key idea</b>
+                                    <p>Off by default. The one-line idea and the technique name give a problem away, so lists, the Next up card and a problem's header hide them until you click Show.</p>
+                                    <Switch on={showIdeas} label="Show the key idea" onChange={setShowIdeas} />
                                 </div>
                                 <div className="st-row">
                                     <b>Numbers bar at the bottom</b>

@@ -9,6 +9,7 @@ import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
 import { getPref, setPref } from "../prefs";
+import { useShowIdeas } from "../spoilers";
 import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
 
 const DIFFS = ["easy", "medium", "hard"];
@@ -18,11 +19,11 @@ const SAME_IDEA_SHOWN = 7;
 const TILES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
     { grade: "good", glyph: "✓", label: "On my own", cls: "ok" },
     { grade: "hard", glyph: "½", label: "With help", cls: "half" },
-    { grade: "again", glyph: "✗", label: "Attempted", cls: "no" },
+    { grade: "again", glyph: "!", label: "Attempted", cls: "no" },
     { grade: "easy", glyph: "⚡", label: "Instant", cls: "fast" },
 ];
 
-const RESULT_GLYPH = { good: "✓", hard: "½", again: "✗" } as const;
+const RESULT_GLYPH = { good: "✓", hard: "½", again: "!" } as const;
 const RESULT_CLASS = { good: "ok", hard: "half", again: "no" } as const;
 const RESULT_WORD = { good: "on my own", hard: "with help", again: "attempted" } as const;
 const ORD = (n: number) => (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
@@ -163,6 +164,10 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const [tab, setTab] = useState(0);
     const [practiceMode, setPracticeMode] = useState(false);
     useEffect(() => setPracticeMode(false), [p?.id]);
+    const [showIdeas] = useShowIdeas();
+    const [revealIdea, setRevealIdea] = useState(false);
+    useEffect(() => setRevealIdea(false), [p?.id]);
+    const ideaShown = showIdeas || revealIdea;
     const [hintsShown, setHintsShown] = useState(0);
     useEffect(() => setHintsShown(0), [p?.id]);
     const [more, setMore] = useState(false);
@@ -269,7 +274,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                     <div className="pp-crumbs">
                         <Link to="/dsa">DSA</Link>
                         <span>/</span>
-                        {pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{pattern.name.toUpperCase()}</Link> : <span>?</span>}
+                        {pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{ideaShown ? pattern.name.toUpperCase() : "PATTERN"}</Link> : <span>?</span>}
                         <span>/</span>
                         <span>#{p.number}</span>
                     </div>
@@ -281,10 +286,10 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         <ProblemTags p={p} />
                         <span className="pp-b">~{MINUTES[p.difficulty]} min</span>
                         {lists.map((l) => <span key={l} className="pp-b">{l}</span>)}
-                        {technique && <span className="pp-b tech">{technique.name}</span>}
+                        {technique && ideaShown && <span className="pp-b tech">{technique.name}</span>}
                     </div>
                     {p.tags.length > 0 && <div className="pp-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</div>}
-                    {p.insight && <p className="pp-ins"><b>Key insight</b>{p.insight}</p>}
+                    {p.insight && (ideaShown ? <p className="pp-ins"><b>Key insight</b>{p.insight}</p> : <p className="pp-ins"><b>Key insight</b>hidden so it does not spoil the problem <button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></p>)}
                     <nav className="pp-subnav" aria-label="Sections">
                         {sections.map((x) => (
                             <button key={x.id} className={section === x.id ? "on" : ""} aria-current={section === x.id} onClick={() => go(x.id)}>{x.label}</button>
@@ -395,8 +400,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
 
                     {(prev || next) && (
                         <div className="pp-pn">
-                            {prev ? <Link to="/d/$slug" params={{ slug: prev.slug }}><small>← PREVIOUS IN {pattern?.name.toUpperCase()}</small><b>{prev.title}</b></Link> : <span />}
-                            {next ? <Link to="/d/$slug" params={{ slug: next.slug }}><small>NEXT IN {pattern?.name.toUpperCase()} →</small><b>{next.title}</b></Link> : <span />}
+                            {prev ? <Link to="/d/$slug" params={{ slug: prev.slug }}><small>← PREVIOUS IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"}</small><b>{prev.title}</b></Link> : <span />}
+                            {next ? <Link to="/d/$slug" params={{ slug: next.slug }}><small>NEXT IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"} →</small><b>{next.title}</b></Link> : <span />}
                         </div>
                     )}
                 </div>

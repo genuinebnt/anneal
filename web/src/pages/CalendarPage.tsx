@@ -18,7 +18,7 @@ const days = (a: string, b: string) => Math.round((ts(b) - ts(a)) / DAY);
 
 /** A topic's colour, from its track code (D7 is the seventh). */
 const hue = (code: string) => `oklch(0.74 0.13 ${(Number.parseInt(code.slice(1), 10) * 137) % 360})`;
-const GLYPH = { good: "✓", easy: "✓", hard: "½", again: "✗" } as const;
+const GLYPH = { good: "✓", easy: "✓", hard: "½", again: "!" } as const;
 const KIND_LABEL: Record<DayKind, string> = { solve: "SOLVE", practice: "PRACTICE", break: "BREAK" };
 
 type Overrides = Record<string, DayKind>;

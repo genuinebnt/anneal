@@ -10,7 +10,7 @@
 .rv-cap{font:500 11.5px var(--mono);color:var(--dim)}
 .rv-ghost{display:inline-flex;align-items:center;gap:8px;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 13px;font-weight:600;font-size:12.5px;color:var(--mut);background:var(--bg);white-space:nowrap}
 .rv-ghost:hover{border-color:var(--dim);color:var(--fg)}
-.rv-stage{display:grid;grid-template-columns:minmax(280px,24%) minmax(0,1fr);gap:20px;padding-block:22px 40px;align-items:start}
+.rv-stage{display:grid;grid-template-columns:minmax(280px,24%) minmax(0,1fr);gap:20px;padding-block:22px 40px;align-items:stretch}
 @media (max-width:900px){.rv-stage{grid-template-columns:1fr}}
 .rv-card{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:20px 22px;display:flex;flex-direction:column;gap:16px;min-width:0}
 .rv-lab{font:600 10.5px var(--mono);letter-spacing:.14em;color:var(--dim)}
@@ -49,8 +49,10 @@ kbd{font:500 10.5px var(--mono);color:var(--dim);border:1px solid var(--line);bo
 .rv-g:disabled{opacity:.5;cursor:default}
 .rv-g.again b{color:var(--bad)}.rv-g.hard b{color:var(--warn)}.rv-g.good b{color:var(--grn)}.rv-g.easy b{color:var(--vio)}
 .rv-g.again:hover:not(:disabled){border-color:var(--bad);background:var(--bad-bg)}.rv-g.hard:hover:not(:disabled){border-color:var(--warn);background:var(--warn-bg)}.rv-g.good:hover:not(:disabled){border-color:var(--grn);background:var(--grn-bg)}.rv-g.easy:hover:not(:disabled){border-color:var(--vio);background:var(--vio-bg)}
-.rv-side{display:flex;flex-direction:column;gap:14px;position:sticky;top:76px}
-@media (max-width:900px){.rv-side{position:static}}
+/* the queue is as tall as the review beside it and scrolls inside itself (no scrollbar drawn), so the two end together */
+.rv-side{position:relative;min-height:440px}
+.rv-side>.rv-card{position:absolute;inset:0;overflow-y:auto;scrollbar-width:none}.rv-side>.rv-card::-webkit-scrollbar{display:none}
+@media (max-width:900px){.rv-side{min-height:0}.rv-side>.rv-card{position:static;overflow:visible}}
 .rv-q{display:flex;flex-direction:column;gap:6px}
 .rv-qi{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;font-size:12.5px;background:var(--bg)}
 .rv-qi.cur{border-color:var(--acc);background:var(--acc-bg)}.rv-qi.done{opacity:.65}
@@ -61,7 +63,6 @@ kbd{font:500 10.5px var(--mono);color:var(--dim);border:1px solid var(--line);bo
 .rv-dist{display:flex;gap:8px;flex-wrap:wrap}
 .rv-next{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--line2);border-radius:8px;font-size:13px;background:var(--bg)}
 .rv-next .w{font:600 11.5px var(--mono);color:var(--dim)}
-@media (max-width:900px){.rv-side .rv-card:last-child{display:none}}
 
 /* the queue you pick from */
 .rv-qh{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
@@ -81,3 +82,4 @@ kbd{font:500 10.5px var(--mono);color:var(--dim);border:1px solid var(--line);bo
 .rv-keys{display:flex;flex-direction:row;gap:6px 24px;flex-wrap:wrap;margin:0;padding:0 4px}.rv-keys>div{display:flex;flex:none;justify-content:flex-start;gap:8px;align-items:center}
 .rv-keys dt{font-size:12px;color:var(--dim)}.rv-keys dd{margin:0}
 .rv-weak{display:flex;gap:8px;align-items:baseline;font:500 12px var(--mono);color:var(--mut);flex-wrap:wrap}.rv-weak input{accent-color:var(--acc)}.rv-weak small{color:var(--dim);font:500 10.5px var(--mono)}
+.rv-side>.rv-card>*{flex-shrink:0}

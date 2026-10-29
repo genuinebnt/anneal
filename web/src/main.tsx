@@ -28,6 +28,7 @@ import { WhatsNewToast } from "./components/WhatsNewToast";
 import { WelcomeBack } from "./components/WelcomeBack";
 import { SettingsPage } from "./pages/SettingsPage";
 import { LogPage } from "./pages/LogPage";
+import { CompanyPage } from "./pages/CompanyPage";
 import "./styles/design.css";
 import "./styles/app.css";
 import "./styles/catalog.css";
@@ -146,6 +147,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/kit", component: KitPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/log", component: LogPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/dsa/company", component: CompanyPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

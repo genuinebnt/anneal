@@ -115,8 +115,13 @@ test("every problem has a one-line key insight, shown under the title and on the
     const slug = (await row.locator("a.pl-top").getAttribute("href"))!.replace("/d/", "");
     const all = await (await request.get("/api/dsa/problems/lc-" + slug + "/row")).json();
     expect(all.insight).toBeTruthy();
+    // the idea gives the problem away, so it is hidden until asked for
+    await expect(row.locator(".d-ins-hide")).toBeVisible();
+    await expect(row).not.toContainText(all.insight);
+    await row.locator(".d-ins-hide").click();
     await expect(row.locator(".d-ins")).toHaveText(all.insight);
     await page.goto(`/d/${slug}`);
-    const first = all;
-    await expect(page.locator(".pp-ins")).toContainText(first.insight);
+    await expect(page.locator(".pp-ins")).not.toContainText(all.insight);
+    await page.locator(".pp-ins").getByRole("button", { name: "Show" }).click();
+    await expect(page.locator(".pp-ins")).toContainText(all.insight);
 });
