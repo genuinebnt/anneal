@@ -46,8 +46,9 @@ function Session({ queue }: { queue: ReviewQueue }) {
   const [order, setOrder] = useState<string[]>(() => queue.items.map((i) => i.problem.id));
   const [results, setResults] = useState<Result[]>([]);
   const [step, setStep] = useState<"recall" | "check">("recall");
-  const [ticks, setTicks] = useState<boolean[]>([false, false, false]);
-  const [started, setStarted] = useState(() => Date.now());
+  // The timer runs only once it is started, and starts over with each problem.
+  const [spent, setSpent] = useState(0);
+  const [running, setRunning] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
@@ -62,6 +63,11 @@ function Session({ queue }: { queue: ReviewQueue }) {
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (!running) return;
+    const t = window.setInterval(() => setSpent((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [running]);
 
   const lesson = useQuery({
     queryKey: ["dsa-page", item?.problem.id],
@@ -76,9 +82,9 @@ function Session({ queue }: { queue: ReviewQueue }) {
       setResults((cur) => [...cur, { id, title: it?.problem.title ?? id, grade, due: r.due }]);
       setOrder((cur) => cur.filter((x) => x !== id));
       setStep("recall");
-      setTicks([false, false, false]);
       setTab(0);
-      setStarted(Date.now());
+      setSpent(0);
+      setRunning(false);
       setError(null);
       for (const key of ["dsa", "practice", "activity", "tracks", "reviews", "progress", "stats", "dsa-mock"]) void qc.invalidateQueries({ queryKey: [key] });
     },
@@ -94,8 +100,8 @@ function Session({ queue }: { queue: ReviewQueue }) {
   const skip = useCallback(() => {
     setOrder((cur) => (cur.length > 1 ? [...cur.slice(1), cur[0]!] : cur));
     setStep("recall");
-    setTicks([false, false, false]);
-    setStarted(Date.now());
+    setSpent(0);
+    setRunning(false);
   }, []);
 
   useEffect(() => {
@@ -117,7 +123,6 @@ function Session({ queue }: { queue: ReviewQueue }) {
   if (total === 0) return <Empty queue={queue} />;
   if (!item) return <Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} />;
 
-  const spent = Math.round((now - started) / 1000);
   return (
     <>
       <div className="rv-bar">
@@ -136,7 +141,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
       <div className="wrap rv-stage">
         <div className="rv-card">
           {step === "recall" ? (
-            <Recall item={item} spent={spent} ticks={ticks} setTicks={setTicks} reveal={() => setStep("check")} skip={skip} canSkip={order.length > 1} today={queue.today} />
+            <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={skip} canSkip={order.length > 1} today={queue.today} />
           ) : (
             <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
           )}
@@ -179,9 +184,9 @@ const ago = (iso: string | null, today: string) => {
   const days = Math.round((Date.parse(`${today}T00:00`) - Date.parse(`${iso}T00:00`)) / 864e5);
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 };
-const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "✗ not yet" };
+const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with a hint", again: "✗ attempted" };
 
-function Recall({ item, spent, ticks, setTicks, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; ticks: boolean[]; setTicks: (t: boolean[]) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
+function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
   const p = item.problem;
   const [sketch, setSketch] = useState("");
   const s = p.state;
@@ -200,22 +205,11 @@ function Recall({ item, spent, ticks, setTicks, reveal, skip, canSkip, today }: 
       </div>
       <div className="rv-timer">
         <div className="tk"><i style={{ width: `${Math.min(100, (spent / 360) * 100)}%` }} /></div>
-        <div className="lb"><span>{mmss(spent)} so far</span><span>06:00 suggested</span></div>
-      </div>
-      <div className="rv-steps">
-        {[
-          ["Say the idea in one sentence", "What is the key observation, and what structure does it use?"],
-          ["Write the skeleton", "The function, the main loop, and where the data structure is updated. Not every detail."],
-          ["State the time and space", "Before you look at anything."],
-        ].map(([title, hint], i) => (
-          <button key={title} className={`rv-chk${ticks[i] ? " on" : ""}`} aria-pressed={ticks[i]} onClick={() => setTicks(ticks.map((t, j) => (j === i ? !t : t)))}>
-            <span className="bx">{ticks[i] ? "✓" : ""}</span>
-            <span>
-              <b>{title}</b>
-              <span className="s">{hint}</span>
-            </span>
-          </button>
-        ))}
+        <div className="lb">
+          <span>{mmss(spent)} so far</span>
+          <button onClick={() => setRunning(!running)}>{running ? "Pause timer" : spent ? "Resume timer" : "Start timer"}</button>
+          <span>06:00 suggested</span>
+        </div>
       </div>
       <textarea className="rv-sketch" value={sketch} onChange={(e) => setSketch(e.target.value)} placeholder="Sketch the skeleton here. It is only a scratchpad: it isn't saved." aria-label="Sketch" spellCheck={false} />
       <div className="rv-row">

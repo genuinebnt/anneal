@@ -50,7 +50,7 @@ export const BLURB: Record<string, string> = {
 };
 
 export type Status = "new" | "solved" | "due" | "retry";
-export const STATUS_LABEL: Record<Status, string> = { new: "Not started", solved: "Solved", due: "Due for review", retry: "Couldn't yet" };
+export const STATUS_LABEL: Record<Status, string> = { new: "Not started", solved: "Solved", due: "Due for review", retry: "Attempted" };
 
 export function statusOf(p: DsaProblem, today: string): Status {
   const s = p.state;
@@ -68,8 +68,8 @@ export const MARK_GLYPH = { solo: "✓", help: "½", fail: "✗", "": "" } as co
 
 export const GRADES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
   { grade: "good", glyph: "✓", label: "Solved on my own", cls: "solo" },
-  { grade: "hard", glyph: "½", label: "Solved with help", cls: "" },
-  { grade: "again", glyph: "✗", label: "Couldn't solve it yet", cls: "fail" },
+  { grade: "hard", glyph: "½", label: "Solved with a hint", cls: "" },
+  { grade: "again", glyph: "✗", label: "Attempted, not solved", cls: "fail" },
 ];
 
 /** The log buttons on a problem that is reviewed: the three above plus "instant" (the whole approach recalled at once). */

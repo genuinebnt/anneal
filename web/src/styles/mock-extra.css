@@ -100,3 +100,4 @@
 .k-root .k-ea.k-danger{color:var(--bad);border-color:color-mix(in oklab,var(--bad) 45%,var(--line2))}
 /* The course map's hover tooltips are placed past the viewport edge for nodes near it: clip them instead of widening the page. */
 .k-root{overflow-x:clip}
+.s-root .s-next.s-click{cursor:pointer}.s-root .s-next.s-click:hover{border-color:var(--s-ac)}

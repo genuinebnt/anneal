@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
@@ -357,6 +357,7 @@ function paceLine(o: DsaOverview): string {
 
 function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
   const ready = useReady();
+  const navigate = useNavigate();
   const byId = new Map(o.problems.map((p) => [p.id, p]));
   const next = o.plan.next_up[0] ? byId.get(o.plan.next_up[0]) : undefined;
   const after = o.plan.start ? byId.get(o.plan.start) : undefined;
@@ -374,8 +375,12 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
       </article>
     );
   }
+  // The whole card opens the problem page; the links and buttons inside keep their own action.
+  const open = (e: MouseEvent<HTMLElement>) => {
+    if (!(e.target as HTMLElement).closest("a, button")) void navigate({ to: "/d/$slug", params: { slug: next.slug } });
+  };
   return (
-    <article className="s-card s-next s-rv" style={rise(4).style} aria-label="Next up">
+    <article className="s-card s-next s-rv s-click" style={rise(4).style} aria-label="Next up" onClick={open}>
       <div className="s-nrow">
         <div className="s-ring">
           <svg viewBox="0 0 64 64" aria-hidden="true">

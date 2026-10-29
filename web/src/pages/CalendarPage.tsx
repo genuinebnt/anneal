@@ -642,7 +642,7 @@ function History({ p }: { p: PlanView }) {
             <div className="cap"><span style={{ color: "var(--grn)" }}>■</span> problems &nbsp;<span style={{ color: "var(--acc)" }}>■</span> reviews, per week (by Monday)</div>
             <div className="c-chs">{Object.entries(h.mix).sort((a, b) => b[1] - a[1]).map(([n, c]) => <span key={n} className="c-ch mix">{n} {c}</span>)}</div>
             <div className="c-key">
-                <i className="sw solo" /><span>Solved on my own</span><i className="sw help" /><span>Solved with help</span><i className="sw fail" /><span>Couldn't yet</span>
+                <i className="sw solo" /><span>Solved on my own</span><i className="sw help" /><span>Solved with a hint</span><i className="sw fail" /><span>Attempted</span>
                 <i className="sw miss" /><span>Planned, not done</span><i className="sw pr" /><span>Practice day (upcoming)</span><i className="sw br" /><span>Break</span><i className="sw td" /><span>Today</span>
             </div>
         </div>

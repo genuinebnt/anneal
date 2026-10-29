@@ -354,7 +354,7 @@ pub struct Logged {
     ideal_days: Option<f32>,
 }
 
-/// Records how a problem went: `again` (couldn't yet), `hard` (with help), `good` (on my own) or `easy`.
+/// Records how a problem went: `again` (attempted, not solved: no streak), `hard` (with a hint), `good` (on my own) or `easy` (instant).
 pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<LogBody>) -> ApiResult<Json<Logged>> {
     let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
     if p.dsa.is_none() {
@@ -377,6 +377,16 @@ pub async fn log(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
         store::set_dsa_start(&s.db, &id).await?;
     }
     Ok(Json(Logged { id, due: scheduled.as_ref().map(|x| x.due), ideal_days: scheduled.map(|x| x.ideal_days) }))
+}
+
+/// Forgets a problem's log: back to "not started", with no review scheduled. Saved solutions stay.
+pub async fn reset(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<serde_json::Value>> {
+    let (_, p) = s.catalog.problem(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
+    if p.dsa.is_none() {
+        return Err(ApiError::BadRequest(format!("{id} isn't a DSA problem")));
+    }
+    store::reset_problem(&s.db, &id).await?;
+    Ok(Json(serde_json::json!({ "id": id })))
 }
 
 #[derive(Deserialize)]

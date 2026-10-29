@@ -351,6 +351,15 @@ pub async fn attempt_history(db: &PgPool, problem_id: &str) -> sqlx::Result<Vec<
         .await
 }
 
+/// Forgets everything logged for a problem: its attempts (and their runs) and its review. What the owner wrote
+/// (saved solutions) and the time spent are kept.
+pub async fn reset_problem(db: &PgPool, problem_id: &str) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM attempts WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM reviews WHERE problem_id = $1").bind(problem_id).execute(&mut *tx).await?;
+    tx.commit().await
+}
+
 /// The DSA problems (`lc-…`) that have any attempt logged, with any grade.
 pub async fn attempted_dsa(db: &PgPool) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar("SELECT DISTINCT problem_id FROM attempts WHERE problem_id LIKE 'lc-%'").fetch_all(db).await

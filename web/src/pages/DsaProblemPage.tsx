@@ -14,14 +14,14 @@ const SAME_IDEA_SHOWN = 7;
 /** The four log tiles: short labels, since each one also says when the problem comes back. */
 const TILES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
     { grade: "good", glyph: "✓", label: "On my own", cls: "ok" },
-    { grade: "hard", glyph: "½", label: "With help", cls: "half" },
-    { grade: "again", glyph: "✗", label: "Not yet", cls: "no" },
+    { grade: "hard", glyph: "½", label: "With hint", cls: "half" },
+    { grade: "again", glyph: "✗", label: "Attempted", cls: "no" },
     { grade: "easy", glyph: "⚡", label: "Instant", cls: "fast" },
 ];
 
 const RESULT_GLYPH = { good: "✓", hard: "½", again: "✗" } as const;
 const RESULT_CLASS = { good: "ok", hard: "half", again: "no" } as const;
-const RESULT_WORD = { good: "on my own", hard: "with help", again: "not yet" } as const;
+const RESULT_WORD = { good: "on my own", hard: "with a hint", again: "attempted" } as const;
 const ORD = (n: number) => (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
 
 const dotOf = (p: DsaProblem) => (p.state.last_grade ? (p.state.last_grade === "again" ? "fail" : p.state.last_grade === "hard" ? "help" : "solo") : "");
@@ -106,7 +106,8 @@ function MySolutions({ p, template }: { p: DsaProblem; template: string }) {
 export function DsaProblemPage({ slug }: { slug: string }) {
     const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const o = overview.data;
-    const { log, toast, busy } = useLogger(o?.today);
+    const { log, reset, toast, busy } = useLogger(o?.today);
+    const [confirmReset, setConfirmReset] = useState(false);
     // a problem outside the NeetCode lists is not in the overview: ask for it by itself
     const listed = o?.problems.find((x) => x.slug === slug);
     const outside = useQuery({ queryKey: ["dsa-row", slug], queryFn: () => api.dsaRow(`lc-${slug}`), enabled: !!o && !listed, retry: false });
@@ -195,9 +196,9 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         ? status === "due"
             ? [`Review due ${s.due && s.due < today ? "now" : "today"}`, `${s.reps} log${s.reps === 1 ? "" : "s"} · ${s.lapses} lapse${s.lapses === 1 ? "" : "s"}`]
             : s.last_grade === "again"
-                ? ["Couldn't solve it yet", s.due ? `Retry ${niceDate(s.due, today)}` : "Retry soon"]
-                : [s.last_grade === "hard" ? "Solved with help" : "Solved on my own", s.due ? `Next review ${niceDate(s.due, today)}` : `${s.reps} logs`]
-        : ["Not logged yet", p.list_tag ? "Solve it on LeetCode, then log how it went. The next review is scheduled for you." : "Solve it on LeetCode, then log how it went. It is tracked, but not part of your goal, the reviews or the calendar."];
+                ? ["Attempted, not solved", s.due ? `Retry ${niceDate(s.due, today)}` : "Retry soon"]
+                : [s.last_grade === "hard" ? "Solved with a hint" : s.last_grade === "easy" ? "Solved instantly" : "Solved on my own", s.due ? `Next review ${niceDate(s.due, today)}` : `${s.reps} logs`]
+        : ["Not started", p.list_tag ? "Solve it on LeetCode, then log how it went. The next review is scheduled for you." : "Solve it on LeetCode, then log how it went. It is tracked, but not part of your goal, the reviews or the calendar."];
     const lists = p.lists.filter((l) => l !== "practice" || p.lists.length === 1).map((l) => LIST_NAME[l]);
 
     return frame(
@@ -375,10 +376,24 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                 {practised > 0 && <em>practised {practised}×</em>}
                             </div>
                         )}
+                        <p className="pp-streak">On my own, With hint and Instant count towards your streak. Attempted doesn't.</p>
                         <div className="pp-status">
                             <div className="pp-gauge" style={{ "--p": `${recall ?? 0}%` } as CSSProperties}><span>{recall != null ? `${recall}%` : "–"}</span></div>
                             <div><b>{standing[0]}</b><small>{standing[1]}{s.last_grade && recall != null && status !== "due" ? ` · ${recall}% recall now` : ""}</small></div>
                         </div>
+                        {(s.last_grade || history.length > 0) && (
+                            <div className="pp-reset">
+                                {confirmReset ? (
+                                    <>
+                                        <small>Remove this problem's log and review? Your saved solutions stay.</small>
+                                        <button className="pp-link bad" disabled={busy} onClick={() => { reset(p); setConfirmReset(false); }}>Yes, reset</button>
+                                        <button className="pp-link" onClick={() => setConfirmReset(false)}>Keep</button>
+                                    </>
+                                ) : (
+                                    <button className="pp-link" onClick={() => setConfirmReset(true)}>Reset progress</button>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {sameIdea.length > 1 && (

@@ -25,11 +25,7 @@
 .rv-timer{display:flex;flex-direction:column;gap:6px}
 .rv-timer .tk{height:6px;border-radius:3px;background:var(--raise);overflow:hidden}.rv-timer .tk i{display:block;height:100%;background:var(--vio)}
 .rv-timer .lb{display:flex;justify-content:space-between;font:500 11.5px var(--mono);color:var(--mut)}
-.rv-steps{display:flex;flex-direction:column;gap:8px}
-.rv-chk{display:flex;gap:11px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line2);border-radius:9px;background:var(--bg);width:100%;text-align:left}
-.rv-chk .bx{flex:none;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line);display:grid;place-items:center;font:700 11px var(--mono);color:var(--on-acc);margin-top:1px}
-.rv-chk.on{border-color:color-mix(in oklab,var(--grn) 50%,var(--line2))}.rv-chk.on .bx{background:var(--grn);border-color:var(--grn)}
-.rv-chk b{display:block;font-size:13.5px}.rv-chk .s{display:block;font-size:12px;color:var(--dim);line-height:1.45;margin-top:2px}
+.rv-timer .lb{align-items:center}.rv-timer .lb button{font:600 11.5px var(--mono);color:var(--vio)}.rv-timer .lb button:hover{color:var(--fg)}
 .rv-sketch{width:100%;min-height:120px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--fg);padding:12px;font:13px/1.6 var(--mono);resize:vertical;outline:none}
 .rv-sketch:focus{border-color:var(--acc)}
 .rv-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}

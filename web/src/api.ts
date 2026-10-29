@@ -996,6 +996,7 @@ export const api = {
   dsaRow: (id: string) => request<DsaProblem>("GET", `/dsa/problems/${id}/row`),
   patternLessons: (pattern: string) => request<PatternLessons>("GET", `/dsa/patterns/${pattern}`),
   practice: (pattern: string) => request<PracticeList>("GET", `/dsa/practice/${pattern}`),
+  resetDsa: (id: string) => request<{ id: string }>("DELETE", `/dsa/problems/${id}/log`),
   logDsa: (id: string, grade: Grade, practice = false) => request<{ id: string; due: string | null; ideal_days: number | null }>("POST", `/dsa/problems/${id}/log`, { grade, practice }),
   review: () => request<ReviewQueue>("GET", "/dsa/review"),
   mock: () => request<MockData>("GET", "/dsa/mock"),

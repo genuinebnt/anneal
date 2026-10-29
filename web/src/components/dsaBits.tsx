@@ -5,10 +5,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type DsaCompany, type DsaProblem, type Grade } from "../api";
 import { DIFF, markOf, niceDate } from "../dsa";
 
-const SAID: Record<Grade, string> = { good: "on your own", hard: "with help", again: "not yet", easy: "easy" };
+const SAID: Record<Grade, string> = { good: "on your own", hard: "with a hint", again: "attempted", easy: "instant" };
 
 /** Logs a problem and says when it comes back. Render `toast` once on the page. */
-export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; toast: ReactNode; busy: boolean } {
+export function useLogger(today: string | undefined): { log: (p: DsaProblem, grade: Grade, practice?: boolean) => void; reset: (p: DsaProblem) => void; toast: ReactNode; busy: boolean } {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const timer = useRef<number>(0);
@@ -32,9 +32,18 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
     },
     onError: (e: Error) => say(`Couldn't log it: ${e.message}`),
   });
+  const r = useMutation({
+    mutationFn: (p: DsaProblem) => api.resetDsa(p.id),
+    onSuccess: (_, p) => {
+      say(`${p.title}: progress reset.`);
+      for (const key of ["dsa", "dsa-row", "dsa-preview", "practice", "activity", "tracks", "reviews", "dsa-review", "progress", "stats"]) void qc.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (e: Error) => say(`Couldn't reset it: ${e.message}`),
+  });
   return {
     log: (p, grade, practice = false) => m.mutate({ p, grade, practice }),
-    busy: m.isPending,
+    reset: (p) => r.mutate(p),
+    busy: m.isPending || r.isPending,
     toast: message ? (
       <div className="d-toast" role="status">
         {message}
@@ -44,12 +53,12 @@ export function useLogger(today: string | undefined): { log: (p: DsaProblem, gra
 }
 
 /** The state icon of a problem: a filled disc with a check (solved on my own), a half-filled ring (solved with help),
- *  a red ring with a cross (couldn't yet), a violet ring with a clock when a review is due, and a dashed ring when not started. */
+ *  a red ring with a cross (attempted), a violet ring with a clock when a review is due, and a dashed ring when not started. */
 export function Mark({ p, today }: { p: DsaProblem; today: string }) {
   const mark = markOf(p);
   const started = !!p.state.last_grade;
   const due = started && !!p.state.due && p.state.due <= today && mark !== "fail";
-  const label = started ? (due ? "Due for review" : mark === "fail" ? "Couldn't yet" : mark === "help" ? "Solved with help" : "Solved") : "Not started";
+  const label = started ? (due ? "Due for review" : mark === "fail" ? "Attempted" : mark === "help" ? "Solved with a hint" : "Solved") : "Not started";
   const kind = due ? "due" : mark || "none";
   return (
     <span className={`d-st ${mark} k-${kind}`} title={label} role="img" aria-label={label}>
