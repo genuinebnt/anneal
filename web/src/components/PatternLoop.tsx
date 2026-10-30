@@ -30,8 +30,8 @@ const DRAW: Record<LoopKind, ReactNode> = {
             {Array.from({ length: 5 }, (_, i) => <rect key={i} className={`lp-fr${i === 1 ? " lp-ev" : ""}`} style={delay(i * 0.5)} x={44 + i * 32} y={8} width={26} height={14} rx={3} />)}
             <text className="lp-tx" x={14} y={48}>ARC</text>
             {Array.from({ length: 5 }, (_, i) => <rect key={i} className="lp-fr lp-g" style={delay(0.3 + i * 0.5)} x={44 + i * 32} y={40} width={26} height={14} rx={3} />)}
-            <text className="lp-tc" x={206} y={18} style={{ fill: "var(--bad)" }}>evict</text>
-            <text className="lp-tc" x={206} y={50} style={{ fill: "var(--grn)" }}>hit</text>
+            <text className="lp-tc" x={206} y={18} style={{ fill: "color-mix(in oklab,var(--bad) 70%,var(--fg))" }}>evict</text>
+            <text className="lp-tc" x={206} y={50} style={{ fill: "var(--card-ink-2)" }}>hit</text>
         </>
     ),
     "latch-crabbing": (
@@ -60,14 +60,14 @@ const DRAW: Record<LoopKind, ReactNode> = {
     ),
     recovery: (
         <>
-            <rect className="lp-acf lp-pa" x={14} y={24} width={60} height={7} rx={2} style={{ fill: "var(--grn)" }} />
+            <rect className="lp-acf lp-pa" x={14} y={24} width={60} height={7} rx={2} style={{ fill: "var(--card-ink-2)" }} />
             <rect className="lp-acf lp-pr2" x={74} y={38} width={64} height={7} rx={2} />
-            <rect className="lp-acf lp-pu" x={138} y={52} width={60} height={7} rx={2} style={{ fill: "var(--vio)" }} />
-            <path className="lp-cr" d="M74 14 L74 70" stroke="var(--bad)" strokeWidth={1.4} strokeDasharray="3 3" fill="none" />
+            <rect className="lp-acf lp-pu" x={138} y={52} width={60} height={7} rx={2} style={{ fill: "var(--card-ink-3)" }} />
+            <path className="lp-cr" d="M74 14 L74 70" stroke="color-mix(in oklab,var(--bad) 70%,var(--fg))" strokeWidth={1.4} strokeDasharray="3 3" fill="none" />
             <text className="lp-tx" x={14} y={20}>analysis</text>
             <text className="lp-tx" x={78} y={35}>redo</text>
             <text className="lp-tx" x={142} y={49}>undo</text>
-            <text className="lp-tc lp-cr" x={78} y={80} style={{ fill: "var(--bad)" }}>crash</text>
+            <text className="lp-tc lp-cr" x={78} y={80} style={{ fill: "color-mix(in oklab,var(--bad) 70%,var(--fg))" }}>crash</text>
         </>
     ),
     ownership: (
