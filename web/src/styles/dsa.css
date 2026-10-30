@@ -168,13 +168,13 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 /* ---- the written lesson ---- */
 .d-md{font-size:14px;line-height:1.7;color:var(--mut);max-width:72ch}
 .d-md p{margin:0 0 10px}.d-md p:last-child{margin:0}
-.d-md code,.d-tips code,.d-cxnote code{font:500 12px var(--mono);background:var(--raise);border-radius:4px;padding:1px 5px;color:var(--fg)}
+.d-md code,.d-tips code,.d-cxnote code{font:500 12px var(--code);background:var(--raise);border-radius:4px;padding:1px 5px;color:var(--fg)}
 .d-md strong,.d-tips strong{color:var(--fg)}
 .d-aptabs{align-self:flex-start;flex-wrap:wrap}
 .d-ap{display:flex;flex-direction:column;gap:12px;padding-top:6px}
 .d-ap h3{margin:0;font-size:16px}
 .d-code{position:relative;border:1px solid var(--line2);border-radius:8px;background:var(--bg);overflow:hidden}
-.d-code pre{margin:0;padding:14px 16px;overflow-x:auto;font:400 12px/1.65 var(--mono);color:var(--fg);scrollbar-width:none}
+.d-code pre{margin:0;padding:14px 16px;overflow-x:auto;font:400 12px/1.65 var(--code);color:var(--fg);scrollbar-width:none}
 .d-code pre::-webkit-scrollbar{display:none}
 .d-copy{position:absolute;top:8px;right:8px;height:24px;padding:0 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);font:500 11px var(--mono);color:var(--dim)}
 .d-copy:hover{color:var(--ca);border-color:var(--ca)}
@@ -243,8 +243,8 @@ button.d-co.hot{background:color-mix(in oklch,var(--fn) 13%,transparent)}
 .d-statement p{margin:0 0 12px}
 .d-statement p:last-child{margin-bottom:0}
 .d-statement ul,.d-statement ol{margin:0 0 12px;padding-left:22px;display:flex;flex-direction:column;gap:4px}
-.d-statement code{font:500 12px var(--mono);background:var(--raise);border-radius:4px;padding:1px 5px}
-.d-statement pre{margin:0 0 12px;padding:12px 14px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:12.5px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.d-statement code{font:500 12px var(--code);background:var(--raise);border-radius:4px;padding:1px 5px}
+.d-statement pre{margin:0 0 12px;padding:12px 14px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:12.5px/1.65 var(--code);white-space:pre-wrap;overflow-wrap:anywhere}
 .d-statement pre code{background:none;padding:0}
 .d-statement img{max-width:100%;height:auto;border-radius:8px;background:#fff}
 .d-statement table{border-collapse:collapse;margin-bottom:12px}
@@ -280,7 +280,7 @@ a.d-step:hover{border-color:var(--dim)}
 @media (max-width:700px){.d-today{grid-template-columns:1fr}}
 
 .d-codebody{display:flex;min-width:0}.d-codebody pre{flex:1;min-width:0}
-.d-ln{flex:none;padding:14px 0 14px 14px;color:var(--dim);font:400 12px/1.65 var(--mono);text-align:right;user-select:none;white-space:pre}
+.d-ln{flex:none;padding:14px 0 14px 14px;color:var(--dim);font:400 12px/1.65 var(--code);text-align:right;user-select:none;white-space:pre}
 .d-ln+pre{padding-left:14px}
 .d-statement img{padding:8px;box-sizing:border-box;border:1px solid var(--line2)}
 /* reading mode: only the problem, at a comfortable width */

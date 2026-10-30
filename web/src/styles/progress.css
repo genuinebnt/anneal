@@ -30,7 +30,7 @@
 .legend2 i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 .hbars{display:flex;flex-direction:column;gap:10px}
 .hbar{display:grid;grid-template-columns:74px minmax(0,1fr) 36px;gap:12px;align-items:center}
-.hbar code{font:600 12px var(--mono)}
+.hbar code{font:600 12px var(--code)}
 .hbar.nokey{grid-template-columns:minmax(0,1fr) 36px}
 .hbar .t{display:flex;flex-direction:column;gap:5px;min-width:0}
 .hbar .t small{font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

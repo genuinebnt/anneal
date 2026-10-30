@@ -97,10 +97,10 @@
 .cat-empty{padding:40px;text-align:center;border:1px dashed var(--line);border-radius:12px;color:var(--dim);font:500 13px var(--mono)}
 .tcard{color:var(--fg)}
 .tcard .tc-go:hover{background:var(--cab)}
-.nu-main p code{font:500 13px var(--mono);color:var(--fg)}
+.nu-main p code{font:500 13px var(--code);color:var(--fg)}
 .rempty{margin:0;font-size:13px;color:var(--dim)}
 .cat-search input::-webkit-search-cancel-button{display:none}
-.tcard p code{font:500 12px var(--mono);color:var(--fg)}
+.tcard p code{font:500 12px var(--code);color:var(--fg)}
 
 /* pattern navigation (docs/DSA.md, decision 31) */
 .seg .vn{font:600 11px var(--mono);margin-left:8px;padding:1px 7px;border-radius:999px;background:var(--raise);color:var(--dim)}.seg .on .vn{background:var(--ca);color:var(--on-acc)}

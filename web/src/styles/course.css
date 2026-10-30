@@ -47,12 +47,12 @@
 .cx-prose strong,.cx-prose em.k{color:var(--fg);font-weight:600;font-style:normal}
 .cx-prose h2{margin:48px 0 0;font-size:23px;line-height:1.25;font-weight:700;letter-spacing:-.015em;color:var(--fg)}
 .cx-prose h3{margin:36px 0 0;font-size:18px;font-weight:700;color:var(--fg)}
-.cx code{font:500 .86em var(--mono);color:var(--fg);background:var(--raise);padding:1px 5px;border-radius:4px;font-variant-ligatures:none}
+.cx code{font:500 .86em var(--code);color:var(--fg);background:var(--raise);padding:1px 5px;border-radius:4px}
 .cx a{color:inherit}
 .cx-prose a{color:var(--fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
 /* code */
 .cx-code{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
-.cx-code pre{margin:0;padding:14px 0;overflow-x:auto;font:400 13px/1.7 var(--mono);color:var(--fg)}
+.cx-code pre{margin:0;padding:14px 0;overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-ln{display:block;padding:0 20px;white-space:pre}.cx-ln.add{background:var(--grn-bg);box-shadow:inset 3px 0 0 var(--grn)}
 .cx-code figcaption{padding:8px 20px;border-top:1px solid var(--line2);background:var(--panel);font:500 12px var(--mono);color:var(--dim)}
 .t-c{color:var(--com)}.t-k{color:var(--kw)}.t-t{color:var(--ty)}.t-m{color:var(--mac)}
@@ -182,7 +182,7 @@
 @media (max-width:960px){.cx-read{padding:28px 16px 16px}.cx-pn{grid-template-columns:1fr}.cx-bar{padding-inline:16px}}
 
 /* rendered markdown inside a stage */
-.cx-prose pre{margin:20px 0;padding:14px 20px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);overflow-x:auto;font:400 13px/1.7 var(--mono);color:var(--fg)}
+.cx-prose pre{margin:20px 0;padding:14px 20px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-prose pre code{background:none;padding:0;font-size:inherit}
 .cx-prose table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;display:block;overflow-x:auto}
 .cx-prose th,.cx-prose td{padding:8px 12px;border:1px solid var(--line2);text-align:left;vertical-align:top}
@@ -204,7 +204,7 @@
 .cx-locked button:hover{border-color:var(--mut)}
 .cx-locked.vio{--c:var(--vio)}.cx-locked.fn{--c:var(--fn)}
 .cx-diff{margin:14px 0 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
-.cx-diff pre{margin:0;padding:12px 0;overflow-x:auto;font:400 13px/1.7 var(--mono);color:var(--fg)}
+.cx-diff pre{margin:0;padding:12px 0;overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-diff .cx-ln.del{background:var(--bad-bg);box-shadow:inset 3px 0 0 var(--bad);color:var(--mut)}
 .cx-diff figcaption{padding:8px 20px;border-top:1px solid var(--line2);background:var(--panel);font:500 12px var(--mono);color:var(--dim)}
 .cx-reads .cx-r{display:flex;flex-direction:column;gap:3px}
@@ -248,7 +248,7 @@
 .cx-hl.shell .cx-lang{color:var(--fn)}.cx-hl.shell .cx-lang::before{background:var(--fn)}
 .cx-copy{height:22px;padding:0 8px;border:1px solid transparent;border-radius:4px;font:500 11px var(--mono);color:var(--dim);opacity:0;transition:opacity .12s}
 .cx-hl:hover .cx-copy,.cx-copy:focus-visible{opacity:1}.cx-copy:hover{color:var(--fg);border-color:var(--line2)}
-.cx-prose .cx-hl pre{margin:0;padding:14px 18px;border:0;border-radius:0;background:none;font:400 13px/1.7 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
+.cx-prose .cx-hl pre{margin:0;padding:14px 18px;border:0;border-radius:0;background:none;font:400 13px/1.7 var(--code);white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
 .cx-prose .cx-hl pre code{font-size:inherit}
 .t-f{color:var(--fn)}.t-s{color:var(--str)}.t-n{color:var(--num)}.t-l{color:var(--lt)}
 .cx-prose .cx-tbl{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow-x:auto;background:var(--panel)}
@@ -319,7 +319,7 @@
 .cx-dm i+i{margin-left:-2px}
 .cx-dm i.on{background:currentColor}
 .cx-cmds{display:flex;flex-direction:column;gap:6px}
-.cx-cmds code{display:block;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:500 12px var(--mono);color:var(--fg);overflow-wrap:anywhere}
+.cx-cmds code{display:block;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:500 12px var(--code);color:var(--fg);overflow-wrap:anywhere}
 @media (max-width:760px){.cx-srow{grid-template-columns:18px minmax(0,1fr) auto;padding:10px 12px}.cx-sno,.cx-now{display:none}.cx-secp{padding-left:0}}
 
 /* ---- stage tabs (CodeCrafters: Instructions / Code examples / Concepts) ---- */

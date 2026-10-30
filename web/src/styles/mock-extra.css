@@ -62,8 +62,8 @@
 .s-root .s-trk .tc-doors{margin-top:2px}
 
 .k-root .k-planned{margin-left:10px;font:600 11px var(--mono);letter-spacing:.14em;padding:3px 8px;border-radius:4px;border:1px solid var(--line2);color:var(--dim);vertical-align:2px}
-/* The solution viewer: code lines never wrap or collapse, long lines scroll sideways (no scrollbar chrome), and no ligatures stretch `::`. */
-.k-root .k-sol pre{white-space:pre;overflow-x:auto;scrollbar-width:none;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;letter-spacing:0;tab-size:4}
+/* The solution viewer: code lines never wrap or collapse, long lines scroll sideways (no scrollbar chrome), in Fira Code with its ligatures. */
+.k-root .k-sol pre{white-space:pre;overflow-x:auto;scrollbar-width:none;letter-spacing:0;tab-size:4}
 .k-root .k-sol pre::-webkit-scrollbar{display:none}
 .k-root .k-sol pre .k-l{min-width:max-content}
 /* Code, links and emphasis inside a hidden answer take the hidden colour too: they set their own, so they showed through. */
