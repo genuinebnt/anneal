@@ -221,3 +221,26 @@ test("each Idea tab opens with a loop and its sentence; the loop moves, and stan
     expect(await q.locator(".id-hero .lp-sw").evaluate((e) => getComputedStyle(e).animationName)).toBe("none");
     await calm.close();
 });
+
+test("Linked List: links are drawn, reversing flips them one at a time, and slow and fast find a loop or none", async ({ page }) => {
+    await page.goto("/dsa/patterns/D6/idea");
+    await expect(page.locator(".id-links")).toBeVisible();
+    expect(await page.locator(".id-links .id-link").count()).toBeGreaterThanOrEqual(5);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-links .id-link.hot")).toHaveCount(1);
+    await expect(page.locator(".id-ptr span").filter({ hasText: "prev" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-ptr span").filter({ hasText: "prev" })).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("5 4 3 2 1");
+    // slow and fast: a loop is found, an arc is drawn under the row, and no loop ends with none
+    await page.getByRole("radio", { name: /slow and fast/i }).click();
+    await expect(page.locator(".id-links path.far")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("cycle");
+    await page.getByLabel("Last node points to index", { exact: true }).fill("-1");
+    await page.getByLabel("Last node points to index", { exact: true }).blur();
+    await expect(page.locator(".id-links path.far")).toHaveCount(0);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("no cycle");
+});

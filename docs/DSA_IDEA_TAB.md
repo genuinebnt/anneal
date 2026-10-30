@@ -1,6 +1,6 @@
 # The Idea tab of a pattern
 
-Status: **rollout in progress, one pattern per commit. Done: Sliding Window, Two Pointers, Binary Search, Stack (4 of 18).** Approved by the owner from the mockup
+Status: **rollout in progress, one pattern per commit. Done: Sliding Window, Two Pointers, Binary Search, Stack, Linked List (5 of 18).** Approved by the owner from the mockup
 (https://claude.ai/artifact/1pB91P8AtbqRu6fqmkSJdC). It is a **fourth tab** on a pattern's page (Idea, Learn, Problems, Practice). The Learn
 tab and `docs/DSA_LEARN_PAGE_SPEC.md` are untouched, and 1, 2, 3 keep their meaning; `I` opens Idea. The tab only appears for a pattern that has a
 file in `content/dsa/ideas/` (`has_idea` on the pattern in `GET /api/dsa`).
@@ -49,11 +49,11 @@ variation, a general explanation, **how it works with other patterns**, **syntax
 
 ## The frame an animation produces
 
-`Frame` in `web/src/ideaDemos.ts`: `win` (a brace over `[l, r)`), `pointers` (labelled markers, `above` or `below` the row; two on one cell stack), `dim` (ruled out), `cur` (being looked at), `hit` (the answer), `enter`/`leave`/`dup`, `cells` (new values when the array is written in place), `stack` (a second structure beside the row), `lines` (code lines that run), `read` (readings), `work` (bars of what it saves, `ratio` for "n of total"), `say`, `result`. A new pattern also needs a drawing in `PatternLoop.tsx` (and its name in `LOOP_OF`) and a `tagline`. Add a field to the frame only when a pattern needs one, and draw it in `components/IdeaDemo.tsx`.
+`Frame` in `web/src/ideaDemos.ts`: `win` (a brace over `[l, r)`), `pointers` (labelled markers, `above` or `below` the row; two on one cell stack), `dim` (ruled out), `cur` (being looked at), `hit` (the answer), `enter`/`leave`/`dup`, `cells` (new values when the array is written in place), `stack` (a second structure beside the row), `links` (the arrows of a linked list; a demo with `wide: true` spaces its cells to fit them, and a link that reaches back is drawn as an arc under the row), `lines` (code lines that run), `read` (readings), `work` (bars of what it saves, `ratio` for "n of total"), `say`, `result`. A new pattern also needs a drawing in `PatternLoop.tsx` (and its name in `LOOP_OF`) and a `tagline`. Add a field to the frame only when a pattern needs one, and draw it in `components/IdeaDemo.tsx`.
 
 ## Still to write (suggested animation)
 
-Arrays & Hashing (a map filling as the scan goes), Linked List (slow and fast pointers), Trees (the order a DFS and a BFS visit), Heap / Priority Queue (sift up and
+Arrays & Hashing (a map filling as the scan goes), Trees (the order a DFS and a BFS visit), Heap / Priority Queue (sift up and
 down), Backtracking (the decision tree growing and pruning), Tries (a word walking down), Graphs (BFS and DFS frontiers), Advanced Graphs
 (Dijkstra settling nodes), 1-D and 2-D Dynamic Programming (the table filling, each cell lit with the cells it reads), Greedy (the choice made at
 each step), Intervals (a sweep over the line), Math & Geometry, Bit Manipulation (the bits of a number changing).

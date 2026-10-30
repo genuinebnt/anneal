@@ -151,3 +151,40 @@ test("monotonic stack: each index is pushed once and popped at most once, and th
     const decreasing = DEMOS["stack-mono"]!.simulate({ items: ["5", "4", "3"] });
     assert.equal(decreasing[decreasing.length - 1]!.result, "-1 -1 -1", "nothing is greater: they all stay on the stack");
 });
+
+test("reversing in place flips each link once, makes no node, and ends with the order turned round", () => {
+    const frames = run("list-reverse");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "5 4 3 2 1");
+    assert.equal(frames.length, 1 + 5 + 1);
+    const [flips, made] = last.work.bars;
+    assert.equal(flips!.value, 5);
+    assert.equal(made!.value, 0);
+    // at the end every link points the other way and the first node points at nothing
+    assert.deepEqual(last.links!.map((l) => l.to), [-1, 0, 1, 2, 3]);
+    // exactly the link just flipped is hot
+    for (const f of frames.slice(1, -1)) assert.equal(f.links!.filter((l) => l.hot).length, 1);
+    // prev is always the node before cur in the original order
+    for (const f of frames.slice(1, -1)) {
+        const prev = f.pointers.find((p) => p.label === "prev");
+        const cur = f.pointers.find((p) => p.label === "cur")!;
+        if (prev) assert.equal(prev.at, cur.at - 1);
+    }
+});
+
+test("slow and fast meet inside a loop and never meet without one", () => {
+    const looped = run("list-cycle");
+    const last = looped[looped.length - 1]!;
+    assert.equal(last.result, "cycle");
+    assert.equal(last.hit!.length, 1);
+    assert.ok(last.hit![0]! >= 2, "they meet inside the loop, from index 2 on");
+    assert.ok(looped.length <= 1 + 8, "a few steps");
+    assert.equal(last.work.bars[1]!.value, 2, "two pointers, whatever the length");
+    const none = DEMOS["list-cycle"]!.simulate({ items: ["1", "2", "3", "4", "5"], param: -1 });
+    assert.equal(none[none.length - 1]!.result, "no cycle");
+    for (const f of none) assert.ok(!f.hit, "no meeting");
+    const d = DEMOS["list-cycle"]!;
+    assert.deepEqual(d.parse("1,2,3", "1"), { items: ["1", "2", "3"], param: 1 });
+    assert.equal(d.parse("1,2,3", "5"), null, "the loop must point at a node of the list");
+    assert.deepEqual(d.parse("1,2,3", "-1"), { items: ["1", "2", "3"], param: -1 });
+});

@@ -1,0 +1,171 @@
+pattern = "Linked List"
+
+tagline = "A node knows only the next one, so every trick is about moving pointers carefully: reverse them, race two of them, or keep one behind."
+
+what = [
+    "A linked list gives you **no index**: to reach the middle you walk from the head. So the problems are not about finding items but about **changing the links** without losing the rest of the list. The tools are a few pointers (`prev`, `cur`, `next`), a **dummy head** that removes the special case of the first node, and two pointers moving at different speeds or a fixed gap apart.",
+    "Run the two classics below: **reversing a list in place** (flip each link once, remember the rest first), and **finding a loop** with a slow and a fast pointer (no memory beyond the two).",
+]
+
+demos = ["list-reverse", "list-cycle"]
+
+applies = [
+    "Anything built from **nodes and next pointers**: reverse, reorder, merge, split, remove, copy.",
+    "\"Does it have a **cycle**\", \"find the **middle**\", \"the **n-th from the end**\": two pointers at different speeds or a fixed gap.",
+    "**Merging** sorted lists, adding two numbers stored as lists, partitioning around a value.",
+    "**Design** problems that need O(1) insert and delete anywhere: an LRU cache is a hash map plus a doubly linked list.",
+]
+
+yes = [
+    "You can do the job by **re-pointing nodes you already have**, without copying their values.",
+    "A pointer that moves at a **different speed** (or starts a **fixed distance** behind) answers the question in one pass.",
+    "The first node can change, so a **dummy head** in front of it makes every case the same.",
+]
+
+no = [
+    "You need **random access** (the k-th item, binary search): copy the list into an array first.",
+    "The structure is not a list: a node with two children is a tree, a node with many neighbours is a graph.",
+    "Memory is plentiful and clarity matters more: a hash set of visited nodes is simpler than Floyd's two pointers.",
+]
+
+apply = [
+    "**Say what each pointer means.** \"The part already reversed\", \"the node about to be turned\", \"the node before the one to delete\".",
+    "**Save what you are about to lose.** Before you overwrite `cur.next`, keep the old value in `nxt`.",
+    "**Add a dummy head** whenever the head itself may be removed or replaced, and return `dummy.next`.",
+    "**Pick the speeds or the gap.** Two steps against one finds a loop or the middle; a gap of n finds the n-th from the end.",
+    "**Check the ends.** An empty list, one node, and the last node's `next` being null. If every pointer is guarded, the code follows.",
+]
+
+[[which]]
+says = "\"**reverse** the list\", \"reverse a **part** / in groups of k\""
+kind = "Reversal"
+move = "Walk once; at each node remember the rest, point it backward, step on."
+glyph = "reverse"
+technique = "Linked List:reverse"
+
+[[which]]
+says = "\"is there a **cycle**\", \"the **middle** node\", \"is it a **palindrome**\""
+kind = "Fast and slow"
+move = "Slow steps one, fast steps two. Meeting means a loop; fast at the end means slow is in the middle."
+glyph = "cycle"
+technique = "Linked List:fast-slow"
+
+[[which]]
+says = "\"the **n-th from the end**\", \"where two lists **intersect**\""
+kind = "A fixed gap"
+move = "Start the second pointer n ahead, then move both. When it falls off, the first is in place."
+glyph = "gap"
+technique = "Linked List:gap"
+
+[[which]]
+says = "\"**merge** two sorted lists\", \"add two numbers\""
+kind = "Dummy head and merge"
+move = "A dummy head and a tail. Append the smaller node each time, then attach what is left."
+glyph = "merge"
+technique = "Linked List:dummy-merge"
+
+[[which]]
+says = "\"**remove** all nodes with value x\", \"delete the duplicates\""
+kind = "Splice in place"
+move = "Keep a pointer to the node before the target and re-point its `next` past it."
+glyph = "splice"
+technique = "Linked List:splice"
+
+[[which]]
+says = "\"**copy** a list with a random pointer\""
+kind = "Old to new map"
+move = "First make every new node and remember it by its old node; then wire the pointers through the map."
+glyph = "clone"
+technique = "Linked List:clone-map"
+
+[[which]]
+says = "\"an **LRU cache**\", \"O(1) insert, delete and move to front\""
+kind = "Hash map and list"
+move = "The map finds a node in O(1); the doubly linked list moves or removes it in O(1)."
+glyph = "lru"
+technique = "Linked List:lru"
+
+[[which]]
+says = "\"merge **k** sorted lists\""
+kind = "K-way merge"
+move = "A heap holds the head of each list; pop the smallest and push its successor."
+glyph = "kmerge"
+technique = "Linked List:kway-merge"
+
+[[cost]]
+name = "Copy into an array and back"
+time = "O(n)"
+space = "O(n)"
+why = "It works, and it is easy to get right, but it holds a second copy of the whole list. This is the cost to beat."
+
+[[cost]]
+name = "Reverse in place"
+time = "O(n)"
+space = "O(1)"
+why = "Each node is visited once and its one pointer is flipped once. Only `prev`, `cur` and `nxt` are kept. A recursive version also takes O(n) space on the call stack."
+
+[[cost]]
+name = "Fast and slow pointers"
+time = "O(n)"
+space = "O(1)"
+why = "If there is a loop, the fast pointer gains one node on the slow one every step, so they meet within one lap, and the work is linear. A hash set of visited nodes is also O(n) time but O(n) space."
+
+[[cost]]
+name = "A fixed gap"
+time = "O(n)"
+space = "O(1)"
+why = "One pass: the lead pointer walks n ahead, then both walk together until the lead falls off. No length is counted first."
+
+[[cost]]
+name = "Dummy head and merge"
+time = "O(n + m)"
+space = "O(1)"
+why = "Every step takes one existing node from one of the lists and re-points it, so no nodes are created."
+
+[[cost]]
+name = "Copy with an old-to-new map"
+time = "O(n)"
+space = "O(n)"
+why = "Two passes over the list, and the map holds one entry per node. Interleaving each copy right after its original removes the map and costs O(1) extra."
+
+[[cost]]
+name = "LRU cache (map and doubly linked list)"
+time = "O(1) per operation"
+space = "O(capacity)"
+why = "The map finds the node in O(1), and because the list is doubly linked a node can be unlinked and moved to the front without walking."
+
+[[cost]]
+name = "K-way merge with a heap"
+time = "O(N log k)"
+space = "O(k)"
+why = "N nodes in total are each pushed and popped once, and each heap operation costs log k because the heap holds one head per list."
+
+[[with]]
+pattern = "Two Pointers"
+how = "Fast and slow is two pointers on a structure with no index. On an array you could write `nums[i]`; on a list you move the pointers node by node."
+example = "palindrome-linked-list"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "A hash map gives O(1) lookup and a doubly linked list gives O(1) reordering; together they are an LRU cache. A hash set of visited nodes also detects a cycle, with O(n) memory."
+example = "lru-cache"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "Merging k sorted lists keeps the current head of each in a heap, so the next smallest node is always at the top."
+example = "merge-k-sorted-lists"
+
+[[with]]
+pattern = "Trees"
+how = "A linked list is a tree with one child. Flattening a tree into a list in preorder re-points the same `next` pointers, and many tree walks (a stack, a queue) are lists underneath."
+example = "flatten-binary-tree-to-linked-list"
+
+[[with]]
+pattern = "Graphs"
+how = "A list is a graph where each node has one outgoing edge, so a cycle in an array of next indexes is the same problem, and Floyd's two pointers finds the repeated number in an array with no extra space."
+example = "find-the-duplicate-number"
+
+[[with]]
+pattern = "Stack"
+how = "Reversing a list is what a stack does to the order of items: last in, first out. A stack of nodes reverses a list in O(n) space, where flipping pointers needs none."
+example = "add-two-numbers"

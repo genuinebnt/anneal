@@ -20,7 +20,7 @@
 .id-stage{border:1px solid var(--line2);border-radius:14px;background:radial-gradient(120% 150% at 15% 0%,color-mix(in oklab,var(--id-win) 8%,var(--bg)),var(--bg));padding:46px 16px 54px;overflow-x:auto;scrollbar-width:none;display:flex}
 .id-stage::-webkit-scrollbar{display:none}
 .id-row{position:relative;height:56px;margin:0 auto;flex:none}
-.id-cell{position:absolute;top:0;width:calc(var(--cell) - 6px);margin-left:3px;height:52px;border-radius:13px;border:1px solid var(--line);background:var(--raise);display:grid;place-items:center;transition:background .35s,border-color .35s,box-shadow .35s}
+.id-cell{position:absolute;top:0;width:calc(var(--cell) - var(--gap,6px));margin-left:calc(var(--gap,6px) / 2);height:52px;border-radius:13px;border:1px solid var(--line);background:var(--raise);display:grid;place-items:center;transition:background .35s,border-color .35s,box-shadow .35s}
 .id-cell b{font:600 19px var(--mono);color:var(--fg)}
 .id-cell[style*="--h"] b{color:color-mix(in oklab,oklch(.62 .17 var(--h)) 72%,var(--fg))}
 .id-cell small{position:absolute;bottom:-21px;left:0;right:0;text-align:center;font:500 11px var(--mono);color:var(--dim)}
@@ -135,3 +135,10 @@
 .id-ht{margin:8px 0 6px;font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1.1;color:var(--fg)}
 .id-hs{margin:0;font-size:15px;line-height:1.6;color:var(--mut);max-width:46ch}
 .id-hero .lp{height:150px}
+
+/* the arrows of a linked list */
+.id-links{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.id-link path,path.id-link{fill:none;stroke:var(--dim);stroke-width:1.6;transition:stroke .3s}
+.id-link text{font:600 11px var(--mono);fill:var(--dim)}
+.id-link.hot path,path.id-link.hot{stroke:var(--acc);stroke-width:2.2}.id-link.hot text{fill:var(--acc)}
+path.id-link.far{stroke:var(--vio);stroke-dasharray:4 3;stroke-width:1.8}

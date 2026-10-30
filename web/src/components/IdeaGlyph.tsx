@@ -24,6 +24,13 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     contrib: { n: 10, w: [[2, 7]], bars: [4, 6, 2, 7, 3, 5, 1, 6, 4, 3] },
     runstate: { n: 10, w: [], dots: [0, 1, 2, 3, 4], bars: [3, 3, 2, 2, 1], ptr: [4] },
     evaluate: { n: 10, w: [], dots: [0, 2, 4, 6, 8], ptr: [9] },
+    reverse: { n: 10, w: [], w2: [[0, 5]], dots: [0, 1, 2, 3, 4], ptr: [4, 5] },
+    cycle: { n: 10, w: [[3, 10]], dots: [3, 6, 9], ptr: [3, 9] },
+    gap: { n: 10, w: [], w2: [[2, 7]], ptr: [2, 7] },
+    splice: { n: 10, w: [], w2: [[2, 5]], dots: [3], ptr: [2, 5] },
+    clone: { n: 10, w: [[0, 5]], w2: [[5, 10]], dots: [1, 6] },
+    lru: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5], ptr: [0, 5] },
+    kmerge: { n: 10, w: [], bars: [2, 4, 3, 6, 5, 7, 6, 8, 7, 9], ptr: [0] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {

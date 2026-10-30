@@ -3,7 +3,6 @@ import { DEMOS, type DemoInput, type Frame, type Reading } from "../ideaDemos";
 import { highlightPy } from "./dsaBits";
 import { Segmented } from "./ui";
 
-const CELL = 56;
 const hue = (c: string) => (c.charCodeAt(0) * 47) % 360;
 
 /** A number that counts to its new value instead of jumping (at once under reduced motion). */
@@ -63,6 +62,43 @@ function Work({ f }: { f: Frame }) {
     );
 }
 
+/** The arrows of a linked list: one in the gap between neighbours (a hot one is the link just changed), a short one with a null mark at an end,
+ *  and an arc under the row for a link that reaches back. */
+function Links({ links, n, cell, gap }: { links: NonNullable<Frame["links"]>; n: number; cell: number; gap: number }) {
+    const cx = (i: number) => i * cell + cell / 2;
+    const right = (i: number) => i * cell + cell - gap / 2;
+    const left = (i: number) => i * cell + gap / 2;
+    const mid = 26;
+    return (
+        <svg className="id-links" width={n * cell} height={110} viewBox={`0 0 ${n * cell} 110`} aria-hidden="true">
+            <defs>
+                {([["id-ah", "var(--dim)"], ["id-ah-hot", "var(--acc)"], ["id-ah-far", "var(--vio)"]] as const).map(([id, color]) => (
+                    <marker key={id} id={id} viewBox="0 0 8 8" refX="6" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8Z" style={{ fill: color, stroke: "none" }} /></marker>
+                ))}
+            </defs>
+            {links.map((l) => {
+                const cls = `id-link${l.hot ? " hot" : ""}`;
+                if (l.to === -1) {
+                    const onRight = l.from === n - 1;
+                    const x1 = onRight ? right(l.from) + 2 : left(l.from) - 2;
+                    const x2 = onRight ? x1 + 16 : x1 - 16;
+                    return (
+                        <g key={`${l.from}-n`} className={cls}>
+                            <path d={`M${x1} ${mid} L${x2} ${mid}`} markerEnd={`url(#${l.hot ? "id-ah-hot" : "id-ah"})`} />
+                            <text x={onRight ? x2 + 9 : x2 - 9} y={mid + 3} textAnchor="middle">∅</text>
+                        </g>
+                    );
+                }
+                if (l.to === l.from + 1) return <path key={`${l.from}-r`} className={cls} d={`M${right(l.from) + 2} ${mid} L${left(l.to) - 3} ${mid}`} markerEnd={`url(#${l.hot ? "id-ah-hot" : "id-ah"})`} />;
+                if (l.to === l.from - 1) return <path key={`${l.from}-l`} className={cls} d={`M${left(l.from) - 2} ${mid} L${right(l.to) + 3} ${mid}`} markerEnd={`url(#${l.hot ? "id-ah-hot" : "id-ah"})`} />;
+                const x1 = cx(l.from);
+                const x2 = cx(l.to);
+                return <path key={`${l.from}-b`} className={`${cls} far`} d={`M${x1} 68 C${x1} 108, ${x2} 108, ${x2} 70`} markerEnd="url(#id-ah-far)" />;
+            })}
+        </svg>
+    );
+}
+
 /** Markers on one cell stack, so two never sit on top of each other. */
 function placed(f: Frame) {
     const count = new Map<string, number>();
@@ -108,7 +144,10 @@ export function IdeaDemo({ names }: { names: string[] }) {
 
     if (!demo || !input || frames.length === 0) return null;
     const f = frames[Math.min(i, last)]!;
+    const CELL = demo.wide ? 72 : 56;
+    const GAP = demo.wide ? 28 : 6;
     const cells = f.cells ?? input.items;
+    const farLinks = frames.some((fr) => fr.links?.some((l) => l.to >= 0 && Math.abs(l.to - l.from) > 1));
     const pointers = placed(f);
     // room for the markers that stack: the most any step has above and below the row
     const rooms = frames.reduce((m, fr) => {
@@ -144,9 +183,10 @@ export function IdeaDemo({ names }: { names: string[] }) {
                     <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={demo.fields.text} maxLength={demo.letters || demo.compact ? 14 : 40} /></label>
                     {demo.fields.param && <label>{demo.fields.param.label.replace(/^Window size /, "")} <input className="id-k" type="number" min={demo.fields.param.min} max={demo.fields.param.max} value={k} onChange={(e) => setK(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} aria-label={demo.fields.param.label} /></label>}
                 </div>
-                <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 }}>
+                <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 + (farLinks ? 34 : 0) }}>
                     <div className="id-body">
-                        <div className="id-row" style={{ width: cells.length * CELL, "--cell": `${CELL}px` } as CSSProperties}>
+                        <div className="id-row" style={{ width: cells.length * CELL, "--cell": `${CELL}px`, "--gap": `${GAP}px` } as CSSProperties}>
+                            {f.links && <Links links={f.links} n={cells.length} cell={CELL} gap={GAP} />}
                             {f.win && <div className="id-brace" style={{ left: f.win[0] * CELL, width: Math.max(f.win[1] - f.win[0], 1) * CELL, opacity: f.win[1] > f.win[0] ? 1 : 0.35 }} />}
                             {pointers.map((p) => (
                                 <div key={`${p.label}${p.below ? "b" : "a"}`} className={`id-ptr id-${p.tone}${p.below ? " id-below" : ""}`} style={{ transform: `translateX(${p.at * CELL}px)`, "--k": p.k } as CSSProperties}><span>{p.label}</span></div>

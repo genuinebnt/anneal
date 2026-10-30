@@ -44,6 +44,8 @@ export interface Frame {
     /** Cells answered yes (green) and no (red). */
     ok?: number[];
     nope?: number[];
+    /** The arrows of a linked list: `from` points to `to` (-1 is null). `hot` marks the one just changed. */
+    links?: { from: number; to: number; hot?: boolean }[];
     enter?: number;
     leave?: number;
     dup?: number;
@@ -64,6 +66,8 @@ export interface Demo {
     letters?: boolean;
     /** Typed as one string, without commas ("FFTT"). */
     compact?: boolean;
+    /** Cells set wider apart, so an arrow fits between them (linked lists). */
+    wide?: boolean;
     /** The labels of what can be typed: the cells, and the number if there is one. */
     fields: { text: string; param?: { label: string; min: number; max: number } };
     /** Reads what was typed; null when it is not a valid input. */
@@ -473,6 +477,100 @@ function simulateMono(input: DemoInput): Frame[] {
     return out;
 }
 
+// ---------------------------------------------------------------- linked list
+
+const reverseCode = [
+    "def reverse(head):",
+    "    prev, cur = None, head",
+    "    while cur:",
+    "        nxt = cur.next  # remember the rest",
+    "        cur.next = prev  # flip this link",
+    "        prev, cur = cur, nxt",
+    "    return prev",
+];
+
+function simulateReverse(input: DemoInput): Frame[] {
+    const v = input.items;
+    const n = v.length;
+    if (n < 2) return [];
+    const links = v.map((_, i) => ({ from: i, to: i < n - 1 ? i + 1 : -1, hot: false }));
+    let prev = -1;
+    let cur = 0;
+    let flips = 0;
+    const name = (i: number) => (i === -1 ? "None" : v[i]!);
+    const ptrs = (nxt: number): Pointer[] => [
+        ...(prev >= 0 ? [{ at: prev, label: "prev", tone: "l" as const, below: true }] : []),
+        ...(cur >= 0 ? [{ at: cur, label: "cur", tone: "r" as const }] : []),
+        ...(nxt >= 0 ? [{ at: nxt, label: "next", tone: "m" as const }] : []),
+    ];
+    const work = (): Work => ({
+        title: "WORK DONE",
+        bars: [{ label: "Pointers flipped", value: flips, of: n, tone: "good", ratio: true }, { label: "New nodes made", value: 0, of: n, tone: "bad", ratio: true }],
+        note: "Each node is visited once and its one pointer is flipped once. No node is copied and nothing extra is stored: O(n) time, O(1) space.",
+    });
+    const read = (): Reading[] => [{ label: "PREV", value: name(prev) }, { label: "CUR", value: name(cur) }];
+    const out: Frame[] = [{ links: links.map((l) => ({ ...l })), pointers: ptrs(cur + 1 < n ? cur + 1 : -1).filter((p) => p.label !== "next"), cur: [0], lines: [2], read: read(), work: work(), say: "Reverse the list in place. prev is the part already reversed (empty, so None); cur is the node about to be turned around." }];
+    while (cur !== -1) {
+        const nxt = cur + 1 < n ? cur + 1 : -1;
+        const was = cur;
+        links[was] = { from: was, to: prev, hot: true };
+        flips++;
+        const before = prev;
+        out.push({ links: links.map((l) => ({ ...l, hot: l.from === was })), pointers: ptrs(nxt), cur: [was], lines: [3, 4, 5, 6], read: read(), work: work(), say: `Remember the rest (${name(nxt)}), then point ${v[was]} back at ${name(before)}. Then both pointers step: prev becomes ${v[was]}, cur becomes ${name(nxt)}.` });
+        for (const l of links) l.hot = false;
+        prev = was;
+        cur = nxt;
+    }
+    out.push({ links: links.map((l) => ({ ...l, hot: false })), pointers: [{ at: prev, label: "head", tone: "l", below: true }], hit: [...v.keys()], lines: [7], read: [{ label: "NEW ORDER", value: [...v].reverse().join(" ") }], work: work(), result: [...v].reverse().join(" "), say: `cur ran off the end, so prev is the new head: ${[...v].reverse().join(" → ")}. Every link now points the other way.` });
+    return out;
+}
+
+const cycleCode = [
+    "def has_cycle(head):",
+    "    slow = fast = head",
+    "    while fast and fast.next:",
+    "        slow = slow.next  # one step",
+    "        fast = fast.next.next  # two steps",
+    "        if slow is fast:",
+    "            return True",
+    "    return False",
+];
+
+function simulateCycle(input: DemoInput): Frame[] {
+    const v = input.items;
+    const n = v.length;
+    const tail = input.param !== undefined && input.param >= 0 && input.param < n ? input.param : -1;
+    if (n < 2) return [];
+    const next = (i: number) => (i < n - 1 ? i + 1 : tail);
+    const links = v.map((_, i) => ({ from: i, to: next(i) }));
+    let slow = 0;
+    let fast = 0;
+    let steps = 0;
+    const seen = new Set<number>([0]);
+    const work = (): Work => ({
+        title: "EXTRA MEMORY",
+        bars: [{ label: "Remember every node", value: seen.size, of: n, tone: "bad", ratio: true }, { label: "Slow and fast", value: 2, of: n, tone: "good", ratio: true }],
+        note: "A set of visited nodes grows with the list. Two pointers are always two pointers: if there is a loop, the fast one laps the slow one inside it, and they meet.",
+    });
+    const ptrs = (s: number, f: number): Pointer[] => [{ at: s, label: "slow", tone: "l" }, ...(f >= 0 ? [{ at: f, label: "fast", tone: "r" as const }] : [])];
+    const read = (): Reading[] => [{ label: "STEPS", value: steps }, { label: "SLOW AT", value: v[slow]! }, { label: "FAST AT", value: fast >= 0 ? v[fast]! : "end" }];
+    const out: Frame[] = [{ links, pointers: ptrs(0, 0), cur: [0], lines: [2], read: read(), work: work(), say: tail >= 0 ? `The last node points back to ${v[tail]}, so this list has a loop. Both pointers start at the head.` : "The last node points to nothing (null), so this list has no loop. Both pointers start at the head." }];
+    while (fast !== -1 && next(fast) !== -1) {
+        slow = next(slow);
+        fast = next(next(fast));
+        steps++;
+        seen.add(slow);
+        if (fast !== -1) seen.add(fast);
+        if (slow === fast) {
+            out.push({ links, pointers: [{ at: slow, label: "slow = fast", tone: "r" }], hit: [slow], lines: [4, 5, 6, 7], read: read(), work: work(), result: "cycle", say: `slow and fast are on ${v[slow]} at the same time: the fast pointer lapped the slow one, which can only happen inside a loop. Found in ${steps} step${steps === 1 ? "" : "s"}.` });
+            return out;
+        }
+        out.push({ links, pointers: ptrs(slow, fast), cur: [slow, ...(fast >= 0 ? [fast] : [])], lines: [3, 4, 5], read: read(), work: work(), say: `slow takes one step, fast takes two. slow is on ${v[slow]}, fast is on ${fast >= 0 ? v[fast] : "the end"}.` });
+    }
+    out.push({ links, pointers: ptrs(slow, -1), dim: [], lines: [3, 8], read: read(), work: work(), result: "no cycle", say: `fast reached the end of the list, so there is no loop. Two steps at a time took only ${steps} step${steps === 1 ? "" : "s"}, with no memory beyond the two pointers.` });
+    return out;
+}
+
 export const DEMOS: Record<string, Demo> = {
     "window-fixed": {
         title: "Fixed size · best sum",
@@ -569,5 +667,30 @@ export const DEMOS: Record<string, Demo> = {
             return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) ? { items } : null;
         },
         simulate: simulateMono,
+    },
+    "list-reverse": {
+        title: "Reverse a list in place",
+        code: reverseCode,
+        initial: { items: ["1", "2", "3", "4", "5"] },
+        wide: true,
+        fields: { text: "Node values, separated by commas" },
+        parse: (text) => {
+            const items = numbers(text);
+            return items.length >= 2 && items.length <= 7 && smallInts(items) ? { items } : null;
+        },
+        simulate: simulateReverse,
+    },
+    "list-cycle": {
+        title: "Find a loop with slow and fast",
+        code: cycleCode,
+        initial: { items: ["1", "2", "3", "4", "5", "6"], param: 2 },
+        wide: true,
+        fields: { text: "Node values, separated by commas", param: { label: "Last node points to index", min: -1, max: 6 } },
+        parse: (text, param) => {
+            const items = numbers(text);
+            const tail = Number(param);
+            return items.length >= 2 && items.length <= 7 && smallInts(items) && Number.isInteger(tail) && tail >= -1 && tail < items.length && param.trim() !== "" ? { items, param: tail } : null;
+        },
+        simulate: simulateCycle,
     },
 };
