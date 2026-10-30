@@ -18,6 +18,12 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     rotated: { n: 10, w: [], bars: [6, 7, 8, 9, 10, 1, 2, 3, 4, 5], ptr: [5] },
     partition: { n: 10, w: [[0, 4]], w2: [[4, 10]], dots: [3, 4] },
     mountain: { n: 10, w: [], bars: [1, 3, 5, 7, 9, 8, 6, 4, 3, 1], ptr: [4] },
+    nested: { n: 10, w: [[0, 10], [2, 8]], w2: [[4, 6]] },
+    cancel: { n: 10, w: [], w2: [[3, 5]], dots: [3, 4], ptr: [5] },
+    monotone: { n: 10, w: [], bars: [9, 7, 5, 3, 6, 4, 2, 8, 5, 3], ptr: [4] },
+    contrib: { n: 10, w: [[2, 7]], bars: [4, 6, 2, 7, 3, 5, 1, 6, 4, 3] },
+    runstate: { n: 10, w: [], dots: [0, 1, 2, 3, 4], bars: [3, 3, 2, 2, 1], ptr: [4] },
+    evaluate: { n: 10, w: [], dots: [0, 2, 4, 6, 8], ptr: [9] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {

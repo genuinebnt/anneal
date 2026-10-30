@@ -126,9 +126,9 @@ pub struct DsaCatalog {
 }
 
 /// The animations the web app can draw for an Idea tab. A name here needs a simulator in `web/src/ideaDemos.ts`.
-pub const IDEA_DEMOS: &[&str] = &["window-fixed", "window-variable", "pointers-opposite", "pointers-same", "search-find", "search-first-true"];
+pub const IDEA_DEMOS: &[&str] = &["window-fixed", "window-variable", "pointers-opposite", "pointers-same", "search-find", "search-first-true", "stack-brackets", "stack-mono"];
 /// The small pictures of a window or pointer layout beside a row of "which one". Drawn by `web/src/components/IdeaGlyph.tsx`.
-pub const IDEA_GLYPHS: &[&str] = &["fixed", "longest", "shortest", "counting", "frequency", "deque", "opposite", "samedir", "ksum", "merge", "greedy", "peaks", "halving", "boundary", "answer", "rotated", "partition", "mountain"];
+pub const IDEA_GLYPHS: &[&str] = &["fixed", "longest", "shortest", "counting", "frequency", "deque", "opposite", "samedir", "ksum", "merge", "greedy", "peaks", "halving", "boundary", "answer", "rotated", "partition", "mountain", "nested", "cancel", "monotone", "contrib", "runstate", "evaluate"];
 
 /// One row of "which one?": what the question says, the kind of the pattern it points to, the move, and the technique card to open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -371,6 +371,108 @@ function simulateFirstTrue(input: DemoInput): Frame[] {
     return out;
 }
 
+// ---------------------------------------------------------------- stack
+
+const bracketsCode = [
+    "def is_valid(s):",
+    "    pairs = {')': '(', ']': '[', '}': '{'}",
+    "    stack = []",
+    "    for ch in s:",
+    "        if ch in pairs:  # a closer",
+    "            if not stack or stack.pop() != pairs[ch]:",
+    "                return False",
+    "        else:",
+    "            stack.append(ch)  # an opener waits",
+    "    return not stack",
+];
+
+const PAIRS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
+function simulateBrackets(input: DemoInput): Frame[] {
+    const s = input.items;
+    const n = s.length;
+    if (n < 2) return [];
+    const stack: { ch: string; at: number }[] = [];
+    let matched: number[] = [];
+    let pushes = 0;
+    let pops = 0;
+    const sk = (top?: "push" | "pop") => ({ label: "STACK", items: stack.map((x) => x.ch), top });
+    const work = (): Work => ({
+        title: "EVERY CHARACTER IS PUSHED ONCE AND POPPED AT MOST ONCE",
+        bars: [{ label: "Pushed", value: pushes, of: n, tone: "good", ratio: true }, { label: "Popped", value: pops, of: n, tone: "bad", ratio: true }],
+        note: "A character is pushed when it opens and popped when its partner arrives, never more than once each, so a string of n characters costs O(n) however deeply it nests.",
+    });
+    const read = (verdict: string): Reading[] => [{ label: "STACK", value: stack.map((x) => x.ch).join(" ") || "empty" }, { label: "VERDICT", value: verdict }];
+    const out: Frame[] = [{ pointers: [], stack: sk(), lines: [2, 3], read: read("?"), work: work(), say: "Every closer must meet its own opener, and the most recent opener first. The stack holds the openers still waiting, newest on top." }];
+    for (let i = 0; i < n; i++) {
+        const ch = s[i]!;
+        const p: Pointer[] = [{ at: i, label: "i", tone: "r" }];
+        if (ch in PAIRS) {
+            const top = stack[stack.length - 1];
+            if (!top || top.ch !== PAIRS[ch]) {
+                out.push({ pointers: p, ok: matched, nope: [i, ...(top ? [top.at] : [])], stack: sk(), lines: [4, 5, 6, 7], read: read("invalid"), work: work(), result: "invalid", say: top ? `“${ch}” needs “${PAIRS[ch]}” on top, but the top is “${top.ch}”. The brackets cross, so the string is invalid.` : `“${ch}” closes something, but the stack is empty: nothing is open. Invalid.` });
+                return out;
+            }
+            stack.pop();
+            pops++;
+            matched = [...matched, top.at, i];
+            out.push({ pointers: p, ok: matched, stack: sk("pop"), lines: [4, 5, 6], read: read("?"), work: work(), say: `“${ch}” closes, and the top is “${top.ch}”: a match. Pop it.` });
+        } else {
+            stack.push({ ch, at: i });
+            pushes++;
+            out.push({ pointers: p, ok: matched, cur: [i], stack: sk("push"), lines: [4, 8, 9], read: read("?"), work: work(), say: `“${ch}” opens something, so it waits on the stack until its partner comes.` });
+        }
+    }
+    const left = stack.length;
+    out.push({ pointers: [], ok: matched, nope: stack.map((x) => x.at), stack: sk(), lines: [10], read: read(left ? "invalid" : "valid"), work: work(), result: left ? "invalid" : "valid", say: left ? `The string ended with ${left} bracket${left === 1 ? "" : "s"} still open, so it is invalid.` : "The stack is empty: every opener found its partner, in the right order. Valid." });
+    return out;
+}
+
+const monoCode = [
+    "def next_greater(nums):",
+    "    res = [-1] * len(nums)",
+    "    stack = []  # indexes, values decreasing",
+    "    for i, x in enumerate(nums):",
+    "        while stack and nums[stack[-1]] < x:",
+    "            res[stack.pop()] = x  # x is their next greater",
+    "        stack.append(i)",
+    "    return res",
+];
+
+function simulateMono(input: DemoInput): Frame[] {
+    const a = input.items.map(Number);
+    const n = a.length;
+    if (n < 2) return [];
+    const res: (number | null)[] = Array(n).fill(null);
+    const stack: number[] = [];
+    let pushes = 0;
+    let pops = 0;
+    const done = () => res.map((v, i) => (v === null ? -1 : i)).filter((i) => res[i] !== null);
+    const sk = (top?: "push" | "pop") => ({ label: "STACK", items: stack.map((j) => String(a[j])), top });
+    const work = (): Work => ({
+        title: "EVERY INDEX IS PUSHED ONCE AND POPPED AT MOST ONCE",
+        bars: [{ label: "Pushed", value: pushes, of: n, tone: "good", ratio: true }, { label: "Popped", value: pops, of: n, tone: "bad", ratio: true }],
+        note: "A step may pop several items, but each item can only be popped once in the whole run, so the pops add up to at most n. That is why the nested while is still O(n).",
+    });
+    const read = (): Reading[] => [{ label: "STACK", value: stack.map((j) => a[j]).join(" ") || "empty" }, { label: "NEXT GREATER", value: res.map((v) => (v === null ? "–" : v)).join(" ") }];
+    const out: Frame[] = [{ pointers: [], stack: sk(), lines: [2, 3], read: read(), work: work(), say: "For each number, find the next one to its right that is bigger. The stack holds the numbers still waiting for theirs, biggest at the bottom." }];
+    for (let i = 0; i < n; i++) {
+        const x = a[i]!;
+        const p: Pointer[] = [{ at: i, label: "i", tone: "r" }];
+        while (stack.length && a[stack[stack.length - 1]!]! < x) {
+            const j = stack.pop()!;
+            res[j] = x;
+            pops++;
+            out.push({ pointers: p, ok: done(), cur: [i], stack: sk("pop"), lines: [5, 6], read: read(), work: work(), say: `${a[j]} < ${x}, so ${x} is the next greater number for ${a[j]} (index ${j}). Pop it and record ${x}.` });
+        }
+        stack.push(i);
+        pushes++;
+        out.push({ pointers: p, ok: done(), cur: [i], stack: sk("push"), lines: [4, 7], read: read(), work: work(), say: `Push ${x}. Everything left on the stack is bigger, so the stack stays in decreasing order and only its top ever needs checking.` });
+    }
+    out.push({ pointers: [], ok: done(), stack: sk(), lines: [8], read: read(), work: work(), result: res.map((v) => (v === null ? -1 : v)).join(" "), say: `Done. The numbers left on the stack have no greater number to their right, so they get -1. Each index was pushed once and popped at most once.` });
+    return out;
+}
+
 export const DEMOS: Record<string, Demo> = {
     "window-fixed": {
         title: "Fixed size · best sum",
@@ -444,5 +546,28 @@ export const DEMOS: Record<string, Demo> = {
             return /^F*T+$/.test(s) && s.length >= 2 && s.length <= MAX_CELLS ? { items: [...s] } : null;
         },
         simulate: simulateFirstTrue,
+    },
+    "stack-brackets": {
+        title: "Matching brackets",
+        code: bracketsCode,
+        initial: { items: [..."([]{})"] },
+        compact: true,
+        fields: { text: "Brackets, such as ([]{})" },
+        parse: (text) => {
+            const s = text.replace(/[^()[\]{}]/g, "");
+            return s.length >= 2 && s.length <= MAX_CELLS ? { items: [...s] } : null;
+        },
+        simulate: simulateBrackets,
+    },
+    "stack-mono": {
+        title: "Monotonic stack · next greater",
+        code: monoCode,
+        initial: { items: ["2", "1", "5", "3", "6", "4"] },
+        fields: { text: "Numbers, separated by commas" },
+        parse: (text) => {
+            const items = numbers(text);
+            return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) ? { items } : null;
+        },
+        simulate: simulateMono,
     },
 };

@@ -175,3 +175,28 @@ test("Binary Search: the middle is looked at, half the row falls away, and a fir
     await expect(page).toHaveURL(/\/dsa\/patterns\/D5#t-on-answer$/);
     await expect(page.locator("#t-on-answer")).toHaveClass(/open/);
 });
+
+test("Stack: brackets wait on the stack and match, a crossing is invalid, and the monotonic stack answers next greater", async ({ page }) => {
+    await page.goto("/dsa/patterns/D4/idea");
+    await expect(page.locator(".id-stack")).toBeVisible();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-stack .id-cell")).toHaveCount(1);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-stack .id-cell")).toHaveCount(2);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("valid");
+    await expect(page.locator(".id-stack .id-cell")).toHaveCount(0);
+    // a crossing
+    await page.getByLabel("Brackets, such as ([]{})").fill("(]");
+    await page.getByLabel("Brackets, such as ([]{})").blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("invalid");
+    await expect(page.locator(".id-cell.id-nope")).toHaveCount(2);
+    // the monotonic stack
+    await page.getByRole("radio", { name: /Monotonic stack/ }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("5 5 6 6 -1 -1");
+    await page.getByRole("link", { name: "See the technique →" }).nth(2).click();
+    await expect(page).toHaveURL(/\/dsa\/patterns\/D4#t-mono-stack$/);
+    await expect(page.locator("#t-mono-stack")).toHaveClass(/open/);
+});

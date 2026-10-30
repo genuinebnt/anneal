@@ -1,0 +1,156 @@
+pattern = "Stack"
+
+what = [
+    "A stack gives you **last in, first out**: the most recent thing you set aside is the first one you come back to. Whenever a problem says \"the most recent one that still matters\", a stack holds exactly those items and lets you drop the ones that no longer do.",
+    "That one rule covers three families. **Matching**: an opener waits until its closer arrives. **Monotonic**: keep the stack in order, and pop whatever the new item makes useless. **Evaluating and undoing**: a stack of results or states that you collapse as you go. Run the first two below.",
+]
+
+demos = ["stack-brackets", "stack-mono"]
+
+applies = [
+    "**Nested** or **paired** structure: brackets, tags, quotes, function calls, decode strings.",
+    "\"The **next greater / smaller** element\", \"how many days until warmer\", \"the largest rectangle\": each item waits for the first thing that beats it.",
+    "**Undo, cancel, collide or collapse**: remove adjacent duplicates, asteroids, a calculator with precedence.",
+    "Replacing **recursion with a loop** by keeping your own stack of work.",
+]
+
+yes = [
+    "What you need next is always the **most recently added** item that is still waiting.",
+    "An item can be **resolved the moment** a later item arrives, and then it is never needed again.",
+    "The structure nests: whatever opens last must close first.",
+]
+
+no = [
+    "You need the **oldest** waiting item first (a queue), or an item from the **middle**: a stack gives you only the top.",
+    "You need a **stretch of consecutive items with a running summary** (longest, shortest, count): that is a sliding window.",
+    "An item waits for a **specific** other item, not for the nearest one that qualifies: use a hash map.",
+]
+
+apply = [
+    "**Say what the stack holds.** \"Openers not yet closed\", or \"indexes still waiting for something bigger\".",
+    "**Say what pushes and what pops.** Usually: every item is pushed, and an arriving item pops everything it resolves.",
+    "**Decide the order the stack keeps.** Decreasing for \"next greater\", increasing for \"next smaller\", or none for plain matching.",
+    "**Decide what a pop produces.** A matched pair, an answer for the popped item, or a collapsed value.",
+    "**State the invariant.** \"The stack always holds exactly the items still waiting, in order.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"are the brackets **balanced**\", \"is the string **valid**\""
+kind = "Matching"
+move = "Push openers. A closer must meet its own opener on top, or the string is invalid."
+glyph = "nested"
+technique = "Stack:matching"
+
+[[which]]
+says = "\"**remove** adjacent duplicates\", \"asteroids **collide**\", \"**undo**\""
+kind = "Cancel and collapse"
+move = "Compare the new item with the top. If they cancel, pop; otherwise push."
+glyph = "cancel"
+technique = "Stack:simulate-stack"
+
+[[which]]
+says = "\"the **next greater / smaller** element\", \"days until a **warmer** day\""
+kind = "Monotonic stack"
+move = "Keep the stack ordered. A new item pops every item it beats, and answers for them."
+glyph = "monotone"
+technique = "Stack:mono-stack"
+
+[[which]]
+says = "\"sum of the **minimum of every subarray**\", \"smallest subsequence\""
+kind = "Contribution counting"
+move = "Pop to find how far each item is the minimum, then count the subarrays it covers."
+glyph = "contrib"
+technique = "Stack:mono-contrib"
+
+[[which]]
+says = "\"a stack that also returns the **minimum**\", \"get max in O(1)\""
+kind = "Stack with running state"
+move = "Push the item together with the minimum so far, so each pop restores the state."
+glyph = "runstate"
+technique = "Stack:aux-stack"
+
+[[which]]
+says = "\"**evaluate** this expression\", \"reverse Polish notation\""
+kind = "Expression evaluation"
+move = "Push operands. An operator pops two, combines them and pushes the result."
+glyph = "evaluate"
+technique = "Stack:expression"
+
+[[which]]
+says = "\"**decode** `3[a2[c]]`\", \"flatten a **nested** list\""
+kind = "Nested structures"
+move = "On an opener, save the current state. On a closer, restore it and merge."
+glyph = "nested"
+technique = "Stack:nested"
+
+[[cost]]
+name = "Rescan for each item"
+time = "O(n²)"
+space = "O(1)"
+why = "For every item, scanning right until something bigger appears can walk the whole rest of the input, so n items cost n scans. This is the cost to beat."
+
+[[cost]]
+name = "Matching brackets"
+time = "O(n)"
+space = "O(n)"
+why = "Each character is pushed at most once and popped at most once, so the work is linear. The stack holds the openers still waiting, which can be all of them: \"((((((\"."
+
+[[cost]]
+name = "Monotonic stack (next greater)"
+time = "O(n)"
+space = "O(n)"
+why = "A step may pop several items, but an item can only be popped once in the whole run, so all the pops add up to at most n. The nested while is paid for by the pushes. A strictly decreasing input leaves every index on the stack."
+
+[[cost]]
+name = "Contribution counting"
+time = "O(n)"
+space = "O(n)"
+why = "The same single pass finds, for every item, how far it stays the minimum on each side; the count is a product of two distances. No subarray is ever listed."
+
+[[cost]]
+name = "Stack with running state (min stack)"
+time = "O(1) per operation"
+space = "O(n)"
+why = "Push, pop and \"what is the minimum\" each touch only the top, because every entry already carries the state at its time. The price is one extra number per entry."
+
+[[cost]]
+name = "Expression evaluation"
+time = "O(n)"
+space = "O(n)"
+why = "Each token is read once and each operand is pushed and popped once. The stack is as deep as the most operands waiting at once, at most n."
+
+[[cost]]
+name = "Nested structures (decode, flatten)"
+time = "O(output size)"
+space = "O(depth)"
+why = "The work is writing the result, so the cost follows the length of the output, which can be much bigger than the input (`100[a]`). The stack only holds one saved state per open level."
+
+[[with]]
+pattern = "Sliding Window"
+how = "When the stack must also drop items that leave a window, it becomes a monotonic deque: it keeps candidates in order and removes from both ends. That finds the maximum of every window in O(n)."
+example = "sliding-window-maximum"
+
+[[with]]
+pattern = "Two Pointers"
+how = "Trapping rain water can use a stack of bars or two pointers walking in from the ends. Both are O(n); the pointers need no stack, so they use O(1) space."
+example = "trapping-rain-water"
+
+[[with]]
+pattern = "Trees"
+how = "A stack is how you turn a recursive traversal into a loop: push the root, pop a node, visit it, push its children. Inorder uses a stack to remember the path back up."
+example = "validate-binary-search-tree"
+
+[[with]]
+pattern = "Graphs"
+how = "Depth-first search is a stack, either the call stack or your own. Replacing the stack with a queue turns it into breadth-first search."
+example = "number-of-islands"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Some DP tables can be replaced by a stack of indexes. The longest valid parentheses can be a DP over positions or one pass with a stack that remembers where the last unmatched bracket was."
+example = "longest-valid-parentheses"
+
+[[with]]
+pattern = "Greedy"
+how = "A stack lets a greedy choice be taken back: keep a letter, then pop it when a smaller one arrives and the popped letter still appears later."
+example = "remove-duplicate-letters"

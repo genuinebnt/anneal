@@ -105,3 +105,49 @@ test("first-true search asks about few cells, keeps mid when it is True and drop
     assert.equal(f.parse("FTFT", ""), null, "it must flip once");
     assert.equal(f.parse("FFF", ""), null, "and have a True");
 });
+
+test("brackets: openers wait on the stack, closers must meet the top, and a crossing or a leftover is invalid", () => {
+    const frames = run("stack-brackets");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "valid");
+    assert.equal(frames.length, 1 + 6 + 1);
+    assert.deepEqual(last.stack!.items, []);
+    // pushed and popped are each at most once per character
+    const [pushed, popped] = last.work.bars;
+    assert.equal(pushed!.value, 3);
+    assert.equal(popped!.value, 3);
+    // the stack never holds more than the openers seen
+    for (const f of frames) assert.ok(f.stack!.items.length <= 3);
+    const sim = (s: string) => DEMOS["stack-brackets"]!.simulate({ items: [...s] });
+    const crossing = sim("(]");
+    assert.equal(crossing[crossing.length - 1]!.result, "invalid");
+    assert.deepEqual(crossing[crossing.length - 1]!.nope, [1, 0], "the closer and the opener it met");
+    const empty = sim("))");
+    assert.equal(empty[empty.length - 1]!.result, "invalid");
+    assert.deepEqual(empty[empty.length - 1]!.nope, [0], "nothing was open");
+    const open = sim("((");
+    assert.equal(open[open.length - 1]!.result, "invalid");
+    assert.deepEqual(open[open.length - 1]!.nope, [0, 1], "two still open");
+    const p = DEMOS["stack-brackets"]!;
+    assert.deepEqual(p.parse("([ a ]{})", ""), { items: [..."([]{})"] }, "other characters are ignored");
+    assert.equal(p.parse("(", ""), null);
+});
+
+test("monotonic stack: each index is pushed once and popped at most once, and the answers are the next greater numbers", () => {
+    const frames = run("stack-mono");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "5 5 6 6 -1 -1");
+    const [pushed, popped] = last.work.bars;
+    assert.equal(pushed!.value, 6);
+    assert.ok(popped!.value <= 6);
+    // the stack stays in decreasing order of value
+    for (const f of frames) {
+        const v = f.stack!.items.map(Number);
+        for (let i = 1; i < v.length; i++) assert.ok(v[i - 1]! >= v[i]!, `decreasing: ${v}`);
+    }
+    // a pop step resolves exactly the cell it popped
+    const resolved = frames.map((f) => (f.ok ?? []).length);
+    for (let i = 1; i < resolved.length; i++) assert.ok(resolved[i]! >= resolved[i - 1]!);
+    const decreasing = DEMOS["stack-mono"]!.simulate({ items: ["5", "4", "3"] });
+    assert.equal(decreasing[decreasing.length - 1]!.result, "-1 -1 -1", "nothing is greater: they all stay on the stack");
+});
