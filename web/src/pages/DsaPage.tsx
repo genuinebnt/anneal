@@ -167,10 +167,10 @@ export function DsaPage() {
           <section className="s-hero">
             <div>
               <div className="s-eye s-rv" style={rise(0).style}>
-                <b>DSA</b> / NEETCODE
+                <b>DSA</b> / PROBLEMS
               </div>
               <h1 className="s-rv" style={rise(1).style}>
-                Every NeetCode problem, <em>tracked.</em>
+                Solve, review, <em>remember.</em>
               </h1>
             </div>
             <div className="s-stats s-rv" style={rise(3).style}>
