@@ -3,8 +3,9 @@ import { Skeleton } from "../components/Skeleton";
 import { ConfirmButton, DateField } from "../components/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
+import { api, type StreakDay, type Streaks, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
 import { Header } from "../components/Header";
+import { MarkChoices, useStreaks } from "../components/Streaks";
 
 /* ---------- dates ---------- */
 const DAY = 86400000;
@@ -77,6 +78,8 @@ export function CalendarPage() {
     const gridStart = m ? add(`${m}-01`, -dow(`${m}-01`)) : "";
     const planQ = useQuery({ queryKey: ["plan", gridStart], queryFn: () => api.plan(gridStart, add(gridStart, 41)), enabled: !!gridStart, placeholderData: (prev) => prev });
     const p = planQ.data;
+    const streaks = useStreaks();
+    const stByDate = new Map((streaks.data?.days ?? []).map((d) => [d.date, d]));
 
     const refresh = useCallback(async () => {
         await Promise.all([qc.invalidateQueries({ queryKey: ["plan"] }), qc.invalidateQueries({ queryKey: ["dsa"] }), qc.invalidateQueries({ queryKey: ["reviews"] })]);
@@ -333,7 +336,7 @@ export function CalendarPage() {
                             {view === "calendar" ? (
                                 <>
                                     <Bar p={p} sel={selDays} note={tab === "rules" ? null : note} hover={hover} busy={busy} onKind={setKind} onHover={(k) => (k ? void showImpact(k) : setHover(null))} onQuick={quick} kindOfRoutine={kindOfRoutine} />
-                                    <Grid p={p} byDate={byDate} month={m} gridStart={gridStart} today={today} sel={sel} onPick={pickDay} onDown={(d) => { if (d >= today) drag.current = { a: d, last: d, moved: false }; }} onOver={overDay} onWeek={(ws) => { const ds = range(ws, add(ws, 6)); setSel(ds); setAnchor(ds[0] ?? null); }} />
+                                    <Grid p={p} byDate={byDate} st={stByDate} month={m} gridStart={gridStart} today={today} sel={sel} onPick={pickDay} onDown={(d) => { if (d >= today) drag.current = { a: d, last: d, moved: false }; }} onOver={overDay} onWeek={(ws) => { const ds = range(ws, add(ws, 6)); setSel(ds); setAnchor(ds[0] ?? null); }} />
                                     <Load p={p} byDate={byDate} month={m} today={today} />
                                 </>
                             ) : (
@@ -348,7 +351,7 @@ export function CalendarPage() {
                                     ))}
                                 </div>
                                 {tab === "rules" && <Rules p={p} note={note} open={open} setOpen={setOpen} setRules={setRules} topicName={topicName} commit={commit} busy={busy} onDelete={planWord && planWord.id !== "default" ? () => api.deletePlan(planWord.id).then(refresh) : undefined} />}
-                                {tab === "day" && <DayDetail p={p} date={selDays[0] ?? today} today={today} byDate={byDate} />}
+                                {tab === "day" && <DayDetail p={p} date={selDays[0] ?? today} today={today} byDate={byDate} streaks={streaks.data} />}
                                 {tab === "history" && <History p={p} />}
                             </div>
                         </aside>
@@ -361,7 +364,7 @@ export function CalendarPage() {
 
 /* ---------- the month ---------- */
 
-function Grid({ p, byDate, month, gridStart, today, sel, onPick, onDown, onOver, onWeek }: { p: PlanView; byDate: Map<string, PlanDay>; month: string; gridStart: string; today: string; sel: string[]; onPick: (d: string, e: React.MouseEvent) => void; onDown: (d: string) => void; onOver: (d: string) => void; onWeek: (ws: string) => void }) {
+function Grid({ p, byDate, st: stByDate, month, gridStart, today, sel, onPick, onDown, onOver, onWeek }: { p: PlanView; byDate: Map<string, PlanDay>; st: Map<string, StreakDay>; month: string; gridStart: string; today: string; sel: string[]; onPick: (d: string, e: React.MouseEvent) => void; onDown: (d: string) => void; onOver: (d: string) => void; onWeek: (ws: string) => void }) {
     const rows: string[] = [];
     for (let w = 0; w < 6; w++) {
         const ws = add(gridStart, w * 7);
@@ -385,7 +388,7 @@ function Grid({ p, byDate, month, gridStart, today, sel, onPick, onDown, onOver,
                         {Array.from({ length: 7 }, (_, i) => {
                             const date = add(ws, i);
                             const d = byDate.get(date);
-                            return d ? <Cell key={date} d={d} p={p} out={date.slice(0, 7) !== month} today={today} selected={sel.includes(date)} onPick={onPick} onDown={onDown} onOver={onOver} /> : <span key={date} />;
+                            return d ? <Cell key={date} d={d} p={p} out={date.slice(0, 7) !== month} today={today} st={stByDate.get(date)} selected={sel.includes(date)} onPick={onPick} onDown={onDown} onOver={onOver} /> : <span key={date} />;
                         })}
                     </div>
                 );
@@ -394,13 +397,17 @@ function Grid({ p, byDate, month, gridStart, today, sel, onPick, onDown, onOver,
     );
 }
 
-function Cell({ d, p, out, today, selected, onPick, onDown, onOver }: { d: PlanDay; p: PlanView; out: boolean; today: string; selected: boolean; onPick: (d: string, e: React.MouseEvent) => void; onDown: (d: string) => void; onOver: (d: string) => void }) {
+function Cell({ d, p, out, today, st, selected, onPick, onDown, onOver }: { st?: StreakDay; d: PlanDay; p: PlanView; out: boolean; today: string; selected: boolean; onPick: (d: string, e: React.MouseEvent) => void; onDown: (d: string) => void; onOver: (d: string) => void }) {
     const past = d.date < today;
     const cls = ["c-day", out ? "out" : "", selected ? "sel" : "", d.date === today ? "today" : "", past ? "past" : `up ${d.kind}`];
     let kind: string = KIND_LABEL[d.kind], title = "", sub: React.ReactNode = null, tag = "", topic: string | null = null;
     if (past) {
         const x = d.past!;
-        if (x.state === "missed") { cls.push("missed"); kind = "MISSED"; title = "Planned problem not done"; }
+        if (st && (st.state === "frozen" || st.state === "holiday" || st.state === "sick")) {
+            cls.push(st.state);
+            kind = { frozen: "FROZEN", holiday: "HOLIDAY", sick: "SICK" }[st.state];
+            title = { frozen: "Freeze used", holiday: "Holiday", sick: "Sick day" }[st.state];
+        } else if (x.state === "missed") { cls.push("missed"); kind = "MISSED"; title = "Planned problem not done"; }
         else if (x.state === "break") { cls.push("break"); kind = "BREAK"; }
         else if (x.state === "solved") {
             const first = x.problems![0]!;
@@ -620,16 +627,22 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
     );
 }
 
-function DayDetail({ p, date, today, byDate }: { p: PlanView; date: string; today: string; byDate: Map<string, PlanDay> }) {
+function DayDetail({ p, date, today, byDate, streaks }: { p: PlanView; date: string; today: string; byDate: Map<string, PlanDay>; streaks?: Streaks }) {
     const d = byDate.get(date);
     if (!d) return <p className="rempty">That day is outside this month's view.</p>;
     const past = date < today;
     const x = d.past;
-    const label = past ? (x?.state === "missed" ? "MISSED" : x?.state === "break" ? "BREAK" : x?.state === "reviews" ? "REVIEW DAY" : x?.state === "rest" ? "REST" : "PROBLEM DAY") : `${{ solve: "PROBLEM DAY", practice: "PRACTICE DAY", break: "BREAK" }[d.kind]}${d.edited ? " · EDITED" : ""}`;
+    const marked = streaks?.days.find((q) => q.date === date && (q.state === "frozen" || q.state === "holiday" || q.state === "sick"));
+    const label = marked ? marked.state.toUpperCase() : past ? (x?.state === "missed" ? "MISSED" : x?.state === "break" ? "BREAK" : x?.state === "reviews" ? "REVIEW DAY" : x?.state === "rest" ? "REST" : "PROBLEM DAY") : `${{ solve: "PROBLEM DAY", practice: "PRACTICE DAY", break: "BREAK" }[d.kind]}${d.edited ? " · EDITED" : ""}`;
     return (
         <div className="c-dd">
             <div className="big">{long(date)}</div>
             <span className="chip">{label}</span>
+            {streaks && date <= today && streaks.days.some((q) => q.date === date) && (
+                <div className="sk-box">
+                    <MarkChoices s={streaks} date={date} repair={streaks.repairs.find((r) => r.date === date)} />
+                </div>
+            )}
             {past ? (
                 <>
                     {x?.problems?.map((q) => (

@@ -1,0 +1,53 @@
+/* Streaks, perfect streaks and freezes (docs/STREAKS.md). Classes are all sk- so nothing else in the app can collide with them.
+   Each state is a hue on the theme's own accent lightness; they tint a small badge or a border, never fill a box. */
+:root{--sk-ice:oklch(from var(--acc) l c 240);--sk-tea:oklch(from var(--acc) l c 190);--sk-gold:var(--warn)}
+.sk-scrim{position:fixed;inset:0;z-index:140;display:grid;place-items:center;padding:16px;background:color-mix(in oklab,var(--bg) 62%,transparent);backdrop-filter:blur(3px);animation:sk-fade .2s var(--ease)}
+.sk-dlg{width:min(440px,100%);display:grid;gap:12px;padding:20px;border:1px solid var(--line);border-radius:18px;background:var(--panel);box-shadow:0 30px 70px -26px var(--shadow);animation:sk-rise .28s var(--ease)}
+.sk-dlg h3{margin:0;font-size:19px;letter-spacing:-.02em}
+.sk-note{margin:0;font-size:13px;line-height:1.5;color:var(--mut)}
+.sk-choices{display:grid;gap:8px}
+.sk-row{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--line2);border-radius:12px}
+.sk-row span{min-width:0;display:grid;gap:1px}.sk-row b{font-size:13px}.sk-row small{font-size:12px;line-height:1.4;color:var(--dim)}
+.sk-btn{flex:none;height:34px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-size:12.5px;font-weight:600;transition:border-color .15s,color .15s,filter .15s}
+.sk-btn:hover:not(:disabled){border-color:var(--acc);color:var(--acc)}.sk-btn:disabled{opacity:.4;cursor:default}
+.sk-btn.pri{border-color:var(--sk-ice);background:var(--sk-ice);color:var(--on-acc)}.sk-btn.pri:hover:not(:disabled){color:var(--on-acc);filter:brightness(1.08)}
+.sk-join{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font:600 12px var(--mono);color:var(--mut)}
+.sk-join i{font-style:normal;padding:3px 9px;border-radius:8px;border:1px solid var(--line2)}
+.sk-join i.new{border-color:color-mix(in oklab,var(--sk-ice) 55%,var(--line2));color:var(--sk-ice)}
+.sk-join i.sum{border-color:color-mix(in oklab,var(--grn) 55%,var(--line2));color:var(--grn)}
+.sk-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;font:600 11px var(--mono);letter-spacing:.06em;color:var(--dim)}
+@keyframes sk-fade{from{opacity:0}to{opacity:1}}
+@keyframes sk-rise{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+
+/* the strip of days */
+.sk-strip{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px}
+@media(max-width:620px){.sk-strip{grid-template-columns:repeat(7,minmax(0,1fr))}}
+.sk-day{aspect-ratio:1;max-height:34px;display:grid;place-items:center;border:1px solid var(--line2);border-radius:9px;font:700 12px var(--mono);color:var(--dim);transition:transform .2s var(--ease),border-color .2s}
+button.sk-day:not(:disabled):hover{transform:translateY(-2px);border-color:var(--acc)}
+.sk-day:disabled{cursor:default;opacity:1}
+.sk-day.kept{color:var(--grn);border-color:color-mix(in oklab,var(--grn) 40%,var(--line2))}
+.sk-day.perfect{color:var(--sk-gold);border-color:color-mix(in oklab,var(--sk-gold) 55%,var(--line2));box-shadow:0 0 0 2px color-mix(in oklab,var(--sk-gold) 18%,transparent)}
+.sk-day.frozen{color:var(--sk-ice);border-color:color-mix(in oklab,var(--sk-ice) 50%,var(--line2))}
+.sk-day.holiday{color:var(--sk-tea);border-color:color-mix(in oklab,var(--sk-tea) 50%,var(--line2))}
+.sk-day.sick{color:var(--vio);border-color:color-mix(in oklab,var(--vio) 50%,var(--line2))}
+.sk-day.missed{color:var(--bad);border-color:color-mix(in oklab,var(--bad) 50%,var(--line2))}
+.sk-day.today{outline:2px solid var(--acc);outline-offset:1px}
+.sk-legend{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12px;color:var(--mut)}
+.sk-legend span{display:inline-flex;gap:6px;align-items:center}
+.sk-legend i{width:18px;height:18px;border-radius:6px;display:inline-grid;place-items:center;font:700 10px var(--mono);font-style:normal}
+
+/* the Progress box and the header chip */
+.sk-box{display:grid;gap:14px}
+.sk-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.sk-stat{padding:12px 14px;border:1px solid var(--line2);border-radius:14px}
+.sk-stat span{display:block;font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
+.sk-stat b{display:block;font:700 28px var(--mono);letter-spacing:-.02em}
+.sk-stat small{display:block;font-size:12px;color:var(--dim)}
+.sk-stat.sk-perfect b{color:var(--sk-gold)}.sk-stat.sk-freeze b{color:var(--sk-ice)}.sk-stat.sk-streak b{color:var(--acc)}
+.sk-bar{height:5px;margin-top:6px;border-radius:3px;background:var(--line2);overflow:hidden}.sk-bar i{display:block;height:100%;background:var(--sk-ice);transition:width .4s var(--ease)}
+.sk-rules{font-size:13px;color:var(--mut)}.sk-rules summary{cursor:pointer;font-weight:600;color:var(--fg)}
+.sk-rules ul{margin:8px 0 0;padding-left:18px;display:grid;gap:4px}
+.hd-chip .sk-fz{color:var(--sk-ice)}
+.c-dd .sk-box{margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)}
+.c-day.frozen .k,.c-day.holiday .k,.c-day.sick .k{color:var(--sk-ice)}
+.c-day.holiday .k{color:var(--sk-tea)}.c-day.sick .k{color:var(--vio)}

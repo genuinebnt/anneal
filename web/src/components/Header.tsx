@@ -8,6 +8,7 @@ import { StatsBar } from "./StatsBar";
 import { Palette } from "./Palette";
 import { useDialog } from "./useDialog";
 import { NotificationBell } from "./Notifications";
+import { fmt, useStreaks } from "./Streaks";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
 // The header has two tiers (docs/mockups/navbar-v2.html). The first answers "where in the product am I": the three areas as one switcher
@@ -108,6 +109,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+    const streaks = useStreaks();
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]), enabled: current === "dsa" });
     const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -223,6 +225,11 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                                     <span className="hd-chip">
                                         streak <b>{progress.data?.streak ?? "–"}</b> {progress.data?.streak === 1 ? "day" : "days"}
                                     </span>
+                                    {streaks.data && (
+                                        <Link to="/progress" className="hd-chip" title={`Perfect streak ${streaks.data.perfect}: days you met the whole plan. Freezes: ${fmt(streaks.data.freezes)}, earned by doing more than planned (an extra new problem is 1, an extra review half).`}>
+                                            {streaks.data.perfect > 0 && <>perfect <b>{streaks.data.perfect}</b> · </>}freezes <b className="sk-fz">{fmt(streaks.data.freezes)}</b>
+                                        </Link>
+                                    )}
                                     {dsa.data && activity.data && (() => {
                                         const plan = dsa.data.plan;
                                         const doneToday = activity.data.week[activity.data.week.length - 1]?.solved ?? 0;

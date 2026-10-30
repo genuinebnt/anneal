@@ -284,6 +284,9 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Json<serde_json::V
         .collect();
     let problems = dsa_tracks(&s.catalog).flat_map(|t| t.problems.iter().map(move |p| (t, p))).map(|(t, p)| row(t, p, &progress, &by_problem, today)).collect();
     let plan = plan(&s, &settings, &progress, &reviews, today).await?;
+    // A perfect day is the day's plan met, so the plan is saved the first time the day is opened (docs/STREAKS.md).
+    let planned_new = if plan.solve_day { settings.new_on_weekday(chrono::Datelike::weekday(&today)) } else { 0 };
+    crate::streaks::snapshot(&s.db, today, planned_new, plan.review_ids.len() as u32).await?;
     let overview = Overview {
         today,
         settings,

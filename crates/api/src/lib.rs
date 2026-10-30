@@ -23,6 +23,7 @@ pub mod calendar;
 pub mod course;
 pub mod planner;
 pub mod solutions;
+pub mod streaks;
 pub mod statement;
 mod store;
 mod views;
@@ -97,6 +98,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/problems/{id}/restore", post(dsa::restore))
         .route("/dsa/problems/{id}/statement", get(statement::get))
         .route("/dsa/problems/{id}/preview", get(review::preview))
+        .route("/streaks", get(streaks::get))
+        .route("/streaks/marks", post(streaks::post_mark))
+        .route("/streaks/marks/{id}", axum::routing::delete(streaks::delete_mark))
         .route("/plan", get(calendar::get))
         .route("/plan/preview", post(calendar::preview))
         .route("/plan/state", put(calendar::put_state))

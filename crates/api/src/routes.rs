@@ -55,7 +55,11 @@ pub async fn activity(
     let rows = store::activity(&s.db).await?;
     let count_premium = crate::settings::count_premium(&s.db).await?;
     let is_solve_day = crate::calendar::solve_day_fn(&s.db).await?;
-    Ok(Json(activity::build(&s.catalog, &sections, &progress, &rows, activity::today(), count_premium, &is_solve_day)))
+    let today = activity::today();
+    let mut a = activity::build(&s.catalog, &sections, &progress, &rows, today, count_premium, &is_solve_day);
+    // Freezes and holidays shape the streak; with no marks this is the streak `build` just worked out.
+    a.streak = crate::streaks::streak(&crate::streaks::facts(&s.db, today).await?, today);
+    Ok(Json(a))
 }
 
 /// `GET /api/week-summary`: last week (Monday to Sunday before this one): what was solved and how, the days that had a solve,
@@ -112,7 +116,12 @@ pub async fn progress(State(s): State<AppState>) -> ApiResult<Json<Overview>> {
     let progress = store::progress(&s.db).await?;
     let count_premium = crate::settings::count_premium(&s.db).await?;
     let is_solve_day = crate::calendar::solve_day_fn(&s.db).await?;
-    Ok(Json(progress::overview(&s.catalog, &rows, &focus, &progress, activity::today(), count_premium, &is_solve_day)))
+    let today = activity::today();
+    let mut o = progress::overview(&s.catalog, &rows, &focus, &progress, today, count_premium, &is_solve_day);
+    let f = crate::streaks::facts(&s.db, today).await?;
+    o.streak = crate::streaks::streak(&f, today);
+    o.longest_streak = crate::streaks::longest(&f, today).max(o.longest_streak);
+    Ok(Json(o))
 }
 
 pub async fn stats(State(s): State<AppState>) -> ApiResult<Json<Stats>> {

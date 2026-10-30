@@ -836,6 +836,13 @@ export class ApiError extends Error {
   }
 }
 
+export type StreakState = "perfect" | "kept" | "frozen" | "holiday" | "sick" | "missed" | "open" | "free";
+export type StreakMarkKind = "freeze" | "holiday" | "sick";
+export type StreakDay = { date: string; state: StreakState; planned_new: number; planned_reviews: number; done_new: number; done_reviews: number; earned: number; mark_id: number | null };
+/** `before` and `after` are the streak days either side of a missed day: repairing it makes `before + 1 + after`. */
+export type StreakRepair = { date: string; before: number; after: number };
+export type Streaks = { today: string; streak: number; perfect: number; longest: number; freezes: number; earned: number; spent: number; days: StreakDay[]; repairs: StreakRepair[] };
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
@@ -1013,6 +1020,9 @@ export const api = {
   format: (code: string) => request<{ code: string }>("POST", "/format", { code }).then((r) => r.code),
   saveAppearance: (appearance: AppearanceSettings) => request<AppearanceSettings>("PUT", "/settings/appearance", appearance),
   progress: () => request<ProgressOverview>("GET", "/progress"),
+  streaks: () => request<Streaks>("GET", "/streaks"),
+  markDay: (day: string, kind: StreakMarkKind) => request<Streaks>("POST", "/streaks/marks", { day, kind }),
+  unmarkDay: (id: number) => request<Streaks>("DELETE", `/streaks/marks/${id}`),
   stats: () => request<ProgressStats>("GET", "/stats"),
   reviews: () => request<ReviewsView>("GET", "/reviews"),
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),

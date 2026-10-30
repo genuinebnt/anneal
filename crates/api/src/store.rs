@@ -345,7 +345,10 @@ pub async fn log_attempt(
     if !schedule || extra {
         return Ok(None);
     }
-    record_review(db, problem_id, grade, resolve, settings).await.map(Some)
+    let due_before: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT due_at FROM reviews WHERE problem_id = $1").bind(problem_id).fetch_optional(db).await?;
+    let scheduled = record_review(db, problem_id, grade, resolve, settings).await?;
+    crate::streaks::record_event(db, problem_id, !resolve, solved, due_before).await?;
+    Ok(Some(scheduled))
 }
 
 /// A problem's logged attempts, oldest first: the kind (`practice` is the first try, `resolve` a later one, `extra` a
@@ -432,6 +435,7 @@ pub async fn undo_log(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
     let Some((attempt, undo)) = undo_plan(db, problem_id).await? else { return Ok(false) };
     let mut tx = db.begin().await?;
     sqlx::query("DELETE FROM attempts WHERE id = $1").bind(attempt).execute(&mut *tx).await?;
+    let had_event = !matches!(undo, Undo::AttemptOnly);
     match undo {
         Undo::AttemptOnly => {}
         Undo::DropReview => {
@@ -458,6 +462,9 @@ pub async fn undo_log(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
         }
     }
     tx.commit().await?;
+    if had_event {
+        crate::streaks::void_last_event(db, problem_id).await?;
+    }
     Ok(true)
 }
 

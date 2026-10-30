@@ -7,8 +7,9 @@ import { counted, newOn, niceDate, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { clearNotes, useNotes } from "./toasts";
 import { useDialog } from "./useDialog";
+import { RepairDialog, addDays, fmt, niceDay, offered, useStreaks } from "./Streaks";
 
-type Need = { id: string; label: string; text: ReactNode; sub: string; tone: "due" | "next" | "warn" | "late"; to: string; slug?: string };
+type Need = { id: string; label: string; text: ReactNode; sub: string; tone: "due" | "next" | "warn" | "late"; to: string; slug?: string; act?: () => void };
 
 const today = () => new Date().toLocaleDateString("en-CA");
 const ago = (t: number) => {
@@ -59,6 +60,8 @@ export function NotificationBell() {
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]) });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+    const streaks = useStreaks();
+    const [repairing, setRepairing] = useState(false);
     const plan = useQuery({ queryKey: ["plan", "bell"], queryFn: () => api.plan(today(), today()), enabled: open });
     const [dismissed, setDismissed] = useState<string[]>(() => {
         const d = getPref<{ day: string; ids: string[] }>("notif.dismissed", { day: "", ids: [] });
@@ -95,6 +98,16 @@ export function NotificationBell() {
 
     const needs: Need[] = [];
     const o = dsa.data;
+    const repair = offered(streaks.data)[0];
+    // The morning after a miss the repair dialog opens once; after that it lives in the bell and the Calendar.
+    useEffect(() => {
+        const s = streaks.data;
+        if (!s || !repair || repair.date !== addDays(s.today, -1)) return;
+        if (getPref<string>("streak.prompted", "") === s.today) return;
+        setPref("streak.prompted", s.today);
+        setRepairing(true);
+    }, [streaks.data, repair]);
+    if (streaks.data && repair) needs.unshift({ id: `repair-${repair.date}`, label: `Your streak broke on ${niceDay(repair.date)}`, text: <>Your <b className="nt-num">{repair.before}</b>-day streak broke on <b>{niceDay(repair.date)}</b></>, sub: `${fmt(streaks.data.freezes)} ${streaks.data.freezes === 1 ? "freeze" : "freezes"}. Repair it, or mark the day.`, tone: "warn", to: "/dsa/calendar", act: () => { setOpen(false); setRepairing(true); } });
     if (o) {
         const p = o.plan;
         const doneToday = activity.data?.week[activity.data.week.length - 1]?.solved ?? 0;
@@ -133,6 +146,7 @@ export function NotificationBell() {
 
     return (
         <div className="nt" ref={box}>
+            {repairing && streaks.data && repair && <RepairDialog s={streaks.data} repair={repair} onClose={() => setRepairing(false)} />}
             <button className="hd-ib bell" aria-haspopup="dialog" aria-expanded={open} aria-label={count ? `Notifications, ${count} need you` : "Notifications"} title="Notifications" onClick={() => setOpen(!open)}>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M3.5 11.5h9l-1.2-1.6V7a3.3 3.3 0 0 0-6.6 0v2.9z" />
@@ -175,7 +189,7 @@ export function NotificationBell() {
                         return (
                             <div key={n.id} className={`nt-item ${n.tone}${leaving.includes(n.id) ? " out" : ""}`} style={{ "--i": k + 4 } as CSSProperties}>
                                 <div className="nt-in">
-                                    {n.slug ? <Link to="/d/$slug" params={{ slug: n.slug }} onClick={() => setOpen(false)}>{inner}</Link> : <Link to={n.to as "/dsa/review"} onClick={() => setOpen(false)}>{inner}</Link>}
+                                    {n.act ? <button className="nt-act" onClick={n.act}>{inner}</button> : n.slug ? <Link to="/d/$slug" params={{ slug: n.slug }} onClick={() => setOpen(false)}>{inner}</Link> : <Link to={n.to as "/dsa/review"} onClick={() => setOpen(false)}>{inner}</Link>}
                                     <button className="nt-x" aria-label={`Dismiss: ${n.label}`} title="Dismiss for today" onClick={() => dismiss(n.id)}>
                                         <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg>
                                     </button>

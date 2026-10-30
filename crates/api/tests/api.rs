@@ -2235,3 +2235,72 @@ async fn large_answers_are_compressed_for_a_client_that_accepts_it(db: PgPool) {
     let zipped_len = zipped.into_body().collect().await.unwrap().to_bytes().len();
     assert!(zipped_len * 2 < plain_len, "{zipped_len} bytes compressed against {plain_len}");
 }
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn freezes_are_earned_by_extra_new_problems_and_spent_on_a_missed_day(db: PgPool) {
+    let root = dsa_root(None);
+    let app = test_app_with(db.clone(), root.path());
+    // Two earlier solve days with a gap between them, and an unsolved yesterday; Sunday is no solve day by default, so the missed day is the first other one.
+    sqlx::query("INSERT INTO attempts (problem_id, kind, solved_at) VALUES ('lc-old-one', 'practice', now() - interval '5 days'), ('lc-old-two', 'practice', now() - interval '2 days')")
+        .execute(&db)
+        .await
+        .unwrap();
+    let today = chrono::Local::now().date_naive();
+    let missed = (3..=4).map(|n| today - chrono::Days::new(n)).find(|d| chrono::Datelike::weekday(d) != chrono::Weekday::Sun).unwrap();
+    let missed_s = missed.to_string();
+
+    let (status, s) = call(&app, Method::GET, "/api/streaks", None).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["freezes"], 0.0);
+    assert!(s["repairs"].as_array().unwrap().iter().any(|r| r["date"] == missed_s.as_str()), "{s}");
+    let (status, err) = call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": missed_s, "kind": "freeze" }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(err.to_string().contains("extra problem"), "{err}");
+
+    // Today's plan is one new problem and no reviews; two new problems are one beyond it, which earns one freeze.
+    sqlx::query("INSERT INTO day_plan (day, planned_new, planned_reviews) VALUES ($1, 1, 0)").bind(today).execute(&db).await.unwrap();
+    for id in ["lc-two-sum", "lc-valid-palindrome"] {
+        let (status, out) = call(&app, Method::POST, &format!("/api/dsa/problems/{id}/log"), Some(json!({ "grade": "good" }))).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let s = call(&app, Method::GET, "/api/streaks", None).await.1;
+    assert_eq!(s["freezes"], 1.0, "{s}");
+
+    // Reviewing a problem that is not due yet earns half a freeze, but only the first time in a row.
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    assert_eq!(call(&app, Method::GET, "/api/streaks", None).await.1["freezes"], 1.5);
+    call(&app, Method::POST, "/api/dsa/problems/lc-two-sum/log", Some(json!({ "grade": "good" }))).await;
+    assert_eq!(call(&app, Method::GET, "/api/streaks", None).await.1["freezes"], 1.5, "repeating the same review earns nothing");
+
+    // Spend one on the missed day, then take it back.
+    let (status, s) = call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": missed_s, "kind": "freeze" }))).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["freezes"], 0.5);
+    let day = s["days"].as_array().unwrap().iter().find(|d| d["date"] == missed_s.as_str()).unwrap().clone();
+    assert_eq!(day["state"], "frozen");
+    let (status, _) = call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": missed_s, "kind": "holiday" }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a day with a mark is marked once");
+    let s = call(&app, Method::DELETE, &format!("/api/streaks/marks/{}", day["mark_id"]), None).await.1;
+    assert_eq!(s["freezes"], 1.5, "an undone freeze comes back");
+    let marks: i64 = sqlx::query_scalar("SELECT count(*) FROM streak_marks WHERE voided_at IS NOT NULL").fetch_one(&db).await.unwrap();
+    assert_eq!(marks, 1, "the mark is voided, not deleted");
+
+    // A holiday or a sick day is for today or yesterday only.
+    let old = (today - chrono::Days::new(3)).to_string();
+    assert_eq!(call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": old, "kind": "sick" }))).await.0, StatusCode::BAD_REQUEST);
+    let yesterday = (today - chrono::Days::new(1)).to_string();
+    let (status, s) = call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": yesterday, "kind": "sick" }))).await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(call(&app, Method::POST, "/api/streaks/marks", Some(json!({ "day": today.to_string(), "kind": "holiday" }))).await.0, StatusCode::BAD_REQUEST, "today has a solve, so nothing to excuse");
+
+    // Undoing a log takes its freeze credit back.
+    sqlx::query("UPDATE streak_marks SET voided_at = now()").execute(&db).await.unwrap();
+    let before = call(&app, Method::GET, "/api/streaks", None).await.1["freezes"].as_f64().unwrap();
+    assert_eq!(call(&app, Method::POST, "/api/dsa/problems/lc-valid-palindrome/undo", None).await.0, StatusCode::OK);
+    let after = call(&app, Method::GET, "/api/streaks", None).await.1["freezes"].as_f64().unwrap();
+    assert_eq!(before - after, 1.0);
+
+    // Nothing was deleted along the way.
+    let events: i64 = sqlx::query_scalar("SELECT count(*) FROM review_events").fetch_one(&db).await.unwrap();
+    assert_eq!(events, 4);
+}

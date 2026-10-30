@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Counted, type ProgressOverview, type ProgressStats, type ReviewsView } from "../api";
 import { Header } from "../components/Header";
+import { StreaksBox } from "../components/Streaks";
 import { LEVEL_COLOR, pctColor } from "../components/bits";
 import { SECTION_NAMES } from "../curriculum";
 import { DATA_STRUCTURES, counted, readinessRows, type ReadyRow } from "../dsa";
@@ -206,6 +207,7 @@ function Overview({ o }: { o: ProgressOverview }) {
           ["FOCUS TIME", dur(o.focus_week_seconds), `this week · ${dur(o.focus_quarter_seconds)} in 90 days`],
         ]}
       />
+      <StreaksBox />
       <div className="pbox" style={{ marginTop: 20 }}>
         <h3>Every day you solved something</h3>
         <p className="sub">Darker means more problems solved that day. Hover a day for the count.</p>
