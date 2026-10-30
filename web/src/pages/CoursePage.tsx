@@ -276,7 +276,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                                 const pct = total ? Math.round((passed / total) * 100) : 0;
                                                 const art = projectArt(p.number, p.title);
                                                 return (
-                                                    <article className={`kp-card${total > 0 && passed === total ? " kp-done" : ""}`} key={p.number}>
+                                                    <article className={`kp-card tint${total > 0 && passed === total ? " kp-done" : ""}`} key={p.number}>
                                                         <header>
                                                             <span className="kp-lab">
                                                                 {rest.length > 0 ? (

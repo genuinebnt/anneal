@@ -181,7 +181,7 @@ function Card({ item, open, toggle, today, glyph }: { item: Item; open: boolean;
     <article className={`lr-card${open ? " open" : ""}`} id={id}>
       <button className={`lr-head${glyph ? " thumb" : ""}`} aria-expanded={open} aria-controls={`${id}-body`} onClick={toggle}>
         <i className={`lr-dot ${status(item)}`} aria-hidden="true" />
-        {glyph && <span className="lr-thumb" aria-hidden="true"><IdeaGlyph kind={glyph} /></span>}
+        {glyph && <span className="lr-thumb tint" aria-hidden="true"><IdeaGlyph kind={glyph} /></span>}
         <span className="lr-name"><b>{item.name}</b>{first && <small>{first}</small>}</span>
         {item.versions > 0 && <span className="lr-ver">{item.versions + 1} VERSIONS</span>}
         <span className="lr-count">{item.lists > 0 && <>{item.solved}/{item.lists} · </>}{item.problems.length} problem{item.problems.length === 1 ? "" : "s"}</span>

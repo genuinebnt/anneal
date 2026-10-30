@@ -129,7 +129,7 @@
 @keyframes id-spark{0%{opacity:1;transform:rotate(var(--a)) translateY(0) scale(1)}100%{opacity:0;transform:rotate(var(--a)) translateY(-46px) scale(.4)}}
 
 /* the loop at the top of the tab */
-.id-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:24px;align-items:center;padding:20px 24px;border:1px solid var(--line);border-radius:18px;background:radial-gradient(90% 140% at 100% 0%,var(--card-glow),transparent 65%),var(--card-bg);border-color:var(--card-line);box-shadow:var(--card-hi);animation:id-rise .55s var(--ease) backwards}
+.id-hero{--c:var(--acc);display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:24px;align-items:center;padding:20px 24px;border:1px solid var(--line);border-radius:18px;background:radial-gradient(80% 140% at 100% 0%,var(--c-glow),transparent 62%),var(--panel);border-color:var(--c-line);animation:id-rise .55s var(--ease) backwards}
 @media (max-width:760px){.id-hero{grid-template-columns:minmax(0,1fr)}}
 .id-hk{font:600 10px var(--mono);letter-spacing:.2em;color:var(--dim)}
 .id-ht{margin:8px 0 6px;font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1.1;color:var(--fg)}

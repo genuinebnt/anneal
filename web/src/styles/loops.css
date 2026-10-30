@@ -1,10 +1,11 @@
 /* The looping drawings of PatternLoop. Always moving; still under Reduce motion (the setting, or the system's). `lp-` prefixed. */
-/* the ink of a drawing and of the cards around it is built from the theme's own tokens (its violet-blue, mixed with the foreground and the panel), so it is rich in both light and dark and never needs a colour of its own */
-:root{--card-ink:color-mix(in oklab,var(--vio) 78%,var(--fg));--card-ink-2:color-mix(in oklab,var(--vio) 58%,var(--panel));--card-ink-3:color-mix(in oklab,var(--vio) 36%,var(--panel));--card-glow:color-mix(in oklab,var(--vio) 16%,transparent);--card-line:color-mix(in oklab,var(--vio) 20%,var(--line));--card-hi:inset 0 1px 0 color-mix(in oklab,var(--fg) 8%,transparent);--card-bg:linear-gradient(180deg,color-mix(in oklab,var(--vio) 5%,var(--panel)),var(--panel) 70%);--card-stage:color-mix(in oklab,var(--vio) 6%,var(--bg))}
-.lp{--lp-c:var(--card-ink);--lp-cell:color-mix(in oklab,var(--vio) 30%,var(--dim));display:block;width:100%;overflow:visible}
+/* A card sets --c (its area's colour: copper for DSA, green for Courses) and the class .tint, and everything on it is a soft tint of that colour
+   mixed into the card's own surface, so the colour is present but never pops and no grey boxes fight the card. */
+.tint{--cs:color-mix(in oklab,var(--c) 58%,var(--panel));--cs-2:color-mix(in oklab,var(--c) 34%,var(--panel));--c-line:color-mix(in oklab,var(--c) 22%,var(--line));--c-glow:color-mix(in oklab,var(--c) 11%,transparent);--c-fill:transparent;--c-track:color-mix(in oklab,var(--fg) 8%,var(--panel));--c-bg:var(--panel);--card-hi:inset 0 1px 0 color-mix(in oklab,var(--fg) 7%,transparent)}
+.lp{--lp-c:var(--cs,color-mix(in oklab,var(--acc) 58%,var(--panel)));--lp-cell:var(--cs-2,color-mix(in oklab,var(--acc) 34%,var(--panel)));display:block;width:100%;overflow:visible}
 .lp-cl{fill:none;stroke:var(--lp-cell);stroke-width:1.4}.lp-cf{fill:color-mix(in oklab,var(--lp-c) 14%,transparent);stroke:var(--lp-c);stroke-width:1.4}
 .lp-ac{fill:none;stroke:var(--lp-c);stroke-width:1.8}.lp-acf{fill:var(--lp-c);stroke:none}.lp-ed{fill:none;stroke:var(--lp-cell);stroke-width:1.4;stroke-dasharray:3 3}
-.lp-tx{font:500 7.5px var(--mono);fill:var(--dim)}.lp-tc{font:600 7.5px var(--mono);fill:var(--lp-c)}
+.lp-tx{font:500 7.5px var(--mono);fill:color-mix(in oklab,var(--dim) 80%,var(--c,var(--acc)))}.lp-tc{font:600 7.5px var(--mono);fill:var(--lp-c)}
 .lp *{transform-box:fill-box}
 html[data-motion="reduce"] .lp *{animation:none!important}
 @media (prefers-reduced-motion:reduce){.lp *{animation:none!important}}
@@ -38,13 +39,13 @@ html[data-motion="reduce"] .lp *{animation:none!important}
 .lp-dp{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-fill 7s infinite both}
 /* backtracking: edges draw, one branch is cut */
 @keyframes lp-draw{0%,4%{stroke-dashoffset:40}18%,100%{stroke-dashoffset:0}}
-@keyframes lp-cut{0%,60%{stroke:var(--lp-c)}70%,100%{stroke:color-mix(in oklab,var(--bad) 70%,var(--fg));opacity:.55}}
+@keyframes lp-cut{0%,60%{stroke:var(--lp-c)}70%,100%{stroke:color-mix(in oklab,var(--bad) 65%,var(--panel));opacity:.7}}
 .lp-bt{fill:none;stroke:var(--lp-c);stroke-width:1.6;stroke-dasharray:40;animation:lp-draw 6s infinite both}
 .lp-bt.lp-cut{animation:lp-draw 6s infinite both,lp-cut 6s infinite both}
 /* buffer pool: frames fill, one is evicted */
 @keyframes lp-hit{0%,10%{fill:transparent;stroke:var(--lp-cell)}18%,40%{fill:color-mix(in oklab,var(--lp-c) 22%,transparent);stroke:var(--lp-c)}60%,100%{fill:color-mix(in oklab,var(--lp-c) 8%,transparent);stroke:color-mix(in oklab,var(--lp-c) 50%,var(--lp-cell))}}
-@keyframes lp-evict{0%,55%{opacity:1}70%,100%{opacity:.2;stroke:color-mix(in oklab,var(--bad) 70%,var(--fg))}}
-.lp-fr{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-hit 6s infinite both}.lp-fr.lp-ev{animation:lp-hit 6s infinite both,lp-evict 6s infinite both}.lp-fr.lp-g{--lp-c:var(--card-ink-2)}
+@keyframes lp-evict{0%,55%{opacity:1}70%,100%{opacity:.25;stroke:color-mix(in oklab,var(--bad) 65%,var(--panel))}}
+.lp-fr{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-hit 6s infinite both}.lp-fr.lp-ev{animation:lp-hit 6s infinite both,lp-evict 6s infinite both}.lp-fr.lp-g{--lp-c:var(--cs-2,var(--lp-cell))}
 /* latch crabbing: the held latch moves down, the parent's is released */
 @keyframes lp-l0{0%,12%{opacity:1}22%,100%{opacity:0}}@keyframes lp-l1{0%,14%{opacity:0}22%,42%{opacity:1}52%,100%{opacity:0}}@keyframes lp-l2{0%,44%{opacity:0}52%,88%{opacity:1}100%{opacity:0}}
 .lp-la0{animation:lp-l0 6s infinite both}.lp-la1{animation:lp-l1 6s infinite both}.lp-la2{animation:lp-l2 6s infinite both}
@@ -57,7 +58,7 @@ html[data-motion="reduce"] .lp *{animation:none!important}
 /* ownership: a value moves, the old name is dead */
 @keyframes lp-move{0%,15%{transform:translateX(0)}50%,85%{transform:translateX(124px)}100%{transform:translateX(0)}}
 @keyframes lp-gone{0%,20%{opacity:0}50%,85%{opacity:1}100%{opacity:0}}
-.lp-mv{animation:lp-move 6s cubic-bezier(.5,0,.3,1) infinite}.lp-moved{animation:lp-gone 6s infinite both;fill:color-mix(in oklab,var(--bad) 70%,var(--fg))}
+.lp-mv{animation:lp-move 6s cubic-bezier(.5,0,.3,1) infinite}.lp-moved{animation:lp-gone 6s infinite both;fill:color-mix(in oklab,var(--bad) 65%,var(--panel))}
 /* skip list: the search drops down the levels */
 @keyframes lp-sk{0%,4%{fill:transparent;stroke:var(--lp-cell)}10%,24%{fill:color-mix(in oklab,var(--lp-c) 24%,transparent);stroke:var(--lp-c)}34%,100%{fill:color-mix(in oklab,var(--lp-c) 10%,transparent);stroke:color-mix(in oklab,var(--lp-c) 55%,var(--lp-cell))}}
 .lp-sk{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-sk 7s infinite both}

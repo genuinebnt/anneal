@@ -1,24 +1,25 @@
-/* The course map as project cards: a moving drawing of the project's idea, its modules, and how far you are. `kp-` prefixed. */
+/* The course map as project cards: a moving drawing of the project's idea, its modules, and how far you are. `kp-` prefixed. The card is a soft tint of the
+   Courses colour (class .tint, styles/loops.css): colour is there, but blended into one surface, with no grey boxes on it. */
 .kp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding-top:14px}
-.kp-card{--c:var(--card-ink);position:relative;display:grid;gap:10px;padding:16px 16px 14px;border:1px solid var(--card-line);border-radius:16px;background:var(--card-bg);box-shadow:var(--card-hi);min-width:0;overflow:hidden;transition:border-color .2s,transform .25s var(--ease),box-shadow .25s}
-.kp-card::before{content:"";position:absolute;inset:0;background:radial-gradient(110% 80% at 50% 0%,var(--card-glow),transparent 70%);pointer-events:none}
-.kp-card:hover{border-color:color-mix(in oklab,var(--vio) 50%,var(--line));transform:translateY(-2px);box-shadow:var(--card-hi),0 22px 40px -26px var(--vio)}
-.kp-card.kp-done{border-color:color-mix(in oklab,var(--vio) 55%,var(--line))}
+.kp-card{--c:var(--grn);position:relative;display:grid;gap:10px;padding:16px 16px 14px;border:1px solid var(--c-line);border-radius:16px;background:var(--c-bg);box-shadow:var(--card-hi);min-width:0;overflow:hidden;transition:border-color .25s,transform .25s var(--ease),box-shadow .3s}
+.kp-card::before{content:"";position:absolute;inset:0;background:radial-gradient(52% 44% at 100% 0%,var(--c-glow),transparent 72%);pointer-events:none}
+.kp-card:hover{border-color:color-mix(in oklab,var(--c) 40%,var(--line));transform:translateY(-2px);box-shadow:var(--card-hi),0 22px 40px -28px var(--c)}
+.kp-card.kp-done{border-color:color-mix(in oklab,var(--c) 45%,var(--line))}
 .kp-card header{position:relative;display:flex;align-items:center;gap:12px}
-.kp-lab{min-width:0;flex:1;display:flex;flex-direction:column}.kp-lab b{font:600 11px var(--mono);letter-spacing:.16em;color:var(--c);text-transform:uppercase}.kp-lab em{font-style:normal;font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--fg);line-height:1.25}
-.kp-ring{flex:none;position:relative;width:44px;height:44px;border-radius:50%;background:conic-gradient(var(--card-ink-2),var(--c) calc(var(--p)*1%),var(--raise) 0);display:grid;place-items:center;animation:kp-ring 1s var(--ease) both}
-.kp-ring::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--panel)}.kp-ring b{position:relative;font:700 10.5px var(--mono);color:var(--fg)}
-@keyframes kp-ring{from{background:conic-gradient(var(--c) 0%,var(--raise) 0)}}
-.kp-stage{position:relative;border:1px solid var(--line2);border-radius:12px;background:var(--card-stage);padding:6px 4px 2px;box-shadow:inset 0 1px 0 color-mix(in oklab,var(--fg) 5%,transparent)}.kp-stage .lp{height:84px}
+.kp-lab{min-width:0;flex:1;display:flex;flex-direction:column}.kp-lab b{font:600 11px var(--mono);letter-spacing:.16em;color:var(--cs);text-transform:uppercase}.kp-lab em{font-style:normal;font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--fg);line-height:1.25}
+.kp-ring{flex:none;position:relative;width:44px;height:44px;border-radius:50%;background:conic-gradient(var(--cs) calc(var(--p)*1%),var(--c-track) 0);display:grid;place-items:center;animation:kp-ring 1s var(--ease) both}
+.kp-ring::before{content:"";position:absolute;inset:5px;border-radius:50%;background:color-mix(in oklab,var(--c) 3%,var(--panel))}.kp-ring b{position:relative;font:700 10.5px var(--mono);color:var(--fg)}
+@keyframes kp-ring{from{background:conic-gradient(var(--cs) 0%,var(--c-track) 0)}}
+.kp-stage{position:relative;padding:2px 0 0}.kp-stage .lp{height:86px}
 .kp-tag{position:relative;margin:0;font-size:13px;line-height:1.55;color:var(--mut)}
 .kp-card .k-nodes{position:relative}
 .kp-foot{position:relative;display:flex;align-items:center;gap:10px;font:600 11px var(--mono);color:var(--dim)}
-.kp-foot i{flex:1;height:5px;border-radius:3px;background:var(--raise);overflow:hidden}.kp-foot i b{display:block;height:100%;background:linear-gradient(90deg,var(--card-ink-2),var(--c));border-radius:3px;transition:width .6s var(--ease)}
+.kp-foot i{flex:1;height:5px;border-radius:3px;background:var(--c-track);overflow:hidden}.kp-foot i b{display:block;height:100%;background:linear-gradient(90deg,var(--cs-2),var(--cs));border-radius:3px;transition:width .6s var(--ease)}
 @media (max-width:760px){.kp-grid{grid-template-columns:minmax(0,1fr)}}
-/* the module buttons on a card take the card's ink too, not the course page's green */
-.kp-card .k-node{background:color-mix(in oklab,var(--vio) 4%,var(--panel));border-color:color-mix(in oklab,var(--vio) 16%,var(--line2))}
-.kp-card .k-node:hover{border-color:var(--c);color:var(--fg)}
-.kp-card .k-node.k-part{border-color:color-mix(in oklab,var(--c) 55%,var(--line2));background:linear-gradient(0deg,color-mix(in oklab,var(--c) 18%,transparent) calc(var(--f,0) * 100%),transparent 0)}
-.kp-card .k-node.k-done{background:linear-gradient(135deg,var(--card-ink-2),var(--c));border-color:var(--c);color:var(--bg)}
-.kp-card .k-node.k-cur{border-color:var(--c);color:var(--c);box-shadow:0 0 0 3px color-mix(in oklab,var(--c) 14%,transparent)}
+/* the module buttons are tints of the card too, not grey */
+.kp-card .k-node{background:transparent;border-color:color-mix(in oklab,var(--c) 20%,var(--line2));color:color-mix(in oklab,var(--fg) 70%,var(--c))}
+.kp-card .k-node:hover{border-color:var(--cs);color:var(--fg)}
+.kp-card .k-node.k-part{border-color:color-mix(in oklab,var(--c) 50%,var(--line2));box-shadow:inset 0 -2px 0 color-mix(in oklab,var(--c) 55%,transparent)}
+.kp-card .k-node.k-done{background:var(--cs);border-color:var(--cs);color:var(--bg)}
+.kp-card .k-node.k-cur{border-color:var(--cs);color:var(--fg);box-shadow:0 0 0 3px var(--c-glow)}
 .kp-card .k-node.k-done.k-cur{color:var(--bg)}

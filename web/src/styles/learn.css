@@ -43,9 +43,9 @@
 .lr-ver{font:600 10px var(--mono);letter-spacing:.1em;color:var(--acc);padding:2px 7px;border:1px solid color-mix(in oklab,var(--acc) 45%,var(--line));border-radius:8px;white-space:nowrap}
 .lr-chev{width:12px;height:8px;color:var(--dim);transition:transform .3s var(--ease)}.lr-card.open .lr-chev{transform:rotate(180deg)}
 .lr-head.thumb{grid-template-columns:auto auto minmax(0,1fr) auto auto auto}
-.lr-thumb{width:92px;height:34px;display:grid;place-items:center;padding:0 6px;border:1px solid var(--card-line);border-radius:9px;background:var(--card-stage);box-shadow:var(--card-hi)}
-.lr-thumb{--id-win:var(--card-ink)}
-.lr-thumb .id-glyph{width:100%;height:100%}.lr-thumb .id-glyph .id-gc{fill:color-mix(in oklab,var(--vio) 22%,var(--line))}.lr-thumb .id-glyph .id-gp{fill:var(--card-ink-2)}.lr-thumb .id-glyph .id-gw{stroke-width:2}
+.lr-thumb{--c:var(--acc);width:92px;height:34px;display:grid;place-items:center;padding:0 6px;border:1px solid var(--c-line);border-radius:9px;background:transparent}
+.lr-thumb{--id-win:var(--cs)}
+.lr-thumb .id-glyph{width:100%;height:100%}.lr-thumb .id-glyph .id-gc{fill:var(--c-track)}.lr-thumb .id-glyph .id-gp{fill:var(--cs)}.lr-thumb .id-glyph .id-gw{stroke-width:2}
 /* the picture is alive: windows slide, pointers bob, dots and bars breathe */
 @keyframes lr-gw{0%,10%{transform:translateX(0)}45%,60%{transform:translateX(21px)}95%,100%{transform:translateX(0)}}
 @keyframes lr-gp{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.6px)}}
