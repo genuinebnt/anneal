@@ -1,0 +1,44 @@
+/* The pattern cards on the DSA home: the pattern's own moving drawing, progress up front, and what to solve next as a button. `pt-` prefixed.
+   Colour is a soft tint of the card's --c (copper; green once the pattern is done), a small shade in the corner, never a filled box or a grey chip. */
+.s-root .s-trk.pt{--c:var(--acc);display:flex;flex-direction:column;gap:11px;padding:16px 16px 0;border:1px solid var(--c-line);border-radius:16px;background:var(--c-bg);box-shadow:var(--card-hi);overflow:hidden;min-width:0}
+.s-root .s-trk.pt::before{inset:0;background:radial-gradient(52% 44% at 100% 0%,var(--c-glow),transparent 72%);opacity:1;transition:none}
+.s-root .s-trk.pt:hover{border-color:color-mix(in oklab,var(--c) 45%,var(--line));box-shadow:var(--card-hi),0 20px 38px -26px var(--c)}
+.s-root .s-trk.pt.pt-up{border-color:color-mix(in oklab,var(--acc) 55%,var(--line));box-shadow:var(--card-hi),0 0 0 3px color-mix(in oklab,var(--acc) 10%,transparent)}
+.s-root .s-trk.pt.pt-fin{border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
+.pt-hd{position:relative;display:flex;align-items:center;gap:11px}
+.pt-num{flex:none;font:600 12px var(--mono);color:var(--c);border:1px solid var(--c-line);border-radius:9px;padding:5px 8px}
+.pt-nm{min-width:0;flex:1}
+.pt-nm h4{margin:0;font-size:18px;letter-spacing:-.02em;line-height:1.2}
+.pt-nm small{display:flex;gap:6px;align-items:center;min-height:14px;margin-top:2px;font:600 10px var(--mono);letter-spacing:.12em}
+.pt-tag{padding:1px 7px;border:1px solid var(--c-line);border-radius:6px;color:var(--c)}
+.pt-t-up{color:var(--acc);border-color:color-mix(in oklab,var(--acc) 50%,var(--line))}
+.pt-t-fin{color:var(--grn);border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
+.pt-t-idea{color:var(--vio);border-color:color-mix(in oklab,var(--vio) 45%,var(--line))}
+.pt-ring{flex:none;position:relative;width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--cs) calc(var(--p)*1%),var(--c-track) 0)}
+.pt-ring::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--c-bg)}
+.pt-ring b{position:relative;font:700 11px var(--mono)}
+.pt-fig{position:relative}.pt-fig .lp{height:76px}
+.pt-tl{position:relative;margin:0;font-size:13px;line-height:1.55;color:var(--mut)}
+.pt-st{position:relative;display:flex;gap:6px;flex-wrap:wrap}
+.pt-st span{font:600 10.5px var(--mono);color:var(--mut);padding:3px 9px;border:1px solid var(--c-line);border-radius:999px;white-space:nowrap}
+.pt-st .pt-due{display:inline-flex;gap:6px;align-items:center;color:var(--vio);border-color:color-mix(in oklab,var(--vio) 45%,var(--line))}
+.pt-due::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--vio);animation:pt-pulse 2s infinite}
+.pt-st .pt-g{color:var(--grn);border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
+.pt-st .pt-w{color:var(--warn);border-color:color-mix(in oklab,var(--warn) 45%,var(--line))}
+.pt-st .pt-r{color:var(--bad);border-color:color-mix(in oklab,var(--bad) 45%,var(--line))}
+.pt-sg{position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.pt-sg i{height:5px;border-radius:3px;background:var(--c-track);overflow:hidden}
+.pt-sg i b{display:block;height:100%;background:var(--cs);border-radius:3px}
+.pt-nx{position:relative;display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--c-line);border-radius:11px;color:var(--fg);font-size:13px;transition:background .15s,border-color .15s}
+.pt-nx:hover{border-color:var(--cs);background:color-mix(in oklab,var(--c) 7%,transparent)}
+.pt-nx small{font:600 10px var(--mono);letter-spacing:.14em;color:var(--dim)}
+.pt-nx b{min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pt-nx i{margin-left:auto;font-style:normal;color:var(--c);transition:transform .2s}
+.pt-nx:hover i{transform:translateX(3px)}
+.pt-nx-done{border-color:color-mix(in oklab,var(--grn) 35%,var(--line))}
+.s-root .pt .pt-ft{position:relative;margin:2px -16px 0;display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--c-line);cursor:default}
+.s-root .pt .pt-ft a:hover{background:color-mix(in oklab,var(--c) 7%,transparent)}
+.pt-ft{margin-top:auto}
+@keyframes pt-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+html[data-motion="reduce"] .pt-due::before{animation:none}
+@media (prefers-reduced-motion:reduce){.pt-due::before{animation:none}}

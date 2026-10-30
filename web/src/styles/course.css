@@ -51,7 +51,7 @@
 .cx a{color:inherit}
 .cx-prose a{color:var(--fg);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
 /* code */
-.cx-code{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
+.cx-code{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--inset)}
 .cx-code pre{margin:0;padding:14px 0;overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-ln{display:block;padding:0 20px;white-space:pre}.cx-ln.add{background:var(--grn-bg);box-shadow:inset 3px 0 0 var(--grn)}
 .cx-code figcaption{padding:8px 20px;border-top:1px solid var(--line2);background:var(--panel);font:500 12px var(--mono);color:var(--dim)}
@@ -59,7 +59,7 @@
 /* figure: explorer */
 .cx-fig{margin:24px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
 .cx-fig figcaption{padding:8px 20px;border-top:1px solid var(--line2);background:var(--panel);font-size:13px;color:var(--dim)}
-.cx-ex{padding:18px 20px;background:var(--bg);display:flex;flex-direction:column;gap:16px}
+.cx-ex{padding:18px 20px;background:var(--inset);display:flex;flex-direction:column;gap:16px}
 .cx-ctl{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;font:500 12px var(--mono);color:var(--dim)}
 .cx-ctl label{display:flex;align-items:center;gap:10px}
 #bxh{width:116px;height:32px;padding:0 10px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);font:500 13px var(--mono);color:var(--fg);outline:0}#bxh:focus{border-color:var(--grn)}
@@ -100,7 +100,7 @@
 .cx-dw div{display:flex;gap:10px;align-items:baseline}
 .cx-ck{width:15px;height:15px;flex:none;border-radius:4px;display:inline-grid;place-items:center;font:700 11px var(--mono);transform:translateY(2px);background:var(--line2);color:var(--dim)}
 .cx-ck.y{background:var(--grn);color:var(--on-acc)}.cx-ck.n{background:var(--bad);color:var(--on-acc)}
-.cx-run{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;border-radius:8px;background:var(--bg);border:1px solid var(--line2);font-size:13px;color:var(--dim)}
+.cx-run{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;border-radius:8px;background:var(--inset);border:1px solid var(--line2);font-size:13px;color:var(--dim)}
 .cx-run code{background:none;padding:0;font-size:13px}
 .cx-cp{height:24px;padding:0 9px;border:1px solid var(--line2);border-radius:4px;font:500 11px var(--mono);color:var(--dim)}.cx-cp:hover{color:var(--fg);border-color:var(--line)}
 .cx-opt{margin:16px 0 0!important;font-size:14px!important;color:var(--mut)!important}
@@ -182,7 +182,7 @@
 @media (max-width:960px){.cx-read{padding:28px 16px 16px}.cx-pn{grid-template-columns:1fr}.cx-bar{padding-inline:16px}}
 
 /* rendered markdown inside a stage */
-.cx-prose pre{margin:20px 0;padding:14px 20px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
+.cx-prose pre{margin:20px 0;padding:14px 20px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-prose pre code{background:none;padding:0;font-size:inherit}
 .cx-prose table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;display:block;overflow-x:auto}
 .cx-prose th,.cx-prose td{padding:8px 12px;border:1px solid var(--line2);text-align:left;vertical-align:top}
@@ -203,7 +203,7 @@
 .cx-locked button{margin-left:auto;height:32px;padding:0 14px;border:1px solid var(--line);border-radius:8px;font:500 12px var(--mono);color:var(--fg)}
 .cx-locked button:hover{border-color:var(--mut)}
 .cx-locked.vio{--c:var(--vio)}.cx-locked.fn{--c:var(--fn)}
-.cx-diff{margin:14px 0 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
+.cx-diff{margin:14px 0 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--inset)}
 .cx-diff pre{margin:0;padding:12px 0;overflow-x:auto;font:400 13px/1.7 var(--code);color:var(--fg)}
 .cx-diff .cx-ln.del{background:var(--bad-bg);box-shadow:inset 3px 0 0 var(--bad);color:var(--mut)}
 .cx-diff figcaption{padding:8px 20px;border-top:1px solid var(--line2);background:var(--panel);font:500 12px var(--mono);color:var(--dim)}
@@ -239,7 +239,7 @@
 .cx-h1{margin-bottom:0!important}
 
 /* ---- rendered stage markdown: code, tables, callouts (pages/courseMd.ts) ---- */
-.cx-prose .cx-hl{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--bg)}
+.cx-prose .cx-hl{margin:20px 0;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--inset)}
 .cx-hl-h{display:flex;align-items:center;justify-content:space-between;gap:12px;height:34px;padding:0 10px 0 18px;border-bottom:1px solid var(--line2);background:var(--panel)}
 .cx-lang{display:inline-flex;align-items:center;gap:8px;font:600 11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
 .cx-lang::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dim)}
@@ -319,7 +319,7 @@
 .cx-dm i+i{margin-left:-2px}
 .cx-dm i.on{background:currentColor}
 .cx-cmds{display:flex;flex-direction:column;gap:6px}
-.cx-cmds code{display:block;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:500 12px var(--code);color:var(--fg);overflow-wrap:anywhere}
+.cx-cmds code{display:block;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);font:500 12px var(--code);color:var(--fg);overflow-wrap:anywhere}
 @media (max-width:760px){.cx-srow{grid-template-columns:18px minmax(0,1fr) auto;padding:10px 12px}.cx-sno,.cx-now{display:none}.cx-secp{padding-left:0}}
 
 /* ---- stage tabs (CodeCrafters: Instructions / Code examples / Concepts) ---- */
@@ -346,7 +346,7 @@
 .cx-leadmd{font-size:16px;line-height:1.7;margin-bottom:6px}
 
 /* ---- diagrams (```svg fences): drawn with the app's own colours, so they follow the theme ---- */
-.cx-prose .cx-diagram{margin:24px 0;border:1px solid var(--line2);border-radius:8px;background:var(--bg);overflow:hidden}
+.cx-prose .cx-diagram{margin:24px 0;border:1px solid var(--line2);border-radius:8px;background:var(--inset);overflow:hidden}
 .cx-diagram svg{display:block;width:100%;height:auto}
 .cx-diagram figcaption{padding:9px 18px;border-top:1px solid var(--line2);background:var(--panel);font-size:13px;line-height:1.5;color:var(--dim)}
 .cx-diagram text{font:500 12px var(--mono);fill:var(--mut)}
@@ -452,7 +452,7 @@
 @keyframes cx-pop{0%{transform:scale(.4)}60%{transform:scale(1.25)}100%{transform:scale(1)}}
 @media (prefers-reduced-motion:reduce){.cx-sdot.ok,.cx-sdot.asst{animation:none}}
 .cx-cmds{gap:8px}
-.cx-cmd{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg)}
+.cx-cmd{display:flex;align-items:center;gap:8px;padding:6px 8px 6px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--inset)}
 .cx-cmd .n{flex:none;width:18px;height:18px;border-radius:50%;background:var(--raise);color:var(--dim);display:grid;place-items:center;font:600 11px var(--mono)}
 .cx-cmd code{flex:1;min-width:0;border:0;padding:0;background:none}
 .rmeter.link{width:100%;text-align:left;padding:4px 0;border-radius:8px;transition:background .2s}
@@ -464,7 +464,7 @@
 .cx-focus{--fc:var(--grn);padding:16px 18px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .cx-focus.brk{--fc:var(--fn)}.cx-focus.warn{--fc:var(--warn)}.cx-focus.crit{--fc:var(--bad)}
 .cx-focus h4{display:flex;align-items:center;justify-content:space-between;margin:0 0 16px}
-.cx-focus .fm{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:8px;background:var(--bg)}
+.cx-focus .fm{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:8px;background:var(--inset)}
 .cx-focus .fm button{font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);padding:3px 6px;border-radius:8px;transition:background .2s,color .2s}.cx-focus .fm button.on{background:var(--raise);color:var(--fg)}
 .cx-focus .fbody{display:flex;align-items:center;gap:18px}
 .fring{--p:0;position:relative;width:92px;height:92px;flex:none;border-radius:50%;background:conic-gradient(var(--fc) calc(var(--p)*1%),var(--line2) 0);display:grid;place-items:center}
@@ -517,7 +517,7 @@
 .cx-reopen{display:inline-flex;gap:6px;margin-right:12px}
 .cx-reopen button{width:28px;height:28px;border:1px solid var(--line2);border-radius:8px;color:var(--mut);transition:color .2s,border-color .2s}.cx-reopen button:hover{color:var(--fg);border-color:var(--line)}
 /* right panel: scrolling cards above a timer that keeps its own space */
-.cx-toc{padding:0;gap:0;height:calc(100vh - var(--hdr-h,52px) - 44px);overflow:hidden;border-left:1px solid var(--line2);background:var(--bg)}
+.cx-toc{padding:0;gap:0;height:calc(100vh - var(--hdr-h,52px) - 44px);overflow:hidden;border-left:1px solid var(--line2);background:var(--inset)}
 .cx.rc .cx-toc{visibility:hidden;border-left:0}
 .cx-tscroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding:20px 16px 28px 14px;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 28px),transparent)}
 .cx-toc .cx-focus{flex:none;margin:6px 16px 16px 14px}
@@ -529,7 +529,7 @@
 .cx-toc a.cx-crow{display:block;padding:9px 0;box-shadow:none;border-top:1px solid var(--line2);white-space:normal;transition:padding-left .25s var(--kease,ease)}
 .cx-toc a.cx-crow:first-of-type{border-top:0}.cx-toc a.cx-crow:hover{padding-left:4px}
 .cx-crow b{display:block;font-size:13px;font-weight:600;line-height:1.35;color:var(--fg)}.cx-crow small{font:500 11px var(--mono);color:var(--dim)}
-.cx-cmdline{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg)}
+.cx-cmdline{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:10px;border:1px solid var(--line2);border-radius:8px;background:var(--inset)}
 .cx-cmdline code{flex:1;min-width:0;font:500 11px var(--code);overflow-wrap:anywhere}
 .cx-kv{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line2);font-size:13px;color:var(--mut)}
 .cx-kv b{font:600 12px var(--mono);color:var(--fg)}
@@ -538,7 +538,7 @@
 .cx-mbar,.cx-dbk{display:none}
 @media (max-width:1100px){
 .cx{grid-template-columns:minmax(0,1fr)}
-.cx-side,.cx-toc{position:fixed;top:calc(var(--hdr-h,52px) + 44px);bottom:0;z-index:95;width:min(360px,90vw);height:auto;background:var(--bg);box-shadow:0 30px 60px -20px var(--shadow);visibility:hidden;transition:transform .45s var(--kease,ease),visibility .45s}
+.cx-side,.cx-toc{position:fixed;top:calc(var(--hdr-h,52px) + 44px);bottom:0;z-index:95;width:min(360px,90vw);height:auto;background:var(--inset);box-shadow:0 30px 60px -20px var(--shadow);visibility:hidden;transition:transform .45s var(--kease,ease),visibility .45s}
 .cx-side{left:0;transform:translateX(-104%);border-right:1px solid var(--line);display:flex!important}
 .cx-toc{right:0;transform:translateX(104%);border-left:1px solid var(--line);display:flex!important}
 .cx-side.open,.cx-toc.open,.cx.rc .cx-toc.open{transform:none;visibility:visible}

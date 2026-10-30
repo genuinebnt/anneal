@@ -121,7 +121,7 @@
 .k-root .k-side{display:grid;gap:16px;align-content:start;position:sticky;top:60px}
 .k-root .k-sc{padding:18px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
 .k-root .k-sc h5{margin:0 0 12px;display:flex;justify-content:space-between;font:500 10.5px var(--mono);letter-spacing:.2em;color:var(--dim)}
-.k-root .k-cmd{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line2);border-radius:7px;background:var(--bg);font:500 12px var(--code)}
+.k-root .k-cmd{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:8px;border:1px solid var(--line2);border-radius:7px;background:var(--inset);font:500 12px var(--code)}
 .k-root .k-cmd span{flex:1;min-width:0;overflow-wrap:anywhere}
 .k-root .k-cmd .k-n{flex:none;width:18px;height:18px;border-radius:50%;background:var(--raise);color:var(--dim);display:grid;place-items:center;font:600 10px var(--mono)}
 .k-root .k-pr{display:grid;gap:5px;margin-bottom:11px;font-size:13px;cursor:pointer}
@@ -555,7 +555,7 @@
 .k-root .k-tt.k-er::after{background:var(--bad)}
 .k-root .k-tt.k-in::after{background:var(--warn)}
 @keyframes k-tl{to{transform:scaleX(0)}}
-.k-root .k-wsp{width:min(420px,100%);border:1px solid var(--line2);border-radius:14px;background:var(--bg);overflow:hidden}
+.k-root .k-wsp{width:min(420px,100%);border:1px solid var(--line2);border-radius:14px;background:var(--inset);overflow:hidden}
 .k-root .k-wsp .k-st3{padding:14px 18px;border-bottom:1px solid var(--line2);display:grid;gap:10px}
 .k-root .k-wsp .k-row3{display:flex;align-items:center;gap:12px}
 .k-root .k-wsp .k-big{font-size:18px;font-weight:600}
@@ -583,7 +583,7 @@
 .k-root .k-tree{width:100%}
 .k-root .k-chead{display:flex;align-items:center;gap:14px;padding:16px 16px 12px}
 .k-root .k-cring{--p:0;width:46px;height:46px;border-radius:50%;flex:none;background:conic-gradient(var(--grn) calc(var(--p)*1%),var(--line2) 0);display:grid;place-items:center}
-.k-root .k-cring span{width:36px;height:36px;border-radius:50%;background:var(--bg);display:grid;place-items:center;font:600 10.5px var(--mono);font-variant-numeric:tabular-nums}
+.k-root .k-cring span{width:36px;height:36px;border-radius:50%;background:var(--inset);display:grid;place-items:center;font:600 10.5px var(--mono);font-variant-numeric:tabular-nums}
 .k-root .k-chead b{display:block;font-size:14.5px;letter-spacing:-.01em;line-height:1.25}
 .k-root .k-chead small{font:500 11px var(--mono);color:var(--dim)}
 .k-root .k-lc .k-chead{padding:14px 9px}
@@ -633,7 +633,7 @@
 .k-root .k-cc2 small{font:500 10.5px var(--mono);color:var(--dim)}
 .k-root .k-cc2 .k-st4{font:600 9.5px var(--mono);letter-spacing:.1em;color:var(--dim)}
 .k-root .k-cc2:not(.k-todo) .k-st4{color:var(--grn)}
-.k-root .k-pincmd{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font:500 12px var(--code);margin-bottom:10px}
+.k-root .k-pincmd{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);font:500 12px var(--code);margin-bottom:10px}
 .k-root .k-pincmd span{flex:1;min-width:0;overflow-wrap:anywhere}
 .k-root .k-kv2{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-top:1px solid var(--line2);font-size:13px;color:var(--mut)}
 .k-root .k-kv2:first-of-type{border-top:0}
@@ -679,7 +679,7 @@
 .k-root .k-pnote.k-cur,.k-root .k-pnote.k-sel{background:color-mix(in oklab,var(--grn) 7%,var(--panel));border-color:color-mix(in oklab,var(--grn) 35%,var(--line2))}
 .k-root .k-pnote.k-cur>b,.k-root .k-pnote.k-sel>b{background:var(--grn);color:var(--on-acc)}
 .k-root .k-pnote.k-cur .k-pb2,.k-root .k-pnote.k-sel .k-pb2{max-height:420px;color:var(--mut)}
-.k-root .k-pnote pre.k-sc{margin:8px 0 0;padding:9px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--line2);font:400 11px/1.6 var(--code);overflow-x:auto;color:var(--fg);scrollbar-width:none;white-space:pre}
+.k-root .k-pnote pre.k-sc{margin:8px 0 0;padding:9px 10px;border-radius:8px;background:var(--inset);border:1px solid var(--line2);font:400 11px/1.6 var(--code);overflow-x:auto;color:var(--fg);scrollbar-width:none;white-space:pre}
 .k-root .k-pnote pre.k-sc::-webkit-scrollbar{display:none}
 .k-root .k-pnote .k-acts3{display:flex;gap:6px;margin-top:8px;max-height:60px;overflow:hidden;transition:opacity .25s,max-height .3s}
 .k-root .k-pnote:not(.k-cur):not(.k-sel) .k-acts3{max-height:0;margin-top:0;opacity:0}
@@ -808,7 +808,7 @@
 .k-root .k-mbar button:active{transform:scale(.96)}
 .k-root .k-mbar button b{font:700 10px var(--mono);padding:1px 7px;border-radius:9px;background:var(--grn-bg);color:var(--grn)}
 .k-root .k-mbar .k-sp{flex:1}
-.k-root .k-tree,.k-root .k-toc{display:flex;position:fixed;top:var(--k-off);bottom:62px;z-index:95;width:min(360px,90vw);height:auto;background:var(--bg);box-shadow:0 30px 60px -20px var(--shadow);transition:transform .45s var(--ease),visibility .45s;visibility:hidden}
+.k-root .k-tree,.k-root .k-toc{display:flex;position:fixed;top:var(--k-off);bottom:62px;z-index:95;width:min(360px,90vw);height:auto;background:var(--inset);box-shadow:0 30px 60px -20px var(--shadow);transition:transform .45s var(--ease),visibility .45s;visibility:hidden}
 .k-root .k-tree{left:0;transform:translateX(-104%);border-right:1px solid var(--line);align-self:auto}
 .k-root .k-toc{right:0;transform:translateX(104%);border-left:1px solid var(--line);padding:18px 0 0 14px;align-self:auto}
 .k-root .k-tree.k-open,.k-root .k-toc.k-open{transform:none;visibility:visible}

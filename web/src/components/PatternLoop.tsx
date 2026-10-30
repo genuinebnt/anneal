@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 /** The small looping drawing of a pattern's idea (the cards of genuinebasil.dev, in anneal's colours). Always moving; still under Reduce
  *  motion (styles/loops.css). Every class is `lp-` prefixed. Add a drawing here, and its pattern to `LOOP_OF`. */
-export type LoopKind = "buffer-pool" | "latch-crabbing" | "query-pipeline" | "recovery" | "ownership" | "skip-list" | "sliding-window" | "two-pointers" | "binary-search" | "stack" | "linked-list" | "trees" | "graphs" | "dp-1d" | "backtracking" | "hashing";
+export type LoopKind = "buffer-pool" | "latch-crabbing" | "query-pipeline" | "recovery" | "ownership" | "skip-list" | "sliding-window" | "two-pointers" | "binary-search" | "stack" | "linked-list" | "trees" | "graphs" | "dp-1d" | "backtracking" | "hashing" | "heap" | "tries" | "advanced-graphs" | "dp-2d" | "greedy" | "intervals" | "math" | "bits";
 
 export const LOOP_OF: Record<string, LoopKind> = {
     "Arrays & Hashing": "hashing",
@@ -15,11 +15,22 @@ export const LOOP_OF: Record<string, LoopKind> = {
     Graphs: "graphs",
     "1-D Dynamic Programming": "dp-1d",
     Backtracking: "backtracking",
+    "Heap / Priority Queue": "heap",
+    Tries: "tries",
+    "Advanced Graphs": "advanced-graphs",
+    "2-D Dynamic Programming": "dp-2d",
+    Greedy: "greedy",
+    Intervals: "intervals",
+    "Math & Geometry": "math",
+    "Bit Manipulation": "bits",
 };
 
 const Cells = ({ n = 8, x0 = 14, w = 22, g = 4, y = 32 }: { n?: number; x0?: number; w?: number; g?: number; y?: number }) => (
     <>{Array.from({ length: n }, (_, i) => <rect key={i} className="lp-cl" x={x0 + i * (w + g)} y={y} width={w} height={w} rx={4} />)}</>
 );
+
+/** Bar heights of the greedy drawing: each is taken from the tallest down. */
+const GREEDY = [22, 38, 14, 46, 30, 54];
 
 const delay = (s: number): CSSProperties => ({ animationDelay: `${s}s` });
 
@@ -167,6 +178,63 @@ const DRAW: Record<LoopKind, ReactNode> = {
             {([[1, 0], [3, 1.4], [4, 2.8]] as const).map(([i, d]) => <rect key={i} className="lp-cf lp-ah" style={delay(d)} x={20 + i * 34} y={44} width={16} height={18} rx={3} />)}
             <path className="lp-ed" d="M30 12 L48 12 M44 8 L48 12 L44 16" />
             <text className="lp-tx" x={54} y={15}>hash(key) % 6</text>
+        </>
+    ),
+    heap: (
+        <>
+            <path className="lp-ed" d="M112 16 L70 42 M112 16 L154 42 M70 42 L46 68 M70 42 L94 68 M154 42 L130 68 M154 42 L178 68" />
+            {([[112, 16, 0], [70, 42, 1], [154, 42, 1], [46, 68, 2], [94, 68, 2], [130, 68, 2], [178, 68, 2]] as const).map(([x, y, k], i) => <circle key={i} className="lp-gn" style={delay(k * 1.3)} cx={x} cy={y} r={9} />)}
+            <text className="lp-tc" x={128} y={14}>min</text>
+        </>
+    ),
+    tries: (
+        <>
+            {([["M112 14 L64 40", 0], ["M112 14 L160 40", 0.3], ["M64 40 L38 68", 0.9], ["M64 40 L90 68", 1.2], ["M160 40 L160 68", 1.5], ["M160 40 L186 68", 1.8]] as const).map(([d, t], i) => <path key={i} className="lp-bt" style={delay(t)} d={d} />)}
+            {([[112, 14, ""], [64, 40, "c"], [160, 40, "d"], [38, 68, "a"], [90, 68, "o"], [160, 68, "o"], [186, 68, "e"]] as const).map(([x, y, c], i) => (
+                <g key={i}>
+                    <circle className="lp-cl" cx={x} cy={y} r={8} />
+                    {c && <text className="lp-tc" x={x} y={y + 2.6} textAnchor="middle">{c}</text>}
+                </g>
+            ))}
+        </>
+    ),
+    "advanced-graphs": (
+        <>
+            <path className="lp-ed" d="M40 42 L84 20 M40 42 L84 64 M84 20 L140 28 M84 64 L140 60 M140 28 L190 42 M140 60 L190 42" />
+            {([[62, 28, "2"], [62, 56, "5"], [112, 21, "4"], [112, 64, "1"], [166, 32, "3"], [166, 58, "2"]] as const).map(([x, y, w], i) => <text key={i} className="lp-tx" x={x} y={y} textAnchor="middle">{w}</text>)}
+            {([[40, 42, 0], [84, 20, 1], [84, 64, 2], [140, 28, 3], [140, 60, 3.6], [190, 42, 4.4]] as const).map(([x, y, k], i) => <circle key={i} className="lp-gn" style={delay(k * 0.8)} cx={x} cy={y} r={9} />)}
+        </>
+    ),
+    "dp-2d": (
+        <>
+            {Array.from({ length: 15 }, (_, i) => <rect key={i} className="lp-dp" style={delay(((i % 5) + Math.floor(i / 5)) * 0.5)} x={46 + (i % 5) * 28} y={14 + Math.floor(i / 5) * 24} width={24} height={20} rx={4} />)}
+            <path className="lp-ed" d="M58 52 L84 40" />
+            <text className="lp-tx" x={14} y={80}>dp[i][j] from the cells above and to the left</text>
+        </>
+    ),
+    greedy: (
+        <>
+            {GREEDY.map((h, i) => <rect key={i} className="lp-cl" x={20 + i * 32} y={74 - h} width={24} height={h} rx={4} />)}
+            {GREEDY.map((h, i) => <rect key={i} className="lp-sk" style={delay([...GREEDY].sort((x, y) => y - x).indexOf(h) * 1.0)} x={20 + i * 32} y={74 - h} width={24} height={h} rx={4} />)}
+        </>
+    ),
+    intervals: (
+        <>
+            {([[14, 10, 84], [58, 32, 80], [150, 54, 60]] as const).map(([x, y, w], i) => <rect key={i} className="lp-sk" style={delay(i * 1.1)} x={x} y={y} width={w} height={14} rx={4} />)}
+            <rect className="lp-acf lp-pa" x={14} y={76} width={124} height={4} rx={2} />
+            <text className="lp-tx" x={14} y={72}>merged</text>
+        </>
+    ),
+    math: (
+        <>
+            {([[0, 0], [1, 0], [2, 0], [2, 1], [2, 2], [1, 2], [0, 2], [0, 1], [1, 1]] as const).map(([c, r], k) => <rect key={k} className="lp-dp" style={delay(k * 0.5)} x={82 + c * 30} y={8 + r * 26} width={26} height={22} rx={4} />)}
+        </>
+    ),
+    bits: (
+        <>
+            {Array.from({ length: 8 }, (_, i) => <rect key={i} className={[1, 3, 4, 6].includes(i) ? "lp-dp" : "lp-cl"} style={[1, 3, 4, 6].includes(i) ? delay([0, 0.8, 1.6, 2.4][[1, 3, 4, 6].indexOf(i)]!) : undefined} x={14 + i * 26} y={30} width={22} height={26} rx={4} />)}
+            {Array.from({ length: 8 }, (_, i) => <text key={i} className="lp-tx" x={25 + i * 26} y={47} textAnchor="middle">{[1, 3, 4, 6].includes(i) ? "1" : "0"}</text>)}
+            <text className="lp-tc" x={14} y={20}>x ^ y</text>
         </>
     ),
 };

@@ -10,13 +10,13 @@
 .ui-sw:disabled{opacity:.5;cursor:default}
 
 /* ---- segmented control */
-.ui-seg,.st-seg,.rv-sort,.acct-seg{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line2);border-radius:var(--r-2,8px);background:var(--bg)}
+.ui-seg,.st-seg,.rv-sort,.acct-seg{display:inline-flex;gap:3px;padding:3px;border:1px solid var(--line2);border-radius:var(--r-2,8px);background:var(--inset)}
 .ui-seg button,.st-seg button,.rv-sort button{height:28px;padding:0 12px;border-radius:6px;font:600 12px var(--mono);color:var(--dim);white-space:nowrap}
 .ui-seg button.on,.st-seg button.on,.rv-sort button.on{background:var(--raise);color:var(--fg)}
 .ui-seg button:hover:not(.on),.st-seg button:hover:not(.on),.rv-sort button:hover:not(.on){color:var(--fg)}
 
 /* ---- button */
-.ui-btn,.st-btn,.cm-btn,.rv-ghost,.mi-ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:34px;padding:0 14px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);color:var(--fg);font:600 12px var(--mono);text-decoration:none;white-space:nowrap;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+.ui-btn,.st-btn,.cm-btn,.rv-ghost,.mi-ghost{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:34px;padding:0 14px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--inset);color:var(--fg);font:600 12px var(--mono);text-decoration:none;white-space:nowrap;cursor:pointer;transition:border-color .15s,background .15s,color .15s}
 .ui-btn:hover:not(:disabled),.st-btn:hover:not(:disabled),.cm-btn:hover:not(:disabled),.rv-ghost:hover,.mi-ghost:hover{border-color:var(--dim)}
 .ui-btn:disabled,.st-btn:disabled,.cm-btn:disabled{opacity:.5;cursor:default}
 .ui-btn.primary,.cm-btn.pri{background:var(--acc);border-color:var(--acc);color:var(--on-acc);font:700 13px var(--sans);height:40px;padding:0 20px}
@@ -56,7 +56,7 @@ html[data-density="compact"] .d-pcard .d-cos,html[data-density="compact"] .d-pca
 html[data-hide-companies] .d-cos{display:none}
 html[data-hide-topics] .d-topics{display:none}
 /* a pattern's heading folds its list, and stays in view while you scroll through it */
-.d-fold{position:sticky;top:calc(var(--hdr-h,102px) + 4px);z-index:4;display:flex;align-items:center;gap:8px;width:100%;padding:8px 0;background:var(--bg);text-align:left;cursor:pointer}
+.d-fold{position:sticky;top:calc(var(--hdr-h,102px) + 4px);z-index:4;display:flex;align-items:center;gap:8px;width:100%;padding:8px 0;background:var(--inset);text-align:left;cursor:pointer}
 .d-fold:hover{color:var(--fg)}.d-chev{display:inline-block;width:14px;color:var(--dim)}
 .d-foldall{display:flex;gap:14px;margin:0 0 6px}
 
@@ -65,7 +65,7 @@ html[data-hide-topics] .d-topics{display:none}
 @media (max-width:700px){.k-root .k-tstack{bottom:92px}}
 
 /* Stepper, Select and DateField: one control height, one font, the same border and focus ring as the other fields */
-.ui-step{display:inline-grid;grid-template-columns:38px 52px 38px;align-items:stretch;height:38px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);overflow:hidden;flex:none}
+.ui-step{display:inline-grid;grid-template-columns:38px 52px 38px;align-items:stretch;height:38px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--inset);overflow:hidden;flex:none}
 .ui-step button{display:grid;place-items:center;padding:0;color:var(--mut);font:500 17px var(--mono);line-height:1;transition:background .15s,color .15s}
 .ui-step button:hover:not(:disabled){background:var(--raise);color:var(--fg)}
 .ui-step button:disabled{opacity:.35;cursor:default}
@@ -74,7 +74,7 @@ html[data-hide-topics] .d-topics{display:none}
 .ui-step.compact{height:32px;grid-template-columns:30px 40px 30px}
 .ui-step.compact button{font-size:15px}.ui-step.compact output{font-size:12px}
 .ui-pop{position:relative;display:inline-block;min-width:0}
-.ui-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:176px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--bg);color:var(--fg);font:500 12px var(--mono);text-align:left;transition:border-color .15s,box-shadow .15s}
+.ui-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:176px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--inset);color:var(--fg);font:500 12px var(--mono);text-align:left;transition:border-color .15s,box-shadow .15s}
 .ui-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ui-trigger svg{flex:none;color:var(--dim)}
 .ui-trigger.empty{color:var(--dim)}
@@ -132,7 +132,7 @@ html[data-hide-topics] .d-topics{display:none}
 /* one-time shortcut tips */
 .hint-tip{position:fixed;z-index:40;left:max(16px,env(safe-area-inset-left,0px));bottom:calc(46px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:12px;max-width:min(440px,calc(100vw - 32px));padding:10px 12px 10px 14px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 14px 36px -14px var(--shadow);font:500 13px/1.4 var(--sans);color:var(--fg)}
 .hint-tip-k{display:flex;gap:4px;flex:none}
-.hint-tip-k kbd{min-width:24px;height:24px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-bottom-width:2px;border-radius:7px;background:var(--bg);font:600 12px var(--mono)}
+.hint-tip-k kbd{min-width:24px;height:24px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-bottom-width:2px;border-radius:7px;background:var(--inset);font:600 12px var(--mono)}
 .hint-tip-t{min-width:0;color:var(--mut)}
 .hint-tip-x{flex:none;height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--line);font:600 12px var(--sans);color:var(--fg)}
 .hint-tip-x:hover{border-color:var(--acc);color:var(--acc)}

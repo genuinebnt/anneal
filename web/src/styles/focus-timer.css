@@ -3,7 +3,7 @@
 .ft{--fc:var(--grn);background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:14px 16px 12px;flex:none}
 .pane .ft{margin:0 18px 14px}
 .ft-h{display:flex;align-items:center;justify-content:space-between;margin:0 0 14px;font:700 11px var(--mono);letter-spacing:.12em;color:var(--dim)}
-.ft-modes{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:8px;background:var(--bg)}
+.ft-modes{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line2);border-radius:8px;background:var(--inset)}
 .ft-modes button{font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);padding:3px 6px;border-radius:8px;transition:background .2s,color .2s}
 .ft-modes button.ft-on{background:var(--raise);color:var(--fg)}
 .ft-body{display:flex;align-items:center;gap:16px}

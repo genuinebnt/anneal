@@ -2,7 +2,7 @@
 .l-intro{margin:0;max-width:78ch;font-size:14px;line-height:1.65;color:var(--mut)}
 .l-soon{margin:0;font-size:13px;color:var(--dim);line-height:1.5}
 .l-jump{display:flex;flex-wrap:wrap;gap:6px}
-.l-jump a{height:30px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--bg)}
+.l-jump a{height:30px;display:inline-flex;align-items:center;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--inset)}
 .l-jump a:hover{border-color:var(--dim);color:var(--fg)}
 .l-pat{border:1px solid var(--line2);border-radius:12px;background:var(--panel);display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);overflow:hidden;scroll-margin-top:72px}
 @media (max-width:900px){.l-pat{grid-template-columns:1fr}.l-pat .l-lft{border-right:0;border-bottom:1px solid var(--line2)}}
@@ -18,7 +18,7 @@
 .l-when span::before{content:"";position:absolute;left:0;top:.62em;width:5px;height:5px;border-radius:50%;background:var(--ca)}
 .l-pit{margin:0;padding-left:16px;color:var(--mut);font-size:12px;line-height:1.55;display:flex;flex-direction:column;gap:4px}
 .l-plist{display:flex;flex-direction:column;gap:4px}
-.l-prow{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 8px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);font-size:13px;min-width:0}
+.l-prow{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 8px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);font-size:13px;min-width:0}
 .l-prow:hover{border-color:var(--line)}
 .l-pt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .l-more{font:600 11px var(--mono);color:var(--ca)}
@@ -32,7 +32,7 @@
 @media (max-width:760px){.l-jg{grid-template-columns:1fr;gap:6px}}
 .l-jg>span{font:600 11px var(--mono);letter-spacing:.14em;color:var(--dim);padding-top:8px}
 .l-chips{display:flex;flex-wrap:wrap;gap:6px}
-.l-chips a{height:30px;display:inline-flex;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--bg)}
+.l-chips a{height:30px;display:inline-flex;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;font-weight:500;color:var(--mut);background:var(--inset)}
 .l-chips a:hover{border-color:var(--dim);color:var(--fg)}
 .l-chips a i{width:7px;height:7px;border-radius:50%;background:var(--grn)}
 .l-chips a.ex i{background:var(--vio)}
@@ -46,7 +46,7 @@
 .l-tabs{display:flex;flex-wrap:wrap;gap:2px;border-bottom:1px solid var(--line2);margin-bottom:-4px}
 .l-tabs button{padding:8px 14px;font:600 11px var(--mono);letter-spacing:.08em;color:var(--dim);border:1px solid transparent;border-bottom:0;border-radius:7px 7px 0 0;background:none;cursor:pointer}
 .l-tabs button:hover{color:var(--fg)}
-.l-tabs button[aria-selected=true]{color:var(--fg);background:var(--bg);border-color:var(--line2);position:relative;top:1px}
+.l-tabs button[aria-selected=true]{color:var(--fg);background:var(--inset);border-color:var(--line2);position:relative;top:1px}
 .l-nolesson{padding-top:6px;font:500 11px var(--mono);color:var(--dim)}
 .l-tabnote{margin:0;font-size:12px;color:var(--mut)}
 .l-exnote{margin:0;padding:8px 10px;border:1px dashed color-mix(in oklab,var(--vio) 45%,var(--line));border-radius:8px;font-size:12px;color:var(--mut)}
@@ -68,12 +68,12 @@ button.l-lchip.has{color:var(--mut);border-style:solid}
 button.l-lchip.on{color:var(--fg);border-color:var(--ca);background:var(--cab)}
 .l-lchip sup{margin-left:2px;font:600 11px var(--mono);color:var(--ca)}
 button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.l-lpanel{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--line2);border-radius:12px;background:var(--bg)}
+.l-lpanel{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--line2);border-radius:12px;background:var(--inset)}
 .l-lpanel p{margin:0}
 .l-lnote{font-size:12px;color:var(--dim)}
 
 /* The problem row of a technique card (docs/DSA_LEARN_PAGE_SPEC.md): tags in a fixed order, companies and topics underneath. */
-.pl{display:flex;flex-direction:column;gap:5px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--bg);min-width:0}
+.pl{display:flex;flex-direction:column;gap:5px;padding:7px 9px;border:1px solid var(--line2);border-radius:8px;background:var(--inset);min-width:0}
 .pl:hover{border-color:var(--line)}
 .pl.pl-out{border-style:dashed}
 .pl-top{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;color:inherit}
@@ -110,7 +110,7 @@ button.l-lchip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space
 .pl-title{font-weight:500}
 .pl-num{margin-right:2px}
 .pl-sub{padding-left:28px}
-.l-pat h3 small{padding:2px 8px;border:1px solid var(--line2);border-radius:999px;background:var(--bg)}
+.l-pat h3 small{padding:2px 8px;border:1px solid var(--line2);border-radius:999px;background:var(--inset)}
 .l-chips a{height:28px;padding:0 11px;font-weight:600;transition:border-color .15s,background .15s,color .15s}
 .l-chips a:hover{background:var(--raise)}
 .l-chips a i{width:6px;height:6px}

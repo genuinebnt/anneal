@@ -15,7 +15,8 @@ import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
 import { CountUp } from "../components/kit";
 import { PracticeRow } from "./PracticePage";
 import { pad2, pctColor } from "../components/bits";
-import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, counted, daysUntil, hours, inList, leetcode, newOn, niceDate, WEEKDAYS, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
+import { PatternLoop } from "../components/PatternLoop";
+import { BLURB, DIFF, REVIEW_GRADES, LISTS, MINUTES, STATUS_LABEL, counted, readinessRows, daysUntil, hours, inList, leetcode, newOn, niceDate, WEEKDAYS, statusOf, videoUrl, type ListKey, type Status } from "../dsa";
 
 type Role = "must_learn" | "practice";
 type View = "patterns" | "problems" | "practice";
@@ -244,7 +245,7 @@ export function DsaPage() {
               )}
               <div id="content" style={{ display: "flex", flexDirection: "column", gap: 28 }}>
                 {shown === "patterns" ? (
-                  <PatternGrid o={o} f={f} model={model} />
+                  <PatternGrid o={o} model={model} />
                 ) : shown === "practice" ? (
                   <PracticeGrid o={o} log={log} />
                 ) : (
@@ -638,9 +639,8 @@ function PracticeGrid({ o, log }: { o: DsaOverview; log: ReturnType<typeof useLo
   );
 }
 
-function PatternGrid({ o, f, model }: { o: DsaOverview; f: Filters; model: Model }) {
+function PatternGrid({ o, model }: { o: DsaOverview; model: Model }) {
   const navigate = useNavigate();
-  const listName = LISTS.find(([k]) => k === f.list)?.[1] ?? "";
   const filtered = model.active > 0;
   return (
     <>
@@ -659,37 +659,52 @@ function PatternGrid({ o, f, model }: { o: DsaOverview; f: Filters; model: Model
           const done = scope.filter((p) => p.state.solved).length;
           const left = scope.filter((p) => !p.state.solved).reduce((n, p) => n + MINUTES[p.difficulty], 0);
           const next = scope.filter((p) => !p.state.solved).sort((a, b) => (a.role === "must_learn" ? 0 : 1) - (b.role === "must_learn" ? 0 : 1) || a.order - b.order)[0];
-          const techs = o.techniques.filter((t) => t.pattern === pat.name).slice(0, 4);
+          const techCount = o.techniques.filter((t) => t.pattern === pat.name).length;
           const isNow = o.plan.next_up[0] ? model.byId.get(o.plan.next_up[0])?.pattern === pat.code : false;
-          const state = done === scope.length ? "done" : isNow ? "cur" : "";
-          const filled = Math.round((done / scope.length) * 5);
+          const finished = done === scope.length;
+          const due = scope.filter((p) => statusOf(p, o.today) === "due").length;
+          const ready = done > 0 ? readinessRows(scope, [[pat.name, () => true]])[0]?.ready ?? 0 : 0;
+          const mustLeft = scope.filter((p) => p.role === "must_learn" && !p.state.solved).length;
+          const pct = Math.round((done / scope.length) * 100);
+          const open = () => void navigate({ to: "/dsa/patterns/$code", params: { code: pat.code } });
           return (
-            <div key={pat.code} className={`s-trk s-rv${state === "cur" ? " s-cur" : ""}${filtered && !match.length ? " s-gone" : ""}`} style={rise(Math.min(7 + i, 16)).style} tabIndex={0} role="button" aria-label={`${pat.name}: open the lesson`} onClick={() => void navigate({ to: "/dsa/patterns/$code", params: { code: pat.code } })} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), void navigate({ to: "/dsa/patterns/$code", params: { code: pat.code } }))}>
-              <div className="s-th">
-                <span className="s-no">{pad2(i + 1)}</span>
-                <span className="s-tk">PATTERN · {listName.toUpperCase()}</span>
-                {state === "cur" && <span className="s-tag s-now">NEXT</span>}
-                {state === "done" && <span className="s-tag" style={{ color: "var(--grn)", background: "var(--grn-bg)", borderColor: "transparent" }}>DONE</span>}
+            <div key={pat.code} className={`s-trk s-rv pt tint${isNow ? " s-cur pt-up" : ""}${finished ? " pt-fin" : ""}${filtered && !match.length ? " s-gone" : ""}`} style={{ ...rise(Math.min(7 + i, 16)).style, "--c": finished ? "var(--grn)" : "var(--acc)", "--p": pct } as CSSProperties} tabIndex={0} role="button" aria-label={`${pat.name}: open the lesson`} onClick={open} onKeyDown={(e) => e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open())}>
+              <div className="pt-hd">
+                <span className="pt-num">{pad2(i + 1)}</span>
+                <div className="pt-nm">
+                  <h4>{pat.name}</h4>
+                  <small>
+                    {isNow && <span className="pt-tag pt-t-up">UP NEXT</span>}
+                    {finished && <span className="pt-tag pt-t-fin">DONE</span>}
+                    {pat.has_idea && <span className="pt-tag pt-t-idea">IDEA</span>}
+                  </small>
+                </div>
+                <span className="pt-ring" role="img" aria-label={`${done} of ${scope.length} solved`}><b>{finished ? "✓" : `${pct}%`}</b></span>
               </div>
-              <h4>{pat.name}</h4>
-              <p>{BLURB[pat.name] ?? ""}</p>
-              <div className="s-meta s-x">
-                <b>{scope.length}</b> problems · <b>{scope.filter((p) => p.role === "must_learn").length}</b> must learn · {hours(left)} left
-                {filtered && <> · <span className="tc-hit">{match.length} match</span></>}
+              <div className="pt-fig"><PatternLoop pattern={pat.name} /></div>
+              <p className="pt-tl">{BLURB[pat.name] ?? ""}</p>
+              <div className="pt-st">
+                <span>{done} / {scope.length} solved</span>
+                {due > 0 && <span className="pt-due">{due} due</span>}
+                {done > 0 && <span className={ready >= 70 ? "pt-g" : ready >= 40 ? "pt-w" : "pt-r"} title="Weighted by difficulty; help counts half; recall fades between reviews">{Math.round(ready)}% ready</span>}
+                {mustLeft > 0 && <span>{mustLeft} must learn left</span>}
+                {left > 0 && <span>{hours(left)} left</span>}
+                {filtered && <span className="tc-hit">{match.length} match</span>}
               </div>
-              <div className="s-segs" title={`${done} of ${scope.length} solved`}>
-                {Array.from({ length: 5 }, (_, k) => (
-                  <i key={k} className={k < filled ? "s-f" : ""} style={{ "--k": k } as CSSProperties} />
-                ))}
+              <div className="pt-sg" aria-hidden="true">
+                {Array.from({ length: 5 }, (_, k) => <i key={k}><b style={{ width: `${Math.max(0, Math.min(100, (pct - k * 20) * 5))}%` }} /></i>)}
               </div>
-              <div className="s-foot">
-                <span>{next ? `next · ${next.title}` : "all solved · reviews keep it fresh"}</span>
-              </div>
-              {techs.length > 0 && <div className="s-pills" style={{ margin: 0 }}>{techs.map((t) => <span className="s-pill" key={t.id}>{t.name}</span>)}</div>}
-              <div className="tc-doors" onClick={(e) => e.stopPropagation()}>
-                <Link to="/dsa/patterns/$code" params={{ code: pat.code }} title="When to use each technique, with a template">
+              {next ? (
+                <Link className="pt-nx" to="/d/$slug" params={{ slug: next.slug }} onClick={(e) => e.stopPropagation()} title={`Open ${next.title}`}>
+                  <small>NEXT</small><b>{next.title}</b><i>→</i>
+                </Link>
+              ) : (
+                <div className="pt-nx pt-nx-done"><small>ALL SOLVED</small><b>Reviews keep it fresh</b></div>
+              )}
+              <div className="pt-ft tc-doors" onClick={(e) => e.stopPropagation()}>
+                <Link to="/dsa/patterns/$code" params={{ code: pat.code }} title={pat.has_idea ? "The idea, how to spot it, and each technique with a template" : "When to use each technique, with a template"}>
                   <b>Learn<i>›</i></b>
-                  <small>{techs.length ? `${o.techniques.filter((t) => t.pattern === pat.name).length} techniques` : "lesson"}</small>
+                  <small>{techCount ? `${techCount} techniques` : "lesson"}</small>
                 </Link>
                 <Link to="/dsa/patterns/$code/problems" params={{ code: pat.code }} title="This pattern's NeetCode problems">
                   <b>Problems<i>›</i></b>
