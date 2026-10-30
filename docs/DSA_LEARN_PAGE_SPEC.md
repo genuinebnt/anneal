@@ -92,6 +92,19 @@ Status: all 1,669 problems have one (`content/dsa/insights.json`). The loader (`
 
 **A problem added to the catalog (for example by `tools/neetcode/problem_catalog.py`) needs its insight in the same change; validation fails until it has one.** Write it as the first thing a strong candidate would say: the pattern or the observation, not the steps.
 
+## 9. How the page is navigated (owner-approved mockup, 2026-10-30; built 2026-10-30)
+
+Only the way you move through the page changed; rules L1 to L5, P1 to P5, the tags (section 3) and the key insight (section 8) are untouched.
+Mockup: https://claude.ai/artifact/EXg2vDaHxiFMVHEkM2RXgh. The page was 44,947 px tall on Arrays & Hashing (32 cards open at once).
+
+| rule | |
+|---|---|
+| N1 | A **rail** beside the cards lists every group (with a progress ring) and, for the group being read, its techniques; a search box finds a technique by name; "open all" and "fold all". On a phone it is a "Jump to" sheet. |
+| N2 | Each technique is a **folded card**: a dot for how you are doing, the name, its first signal, `solved/in the lists · n problems`. One card is open when the page loads; a link `#t-<slug>` opens and scrolls to its card. Open, it is the card of L3: implementation left, problems right. |
+| N3 | The group name sticks under the header while its cards scroll. |
+| N4 | The problems box is **as tall as the implementation beside it** and scrolls inside itself (a fade and a "more" mark say so); a short list is not stretched. |
+| N5 | A problem row is two quiet lines: difficulty and priority are the only loud tags; list, recent, solution and premium are small coloured words; companies and topics follow in plain text, so every tag of section 3 is on every row. The key idea has its own button on the row (or is shown when the setting says so). In the lists and the others are under labelled dividers (T5). |
+
 ## 7. Status
 
 Kept in DSA_LEARN_PAGE_STATUS.md: per topic, how many techniques have a card, how many problems are attached, how many names are at

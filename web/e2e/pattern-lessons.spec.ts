@@ -3,18 +3,20 @@ import { expect, test } from "@playwright/test";
 // docs/DSA_LEARN_PAGE_SPEC.md: the Learn page of a pattern.
 
 test("a technique card has its implementation on the left and its problems, in the lists or not, on the right", async ({ page }) => {
-    await page.goto("/dsa/patterns/D11");
+    // a link to the card opens it (the cards are folded)
+    await page.goto("/dsa/patterns/D11#t-dfs");
     await expect(page.getByRole("heading", { name: "Traversal", level: 2 })).toBeVisible();
 
     // one card, two versions of the template, each tab its own code
     const dfs = page.locator("#t-dfs");
-    await expect(dfs.locator(".l-lft pre").first()).toContainText("def dfs_recursive");
-    await dfs.getByRole("tab", { name: "ITERATIVE (EXPLICIT STACK)" }).click();
-    await expect(dfs.locator(".l-lft pre").first()).toContainText("def dfs_iterative");
+    await expect(dfs).toHaveClass(/open/);
+    await expect(dfs.locator(".lr-left pre").first()).toContainText("def dfs_recursive");
+    await dfs.getByRole("tab", { name: /iterative \(explicit stack\)/i }).click();
+    await expect(dfs.locator(".lr-left pre").first()).toContainText("def dfs_iterative");
     // the traps are part of the implementation side, the problems are the right side only
-    await expect(dfs.locator(".l-lft .l-pit")).toBeVisible();
-    await expect(dfs.locator(".l-rgt .l-pit")).toHaveCount(0);
-    expect(await dfs.locator(".l-rgt .pl").count()).toBeGreaterThanOrEqual(3);
+    await expect(dfs.locator(".lr-left .lr-traps")).toBeVisible();
+    await expect(dfs.locator(".lr-right .lr-traps")).toHaveCount(0);
+    expect(await dfs.locator(".lr-right .lr-p").count()).toBeGreaterThanOrEqual(3);
 });
 
 test("every problem row carries difficulty, priority, the narrowest list (none outside the lists), companies and topics", async ({ page, request }) => {
@@ -22,25 +24,27 @@ test("every problem row carries difficulty, priority, the narrowest list (none o
     const d = await (await request.get("/api/dsa/patterns/D2")).json();
     const withOutside = d.techniques.find((t: { problems: { list_tag: string | null }[] }) => t.problems.some((p) => p.list_tag === null));
     expect(withOutside, "Two Pointers has a technique with a problem outside the lists").toBeTruthy();
-    await page.goto("/dsa/patterns/D2");
+    await page.goto(`/dsa/patterns/D2#t-${withOutside.id.split(":")[1]}`);
     const card = page.locator(`#t-${withOutside.id.split(":")[1]}`);
-    const out = card.locator(".pl.pl-out").first();
+    await expect(card).toHaveClass(/open/);
+    const out = card.locator(".lr-p.out").first();
     await expect(out).toBeVisible();
-    await expect(out.locator(".d-bdg.lv")).toBeVisible();
-    await expect(out.locator(".d-bdg").filter({ hasText: /^(MUST|STRONG|PRACTICE|WARM-UP)$/ })).toHaveCount(1);
-    await expect(out.locator(".d-bdg.lst")).toHaveCount(0); // no list tag outside the lists
-    expect(await out.locator(".pl-sub .d-co").count()).toBeGreaterThan(0);
-    await expect(out.locator(".pl-topics")).not.toBeEmpty();
+    await expect(out.locator(".lr-pill.lv")).toBeVisible();
+    await expect(out.locator(".lr-pill").filter({ hasText: /^(MUST|STRONG|PRACTICE|WARM-UP)$/ })).toHaveCount(1);
+    await expect(out.locator(".lr-q .lst")).toHaveCount(0); // no list tag outside the lists
+    expect(await out.locator(".lr-co span").count()).toBeGreaterThan(0);
+    await expect(out.locator(".lr-tp")).not.toBeEmpty();
     // a list problem has exactly one list tag, the narrowest
-    const inList = card.locator(".pl:not(.pl-out)").first();
-    await expect(inList.locator(".d-bdg.lst")).toHaveCount(1);
+    const inList = card.locator(".lr-p:not(.out)").first();
+    await expect(inList.locator(".lr-q .lst")).toHaveCount(1);
 });
 
 test("a problem row opens the site's problem page, which links to LeetCode", async ({ page, request }) => {
     const d = await (await request.get("/api/dsa/patterns/D2")).json();
     const outside = d.techniques.flatMap((t: { problems: { list_tag: string | null; slug: string; title: string }[] }) => t.problems).find((p: { list_tag: string | null }) => p.list_tag === null);
     await page.goto("/dsa/patterns/D2");
-    await page.locator(`.pl a[href="/d/${outside.slug}"]`).first().click();
+    await page.locator(".lr-tools").getByRole("button", { name: "open all" }).click();
+    await page.locator(`.lr-p a[href="/d/${outside.slug}"]`).first().click();
     await expect(page).toHaveURL(new RegExp(`/d/${outside.slug}$`));
     await expect(page.getByRole("heading", { name: outside.title })).toBeVisible();
     await expect(page.locator(`a[href="https://leetcode.com/problems/${outside.slug}/"]`).first()).toBeVisible();
@@ -111,15 +115,15 @@ test("every problem has a one-line key insight, shown under the title and on the
     expect(rows).toBeGreaterThan(1500);
     // the first row on the page, whichever technique the sections put first
     await page.goto("/dsa/patterns/D2");
-    const row = page.locator(".pl").first();
-    const slug = (await row.locator("a.pl-top").getAttribute("href"))!.replace("/d/", "");
+    const row = page.locator(".lr-p").first();
+    const slug = (await row.locator("a.lr-pt").getAttribute("href"))!.replace("/d/", "");
     const all = await (await request.get("/api/dsa/problems/lc-" + slug + "/row")).json();
     expect(all.insight).toBeTruthy();
     // the idea gives the problem away, so it is hidden until asked for
-    await expect(row.locator(".d-ins-hide")).toBeVisible();
+    await expect(row.locator(".lr-idea")).toBeVisible();
     await expect(row).not.toContainText(all.insight);
-    await row.locator(".d-ins-hide").click();
-    await expect(row.locator(".d-ins")).toHaveText(all.insight);
+    await row.locator(".lr-idea").click();
+    await expect(row.locator(".lr-ins")).toHaveText(all.insight);
     await page.goto(`/d/${slug}`);
     await expect(page.locator(".pp-ins")).not.toContainText(all.insight);
     await page.locator(".pp-ins").getByRole("button", { name: "Show" }).click();

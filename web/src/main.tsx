@@ -53,6 +53,7 @@ import "./styles/focus-timer.css";
 import "./styles/settings.css";
 import "./styles/ui.css";
 import "./styles/idea.css";
+import "./styles/learn.css";
 
 const rootRoute = createRootRoute({
   component: () => (
