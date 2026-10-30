@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 
 /** The small looping drawing of a pattern's idea (the cards of genuinebasil.dev, in anneal's colours). Always moving; still under Reduce
  *  motion (styles/loops.css). Every class is `lp-` prefixed. Add a drawing here, and its pattern to `LOOP_OF`. */
-export type LoopKind = "sliding-window" | "two-pointers" | "binary-search" | "stack" | "linked-list" | "trees" | "graphs" | "dp-1d" | "backtracking" | "hashing";
+export type LoopKind = "buffer-pool" | "latch-crabbing" | "query-pipeline" | "recovery" | "ownership" | "skip-list" | "sliding-window" | "two-pointers" | "binary-search" | "stack" | "linked-list" | "trees" | "graphs" | "dp-1d" | "backtracking" | "hashing";
 
 export const LOOP_OF: Record<string, LoopKind> = {
     "Arrays & Hashing": "hashing",
@@ -24,6 +24,69 @@ const Cells = ({ n = 8, x0 = 14, w = 22, g = 4, y = 32 }: { n?: number; x0?: num
 const delay = (s: number): CSSProperties => ({ animationDelay: `${s}s` });
 
 const DRAW: Record<LoopKind, ReactNode> = {
+    "buffer-pool": (
+        <>
+            <text className="lp-tx" x={14} y={16}>LRU-K</text>
+            {Array.from({ length: 5 }, (_, i) => <rect key={i} className={`lp-fr${i === 1 ? " lp-ev" : ""}`} style={delay(i * 0.5)} x={44 + i * 32} y={8} width={26} height={14} rx={3} />)}
+            <text className="lp-tx" x={14} y={48}>ARC</text>
+            {Array.from({ length: 5 }, (_, i) => <rect key={i} className="lp-fr lp-g" style={delay(0.3 + i * 0.5)} x={44 + i * 32} y={40} width={26} height={14} rx={3} />)}
+            <text className="lp-tc" x={206} y={18} style={{ fill: "var(--bad)" }}>evict</text>
+            <text className="lp-tc" x={206} y={50} style={{ fill: "var(--grn)" }}>hit</text>
+        </>
+    ),
+    "latch-crabbing": (
+        <>
+            <path className="lp-ed" d="M112 16 L68 42 M112 16 L156 42 M68 42 L40 68 M68 42 L96 68" />
+            <rect className="lp-cl" x={92} y={6} width={40} height={18} rx={4} />
+            <rect className="lp-cl" x={48} y={33} width={40} height={18} rx={4} />
+            <rect className="lp-cl" x={20} y={59} width={40} height={18} rx={4} />
+            <rect className="lp-cl" x={136} y={33} width={40} height={18} rx={4} />
+            <rect className="lp-ac lp-la0" x={90} y={4} width={44} height={22} rx={5} />
+            <rect className="lp-ac lp-la1" x={46} y={31} width={44} height={22} rx={5} />
+            <rect className="lp-ac lp-la2" x={18} y={57} width={44} height={22} rx={5} />
+        </>
+    ),
+    "query-pipeline": (
+        <>
+            {["scan", "filter", "join", "agg"].map((n, i) => (
+                <g key={n}>
+                    <rect className="lp-cl" x={10 + i * 54} y={30} width={42} height={24} rx={5} />
+                    <text className="lp-tx" x={31 + i * 54} y={45} textAnchor="middle">{n}</text>
+                    {i < 3 && <path className="lp-ed" d={`M${52 + i * 54} 42 L${64 + i * 54} 42`} />}
+                </g>
+            ))}
+            {[0, 1.1, 2.2].map((d) => <circle key={d} className="lp-acf lp-tup" style={delay(d)} cx={14} cy={36} r={3} />)}
+        </>
+    ),
+    recovery: (
+        <>
+            <rect className="lp-acf lp-pa" x={14} y={24} width={60} height={7} rx={2} style={{ fill: "var(--grn)" }} />
+            <rect className="lp-acf lp-pr2" x={74} y={38} width={64} height={7} rx={2} />
+            <rect className="lp-acf lp-pu" x={138} y={52} width={60} height={7} rx={2} style={{ fill: "var(--vio)" }} />
+            <path className="lp-cr" d="M74 14 L74 70" stroke="var(--bad)" strokeWidth={1.4} strokeDasharray="3 3" fill="none" />
+            <text className="lp-tx" x={14} y={20}>analysis</text>
+            <text className="lp-tx" x={78} y={35}>redo</text>
+            <text className="lp-tx" x={142} y={49}>undo</text>
+            <text className="lp-tc lp-cr" x={78} y={80} style={{ fill: "var(--bad)" }}>crash</text>
+        </>
+    ),
+    ownership: (
+        <>
+            <rect className="lp-cl" x={20} y={26} width={60} height={34} rx={6} />
+            <rect className="lp-cl" x={144} y={26} width={60} height={34} rx={6} />
+            <text className="lp-tx" x={30} y={20}>a</text>
+            <text className="lp-tx" x={154} y={20}>b</text>
+            <rect className="lp-cf lp-mv" x={34} y={34} width={32} height={18} rx={4} />
+            <path className="lp-ed" d="M84 43 L140 43 M134 38 L140 43 L134 48" />
+            <text className="lp-tc lp-moved" x={50} y={76} textAnchor="middle">moved</text>
+        </>
+    ),
+    "skip-list": (
+        <>
+            {[[10, [0, 3, 6]], [38, [0, 1, 3, 5, 6]], [66, [0, 1, 2, 3, 4, 5, 6]]].map(([y, xs]) => (xs as number[]).map((i) => <rect key={`${y}${i}`} className="lp-cl" x={20 + i * 28} y={y as number} width={20} height={14} rx={3} />))}
+            {([[20, 10], [104, 10], [104, 38], [132, 38], [132, 66], [160, 66]] as const).map(([x, y], k) => <rect key={k} className="lp-sk" style={delay(k * 0.9)} x={x} y={y} width={20} height={14} rx={3} />)}
+        </>
+    ),
     "sliding-window": (
         <>
             <Cells />
@@ -108,13 +171,17 @@ const DRAW: Record<LoopKind, ReactNode> = {
     ),
 };
 
-/** The drawing for a pattern (by name), or nothing when it has none yet. `tone` picks the accent. */
-export function PatternLoop({ pattern, tone = "acc", className = "" }: { pattern: string; tone?: "acc" | "vio" | "grn"; className?: string }) {
-    const kind = LOOP_OF[pattern];
-    if (!kind) return null;
+/** A drawing by kind. `tone` picks the accent (copper for DSA, violet for Rust, green for the courses). */
+export function Loop({ kind, tone = "acc", className = "" }: { kind: LoopKind; tone?: "acc" | "vio" | "grn"; className?: string }) {
     return (
         <svg className={`lp lp-${tone}${className ? ` ${className}` : ""}`} viewBox="0 0 224 84" aria-hidden="true" focusable="false">
             {DRAW[kind]}
         </svg>
     );
+}
+
+/** The drawing for a pattern (by name), or nothing when it has none yet. */
+export function PatternLoop({ pattern, tone = "acc", className = "" }: { pattern: string; tone?: "acc" | "vio" | "grn"; className?: string }) {
+    const kind = LOOP_OF[pattern];
+    return kind ? <Loop kind={kind} tone={tone} className={className} /> : null;
 }

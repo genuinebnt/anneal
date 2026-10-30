@@ -40,6 +40,26 @@ html[data-motion="reduce"] .lp *{animation:none!important}
 @keyframes lp-cut{0%,60%{stroke:var(--lp-c)}70%,100%{stroke:var(--bad);opacity:.5}}
 .lp-bt{fill:none;stroke:var(--lp-c);stroke-width:1.6;stroke-dasharray:40;animation:lp-draw 6s infinite both}
 .lp-bt.lp-cut{animation:lp-draw 6s infinite both,lp-cut 6s infinite both}
+/* buffer pool: frames fill, one is evicted */
+@keyframes lp-hit{0%,10%{fill:transparent;stroke:var(--lp-cell)}18%,40%{fill:color-mix(in oklab,var(--lp-c) 22%,transparent);stroke:var(--lp-c)}60%,100%{fill:color-mix(in oklab,var(--lp-c) 8%,transparent);stroke:color-mix(in oklab,var(--lp-c) 50%,var(--lp-cell))}}
+@keyframes lp-evict{0%,55%{opacity:1}70%,100%{opacity:.15;stroke:var(--bad)}}
+.lp-fr{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-hit 6s infinite both}.lp-fr.lp-ev{animation:lp-hit 6s infinite both,lp-evict 6s infinite both}.lp-fr.lp-g{--lp-c:var(--grn)}
+/* latch crabbing: the held latch moves down, the parent's is released */
+@keyframes lp-l0{0%,12%{opacity:1}22%,100%{opacity:0}}@keyframes lp-l1{0%,14%{opacity:0}22%,42%{opacity:1}52%,100%{opacity:0}}@keyframes lp-l2{0%,44%{opacity:0}52%,88%{opacity:1}100%{opacity:0}}
+.lp-la0{animation:lp-l0 6s infinite both}.lp-la1{animation:lp-l1 6s infinite both}.lp-la2{animation:lp-l2 6s infinite both}
+/* query pipeline: tuples flow through the operators */
+@keyframes lp-flow{0%{transform:translateX(0);opacity:0}8%{opacity:1}92%{opacity:1}100%{transform:translateX(162px);opacity:0}}
+.lp-tup{animation:lp-flow 3.6s linear infinite both}
+/* recovery: the three ARIES passes after a crash */
+@keyframes lp-aa{0%,6%{transform:scaleX(0)}22%,100%{transform:scaleX(1)}}@keyframes lp-ar{0%,24%{transform:scaleX(0)}46%,100%{transform:scaleX(1)}}@keyframes lp-au{0%,50%{transform:scaleX(0)}72%,100%{transform:scaleX(1)}}@keyframes lp-crash{0%,20%{opacity:0}28%,100%{opacity:1}}
+.lp-pa,.lp-pr2,.lp-pu{transform-origin:left center}.lp-pa{animation:lp-aa 7s infinite both}.lp-pr2{animation:lp-ar 7s infinite both}.lp-pu{animation:lp-au 7s infinite both}.lp-cr{animation:lp-crash 7s infinite both}
+/* ownership: a value moves, the old name is dead */
+@keyframes lp-move{0%,15%{transform:translateX(0)}50%,85%{transform:translateX(124px)}100%{transform:translateX(0)}}
+@keyframes lp-gone{0%,20%{opacity:0}50%,85%{opacity:1}100%{opacity:0}}
+.lp-mv{animation:lp-move 6s cubic-bezier(.5,0,.3,1) infinite}.lp-moved{animation:lp-gone 6s infinite both;fill:var(--bad)}
+/* skip list: the search drops down the levels */
+@keyframes lp-sk{0%,4%{fill:transparent;stroke:var(--lp-cell)}10%,24%{fill:color-mix(in oklab,var(--lp-c) 24%,transparent);stroke:var(--lp-c)}34%,100%{fill:color-mix(in oklab,var(--lp-c) 10%,transparent);stroke:color-mix(in oklab,var(--lp-c) 55%,var(--lp-cell))}}
+.lp-sk{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-sk 7s infinite both}
 /* hashing: keys drop into their slots */
 @keyframes lp-ahd{0%,6%{opacity:0;transform:translateY(-26px)}16%,84%{opacity:1;transform:none}96%,100%{opacity:0;transform:translateY(-26px)}}
 .lp-ah{animation:lp-ahd 5s infinite both}

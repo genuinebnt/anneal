@@ -6,6 +6,7 @@ import { Header } from "../components/Header";
 import { CountUp } from "../components/kit";
 import { Select } from "../components/ui";
 import { MockCopy, MockRoot, reducedMotion, useReady } from "../components/mock";
+import { Loop, type LoopKind } from "../components/PatternLoop";
 import { toast } from "../components/toasts";
 import { getPref, setPref } from "../prefs";
 import { ago } from "./stage/shared";
@@ -62,6 +63,17 @@ function ResetPanel({ course, c, onDone }: { course: string; c: CourseOverview; 
             </button>
         </div>
     );
+}
+
+/** The drawing and the one plain sentence of a project, for its card on the course map. */
+function projectArt(number: number, title: string): { kind: LoopKind; line: string } | null {
+    if (number === 1) return { kind: "buffer-pool", line: "LRU-K, ARC and Clock run against the same access trace, so replacement policies can be compared, not just described." };
+    if (number === 2) return { kind: "latch-crabbing", line: "A reader releases the parent latch the moment the child is latched, so descents overlap instead of serialising." };
+    if (number === 3) return { kind: "query-pipeline", line: "Rows flow through operators one at a time, so a query is a pipeline you can build, test and swap piece by piece." };
+    if (number === 4) return { kind: "recovery", line: "Timestamps, versions and locks let transactions overlap safely, and the log brings the database back after a crash." };
+    if (/rust/i.test(title)) return { kind: "ownership", line: "Just enough Rust (ownership, borrowing, the standard library) to start the project without fighting the compiler." };
+    if (/primer/i.test(title)) return { kind: "skip-list", line: "A persistent trie and a skip list: small structures to warm up on before the project." };
+    return null;
 }
 
 /** The course the Courses nav item opens. */
@@ -253,43 +265,54 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                         <span>COURSE MAP</span>
                                         <span>click a module to jump</span>
                                     </h5>
-                                    <div>
+                                    <div className="kp-grid">
                                         {c.projects
                                             .filter((p) => p.modules.length > 0)
-                                            .map((p) => (
-                                                <div className="k-proj" key={p.number}>
-                                                    <span className="k-pl">
-                                                        {(() => {
-                                                            const [head, ...rest] = projectLabel(p.number, p.title).split(" · ");
-                                                            return rest.length ? (
-                                                                <>
-                                                                    <b>{head}</b>
-                                                                    <em>{rest.join(" · ")}</em>
-                                                                </>
-                                                            ) : (
-                                                                <b>{head}</b>
-                                                            );
-                                                        })()}
-                                                    </span>
-                                                    <div className="k-nodes">
-                                                        {p.modules.map((m) => {
-                                                            const all = coreStages(m.stages).length;
-                                                            const done = coreStages(m.stages).filter((x) => x.state !== "todo").length;
-                                                            return (
-                                                                <button key={m.code} style={{ "--f": all ? done / all : 0 } as CSSProperties} className={`k-node${done === all ? " k-done" : done > 0 ? " k-part" : ""}${m.code === here?.code ? " k-cur" : ""}`} onClick={() => jump(m.code)} aria-label={`${m.code.toUpperCase()} ${m.title}: ${done} of ${coreStages(m.stages).length} passed`}>
-                                                                    {m.code.toUpperCase()}
-                                                                    <span className="k-tip" aria-hidden="true">
-                                                                        {m.title} · {m.planned ? "planned" : `${done}/${coreStages(m.stages).length}`}
-                                                                    </span>
-                                                                </button>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                    <span className="k-pc">
-                                                        {p.modules.reduce((n, m) => n + coreStages(m.stages).filter((x) => x.state !== "todo").length, 0)}/{p.modules.reduce((n, m) => n + coreStages(m.stages).length, 0)}
-                                                    </span>
-                                                </div>
-                                            ))}
+                                            .map((p) => {
+                                                const [first, ...rest] = projectLabel(p.number, p.title).split(" · ");
+                                                const head = first ?? p.title;
+                                                const total = p.modules.reduce((n, m) => n + coreStages(m.stages).length, 0);
+                                                const passed = p.modules.reduce((n, m) => n + coreStages(m.stages).filter((x) => x.state !== "todo").length, 0);
+                                                const pct = total ? Math.round((passed / total) * 100) : 0;
+                                                const art = projectArt(p.number, p.title);
+                                                return (
+                                                    <article className={`kp-card${total > 0 && passed === total ? " kp-done" : ""}`} key={p.number}>
+                                                        <header>
+                                                            <span className="kp-lab">
+                                                                {rest.length > 0 ? (
+                                                                    <>
+                                                                        <b>{head}</b>
+                                                                        <em>{rest.join(" · ")}</em>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <b>{/\(optional\)/i.test(head) ? "OPTIONAL" : "COURSE"}</b>
+                                                                        <em>{head.replace(/\s*\(optional\)/i, "")}</em>
+                                                                    </>
+                                                                )}
+                                                            </span>
+                                                            <span className="kp-ring" style={{ "--p": pct } as CSSProperties} title={`${passed} of ${total} passed`}><b>{total > 0 && passed === total ? "✓" : `${pct}%`}</b></span>
+                                                        </header>
+                                                        {art && <div className="kp-stage"><Loop kind={art.kind} tone="grn" /></div>}
+                                                        {art && <p className="kp-tag">{art.line}</p>}
+                                                        <div className="k-nodes">
+                                                            {p.modules.map((m) => {
+                                                                const all = coreStages(m.stages).length;
+                                                                const done = coreStages(m.stages).filter((x) => x.state !== "todo").length;
+                                                                return (
+                                                                    <button key={m.code} style={{ "--f": all ? done / all : 0 } as CSSProperties} className={`k-node${done === all ? " k-done" : done > 0 ? " k-part" : ""}${m.code === here?.code ? " k-cur" : ""}`} onClick={() => jump(m.code)} aria-label={`${m.code.toUpperCase()} ${m.title}: ${done} of ${coreStages(m.stages).length} passed`}>
+                                                                        {m.code.toUpperCase()}
+                                                                        <span className="k-tip" aria-hidden="true">
+                                                                            {m.title} · {m.planned ? "planned" : `${done}/${coreStages(m.stages).length}`}
+                                                                        </span>
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <footer className="kp-foot"><i><b style={{ width: `${pct}%` }} /></i><span>{passed}/{total} passed</span></footer>
+                                                    </article>
+                                                );
+                                            })}
                                     </div>
                                 </div>
 

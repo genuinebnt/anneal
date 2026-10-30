@@ -55,6 +55,7 @@ import "./styles/ui.css";
 import "./styles/idea.css";
 import "./styles/learn.css";
 import "./styles/loops.css";
+import "./styles/coursemap.css";
 
 const rootRoute = createRootRoute({
   component: () => (
