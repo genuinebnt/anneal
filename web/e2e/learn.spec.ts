@@ -71,3 +71,15 @@ test("on a phone the rail is a Jump to sheet, and nothing scrolls sideways", asy
     await expect(sheet).toHaveCount(0);
     await expect(page.locator(".lr-card.open", { hasText: "Direct simulation" })).toBeVisible();
 });
+
+test("a technique an Idea tab describes has a moving thumbnail in its card header, and one that is not described has none", async ({ page }) => {
+    await page.goto("/dsa/patterns/D3");
+    const card = page.locator("#t-fixed-sum");
+    await expect(card.locator(".lr-head .lr-thumb svg")).toBeVisible();
+    // the window in the picture slides
+    expect(await card.locator(".lr-thumb .id-gw").first().evaluate((e) => getComputedStyle(e).animationName)).toBe("lr-gw");
+    await expect(page.locator("#t-running-best .lr-thumb")).toHaveCount(0);
+    await page.goto("/dsa/patterns/D1");
+    await expect(page.locator(".lr-card").first()).toBeVisible();
+    await expect(page.locator(".lr-thumb")).toHaveCount(0);
+});

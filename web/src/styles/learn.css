@@ -42,7 +42,21 @@
 .lr-count{font:600 11px var(--mono);color:var(--mut);padding:3px 10px;border:1px solid var(--line);border-radius:999px;white-space:nowrap}
 .lr-ver{font:600 10px var(--mono);letter-spacing:.1em;color:var(--acc);padding:2px 7px;border:1px solid color-mix(in oklab,var(--acc) 45%,var(--line));border-radius:8px;white-space:nowrap}
 .lr-chev{width:12px;height:8px;color:var(--dim);transition:transform .3s var(--ease)}.lr-card.open .lr-chev{transform:rotate(180deg)}
-@media (max-width:700px){.lr-head{grid-template-columns:auto minmax(0,1fr) auto auto}.lr-ver{display:none}}
+.lr-head.thumb{grid-template-columns:auto auto minmax(0,1fr) auto auto auto}
+.lr-thumb{width:92px;height:34px;display:grid;place-items:center;padding:0 6px;border:1px solid var(--line2);border-radius:9px;background:color-mix(in oklab,var(--acc) 5%,var(--bg))}
+.lr-thumb{--id-win:var(--vio)}
+.lr-thumb .id-glyph{width:100%;height:100%}.lr-thumb .id-glyph .id-gc{fill:color-mix(in oklab,var(--dim) 28%,var(--line))}.lr-thumb .id-glyph .id-gw{stroke-width:2}
+/* the picture is alive: windows slide, pointers bob, dots and bars breathe */
+@keyframes lr-gw{0%,10%{transform:translateX(0)}45%,60%{transform:translateX(21px)}95%,100%{transform:translateX(0)}}
+@keyframes lr-gp{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.6px)}}
+@keyframes lr-gb{0%,100%{opacity:1}50%{opacity:.45}}
+.lr-thumb .id-gw{animation:lr-gw 5s cubic-bezier(.5,0,.3,1) infinite}
+.lr-thumb .id-gw2{animation:lr-gb 3s ease-in-out infinite}
+.lr-thumb .id-gp{animation:lr-gp 1.6s ease-in-out infinite}
+.lr-thumb .id-gd{animation:lr-gb 2.4s ease-in-out infinite}
+html[data-motion="reduce"] .lr-thumb *{animation:none!important}
+@media (prefers-reduced-motion:reduce){.lr-thumb *{animation:none!important}}
+@media (max-width:700px){.lr-head{grid-template-columns:auto minmax(0,1fr) auto auto}.lr-head.thumb{grid-template-columns:auto auto minmax(0,1fr) auto auto}.lr-ver{display:none}.lr-thumb{width:64px}}
 .lr-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .32s var(--ease)}.lr-card.open .lr-body{grid-template-rows:1fr}
 .lr-body>div{min-height:0;overflow:hidden}
 .lr-split{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);border-top:1px solid var(--line2);animation:lr-in .35s var(--ease)}

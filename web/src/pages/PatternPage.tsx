@@ -4,6 +4,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, type DsaProblem, type PatternExtra, type PatternLessons, type PatternListed, type PatternTechnique, type TechniqueLesson } from "../api";
 import { LIST_LABEL, Mark, PRIORITY_LABEL, PyCode } from "../components/dsaBits";
+import { IdeaGlyph } from "../components/IdeaGlyph";
 import { PatternShell } from "../components/PatternShell";
 import { useDialog } from "../components/useDialog";
 import { DIFF } from "../dsa";
@@ -102,6 +103,8 @@ function Learn({ d, today }: { d: PatternLessons; today: string }) {
     setSheet(false);
     document.getElementById(`lr-g${g}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
+  // a technique an Idea tab describes gets that row's small picture in its header
+  const glyphs = useMemo(() => new Map((d.idea?.which ?? []).map((w) => [w.technique, w.glyph] as const)), [d]);
   const rail = <Rail sections={sections} cur={cur} query={query} setQuery={setQuery} onPick={pick} onGroup={toGroup} openAll={() => setOpen(new Set(items.map((i) => i.id)))} foldAll={() => setOpen(new Set())} />;
 
   return (
@@ -115,7 +118,7 @@ function Learn({ d, today }: { d: PatternLessons; today: string }) {
         {sections.map((s, g) => (
           <section key={s.name} className="lr-sec" id={`lr-g${g}`} data-g={g} aria-label={s.name}>
             <div className="lr-gh"><h2>{s.name}</h2><small>{s.items.length} technique{s.items.length === 1 ? "" : "s"}</small></div>
-            {s.items.map((i) => <Card key={i.id} item={i} open={open.has(i.id)} toggle={() => toggle(i.id)} today={today} />)}
+            {s.items.map((i) => <Card key={i.id} item={i} open={open.has(i.id)} toggle={() => toggle(i.id)} today={today} glyph={glyphs.get(i.id)} />)}
           </section>
         ))}
       </div>
@@ -169,15 +172,16 @@ function Sheet({ children, onClose }: { children: React.ReactNode; onClose: () =
 }
 
 /** A technique as a folded card: its name, how you are doing, and how many problems; open, it shows the implementation and the problems. */
-function Card({ item, open, toggle, today }: { item: Item; open: boolean; toggle: () => void; today: string }) {
+function Card({ item, open, toggle, today, glyph }: { item: Item; open: boolean; toggle: () => void; today: string; glyph?: string }) {
   const id = anchor(item.id);
   const [opened, setOpened] = useState(open);
   useEffect(() => { if (open) setOpened(true); }, [open]);
   const first = item.lesson?.signals[0];
   return (
     <article className={`lr-card${open ? " open" : ""}`} id={id}>
-      <button className="lr-head" aria-expanded={open} aria-controls={`${id}-body`} onClick={toggle}>
+      <button className={`lr-head${glyph ? " thumb" : ""}`} aria-expanded={open} aria-controls={`${id}-body`} onClick={toggle}>
         <i className={`lr-dot ${status(item)}`} aria-hidden="true" />
+        {glyph && <span className="lr-thumb" aria-hidden="true"><IdeaGlyph kind={glyph} /></span>}
         <span className="lr-name"><b>{item.name}</b>{first && <small>{first}</small>}</span>
         {item.versions > 0 && <span className="lr-ver">{item.versions + 1} VERSIONS</span>}
         <span className="lr-count">{item.lists > 0 && <>{item.solved}/{item.lists} · </>}{item.problems.length} problem{item.problems.length === 1 ? "" : "s"}</span>
