@@ -6,7 +6,7 @@
 .kp-card:hover{border-color:color-mix(in oklab,var(--c) 40%,var(--line));transform:translateY(-2px);box-shadow:var(--card-hi),0 22px 40px -28px var(--c)}
 .kp-card.kp-done{border-color:color-mix(in oklab,var(--c) 45%,var(--line))}
 .kp-card header{position:relative;display:flex;align-items:center;gap:12px}
-.kp-lab{min-width:0;flex:1;display:flex;flex-direction:column}.kp-lab b{font:600 11px var(--mono);letter-spacing:.16em;color:var(--cs);text-transform:uppercase}.kp-lab em{font-style:normal;font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--fg);line-height:1.25}
+.kp-lab{min-width:0;flex:1;display:flex;flex-direction:column}.kp-lab b{font:600 11px var(--mono);letter-spacing:.16em;color:color-mix(in oklab,var(--c) 45%,var(--fg));text-transform:uppercase}.kp-lab em{font-style:normal;font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--fg);line-height:1.25}
 .kp-ring{flex:none;position:relative;width:44px;height:44px;border-radius:50%;background:conic-gradient(var(--cs) calc(var(--p)*1%),var(--c-track) 0);display:grid;place-items:center;animation:kp-ring 1s var(--ease) both}
 .kp-ring::before{content:"";position:absolute;inset:5px;border-radius:50%;background:color-mix(in oklab,var(--c) 3%,var(--panel))}.kp-ring b{position:relative;font:700 10.5px var(--mono);color:var(--fg)}
 @keyframes kp-ring{from{background:conic-gradient(var(--cs) 0%,var(--c-track) 0)}}
