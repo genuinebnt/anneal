@@ -42,6 +42,8 @@ struct PatternRow<'a> {
     /// LeetCode practice problems for the pattern: how many, and how many are solved.
     practice_total: usize,
     practice_solved: usize,
+    /// The pattern has an Idea tab (`content/dsa/ideas`).
+    has_idea: bool,
 }
 
 #[derive(Serialize)]
@@ -276,6 +278,7 @@ pub async fn overview(State(s): State<AppState>) -> ApiResult<Json<serde_json::V
             solved: t.problems.iter().filter(|p| crate::views::counts(p, count_premium) && progress.get(&p.id).is_some_and(|r| r.solved)).count(),
             practice_total,
             practice_solved,
+            has_idea: s.catalog.dsa.ideas.contains_key(&t.name),
             }
         })
         .collect();
@@ -597,6 +600,30 @@ struct LessonExtra<'a> {
 }
 
 /// A pattern's lessons: each technique with when to use it, a template, its traps, and its problems with progress.
+/// The Idea tab as the page reads it: each "with" row gets the other pattern's code, whether it has an Idea tab yet, and the example problem's title and number.
+fn idea_json(s: &AppState, idea: &anneal_content::Idea) -> serde_json::Value {
+    let all_tracks = || dsa_tracks(&s.catalog).chain(s.catalog.practice_tracks.iter());
+    let with: Vec<serde_json::Value> = idea
+        .with
+        .iter()
+        .map(|w| {
+            let other = dsa_tracks(&s.catalog).find(|t| t.name == w.pattern);
+            let id = format!("lc-{}", w.example);
+            let example = all_tracks().find_map(|t| t.problems.iter().find(|p| p.id == id));
+            serde_json::json!({
+                "pattern": w.pattern,
+                "code": other.map(|t| t.code.as_str()),
+                "has_idea": s.catalog.dsa.ideas.contains_key(&w.pattern),
+                "how": w.how,
+                "example": { "slug": w.example, "title": example.map(|p| p.meta.title.as_str()), "number": example.map(|p| dsa_of(p).number) },
+            })
+        })
+        .collect();
+    let mut value = serde_json::to_value(idea).unwrap_or_default();
+    value["with"] = serde_json::Value::Array(with);
+    value
+}
+
 pub async fn pattern(State(s): State<AppState>, Path(code): Path<String>) -> ApiResult<Json<serde_json::Value>> {
     let track = dsa_tracks(&s.catalog).find(|t| t.code.eq_ignore_ascii_case(&code) || t.slug == code).ok_or_else(|| ApiError::NotFound(format!("pattern {code}")))?;
     let today = crate::activity::today();
@@ -645,6 +672,7 @@ pub async fn pattern(State(s): State<AppState>, Path(code): Path<String>) -> Api
     let value = serde_json::json!({
         "code": track.code,
         "pattern": track.name,
+        "idea": s.catalog.dsa.ideas.get(&track.name).map(|i| idea_json(&s, i)),
         "intro": s.catalog.dsa.lesson_intros.get(&track.name),
         "total": track.problems.len(),
         "groups": s.catalog.dsa.lesson_groups.get(&track.name),

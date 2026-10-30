@@ -6,7 +6,7 @@ import { counted } from "../dsa";
 import { Header } from "./Header";
 import { ResetTrack } from "./ResetTrack";
 
-export type PatternTab = "learn" | "problems" | "practice";
+export type PatternTab = "idea" | "learn" | "problems" | "practice";
 const KEYS: PatternTab[] = ["learn", "problems", "practice"];
 
 /** The frame every pattern page shares (docs/DSA.md, decision 31): the strip of all patterns, then Learn, Problems and
@@ -22,14 +22,17 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
     const [resetOpen, setResetOpen] = useState(false);
 
     const go = (c: string, t: PatternTab) => {
-        if (t === "learn") void navigate({ to: "/dsa/patterns/$code", params: { code: c } });
+        if (t === "idea") void navigate({ to: "/dsa/patterns/$code/idea", params: { code: c } });
+        else if (t === "learn") void navigate({ to: "/dsa/patterns/$code", params: { code: c } });
         else if (t === "problems") void navigate({ to: "/dsa/patterns/$code/problems", params: { code: c } });
         else void navigate({ to: "/dsa/practice/$code", params: { code: c } });
     };
     const keys = useRef<(e: KeyboardEvent) => void>(() => {});
     keys.current = (e) => {
         if ((e.target as HTMLElement | null)?.closest?.("input,textarea,select,[contenteditable]") || e.metaKey || e.ctrlKey || e.altKey || !pattern) return;
-        if (e.key === "1" || e.key === "2" || e.key === "3") {
+        if (e.key === "i" && pattern.has_idea) {
+            go(pattern.code, "idea");
+        } else if (e.key === "1" || e.key === "2" || e.key === "3") {
             const t = KEYS[Number(e.key) - 1]!;
             if (t === "practice" && pattern.practice_total === 0) return;
             go(pattern.code, t);
@@ -57,11 +60,12 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
     const [done, total] = pattern ? prog(pattern.code) : [0, 0];
     const techniques = pattern && o ? o.techniques.filter((t) => t.pattern === pattern.name).length + (o.lesson_extras?.[pattern.name] ?? 0) : 0;
     const tabs: [PatternTab, string, string, boolean][] = [
+        ...(pattern?.has_idea ? ([["idea", "Idea", "", true]] as [PatternTab, string, string, boolean][]) : []),
         ["learn", "Learn", techniques ? `${techniques} technique${techniques === 1 ? "" : "s"}` : "", true],
         ["problems", "Problems", pattern ? `${done}/${total}` : "", true],
         ["practice", "Practice", pattern ? `${pattern.practice_solved}/${pattern.practice_total}` : "", !pattern || pattern.practice_total > 0],
     ];
-    const linkTo = (c: string, t: PatternTab) => (t === "learn" ? { to: "/dsa/patterns/$code" as const, params: { code: c } } : t === "problems" ? { to: "/dsa/patterns/$code/problems" as const, params: { code: c } } : { to: "/dsa/practice/$code" as const, params: { code: c } });
+    const linkTo = (c: string, t: PatternTab) => (t === "idea" ? { to: "/dsa/patterns/$code/idea" as const, params: { code: c } } : t === "learn" ? { to: "/dsa/patterns/$code" as const, params: { code: c } } : t === "problems" ? { to: "/dsa/patterns/$code/problems" as const, params: { code: c } } : { to: "/dsa/practice/$code" as const, params: { code: c } });
     // The first problem of this pattern that is not solved yet, in the list's order: where to go next.
     const nextProblem = pattern && o ? o.problems.filter((p) => p.pattern === pattern.code && p.lists.includes("neetcode150") && !p.state.solved).sort((a, b) => a.order - b.order)[0] : undefined;
     const prev = patterns.length ? patterns[(at + patterns.length - 1) % patterns.length] : undefined;
@@ -93,12 +97,12 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
                         </div>
                     )}
                     <div className="ps-tabs" role="tablist">
-                        {tabs.map(([k, label, n, enabled], i) =>
+                        {tabs.map(([k, label, n, enabled]) =>
                             !enabled ? (
                                 <span key={k} role="tab" aria-disabled="true" className="off">{label}<small>{n}</small></span>
                             ) : (
                                 <Link key={k} role="tab" aria-selected={k === tab} className={k === tab ? "on" : ""} {...linkTo(pattern?.code ?? code, k)}>
-                                    {label}<small>{n}</small><kbd>{i + 1}</kbd>
+                                    {label}<small>{n}</small><kbd>{k === "idea" ? "I" : KEYS.indexOf(k) + 1}</kbd>
                                 </Link>
                             ),
                         )}

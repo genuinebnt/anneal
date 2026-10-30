@@ -1,0 +1,141 @@
+pattern = "Sliding Window"
+
+what = [
+    "Keep a **window** over a contiguous stretch of the input, and a small **summary** of what is inside it (a sum, a set, a count per letter). Move the right end to take a new item in. Move the left end to throw one out. The summary is updated by the one item that changed, so nothing inside the window is ever recomputed.",
+    "That is the saving: checking every window from scratch costs `O(n·k)`; sliding costs `O(n)`, because each index enters the window once and leaves it once. Run it below and watch the counters.",
+]
+
+demos = ["window-fixed", "window-variable"]
+
+applies = [
+    "A **contiguous** piece of an array or string: a subarray, a substring, the last k items of a stream.",
+    "The question asks for the **longest**, **shortest**, **best** or **number of** such pieces.",
+    "Typical inputs: numbers, characters, a pair of strings, a circular array.",
+]
+
+yes = [
+    "The answer is a stretch of consecutive items.",
+    "You can say whether a window is **valid** from its summary alone.",
+    "Taking items out changes validity in **one direction**: removing from a window of positive numbers never raises its sum.",
+]
+
+no = [
+    "Items may be skipped (a subsequence): think DP.",
+    "Negative numbers break the one-direction rule: use prefix sums.",
+]
+
+apply = [
+    "**Say what the window means.** \"Exactly k items\", or \"a substring with no repeated letter\".",
+    "**Choose the summary.** The least you need to tell whether the window is valid: a sum, a set, a count per letter.",
+    "**Decide when the left end moves.** Because the window is too long, or because it is broken. Write that as a condition.",
+    "**Decide when you record the answer.** After the window is valid: before shrinking for \"shortest\", after shrinking for \"longest\".",
+    "**State the invariant.** \"After the loop, every letter in [left, right] is different.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"every block of exactly **k**\""
+kind = "Fixed size"
+move = "Add the new item, drop the one k behind. Evaluate each time."
+glyph = "fixed"
+technique = "Sliding Window:fixed-sum"
+
+[[which]]
+says = "\"**longest** ... that has / without ...\""
+kind = "Variable, longest valid"
+move = "Grow right always. Shrink left only while the window is broken."
+glyph = "longest"
+technique = "Sliding Window:window-max"
+
+[[which]]
+says = "\"**shortest** / smallest ... that reaches ...\""
+kind = "Variable, shortest valid"
+move = "Grow right until valid, then shrink left while it stays valid, recording each time."
+glyph = "shortest"
+technique = "Sliding Window:window-min"
+
+[[which]]
+says = "\"**number of** subarrays with exactly k ...\""
+kind = "Counting"
+move = "`atMost(k) - atMost(k - 1)`: two variable windows."
+glyph = "counting"
+technique = "Sliding Window:count-windows"
+
+[[which]]
+says = "\"contains all the letters of t\""
+kind = "Need / have"
+move = "Two count maps and one counter of letters still missing."
+glyph = "frequency"
+technique = "Sliding Window:anagram"
+
+[[which]]
+says = "\"**maximum** of every window of k\""
+kind = "Monotonic queue"
+move = "Keep candidates in a deque, largest at the front."
+glyph = "deque"
+technique = "Sliding Window:mono-deque"
+
+[[cost]]
+name = "Recompute every window"
+time = "O(n·k)"
+space = "O(1)"
+why = "Each of the n − k + 1 windows adds k numbers from scratch, and most of those additions repeat the last window's work. This is the cost to beat."
+
+[[cost]]
+name = "Fixed window"
+time = "O(n)"
+space = "O(1)"
+why = "One item comes in and one goes out per step, so each step is two operations whatever k is. The running sum is the only thing kept."
+
+[[cost]]
+name = "Variable window with a set or counts"
+time = "O(n)"
+space = "O(k)"
+why = "The left end never moves back, so across the whole scan it moves at most n times. The inner while loop is paid for by the items that enter, not extra work on top. The set holds at most the distinct values in the window; for lowercase letters that is at most 26, so O(1)."
+
+[[cost]]
+name = "Need / have (frequency) window"
+time = "O(n + m)"
+space = "O(m)"
+why = "Counting the m letters wanted costs m once, then the window slides in O(n). The two count maps hold only the distinct letters of the target and the window."
+
+[[cost]]
+name = "Counting windows, atMost(k) − atMost(k − 1)"
+time = "O(n)"
+space = "O(k)"
+why = "Two passes of the variable window, so twice O(n), which is still O(n). The map holds at most k distinct values."
+
+[[cost]]
+name = "Monotonic deque for a maximum or minimum"
+time = "O(n)"
+space = "O(k)"
+why = "Every index is pushed once and popped at most once, so the pops cost O(n) in total even though one step may pop several. The deque never holds more than the k items of the window."
+
+[[with]]
+pattern = "Two Pointers"
+how = "A window *is* two pointers that move the same way. If they start at opposite ends and move toward each other, it is the other pattern (sorted pair sums, palindromes)."
+example = "minimum-size-subarray-sum"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "The window's summary: a set for \"no repeats\", a count map for \"has all the letters\". Prefix sums with a hash map take over when negative numbers break the window."
+example = "permutation-in-string"
+
+[[with]]
+pattern = "Stack"
+how = "When the summary is a maximum or minimum, a plain variable cannot give it back after an item leaves. A monotonic deque keeps the candidates in order, the way a monotonic stack does."
+example = "sliding-window-maximum"
+
+[[with]]
+pattern = "Binary Search"
+how = "When the window size is the unknown, \"does a window of length m work?\" flips once as m grows. Search m, and slide a window to check each one."
+example = "maximum-length-of-repeated-subarray"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "For a median or a k-th value in the window, the summary has to remove as well as insert, so it becomes two heaps or an ordered structure."
+example = "sliding-window-median"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Window sums, or the best value in a window, feed a DP. A deque inside the DP keeps the best earlier state within reach."
+example = "maximum-sum-of-3-non-overlapping-subarrays"

@@ -576,6 +576,23 @@ export interface DsaPattern {
   /** LeetCode practice problems for the pattern: how many, and how many are solved. */
   practice_total: number;
   practice_solved: number;
+  /** The pattern has an Idea tab. */
+  has_idea: boolean;
+}
+
+/** A pattern's Idea tab (content/dsa/ideas, docs/DSA_IDEA_TAB.md). Text may use `**bold**`, `*italic*` and backticks. */
+export interface PatternIdea {
+  pattern: string;
+  what: string[];
+  /** Names of the animations, from `ideaDemos.ts`. */
+  demos: string[];
+  applies: string[];
+  yes: string[];
+  no: string[];
+  which: { says: string; kind: string; move: string; glyph: string; technique: string }[];
+  cost: { name: string; time: string; space: string; why: string }[];
+  with: { pattern: string; code: string | null; has_idea: boolean; how: string; example: { slug: string; title: string | null; number: number | null } }[];
+  apply: string[];
 }
 
 /** One technique's practice: the NeetCode problem that teaches it, and LeetCode problems that drill it. */
@@ -646,6 +663,7 @@ export interface PatternLessons {
   pattern: string;
   intro: string | null;
   total: number;
+  idea: PatternIdea | null;
   /** The groups of the page in order; null for a pattern whose page is not grouped. */
   groups: string[] | null;
   techniques: PatternTechnique[];

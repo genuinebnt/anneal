@@ -250,3 +250,74 @@ fn the_sites_own_content_has_an_insight_for_every_problem() {
     let all: Vec<_> = loaded.catalog.tracks.iter().filter(|t| t.section == Section::Dsa).chain(&loaded.catalog.practice_tracks).flat_map(|t| &t.problems).collect();
     assert!(all.len() > 1000 && all.iter().all(|p| p.dsa.as_ref().is_some_and(|d| !d.insight.is_empty())));
 }
+
+const GOOD_IDEA: &str = r#"
+pattern = "Two Pointers"
+what = ["Two indexes **walk** towards each other."]
+demos = ["window-fixed"]
+applies = ["A sorted array."]
+yes = ["The input is sorted."]
+no = ["The input is unsorted and must stay so."]
+apply = ["Say what each pointer means."]
+
+[[which]]
+says = "a sorted pair"
+kind = "Opposite ends"
+move = "Move the pointer that is too far out."
+glyph = "fixed"
+technique = "Two Pointers:opposite"
+
+[[cost]]
+name = "Opposite ends"
+time = "O(n)"
+space = "O(1)"
+why = "Each pointer only moves one way."
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "A hash map finds the pair when the input is not sorted."
+example = "two-sum"
+"#;
+
+#[test]
+fn an_idea_tab_loads_and_every_way_it_can_be_wrong_is_reported() {
+    let dir = root_with(&std::fs::read_to_string(fixture().join("dsa/problems.json")).unwrap());
+    std::fs::create_dir_all(dir.path().join("dsa/ideas")).unwrap();
+    let write = |name: &str, text: &str| std::fs::write(dir.path().join("dsa/ideas").join(name), text).unwrap();
+    let issues = |dir: &std::path::Path| -> Vec<String> { Catalog::load(dir).unwrap().issues.into_iter().map(|i| i.message).collect() };
+
+    write("two-pointers.toml", GOOD_IDEA);
+    let loaded = Catalog::load(dir.path()).unwrap();
+    assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+    assert_eq!(loaded.catalog.dsa.ideas["Two Pointers"].which[0].technique, "Two Pointers:opposite");
+
+    let mistakes = [
+        (GOOD_IDEA.replace("window-fixed", "teleport"), "isn't one the web app can draw"),
+        (GOOD_IDEA.replace("glyph = \"fixed\"", "glyph = \"sparkle\""), "the picture \"sparkle\""),
+        (GOOD_IDEA.replace("Two Pointers:opposite", "Two Pointers:nope"), "isn't a technique of Two Pointers"),
+        (GOOD_IDEA.replace("example = \"two-sum\"", "example = \"no-such-problem\""), "isn't a problem of the site"),
+        (GOOD_IDEA.replace("pattern = \"Arrays & Hashing\"", "pattern = \"Two Pointers\""), "which isn't another pattern"),
+        (GOOD_IDEA.replace("pattern = \"Arrays & Hashing\"", "pattern = \"Cooking\""), "which isn't another pattern"),
+        (GOOD_IDEA.replace("yes = [\"The input is sorted.\"]", "yes = []"), "`yes` needs at least one entry"),
+        (GOOD_IDEA.replace("time = \"O(n)\"", "time = \"\""), "has an empty field"),
+        (GOOD_IDEA.replace("pattern = \"Two Pointers\"\n", "pattern = \"Cooking\"\n"), "unknown pattern Cooking"),
+    ];
+    for (text, expected) in mistakes {
+        write("two-pointers.toml", &text);
+        let found = issues(dir.path());
+        assert!(found.iter().any(|m| m.contains(expected)), "wanted {expected:?} in {found:?}");
+    }
+    // a second file for the same pattern
+    write("two-pointers.toml", GOOD_IDEA);
+    write("again.toml", GOOD_IDEA);
+    assert!(issues(dir.path()).iter().any(|m| m.contains("has two idea files")));
+}
+
+#[test]
+fn the_sites_own_idea_tabs_load_without_issues() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let loaded = Catalog::load(&root).unwrap();
+    let ideas: Vec<_> = loaded.issues.iter().filter(|i| i.path.to_string_lossy().contains("/dsa/ideas/")).collect();
+    assert!(ideas.is_empty(), "{ideas:?}");
+    assert!(loaded.catalog.dsa.ideas.contains_key("Sliding Window"));
+}

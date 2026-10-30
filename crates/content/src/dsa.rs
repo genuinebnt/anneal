@@ -121,6 +121,69 @@ pub struct DsaCatalog {
     pub extras: BTreeMap<String, Vec<Extra>>,
     /// Techniques that are known and not written yet, by pattern name, in file order.
     pub listed: BTreeMap<String, Vec<Listed>>,
+    /// The Idea tab of each pattern that has one, by pattern name (`content/dsa/ideas/<pattern>.toml`, docs/DSA_IDEA_TAB.md).
+    pub ideas: BTreeMap<String, Idea>,
+}
+
+/// The animations the web app can draw for an Idea tab. A name here needs a simulator in `web/src/ideaDemos.ts`.
+pub const IDEA_DEMOS: &[&str] = &["window-fixed", "window-variable"];
+/// The small pictures of a window or pointer layout beside a row of "which one". Drawn by `web/src/components/IdeaGlyph.tsx`.
+pub const IDEA_GLYPHS: &[&str] = &["fixed", "longest", "shortest", "counting", "frequency", "deque"];
+
+/// One row of "which one?": what the question says, the kind of the pattern it points to, the move, and the technique card to open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdeaWhich {
+    pub says: String,
+    pub kind: String,
+    #[serde(rename = "move")]
+    pub moves: String,
+    pub glyph: String,
+    /// A technique or extra id of the pattern, e.g. `Sliding Window:fixed-sum`.
+    pub technique: String,
+}
+
+/// One row of "with other patterns": the other pattern, how the two meet, and an example problem.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdeaWith {
+    /// The other pattern's name, as in `problems.json`.
+    pub pattern: String,
+    pub how: String,
+    /// The slug of a catalog problem that shows the two together, e.g. `sliding-window-maximum`.
+    pub example: String,
+}
+
+/// One row of "time and space": a variation of the pattern, its two costs and the reason, in a sentence or two.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdeaCost {
+    pub name: String,
+    /// e.g. `O(n)`.
+    pub time: String,
+    pub space: String,
+    pub why: String,
+}
+
+/// A pattern's Idea tab: what it is, a step-through, where it applies, how to tell it is this pattern and which one, how it
+/// meets the other patterns, and how to apply it. Text may use `**bold**` and `` `code` ``.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Idea {
+    /// The pattern's name, as in `problems.json`.
+    pub pattern: String,
+    pub what: Vec<String>,
+    /// The animations, from [`IDEA_DEMOS`], in order.
+    pub demos: Vec<String>,
+    pub applies: Vec<String>,
+    pub yes: Vec<String>,
+    pub no: Vec<String>,
+    pub which: Vec<IdeaWhich>,
+    /// Time and space of each variation, the plain way first for comparison.
+    pub cost: Vec<IdeaCost>,
+    #[serde(default, rename = "with")]
+    pub with: Vec<IdeaWith>,
+    pub apply: Vec<String>,
 }
 
 /// One more tab of a template: the same idea written another way (recursive and iterative DFS).
@@ -413,6 +476,8 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> Loaded {
         .collect();
     let practice_set = practice_ids(root);
     let loaded = load_lessons(root, &file.techniques, &by_id, &practice_set, issues);
+    let known_problem = |slug: &str| by_id.contains_key(format!("lc-{slug}").as_str()) || practice_set.contains(&format!("lc-{slug}"));
+    let ideas = load_ideas(root, &file.techniques, &loaded.extras, &known_problem, issues);
     let extra_techniques: BTreeMap<String, String> = loaded.extras.iter().flat_map(|(pat, v)| v.iter().map(move |e| (e.id.clone(), pat.clone()))).collect();
     let practice_tracks = load_practice(root, &file, &tracks, &names, &extra_techniques, insights.as_ref(), issues);
     if let Some(m) = &insights {
@@ -432,6 +497,7 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> Loaded {
             lesson_groups: loaded.groups,
             extras: loaded.extras,
             listed: loaded.listed,
+            ideas,
 
         },
     }
@@ -550,6 +616,84 @@ fn problem(p: &Raw, names: &BTreeMap<&str, &str>, root: &Path, page: Option<&Pag
             page: page.cloned(),
         }),
     }
+}
+
+/// `<root>/dsa/ideas/*.toml`: the Idea tabs. A file for an unknown pattern or a second one for the same pattern is reported, and so is
+/// an empty section, an animation or picture the web app can't draw, a row that opens a technique the pattern doesn't have, and a
+/// "with" row for a pattern that doesn't exist (or for the pattern itself).
+fn load_ideas(root: &Path, techniques: &[Technique], extras: &BTreeMap<String, Vec<Extra>>, known_problem: &dyn Fn(&str) -> bool, issues: &mut Vec<Issue>) -> BTreeMap<String, Idea> {
+    let dir = root.join("dsa").join("ideas");
+    let mut out = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return out };
+    let mut files: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
+    files.sort();
+    for path in files {
+        let idea: Idea = match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| toml::from_str(&t).map_err(|e| e.message().to_owned())) {
+            Ok(i) => i,
+            Err(message) => {
+                issues.push(Issue { path, message });
+                continue;
+            }
+        };
+        let mut bad: Vec<String> = Vec::new();
+        if !techniques.iter().any(|t| t.pattern == idea.pattern) {
+            issues.push(Issue { path, message: format!("unknown pattern {}", idea.pattern) });
+            continue;
+        }
+        if out.contains_key(&idea.pattern) {
+            issues.push(Issue { path, message: format!("{} has two idea files", idea.pattern) });
+            continue;
+        }
+        let blank = |v: &[String]| v.is_empty() || v.iter().any(|t| t.trim().is_empty());
+        for (name, v) in [("what", &idea.what), ("applies", &idea.applies), ("yes", &idea.yes), ("no", &idea.no), ("apply", &idea.apply), ("demos", &idea.demos)] {
+            if blank(v) {
+                bad.push(format!("`{name}` needs at least one entry and none may be empty"));
+            }
+        }
+        for d in idea.demos.iter().filter(|d| !IDEA_DEMOS.contains(&d.as_str())) {
+            bad.push(format!("the demo {d:?} isn't one the web app can draw ({})", IDEA_DEMOS.join(", ")));
+        }
+        if idea.which.is_empty() {
+            bad.push("`which` needs at least one row".into());
+        }
+        let mine = |id: &str| techniques.iter().any(|t| t.id == id && t.pattern == idea.pattern) || extras.get(&idea.pattern).is_some_and(|v| v.iter().any(|e| e.id == id));
+        for w in &idea.which {
+            if [&w.says, &w.kind, &w.moves].iter().any(|t| t.trim().is_empty()) {
+                bad.push(format!("a `which` row ({:?}) has an empty field", w.says));
+            }
+            if !IDEA_GLYPHS.contains(&w.glyph.as_str()) {
+                bad.push(format!("the picture {:?} isn't one the web app can draw ({})", w.glyph, IDEA_GLYPHS.join(", ")));
+            }
+            if !mine(&w.technique) {
+                bad.push(format!("{:?} isn't a technique of {}", w.technique, idea.pattern));
+            }
+        }
+        if idea.cost.is_empty() {
+            bad.push("`cost` needs at least one row".into());
+        }
+        for c in &idea.cost {
+            if [&c.name, &c.time, &c.space, &c.why].iter().any(|t| t.trim().is_empty()) {
+                bad.push(format!("the `cost` row {:?} has an empty field", c.name));
+            }
+        }
+        for w in &idea.with {
+            if w.how.trim().is_empty() || w.example.trim().is_empty() {
+                bad.push(format!("the `with` row for {} has an empty field", w.pattern));
+            }
+            if !known_problem(&w.example) {
+                bad.push(format!("the `with` row for {} gives the example {:?}, which isn't a problem of the site", w.pattern, w.example));
+            }
+            if w.pattern == idea.pattern || !techniques.iter().any(|t| t.pattern == w.pattern) {
+                bad.push(format!("the `with` row names {:?}, which isn't another pattern", w.pattern));
+            }
+        }
+        if bad.is_empty() {
+            out.insert(idea.pattern.clone(), idea);
+        } else {
+            issues.extend(bad.into_iter().map(|message| Issue { path: path.clone(), message }));
+        }
+    }
+    out
 }
 
 /// What `load_lessons` read.

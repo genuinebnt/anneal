@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Navigate, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { DsaPage } from "./pages/DsaPage";
+import { PatternIdea } from "./pages/PatternIdea";
 import { PatternProblems } from "./pages/PatternProblems";
 import { CalendarPage } from "./pages/CalendarPage";
 import { DsaPlanPage } from "./pages/DsaPlanPage";
@@ -51,6 +52,7 @@ import "./styles/polish.css";
 import "./styles/focus-timer.css";
 import "./styles/settings.css";
 import "./styles/ui.css";
+import "./styles/idea.css";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -153,6 +155,14 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/log", component: LogPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dsa/company", component: CompanyPage }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/dsa/patterns/$code/idea",
+    component: function PatternIdeaRoute() {
+      const { code } = patternIdeaRoute.useParams();
+      return <PatternIdea code={code} />;
+    },
+  }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];
@@ -163,6 +173,7 @@ const courseRoute = routes[15];
 const courseStageRoute = routes[16];
 const courseConceptRoute = routes[17];
 const patternProblemsRoute = routes[18];
+const patternIdeaRoute = routes[23];
 
 // Pages are preloaded when their link is hovered, scroll positions come back with Back, and a page that throws shows a way out instead of a blank screen.
 const router = createRouter({ routeTree: rootRoute.addChildren([...routes]), defaultPreload: "intent", defaultPreloadStaleTime: 30_000, scrollRestoration: true, defaultErrorComponent: ErrorScreen });

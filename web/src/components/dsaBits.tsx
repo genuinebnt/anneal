@@ -194,9 +194,8 @@ const KEYWORDS = "def|class|return|if|elif|else|for|while|in|not|and|or|is|None|
 const BUILTINS = "range|len|set|dict|list|tuple|deque|sum|any|all|min|max|enumerate|zip|sorted|print|int|str|self|Counter|defaultdict";
 const TOKEN = new RegExp(`(#[^\\n]*)|("""[\\s\\S]*?"""|"(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*')|\\b(${KEYWORDS})\\b|\\b(${BUILTINS})\\b|\\b(\\d[\\d_]*)\\b|(\\w+)(?=\\()`, "g");
 
-/** Python with light highlighting and a copy button. */
-export function PyCode({ code, lineNumbers = false }: { code: string; lineNumbers?: boolean }) {
-  const [copied, setCopied] = useState(false);
+/** Python text as highlighted spans (the classes `py-k`, `py-s`, `py-c`, `py-b`, `py-n`, `py-f`), for anything that draws code its own way. */
+export function highlightPy(code: string): ReactNode[] {
   const parts: ReactNode[] = [];
   let last = 0;
   for (const m of code.matchAll(TOKEN)) {
@@ -208,6 +207,13 @@ export function PyCode({ code, lineNumbers = false }: { code: string; lineNumber
     last = at + text.length;
   }
   parts.push(code.slice(last));
+  return parts;
+}
+
+/** Python with light highlighting and a copy button. */
+export function PyCode({ code, lineNumbers = false }: { code: string; lineNumbers?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const parts = highlightPy(code);
   return (
     <div className="d-code">
       <button
