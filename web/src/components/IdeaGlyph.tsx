@@ -12,6 +12,12 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     merge: { n: 10, w: [[0, 5]], w2: [[5, 10]], ptr: [2, 7] },
     greedy: { n: 10, w: [], dots: [0, 9], ptr: [0, 9] },
     peaks: { n: 10, w: [], bars: [3, 1, 4, 2, 6, 2, 3, 5, 2, 1], ptr: [2, 9] },
+    halving: { n: 10, w: [[0, 10]], w2: [[5, 10]], ptr: [4] },
+    boundary: { n: 10, w: [], dots: [5, 6, 7, 8, 9], ptr: [5] },
+    answer: { n: 10, w: [], bars: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], ptr: [6] },
+    rotated: { n: 10, w: [], bars: [6, 7, 8, 9, 10, 1, 2, 3, 4, 5], ptr: [5] },
+    partition: { n: 10, w: [[0, 4]], w2: [[4, 10]], dots: [3, 4] },
+    mountain: { n: 10, w: [], bars: [1, 3, 5, 7, 9, 8, 6, 4, 3, 1], ptr: [4] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {

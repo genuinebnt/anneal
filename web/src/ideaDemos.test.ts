@@ -72,3 +72,36 @@ test("typed input is read strictly", () => {
     assert.deepEqual(o.parse("9, 1, 5", "10"), { items: ["1", "5", "9"], param: 10 }, "a pair row is sorted for you");
     assert.equal(o.parse("1,2,3", ""), null, "a target is needed");
 });
+
+test("binary search halves the row each look and finds the target, or says it is not there", () => {
+    const frames = run("search-find");
+    const last = frames[frames.length - 1]!;
+    // 2 5 8 12 16 23 38 56 72 91, target 23: mid 4 (16) too small, mid 7 (56) too big, mid 5 (23) found
+    assert.equal(last.result, "index 5");
+    assert.equal(frames.length, 1 + 3);
+    assert.ok(last.work.bars[1]!.value <= Math.floor(Math.log2(10)) + 1, "never more looks than log2 n + 1");
+    assert.deepEqual(last.hit, [5]);
+    // the ruled-out part only grows
+    for (let i = 2; i < frames.length; i++) assert.ok((frames[i]!.dim ?? []).length >= (frames[i - 1]!.dim ?? []).length);
+    const none = DEMOS["search-find"]!.simulate({ items: ["1", "3", "5"], param: 4 });
+    assert.equal(none[none.length - 1]!.result, "not found");
+    assert.ok(none.length <= 1 + 2 + 1);
+});
+
+test("first-true search asks about few cells, keeps mid when it is True and drops it when False", () => {
+    const frames = run("search-first-true");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "index 6");
+    assert.deepEqual(last.hit, [6]);
+    const asked = last.work.bars[1]!.value;
+    assert.ok(asked <= Math.ceil(Math.log2(10)), "about log2 n questions");
+    // most cells were never asked: they still show a question mark
+    assert.ok(last.cells!.filter((c) => c === "?").length >= 5);
+    // an answer shown is the truth
+    for (const f of frames) for (const i of f.ok ?? []) assert.equal(f.cells![i], "T");
+    for (const f of frames) for (const i of f.nope ?? []) assert.equal(f.cells![i], "F");
+    const f = DEMOS["search-first-true"]!;
+    assert.deepEqual(f.parse("ffftt", ""), { items: [..."FFFTT"] });
+    assert.equal(f.parse("FTFT", ""), null, "it must flip once");
+    assert.equal(f.parse("FFF", ""), null, "and have a True");
+});

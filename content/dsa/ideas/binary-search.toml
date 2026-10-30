@@ -1,0 +1,155 @@
+pattern = "Binary Search"
+
+what = [
+    "Binary search is for a **yes/no question that flips exactly once** as you move along an ordered range: no, no, no, yes, yes. Look at the middle. The answer tells you which half cannot hold the flip, so throw that half away for good. Halving the range finds the flip in about log₂ n looks, where a scan needs n.",
+    "It is not only for finding a number in a sorted array. The range can be sorted values, a rotated array, or just the numbers 1 to n with a function that tests one of them. Run both animations below: finding a value, and finding the first True.",
+]
+
+demos = ["search-find", "search-first-true"]
+
+applies = [
+    "A **sorted** (or sorted-then-rotated) array, list or matrix, and you want a value, its position, or where it would go.",
+    "The question says **first**, **last**, **smallest**, **largest**, or \"the minimum / maximum that still works\".",
+    "The range is huge (up to 10⁹) or n is large enough that a scan is too slow, and you can write a check for one candidate.",
+]
+
+yes = [
+    "You can write `ok(x)` and it is False up to some point and True after it (or the other way round).",
+    "One look at the middle rules out **half** the range for good.",
+    "The range has a known start and end, even when it is a range of answers (speeds 1 to max) and not of items.",
+]
+
+no = [
+    "The data is unordered and cannot be sorted without losing what you need: use a hash map.",
+    "`ok(x)` goes True, False, True: it does not flip once, so halving can skip the answer.",
+    "You need **every** match, not one: you will touch them all anyway.",
+]
+
+apply = [
+    "**Say what the range is.** The indexes of an array, or candidate answers such as speeds 1 to the largest pile.",
+    "**Write `ok(x)`.** A question that is False then True (or True then False). If you cannot, it is not binary search.",
+    "**Choose the loop shape.** `lo <= hi` with `mid ± 1` finds an exact value. `lo < hi` with `hi = mid` finds the first True.",
+    "**Decide what mid proves.** Which side can go, and whether mid itself could still be the answer (keep it) or not (drop it).",
+    "**State the invariant.** \"The answer is always inside [lo, hi].\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"is **x in** the sorted array?\", \"find its index\""
+kind = "Classic search"
+move = "`lo <= hi`. Compare the middle with the target and move one end past it."
+glyph = "halving"
+technique = "Binary Search:classic"
+
+[[which]]
+says = "\"where would it be **inserted**\", \"first or last position of ...\""
+kind = "Boundary"
+move = "Search for the edge between two kinds of items, not for a value."
+glyph = "boundary"
+technique = "Binary Search:insert-pos"
+
+[[which]]
+says = "\"the **first** bad version / the first index where it holds\""
+kind = "First True"
+move = "`lo < hi`. If ok(mid), keep it (`hi = mid`); otherwise drop it (`lo = mid + 1`)."
+glyph = "boundary"
+technique = "Binary Search:first-true"
+
+[[which]]
+says = "\"the **smallest** speed / capacity / time that **still works**\""
+kind = "Search on the answer"
+move = "Binary search the answer. `ok(x)` is a scan that checks whether x is enough."
+glyph = "answer"
+technique = "Binary Search:on-answer"
+
+[[which]]
+says = "\"a sorted array that was **rotated**\""
+kind = "Rotated array"
+move = "One half is always sorted. Check the sorted half to see if the target is in it."
+glyph = "rotated"
+technique = "Binary Search:rotated"
+
+[[which]]
+says = "\"the **median** of two sorted arrays\", \"k-th of ...\""
+kind = "Partition"
+move = "Search for how many items to take from the first array; the second follows."
+glyph = "partition"
+technique = "Binary Search:partition"
+
+[[which]]
+says = "\"a **peak** in a mountain\""
+kind = "Changing slope"
+move = "Compare mid with its neighbour. Go uphill: the peak is on that side."
+glyph = "mountain"
+technique = "Binary Search:peak"
+
+[[cost]]
+name = "Look at every item"
+time = "O(n)"
+space = "O(1)"
+why = "A scan checks the items one by one, so a million items take a million looks. This is the cost to beat."
+
+[[cost]]
+name = "Classic search in a sorted array"
+time = "O(log n)"
+space = "O(1)"
+why = "Each look throws away half of what is left, so n items need at most ⌊log₂ n⌋ + 1 looks: a million need 20. Only lo, hi and mid are kept. A recursive version also uses O(log n) stack."
+
+[[cost]]
+name = "First True in a yes/no"
+time = "O(log n · c)"
+space = "O(1)"
+why = "About log₂ n questions are asked, and c is what one answer costs. When asking is slow (a network call, a scan), the number of questions is the whole story."
+
+[[cost]]
+name = "Search on the answer"
+time = "O(n log R)"
+space = "O(1)"
+why = "R is the size of the range of answers. The check is a scan of the input, O(n), and it runs about log₂ R times. Trying every answer would run it R times."
+
+[[cost]]
+name = "Rotated array"
+time = "O(log n)"
+space = "O(1)"
+why = "One extra comparison tells you which half is sorted, so each look still halves the range."
+
+[[cost]]
+name = "Sort, then bisect the partner"
+time = "O(n log n)"
+space = "O(1)"
+why = "Sorting is O(n log n) and each of the n bisects is O(log n), so the sort and the searches cost the same order. Extra space depends on the sort."
+
+[[cost]]
+name = "Partition of two sorted arrays"
+time = "O(log min(n, m))"
+space = "O(1)"
+why = "The search runs over the shorter array only, and each step halves it."
+
+[[with]]
+pattern = "Two Pointers"
+how = "Both rule out part of a sorted input. Two pointers drops one end at a time in O(n); binary search drops half at a time in O(log n) but needs a way to jump to the middle. Pairing each item with a bisect costs O(n log n) where two pointers costs O(n)."
+example = "successful-pairs-of-spells-and-potions"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "Prefix sums turn \"which range does this number fall in\" into a sorted array you can bisect. A hash map answers exact lookups in O(1) but cannot answer \"the first one at least x\"."
+example = "random-pick-with-weight"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "The k-th smallest in a sorted matrix can be found with a heap, or by binary searching the value and counting how many items are at most it. The count is a scan, so the search is O(n log R)."
+example = "kth-smallest-element-in-a-sorted-matrix"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "The longest increasing subsequence keeps a sorted array of the best tails and bisects into it, which turns an O(n²) table into O(n log n)."
+example = "longest-increasing-subsequence"
+
+[[with]]
+pattern = "Sliding Window"
+how = "When the window size is the unknown, \"does a window of length m work?\" flips once as m grows. Search m, and slide a window to check each one."
+example = "maximum-length-of-repeated-subarray"
+
+[[with]]
+pattern = "Greedy"
+how = "Search on the answer needs a check, and the check is often a greedy scan: how many days does this speed need, how many bouquets can this day make."
+example = "minimum-number-of-days-to-make-m-bouquets"

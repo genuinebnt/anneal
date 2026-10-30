@@ -42,6 +42,8 @@
 .id-ptr.id-l.id-below span::after{top:auto;bottom:100%;border-top-color:transparent;border-bottom-color:var(--id-win)}
 .id-ptr:not(.id-below) span{animation:id-bob 1.6s ease-in-out infinite}
 .id-cell.id-gone{opacity:.28}
+.id-cell.id-ok{border-color:color-mix(in oklab,var(--grn) 60%,var(--line));background:color-mix(in oklab,var(--grn) 13%,var(--panel))}
+.id-cell.id-nope{border-color:color-mix(in oklab,var(--bad) 55%,var(--line));background:color-mix(in oklab,var(--bad) 10%,var(--panel))}
 .id-cell.id-cur{border-color:var(--acc);background:var(--acc-bg)}
 .id-cell.id-hit{border-color:var(--grn);background:var(--grn-bg);animation:id-pop .55s var(--ease)}
 .id-stackwrap{display:flex;flex-direction:column;align-items:center;gap:8px}

@@ -93,7 +93,7 @@ export function IdeaDemo({ names }: { names: string[] }) {
     // the typed text follows the demo shown
     useEffect(() => {
         if (!input) return;
-        setText(input.items.join(demo?.letters ? "" : ","));
+        setText(input.items.join(demo?.letters || demo?.compact ? "" : ","));
         setK(input.param !== undefined ? String(input.param) : "");
         setInvalid(false);
     }, [name]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -141,7 +141,7 @@ export function IdeaDemo({ names }: { names: string[] }) {
             <div className="id-col">
                 {known.length > 1 && <Segmented label="Demo" value={name} onChange={(v) => { setName(v); setI(0); setPlaying(false); }} options={known.map((n) => [n, DEMOS[n]!.title] as const)} />}
                 <div className="id-try">
-                    <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={demo.fields.text} maxLength={demo.letters ? 14 : 40} /></label>
+                    <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={demo.fields.text} maxLength={demo.letters || demo.compact ? 14 : 40} /></label>
                     {demo.fields.param && <label>{demo.fields.param.label.replace(/^Window size /, "")} <input className="id-k" type="number" min={demo.fields.param.min} max={demo.fields.param.max} value={k} onChange={(e) => setK(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} aria-label={demo.fields.param.label} /></label>}
                 </div>
                 <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 }}>
@@ -153,7 +153,7 @@ export function IdeaDemo({ names }: { names: string[] }) {
                             ))}
                             {cells.map((v, j) => {
                                 const inside = !!f.win && j >= f.win[0] && j < f.win[1];
-                                const cls = [inside && "id-in", f.dim?.includes(j) && "id-gone", f.cur?.includes(j) && "id-cur", f.hit?.includes(j) && "id-hit", f.dup === j && "id-dup", f.enter === j && "id-enter", f.leave === j && "id-leave"].filter(Boolean).join(" ");
+                                const cls = [inside && "id-in", f.dim?.includes(j) && "id-gone", f.cur?.includes(j) && "id-cur", f.hit?.includes(j) && "id-hit", f.ok?.includes(j) && "id-ok", f.nope?.includes(j) && "id-nope", f.dup === j && "id-dup", f.enter === j && "id-enter", f.leave === j && "id-leave"].filter(Boolean).join(" ");
                                 return (
                                     <div key={j} className={`id-cell ${cls}`} style={{ left: j * CELL, ...(demo.letters ? { "--h": hue(v) } : {}) } as CSSProperties}>
                                         <b>{v}</b>

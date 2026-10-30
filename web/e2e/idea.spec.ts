@@ -133,8 +133,8 @@ test("Two Pointers: labelled pointers close in on a pair, and the reader and wri
     const [all, used] = await page.locator(".id-work .id-wr em").allInnerTexts();
     expect(parseInt(used!, 10)).toBeLessThan(parseInt(all!, 10));
     // a target with no pair ends with none, and a typed row is sorted for you
-    await page.getByLabel("Target").fill("100");
-    await page.getByLabel("Target").blur();
+    await page.getByLabel("Target", { exact: true }).fill("100");
+    await page.getByLabel("Target", { exact: true }).blur();
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("none");
     // the other animation
@@ -146,4 +146,32 @@ test("Two Pointers: labelled pointers close in on a pair, and the reader and wri
     await page.getByRole("link", { name: "See the technique →" }).first().click();
     await expect(page).toHaveURL(/\/dsa\/patterns\/D2#t-opposite$/);
     await expect(page.locator("#t-opposite")).toHaveClass(/open/);
+});
+
+test("Binary Search: the middle is looked at, half the row falls away, and a first True is found with few questions", async ({ page }) => {
+    await page.goto("/dsa/patterns/D5/idea");
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-ptr span").filter({ hasText: "mid" })).toBeVisible();
+    await page.getByRole("button", { name: "Next →" }).click();
+    expect(await page.locator(".id-cell.id-gone").count()).toBeGreaterThanOrEqual(4);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("index 5");
+    // a target that is not there
+    await page.getByLabel("Target", { exact: true }).fill("24");
+    await page.getByLabel("Target", { exact: true }).blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("not found");
+    // first True: most cells are never asked, so they still show a question mark
+    await page.getByRole("radio", { name: /First True/ }).click();
+    await expect(page.getByLabel("Falses then trues, such as FFFFTT")).toHaveValue("FFFFFFTTTT");
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("index 6");
+    expect(await page.locator(".id-cell", { hasText: "?" }).count()).toBeGreaterThanOrEqual(5);
+    await page.getByLabel("Falses then trues, such as FFFFTT").fill("FTFT");
+    await page.getByLabel("Falses then trues, such as FFFFTT").blur();
+    await expect(page.getByLabel("Falses then trues, such as FFFFTT")).toHaveClass(/id-bad/);
+    // a row of "which one" opens its technique card
+    await page.getByRole("link", { name: "See the technique →" }).nth(3).click();
+    await expect(page).toHaveURL(/\/dsa\/patterns\/D5#t-on-answer$/);
+    await expect(page.locator("#t-on-answer")).toHaveClass(/open/);
 });

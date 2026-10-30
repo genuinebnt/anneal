@@ -41,6 +41,9 @@ export interface Frame {
     dim?: number[];
     cur?: number[];
     hit?: number[];
+    /** Cells answered yes (green) and no (red). */
+    ok?: number[];
+    nope?: number[];
     enter?: number;
     leave?: number;
     dup?: number;
@@ -59,6 +62,8 @@ export interface Demo {
     initial: DemoInput;
     /** Draw each cell in a colour of its letter. */
     letters?: boolean;
+    /** Typed as one string, without commas ("FFTT"). */
+    compact?: boolean;
     /** The labels of what can be typed: the cells, and the number if there is one. */
     fields: { text: string; param?: { label: string; min: number; max: number } };
     /** Reads what was typed; null when it is not a valid input. */
@@ -267,6 +272,105 @@ function simulateSame(input: DemoInput): Frame[] {
     return out;
 }
 
+// ---------------------------------------------------------------- binary search
+
+const findCode = [
+    "def search(nums, target):  # nums is sorted",
+    "    lo, hi = 0, len(nums) - 1",
+    "    while lo <= hi:",
+    "        mid = (lo + hi) // 2",
+    "        if nums[mid] == target:",
+    "            return mid",
+    "        if nums[mid] < target:",
+    "            lo = mid + 1  # everything up to mid is too small",
+    "        else:",
+    "            hi = mid - 1  # everything from mid is too big",
+    "    return -1",
+];
+
+function simulateFind(input: DemoInput): Frame[] {
+    const a = input.items.map(Number);
+    const target = input.param ?? 0;
+    const n = a.length;
+    if (n < 2) return [];
+    let lo = 0;
+    let hi = n - 1;
+    let looks = 0;
+    const dim = () => [...a.keys()].filter((i) => i < lo || i > hi);
+    const ptrs = (mid?: number): Pointer[] => [{ at: lo, label: "lo", tone: "l", below: true }, { at: hi, label: "hi", tone: "r" }, ...(mid === undefined ? [] : [{ at: mid, label: "mid", tone: "m" as const }])];
+    const work = (): Work => ({
+        title: "ITEMS LOOKED AT",
+        bars: [{ label: "Look at every item", value: n, of: n, tone: "bad" }, { label: "Binary search", value: looks, of: n, tone: "good", ratio: true }],
+        note: `Each look throws away half of what is left, so ${n} items need at most ${Math.floor(Math.log2(n)) + 1} looks. A million items need 20.`,
+    });
+    const range = (): Reading[] => [{ label: "LEFT", value: lo }, { label: "RIGHT", value: hi }, { label: "TARGET", value: target }];
+    const out: Frame[] = [{ pointers: ptrs(), lines: [2], read: range(), work: work(), say: `Look for ${target}. The row is sorted, so it can only be at lo, hi or between them. Both ends start at the ends.` }];
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        looks++;
+        const v = a[mid]!;
+        if (v === target) {
+            out.push({ pointers: ptrs(mid), dim: dim(), hit: [mid], lines: [4, 5, 6], read: [{ label: "MIDDLE", value: v }, { label: "TARGET", value: target }], work: work(), result: `index ${mid}`, say: `${v} is the target. Found at index ${mid} after ${looks} look${looks === 1 ? "" : "s"}.` });
+            return out;
+        }
+        if (v < target) {
+            out.push({ pointers: ptrs(mid), dim: dim(), cur: [mid], lines: [4, 7, 8], read: [{ label: "MIDDLE", value: v }, { label: "TARGET", value: target }], work: work(), say: `${v} < ${target}, so ${v} and everything before it is too small. Throw that half away: lo moves to ${mid + 1}.` });
+            lo = mid + 1;
+        } else {
+            out.push({ pointers: ptrs(mid), dim: dim(), cur: [mid], lines: [4, 9, 10], read: [{ label: "MIDDLE", value: v }, { label: "TARGET", value: target }], work: work(), say: `${v} > ${target}, so ${v} and everything after it is too big. Throw that half away: hi moves to ${mid - 1}.` });
+            hi = mid - 1;
+        }
+    }
+    out.push({ pointers: [], dim: [...a.keys()], lines: [11], read: [{ label: "TARGET", value: target }, { label: "LOOKS", value: looks }], work: work(), result: "not found", say: `lo passed hi: nothing is left to look at, so ${target} is not in the row. ${looks} looks were enough to be sure.` });
+    return out;
+}
+
+const firstTrueCode = [
+    "def first_true(lo, hi, ok):  # ok(x): False ... then True",
+    "    while lo < hi:",
+    "        mid = (lo + hi) // 2",
+    "        if ok(mid):",
+    "            hi = mid  # mid could be the first True: keep it",
+    "        else:",
+    "            lo = mid + 1  # mid is too early: drop it",
+    "    return lo",
+];
+
+function simulateFirstTrue(input: DemoInput): Frame[] {
+    const a = input.items;
+    const n = a.length;
+    if (n < 2) return [];
+    let lo = 0;
+    let hi = n - 1;
+    let asked = 0;
+    const known = new Map<number, string>();
+    const shown = () => a.map((_, i) => known.get(i) ?? "?");
+    const dim = () => [...a.keys()].filter((i) => i < lo || i > hi);
+    const tint = () => ({ ok: [...known].filter(([, v]) => v === "T").map(([i]) => i), nope: [...known].filter(([, v]) => v === "F").map(([i]) => i) });
+    const ptrs = (mid?: number): Pointer[] => (lo === hi ? [{ at: lo, label: "lo = hi", tone: "l", below: true }] : [{ at: lo, label: "lo", tone: "l", below: true }, { at: hi, label: "hi", tone: "r" }, ...(mid === undefined ? [] : [{ at: mid, label: "mid", tone: "m" as const }])]);
+    const work = (): Work => ({
+        title: "QUESTIONS ASKED",
+        bars: [{ label: "Ask about every index", value: n, of: n, tone: "bad" }, { label: "Binary search", value: asked, of: n, tone: "good", ratio: true }],
+        note: "Each answer rules out half of the range for good, so the first True is found in about log₂ n questions. When asking is slow, that is the difference between seconds and years.",
+    });
+    const read = (): Reading[] => [{ label: "LEFT", value: lo }, { label: "RIGHT", value: hi }, { label: "ASKED", value: asked }];
+    const out: Frame[] = [{ cells: shown(), pointers: ptrs(), lines: [2], read: read(), work: work(), say: "ok(x) is False up to some point and True after it. Find the first True. A ? is an answer not asked for yet: the search never looks at most of them." }];
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        asked++;
+        known.set(mid, a[mid]!);
+        if (a[mid] === "T") {
+            out.push({ cells: shown(), pointers: ptrs(mid), dim: dim(), ...tint(), cur: [mid], lines: [3, 4, 5], read: read(), work: work(), say: `ok(${mid}) is True. ${mid} could be the first True, so keep it and throw away everything after it: hi = ${mid}.` });
+            hi = mid;
+        } else {
+            out.push({ cells: shown(), pointers: ptrs(mid), dim: dim(), ...tint(), cur: [mid], lines: [3, 4, 6, 7], read: read(), work: work(), say: `ok(${mid}) is False, so ${mid} and everything before it is too early. Throw it away: lo = ${mid + 1}.` });
+            lo = mid + 1;
+        }
+    }
+    out.push({ cells: shown(), pointers: ptrs(), dim: dim(), ...tint(), hit: [lo], lines: [8], read: read(), work: work(), result: `index ${lo}`, say: `lo and hi met at ${lo}: the first True, found with ${asked} question${asked === 1 ? "" : "s"} out of ${n} possible.` });
+    return out;
+}
+
 export const DEMOS: Record<string, Demo> = {
     "window-fixed": {
         title: "Fixed size · best sum",
@@ -315,5 +419,30 @@ export const DEMOS: Record<string, Demo> = {
             return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) ? { items: items.map(Number).sort((x, y) => x - y).map(String) } : null;
         },
         simulate: simulateSame,
+    },
+    "search-find": {
+        title: "Find a value in a sorted row",
+        code: findCode,
+        initial: { items: ["2", "5", "8", "12", "16", "23", "38", "56", "72", "91"], param: 23 },
+        fields: { text: "Sorted numbers, separated by commas", param: { label: "Target", min: -999, max: 999 } },
+        parse: (text, param) => {
+            const items = numbers(text);
+            const target = Number(param);
+            if (items.length < 2 || items.length > MAX_CELLS || !smallInts(items) || !Number.isInteger(target) || param.trim() === "") return null;
+            return { items: items.map(Number).sort((x, y) => x - y).map(String), param: target };
+        },
+        simulate: simulateFind,
+    },
+    "search-first-true": {
+        title: "First True in a yes/no that flips once",
+        code: firstTrueCode,
+        initial: { items: [..."FFFFFFTTTT"] },
+        compact: true,
+        fields: { text: "Falses then trues, such as FFFFTT" },
+        parse: (text) => {
+            const s = text.toUpperCase().replace(/[^FT]/g, "");
+            return /^F*T+$/.test(s) && s.length >= 2 && s.length <= MAX_CELLS ? { items: [...s] } : null;
+        },
+        simulate: simulateFirstTrue,
     },
 };
