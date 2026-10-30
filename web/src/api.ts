@@ -745,6 +745,9 @@ export interface ReviewQueue {
 export interface MockConfig {
   /** `neetcode150`, `neetcode250`, `all` or `practice`. */
   lists: string[];
+  /** Which problems may be drawn: any in the lists, only ones solved (with or without help), or those plus unsolved ones in a pattern with a solve.
+   *  Missing in setups saved before this existed, which means `all`. */
+  reach?: "all" | "done" | "similar";
   status: "all" | "unseen" | "attempted" | "solved" | "due";
   /** Pattern code to 1 (include) or -1 (exclude). */
   topics: Record<string, 1 | -1>;

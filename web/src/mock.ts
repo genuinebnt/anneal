@@ -12,6 +12,12 @@ export const MOCK_LISTS: [string, string][] = [
   ["practice", "Practice"],
 ];
 
+export const MOCK_REACH: [NonNullable<MockConfig["reach"]>, string][] = [
+  ["all", "Everything in the lists"],
+  ["done", "Problems I've done"],
+  ["similar", "Done + similar patterns"],
+];
+
 export const MOCK_STATUS: [MockConfig["status"], string, string][] = [
   ["all", "Everything", "Includes problems you have never opened."],
   ["unseen", "Not attempted yet", "Only problems with no log yet, so each one is new to you."],
@@ -28,6 +34,7 @@ export const FAVOUR: [MockConfig["favour"], string, string][] = [
 
 export const defaultConfig = (): MockConfig => ({
   lists: ["neetcode150"],
+  reach: "all",
   status: "all",
   topics: {},
   mix: [0, 2, 0],
@@ -88,7 +95,16 @@ export function matches(p: DsaProblem, c: MockConfig, today: string): boolean {
   return !c.recent || p.companies.some((co) => co.recent);
 }
 
-export const poolOf = (problems: DsaProblem[], c: MockConfig, today: string): DsaProblem[] => problems.filter((p) => matches(p, c, today));
+/** Done means solved, with or without help. Similar means not solved yet but in a pattern where something is, whatever list the solve was in. */
+export function poolOf(problems: DsaProblem[], c: MockConfig, today: string): DsaProblem[] {
+  const reach = c.reach ?? "all";
+  const patterns = reach === "similar" ? new Set(problems.filter((p) => p.state.solved).map((p) => p.pattern)) : null;
+  return problems.filter((p) => {
+    if (reach === "done" && !p.state.solved) return false;
+    if (patterns && !p.state.solved && !patterns.has(p.pattern)) return false;
+    return matches(p, c, today);
+  });
+}
 
 export const countBy = (pool: DsaProblem[]): [number, number, number] => {
   const n: [number, number, number] = [0, 0, 0];

@@ -38,6 +38,25 @@ test("the history filter", () => {
   assert.equal(ids("all").length, 4);
 });
 
+test("the pool can be only what is done, or that plus unsolved problems in the same patterns", () => {
+  const done = { solved: true, assisted: false, last_grade: "good" as const, reps: 1, lapses: 0, last_review: TODAY, due: null, retrievability: 1 };
+  const helped = { ...done, assisted: true, last_grade: "hard" as const };
+  const a = make({ pattern: "D1", state: done });
+  const b = make({ pattern: "D2", state: helped });
+  const sameAsA = make({ pattern: "D1" });
+  const other = make({ pattern: "D3" });
+  const outside = make({ pattern: "D4", lists: ["all"], state: done });
+  const premiumSame = make({ pattern: "D1", premium: true });
+  const ps = [a, b, sameAsA, other, outside, premiumSame];
+  const ids = (reach?: MockConfig["reach"], over: Partial<MockConfig> = {}) => poolOf(ps, cfg({ reach, ...over }), TODAY).map((p) => p.id);
+  assert.deepEqual(ids("done"), [a.id, b.id], "solved with or without help; the list still applies");
+  assert.deepEqual(ids("similar"), [a.id, b.id, sameAsA.id], "plus the unsolved in a pattern with a solve, no Premium");
+  assert.equal(ids("all").length, 4);
+  assert.equal(ids(undefined).length, 4, "a setup saved before this means everything");
+  assert.deepEqual(ids("similar", { lists: ["neetcode150", "all"] }), [a.id, b.id, sameAsA.id, outside.id], "a solve in another list still counts as a pattern done");
+  assert.deepEqual(ids("similar", { topics: { D1: 1 } }), [a.id, sameAsA.id], "other filters still apply");
+});
+
 test("companies: a group or a company, and recent only", () => {
   const a = make({ companies: [co("Google", "Big Tech", true), co("Uber", "Top tech")] });
   const b = make({ companies: [co("Stripe", "Top tech")] });

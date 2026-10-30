@@ -13,6 +13,7 @@ import {
     BANDS,
     FAVOUR,
     MOCK_LISTS,
+    MOCK_REACH,
     MOCK_STATUS,
     PRESETS,
     clock,
@@ -272,6 +273,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
     const listName = (k: string) => MOCK_LISTS.find(([key]) => key === k)?.[1] ?? k;
     const filters: { key: string; label: string; exc?: boolean; remove: () => void }[] = [
         ...c.lists.map((l) => ({ key: `list:${l}`, label: listName(l), remove: () => edit((cur) => (cur.lists.length > 1 ? { ...cur, lists: toggle(cur.lists, l) } : cur)) })),
+        ...((c.reach ?? "all") !== "all" ? [{ key: "reach", label: MOCK_REACH.find(([k]) => k === c.reach)?.[1] ?? "", remove: () => edit((cur) => ({ ...cur, reach: "all" as const })) }] : []),
         ...(c.status !== "all" ? [{ key: "status", label: MOCK_STATUS.find(([k]) => k === c.status)?.[1] ?? c.status, remove: () => edit((cur) => ({ ...cur, status: "all" as const })) }] : []),
         ...Object.entries(c.topics).map(([code, v]) => ({ key: `topic:${code}`, label: data.patterns.find((p) => p.code === code)?.name ?? code, exc: v === -1, remove: () => cycleTopic(code) })),
         ...c.groups.map((g) => ({ key: `group:${g}`, label: g, remove: () => edit((cur) => ({ ...cur, groups: toggle(cur.groups, g) })) })),
@@ -347,6 +349,10 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
 
                         {tab === "pool" && (
                             <>
+                                <div className="mi-sec">
+                                    <span className="t">WHICH PROBLEMS</span>
+                                    <Seg label="Which problems" value={c.reach ?? "all"} options={MOCK_REACH} onPick={(reach) => edit((cur) => ({ ...cur, reach }))} />
+                                </div>
                                 <div className="mi-sec">
                                     <span className="t">WHERE PROBLEMS COME FROM <em>{c.lists.length} selected</em></span>
                                     <div className="mi-chips">
