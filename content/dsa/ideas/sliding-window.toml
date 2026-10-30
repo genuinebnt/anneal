@@ -1,5 +1,7 @@
 pattern = "Sliding Window"
 
+tagline = "A window glides over the input and keeps a small summary, so nothing inside it is ever recomputed."
+
 what = [
     "Keep a **window** over a contiguous stretch of the input, and a small **summary** of what is inside it (a sum, a set, a count per letter). Move the right end to take a new item in. Move the left end to throw one out. The summary is updated by the one item that changed, so nothing inside the window is ever recomputed.",
     "That is the saving: checking every window from scratch costs `O(n·k)`; sliding costs `O(n)`, because each index enters the window once and leaves it once. Run it below and watch the counters.",

@@ -1,5 +1,7 @@
 pattern = "Binary Search"
 
+tagline = "Look at the middle and throw half away: a yes/no that flips once is found in about log₂ n looks."
+
 what = [
     "Binary search is for a **yes/no question that flips exactly once** as you move along an ordered range: no, no, no, yes, yes. Look at the middle. The answer tells you which half cannot hold the flip, so throw that half away for good. Halving the range finds the flip in about log₂ n looks, where a scan needs n.",
     "It is not only for finding a number in a sorted array. The range can be sorted values, a rotated array, or just the numbers 1 to n with a function that tests one of them. Run both animations below: finding a value, and finding the first True.",

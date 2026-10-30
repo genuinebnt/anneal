@@ -1,5 +1,7 @@
 pattern = "Two Pointers"
 
+tagline = "Two pointers walk the input by a rule that rules out an item at every step, so one pass replaces a nested loop."
+
 what = [
     "Keep **two indexes** in the same input and move them by a rule, so that each step lets you rule something out for good. Because the rule never makes you look back, one pass is enough where a nested loop would compare everything with everything.",
     "There are two shapes. **Opposite ends**: one pointer at each end of a sorted input, walking toward each other. **Same direction**: a fast pointer that reads and a slow pointer that marks what is already done. Run each one below.",

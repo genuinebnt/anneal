@@ -200,3 +200,24 @@ test("Stack: brackets wait on the stack and match, a crossing is invalid, and th
     await expect(page).toHaveURL(/\/dsa\/patterns\/D4#t-mono-stack$/);
     await expect(page.locator("#t-mono-stack")).toHaveClass(/open/);
 });
+
+test("each Idea tab opens with a loop and its sentence; the loop moves, and stands still under reduced motion", async ({ page, request, browser }) => {
+    const o = await (await request.get("/api/dsa")).json();
+    for (const p of (o.patterns as { code: string; name: string; has_idea: boolean }[]).filter((x) => x.has_idea)) {
+        const d = await (await request.get(`/api/dsa/patterns/${p.code}`)).json();
+        expect(d.idea.tagline.length, `${p.name} tagline`).toBeGreaterThan(20);
+        await page.goto(`/dsa/patterns/${p.code}/idea`);
+        const hero = page.locator(".id-hero");
+        await expect(hero).toContainText(d.idea.tagline);
+        await expect(hero.locator("svg.lp")).toBeVisible();
+    }
+    // Sliding Window's brace is animated; with reduced motion it is not
+    await page.goto("/dsa/patterns/D3/idea");
+    const running = await page.locator(".id-hero .lp-sw").evaluate((e) => getComputedStyle(e).animationName);
+    expect(running).toBe("lp-slide");
+    const calm = await browser.newContext({ reducedMotion: "reduce" });
+    const q = await calm.newPage();
+    await q.goto("/dsa/patterns/D3/idea");
+    expect(await q.locator(".id-hero .lp-sw").evaluate((e) => getComputedStyle(e).animationName)).toBe("none");
+    await calm.close();
+});

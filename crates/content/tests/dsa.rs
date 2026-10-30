@@ -253,6 +253,7 @@ fn the_sites_own_content_has_an_insight_for_every_problem() {
 
 const GOOD_IDEA: &str = r#"
 pattern = "Two Pointers"
+tagline = "Two ends walk toward each other."
 what = ["Two indexes **walk** towards each other."]
 demos = ["window-fixed"]
 applies = ["A sorted array."]
@@ -300,6 +301,7 @@ fn an_idea_tab_loads_and_every_way_it_can_be_wrong_is_reported() {
         (GOOD_IDEA.replace("pattern = \"Arrays & Hashing\"", "pattern = \"Cooking\""), "which isn't another pattern"),
         (GOOD_IDEA.replace("yes = [\"The input is sorted.\"]", "yes = []"), "`yes` needs at least one entry"),
         (GOOD_IDEA.replace("time = \"O(n)\"", "time = \"\""), "has an empty field"),
+        (GOOD_IDEA.replace("tagline = \"Two ends walk toward each other.\"", "tagline = \"\""), "`tagline` is one sentence"),
         (GOOD_IDEA.replace("pattern = \"Two Pointers\"\n", "pattern = \"Cooking\"\n"), "unknown pattern Cooking"),
     ];
     for (text, expected) in mistakes {

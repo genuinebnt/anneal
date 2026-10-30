@@ -1,5 +1,7 @@
 pattern = "Stack"
 
+tagline = "The most recent item that still matters is always on top, so what you need next is one pop away."
+
 what = [
     "A stack gives you **last in, first out**: the most recent thing you set aside is the first one you come back to. Whenever a problem says \"the most recent one that still matters\", a stack holds exactly those items and lets you drop the ones that no longer do.",
     "That one rule covers three families. **Matching**: an opener waits until its closer arrives. **Monotonic**: keep the stack in order, and pop whatever the new item makes useless. **Evaluating and undoing**: a stack of results or states that you collapse as you go. Run the first two below.",

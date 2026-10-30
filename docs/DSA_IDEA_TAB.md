@@ -13,6 +13,7 @@ variation, a general explanation, **how it works with other patterns**, **syntax
 
 | section | field in the file | notes |
 |---|---|---|
+| The idea in five seconds | `tagline` | a looping drawing of the pattern (`components/PatternLoop.tsx`, always moving, still under Reduce motion) beside the pattern name and one sentence (at most 140 characters). The same drawing and sentence are meant for the pattern's card on the DSA home. A pattern with no drawing in `LOOP_OF` shows no header. |
 | What it is | `what` | two short paragraphs: the idea, then the saving. `**bold**`, `*italic*` and backticks only. |
 | Watch it run | `demos` | one or two animations, each with the Python beside it (running lines lit), the readings, a counter of what it saves, an input the learner can change, a step scrubber and keys. |
 | Where it applies | `applies` | the shape of the question and the input. |
@@ -48,7 +49,7 @@ variation, a general explanation, **how it works with other patterns**, **syntax
 
 ## The frame an animation produces
 
-`Frame` in `web/src/ideaDemos.ts`: `win` (a brace over `[l, r)`), `pointers` (labelled markers, `above` or `below` the row; two on one cell stack), `dim` (ruled out), `cur` (being looked at), `hit` (the answer), `enter`/`leave`/`dup`, `cells` (new values when the array is written in place), `stack` (a second structure beside the row), `lines` (code lines that run), `read` (readings), `work` (bars of what it saves, `ratio` for "n of total"), `say`, `result`. Add a field only when a pattern needs one, and draw it in `components/IdeaDemo.tsx`.
+`Frame` in `web/src/ideaDemos.ts`: `win` (a brace over `[l, r)`), `pointers` (labelled markers, `above` or `below` the row; two on one cell stack), `dim` (ruled out), `cur` (being looked at), `hit` (the answer), `enter`/`leave`/`dup`, `cells` (new values when the array is written in place), `stack` (a second structure beside the row), `lines` (code lines that run), `read` (readings), `work` (bars of what it saves, `ratio` for "n of total"), `say`, `result`. A new pattern also needs a drawing in `PatternLoop.tsx` (and its name in `LOOP_OF`) and a `tagline`. Add a field to the frame only when a pattern needs one, and draw it in `components/IdeaDemo.tsx`.
 
 ## Still to write (suggested animation)
 

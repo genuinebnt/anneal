@@ -583,6 +583,8 @@ export interface DsaPattern {
 /** A pattern's Idea tab (content/dsa/ideas, docs/DSA_IDEA_TAB.md). Text may use `**bold**`, `*italic*` and backticks. */
 export interface PatternIdea {
   pattern: string;
+  /** The idea in one sentence. */
+  tagline: string;
   what: string[];
   /** Names of the animations, from `ideaDemos.ts`. */
   demos: string[];

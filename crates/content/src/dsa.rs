@@ -172,6 +172,8 @@ pub struct IdeaCost {
 pub struct Idea {
     /// The pattern's name, as in `problems.json`.
     pub pattern: String,
+    /// The idea in one sentence (at most 140 characters): under the loop at the top of the tab, and on the pattern's card.
+    pub tagline: String,
     pub what: Vec<String>,
     /// The animations, from [`IDEA_DEMOS`], in order.
     pub demos: Vec<String>,
@@ -643,6 +645,9 @@ fn load_ideas(root: &Path, techniques: &[Technique], extras: &BTreeMap<String, V
         if out.contains_key(&idea.pattern) {
             issues.push(Issue { path, message: format!("{} has two idea files", idea.pattern) });
             continue;
+        }
+        if idea.tagline.trim().is_empty() || idea.tagline.chars().count() > 140 {
+            bad.push("`tagline` is one sentence of at most 140 characters".into());
         }
         let blank = |v: &[String]| v.is_empty() || v.iter().any(|t| t.trim().is_empty());
         for (name, v) in [("what", &idea.what), ("applies", &idea.applies), ("yes", &idea.yes), ("no", &idea.no), ("apply", &idea.apply), ("demos", &idea.demos)] {

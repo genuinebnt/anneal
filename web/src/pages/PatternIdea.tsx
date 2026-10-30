@@ -4,6 +4,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { api, type PatternIdea as Idea } from "../api";
 import { IdeaDemo } from "../components/IdeaDemo";
 import { IdeaGlyph } from "../components/IdeaGlyph";
+import { PatternLoop } from "../components/PatternLoop";
 import { PatternShell } from "../components/PatternShell";
 import { rich } from "../components/rich";
 
@@ -43,6 +44,14 @@ export function PatternIdea({ code }: { code: string }) {
 function Body({ idea, code }: { idea: Idea; code: string }) {
     return (
         <div className="id-wrap">
+            <div className="id-hero" style={{ "--i": 0 } as CSSProperties}>
+                <div>
+                    <span className="id-hk">THE IDEA IN FIVE SECONDS</span>
+                    <p className="id-ht">{idea.pattern}</p>
+                    <p className="id-hs">{idea.tagline}</p>
+                </div>
+                <PatternLoop pattern={idea.pattern} />
+            </div>
             <Section title="WHAT IT IS" i={0}>
                 {idea.what.map((t, n) => <p key={n}>{rich(t)}</p>)}
             </Section>

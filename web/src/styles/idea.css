@@ -127,3 +127,11 @@
 @keyframes id-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
 @keyframes id-say{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
 @keyframes id-spark{0%{opacity:1;transform:rotate(var(--a)) translateY(0) scale(1)}100%{opacity:0;transform:rotate(var(--a)) translateY(-46px) scale(.4)}}
+
+/* the loop at the top of the tab */
+.id-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:24px;align-items:center;padding:20px 24px;border:1px solid var(--line);border-radius:18px;background:radial-gradient(90% 140% at 100% 0%,color-mix(in oklab,var(--acc) 9%,transparent),transparent 65%),var(--panel);animation:id-rise .55s var(--ease) backwards}
+@media (max-width:760px){.id-hero{grid-template-columns:minmax(0,1fr)}}
+.id-hk{font:600 10px var(--mono);letter-spacing:.2em;color:var(--dim)}
+.id-ht{margin:8px 0 6px;font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1.1;color:var(--fg)}
+.id-hs{margin:0;font-size:15px;line-height:1.6;color:var(--mut);max-width:46ch}
+.id-hero .lp{height:150px}

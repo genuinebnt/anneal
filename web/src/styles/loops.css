@@ -1,0 +1,45 @@
+/* The looping drawings of PatternLoop. Always moving; still under Reduce motion (the setting, or the system's). `lp-` prefixed. */
+.lp{--lp-c:var(--acc);--lp-cell:color-mix(in oklab,var(--dim) 45%,var(--line));display:block;width:100%;overflow:visible}
+.lp.lp-vio{--lp-c:var(--vio)}.lp.lp-grn{--lp-c:var(--grn)}
+.lp-cl{fill:none;stroke:var(--lp-cell);stroke-width:1.4}.lp-cf{fill:color-mix(in oklab,var(--lp-c) 14%,transparent);stroke:var(--lp-c);stroke-width:1.4}
+.lp-ac{fill:none;stroke:var(--lp-c);stroke-width:1.8}.lp-acf{fill:var(--lp-c);stroke:none}.lp-ed{fill:none;stroke:var(--lp-cell);stroke-width:1.4;stroke-dasharray:3 3}
+.lp-tx{font:500 7.5px var(--mono);fill:var(--dim)}.lp-tc{font:600 7.5px var(--mono);fill:var(--lp-c)}
+.lp *{transform-box:fill-box}
+html[data-motion="reduce"] .lp *{animation:none!important}
+@media (prefers-reduced-motion:reduce){.lp *{animation:none!important}}
+/* sliding window */
+@keyframes lp-slide{0%,8%{transform:translateX(0)}42%,58%{transform:translateX(104px)}92%,100%{transform:translateX(0)}}
+.lp-sw{animation:lp-slide 6s cubic-bezier(.5,0,.3,1) infinite}
+/* two pointers */
+@keyframes lp-pl{0%,15%{transform:translateX(0)}35%,50%{transform:translateX(26px)}70%,100%{transform:translateX(78px)}}
+@keyframes lp-pr{0%,15%{transform:translateX(0)}35%,50%{transform:translateX(-26px)}70%,100%{transform:translateX(-78px)}}
+.lp-pl{animation:lp-pl 5.5s steps(1,end) infinite}.lp-pr{animation:lp-pr 5.5s steps(1,end) infinite}
+/* binary search */
+@keyframes lp-bs{0%,12%{transform:translateX(0) scaleX(1)}30%,42%{transform:translateX(0) scaleX(.5)}55%,66%{transform:translateX(52px) scaleX(.25)}80%,100%{transform:translateX(52px) scaleX(.125)}}
+.lp-bs{transform-origin:left center;animation:lp-bs 6s ease-in-out infinite}
+/* stack */
+@keyframes lp-st1{0%,6%{opacity:0;transform:translateY(-14px)}14%,70%{opacity:1;transform:none}80%,100%{opacity:0;transform:translateY(-14px)}}
+@keyframes lp-st2{0%,22%{opacity:0;transform:translateY(-14px)}30%,58%{opacity:1;transform:none}66%,100%{opacity:0;transform:translateY(-14px)}}
+@keyframes lp-st3{0%,38%{opacity:0;transform:translateY(-14px)}46%,50%{opacity:1;transform:none}56%,100%{opacity:0;transform:translateY(-14px)}}
+.lp-s1{animation:lp-st1 6s infinite}.lp-s2{animation:lp-st2 6s infinite}.lp-s3{animation:lp-st3 6s infinite}
+/* linked list: slow and fast */
+@keyframes lp-slow{0%,12%{transform:translateX(0)}28%,42%{transform:translateX(44px)}58%,72%{transform:translateX(88px)}88%,100%{transform:translateX(132px)}}
+@keyframes lp-fast{0%,12%{transform:translateX(0)}28%,42%{transform:translateX(88px)}58%,72%{transform:translateX(176px)}88%,100%{transform:translateX(176px)}}
+.lp-sl{animation:lp-slow 6s steps(1,end) infinite}.lp-fa{animation:lp-fast 6s steps(1,end) infinite}
+/* tree: preorder visit */
+@keyframes lp-lit{0%,4%{fill:transparent;stroke:var(--lp-cell)}10%,22%{fill:color-mix(in oklab,var(--lp-c) 22%,transparent);stroke:var(--lp-c)}30%,100%{fill:color-mix(in oklab,var(--lp-c) 10%,transparent);stroke:color-mix(in oklab,var(--lp-c) 55%,var(--lp-cell))}}
+.lp-nd{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-lit 7s infinite both}
+/* graph: breadth-first wave */
+@keyframes lp-wave{0%,4%{fill:transparent;stroke:var(--lp-cell)}12%,100%{fill:color-mix(in oklab,var(--lp-c) 18%,transparent);stroke:var(--lp-c)}}
+.lp-gn{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-wave 6s infinite both}
+/* 1-D dp: a row filling */
+@keyframes lp-fill{0%,4%{fill:transparent;stroke:var(--lp-cell)}12%,86%{fill:color-mix(in oklab,var(--lp-c) 18%,transparent);stroke:var(--lp-c)}95%,100%{fill:transparent;stroke:var(--lp-cell)}}
+.lp-dp{fill:transparent;stroke:var(--lp-cell);stroke-width:1.4;animation:lp-fill 7s infinite both}
+/* backtracking: edges draw, one branch is cut */
+@keyframes lp-draw{0%,4%{stroke-dashoffset:40}18%,100%{stroke-dashoffset:0}}
+@keyframes lp-cut{0%,60%{stroke:var(--lp-c)}70%,100%{stroke:var(--bad);opacity:.5}}
+.lp-bt{fill:none;stroke:var(--lp-c);stroke-width:1.6;stroke-dasharray:40;animation:lp-draw 6s infinite both}
+.lp-bt.lp-cut{animation:lp-draw 6s infinite both,lp-cut 6s infinite both}
+/* hashing: keys drop into their slots */
+@keyframes lp-ahd{0%,6%{opacity:0;transform:translateY(-26px)}16%,84%{opacity:1;transform:none}96%,100%{opacity:0;transform:translateY(-26px)}}
+.lp-ah{animation:lp-ahd 5s infinite both}
