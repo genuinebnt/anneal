@@ -25,6 +25,7 @@ import { ToastHost } from "./components/toasts";
 import { hydratePrefs } from "./prefs";
 import { applyUi } from "./uiprefs";
 import { ShortcutHelp } from "./components/ShortcutHelp";
+import { Tips } from "./components/Tips";
 import { WelcomeBack } from "./components/WelcomeBack";
 import { ConnectionBanner } from "./components/ConnectionBanner";
 import { ErrorScreen } from "./components/ErrorScreen";
@@ -58,6 +59,7 @@ const rootRoute = createRootRoute({
       <ToastHost />
       <ShortcutHelp />
       <WelcomeBack />
+      <Tips />
       <ConnectionBanner />
     </>
   ),

@@ -299,7 +299,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                     accent="interview."
                     stats={[
                         { value: data.rounds.length, label: data.rounds.length === 1 ? "ROUND TAKEN" : "ROUNDS TAKEN" },
-                        { value: pool.length, label: "IN THE POOL" },
+                        { value: pool.length, label: "IN THE POOL", hint: "Problems a round can draw, after the filters below." },
                         { value: need, label: need === 1 ? "PROBLEM A ROUND" : "PROBLEMS A ROUND" },
                     ]}
                 />

@@ -79,9 +79,9 @@ function Editor({ o }: { o: DsaOverview }) {
       title="Your plan,"
       accent="on pace."
       stats={[
-        { value: goal.remaining, label: "LEFT TO SOLVE" },
-        { value: newPerWeek, label: "NEW A WEEK" },
-        { value: pace.finish ? niceDate(pace.finish, o.today) : "never", label: "FINISH AT THIS PACE" },
+        { value: goal.remaining, label: "LEFT TO SOLVE", hint: "Problems in your goal you have not solved yet." },
+        { value: newPerWeek, label: "NEW A WEEK", hint: "New problems you will start in a week, counting every solve day." },
+        { value: pace.finish ? niceDate(pace.finish, o.today) : "never", label: "FINISH AT THIS PACE", hint: "The day the last problem is solved if you keep to the week below." },
       ]}
     />
     <div className="p-grid s-body">

@@ -563,6 +563,16 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
     const orderName = { curriculum: "Curriculum", ramp: "Easy → hard", company: "Most asked", important: "Most important" }[r.order];
     const sg = p.suggestion;
     const move = (id: string, by: number) => setRules((x) => { const o = [...order]; const i = o.indexOf(id); [o[i], o[i + by]] = [o[i + by]!, o[i]!]; return { ...x, topic_order: o }; }, "Topic order");
+    // dragging a row by its grip: it lands where the row it is dropped on is, the rows between shift by one
+    const [dragging, setDragging] = useState<string | null>(null);
+    const [over, setOver] = useState<string | null>(null);
+    const drop = (to: string) => {
+        const from = dragging;
+        setDragging(null);
+        setOver(null);
+        if (!from || from === to) return;
+        setRules((x) => { const o = [...order]; const at = o.indexOf(to); o.splice(o.indexOf(from), 1); o.splice(at, 0, from); return { ...x, topic_order: o }; }, "Topic order");
+    };
     return (
         <>
             {note && <div className="c-note">{note}</div>}
@@ -580,8 +590,12 @@ function Rules({ p, note, open, setOpen, setRules, topicName, commit, busy, onDe
                 <div className="fl row1"><span>Everything done by</span><DateField label="Everything done by" className="compact" value={finishBy} onChange={(v) => setRules((x) => ({ ...x, finish_by: v || null }), "Final target")} /></div>
                 <div className="c-trs">
                     {rows.map((t, i) => (
-                        <div key={t.id} className={`c-tr${t.status ? "" : " dim"}`}>
-                            <span className="mv"><button disabled={i === 0} aria-label="Move up" onClick={() => move(t.id, -1)}>↑</button><button disabled={i === rows.length - 1} aria-label="Move down" onClick={() => move(t.id, 1)}>↓</button></span>
+                        <div key={t.id} className={`c-tr${t.status ? "" : " dim"}${dragging === t.id ? " drag" : ""}${over === t.id && dragging !== t.id ? " over" : ""}`} data-topic={t.id}
+                            onDragOver={(e) => { if (dragging) { e.preventDefault(); setOver(t.id); } }}
+                            onDrop={(e) => { e.preventDefault(); drop(t.id); }}>
+                            <span className="mv"><span className="grip" role="img" aria-label={`Drag ${t.name} to reorder`} title="Drag to reorder" draggable
+                                onDragStart={(e) => { setDragging(t.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", t.id); const row = (e.currentTarget as HTMLElement).closest(".c-tr"); if (row) e.dataTransfer.setDragImage(row, 16, 16); }}
+                                onDragEnd={() => { setDragging(null); setOver(null); }}>⠿</span><button disabled={i === 0} aria-label="Move up" onClick={() => move(t.id, -1)}>↑</button><button disabled={i === rows.length - 1} aria-label="Move down" onClick={() => move(t.id, 1)}>↓</button></span>
                             <span className="nm"><i style={{ background: hue(t.id) }} /><b title={t.name}>{t.name}</b><small>{t.status ? `${t.status.n} left` : "none in scope"}</small></span>
                             {!t.status ? <span className="st muted">—</span> : t.status.due && (t.target || t.covered) ? (t.status.late ? <span className="st bad">⚠ {t.status.late >= 9999 ? "not in time" : `${t.status.late}d late`}</span> : <span className="st ok">✓ {t.status.slack}d spare</span>) : null}
                             <span className="dt">

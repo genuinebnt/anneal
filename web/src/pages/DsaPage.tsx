@@ -190,7 +190,7 @@ export function DsaPage() {
                 <b>
                   <CountUp value={model.minutesLeft150} format={hours} />
                 </b>
-                <span>TO FINISH THE 150</span>
+                <span className="hinted" tabIndex={0} data-tip="An estimate of the time left: 12 minutes for each unsolved easy problem of the 150, 25 for a medium, 45 for a hard.">TO FINISH THE 150</span>
               </div>
             </div>
           </section>

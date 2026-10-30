@@ -196,7 +196,7 @@ behaviour, data or a new screen's purpose is parked at the end. **The owner acce
 - C4. ★ A recall curve on a problem's page (a small chart, from review data already stored).
 - C5. Compact headers on working pages (Plan, Progress, Patterns, Review, Calendar); the big headline stays on the two home pages.
 - C6. The equal-height two-column rule (done for Calendar and Review) on the problem page rail, Company and Settings; check 1920 px and the width toggle on the new pages.
-- C7. Group Plan, Calendar and Company under one "Plan" tab with sub-pages (mockup first; the tab row is seven wide).
+- C7. ~~Group Plan, Calendar and Company under one "Plan" tab~~ Dropped by the owner (2026-10-30): the seven tabs stay.
 
 **D. States**
 - D1. Skeletons on every page that loads. D2. Errors and empty states that say what to do next (a banner when the server cannot be reached or the login expired; a friendly screen if the app crashes). D3. One confirmation pattern for destructive actions.

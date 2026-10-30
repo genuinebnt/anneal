@@ -15,7 +15,7 @@ export function RecallCurve({ id, version }: { id: string; version: number }) {
     const label = `Recall chance over the next 60 days: ${Math.round(pts[0]! * 100)}% now, ${Math.round(pts[pts.length - 1]! * 100)}% in 60 days${due != null ? `. Review due ${due <= 0 ? "now" : `in ${due} day${due === 1 ? "" : "s"}`}` : ""}.`;
     return (
         <div className="pp-card rc-card">
-            <h3><span>RECALL</span><span>next 60 days</span></h3>
+            <h3><span className="hinted" tabIndex={0} data-tip="How likely you are to solve this problem cold. It falls as days pass and resets when you review it.">RECALL</span><span>next 60 days</span></h3>
             <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label}>
                 <path className="rc-area" d={`${line} L${x(pts.length - 1)} ${y(0)} L${x(0)} ${y(0)}Z`} />
                 <line className="rc-target" x1={L} x2={W - R} y1={y(target)} y2={y(target)} />

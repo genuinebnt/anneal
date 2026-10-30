@@ -95,9 +95,9 @@ export function CompanyPage() {
                 title="Interview"
                 accent="mode."
                 stats={[
-                    { value: companies.length, label: "COMPANIES" },
+                    { value: companies.length, label: "COMPANIES", hint: "Companies that have asked at least one problem of the site." },
                     { value: chosen ? scope.length : "–", label: chosen ? `${chosen.name.toUpperCase()} IN THE PLAN` : "IN THE PLAN" },
-                    { value: chosen ? left.length : "–", label: "TO GO" },
+                    { value: chosen ? left.length : "–", label: "TO GO", hint: "Problems in this plan that you have not solved yet." },
                 ]}
             />
             <div className="cm-wrap">

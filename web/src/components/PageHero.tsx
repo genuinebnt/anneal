@@ -2,7 +2,8 @@ import type { CSSProperties, ReactNode } from "react";
 import { Header } from "./Header";
 import { MockRoot } from "./mock";
 
-type Stat = { value: ReactNode; label: string };
+/** `hint` explains the number in plain words, on hover or keyboard focus. */
+type Stat = { value: ReactNode; label: string; hint?: string };
 
 /** The Problems page's header, for the other pages: a small eyebrow, a large title with one accent word, and a strip of the numbers that matter. */
 export function PageHero({ eyebrow, title, accent, stats = [] }: { eyebrow: ReactNode; title: string; accent?: string; stats?: Stat[] }) {
@@ -15,7 +16,7 @@ export function PageHero({ eyebrow, title, accent, stats = [] }: { eyebrow: Reac
             {stats.length > 0 && (
                 <div className="s-stats s-rv" style={{ "--i": 3 } as CSSProperties}>
                     {stats.map((s) => (
-                        <div key={s.label}><b>{s.value}</b><span>{s.label}</span></div>
+                        <div key={s.label}><b>{s.value}</b>{s.hint ? <span className="hinted" tabIndex={0} data-tip={s.hint} aria-label={`${s.label}: ${s.hint}`}>{s.label}</span> : <span>{s.label}</span>}</div>
                     ))}
                 </div>
             )}

@@ -59,7 +59,9 @@ test("Reset progress forgets one module after you type reset, and leaves the oth
     await page.goto("/courses/bustub");
     await page.getByRole("button", { name: "RESET PROGRESS" }).click();
     const panel = page.getByRole("group", { name: "Reset progress" });
-    await panel.getByRole("combobox").selectOption("m:4c");
+    await panel.getByRole("button", { name: "What to reset" }).click();
+    await page.getByRole("option", { name: /^Module 4C/ }).click();
+    await expect(panel.getByRole("button", { name: "What to reset" })).toContainText("Module 4C");
     const go = panel.getByRole("button", { name: "Reset progress" });
     await expect(go).toBeDisabled();
     await panel.getByPlaceholder("reset").fill("reset");

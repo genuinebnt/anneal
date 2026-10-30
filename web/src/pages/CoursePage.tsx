@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, coreStages, type CourseOverview, type CourseStageRow, type StageDifficulty } from "../api";
 import { Header } from "../components/Header";
 import { CountUp } from "../components/kit";
+import { Select } from "../components/ui";
 import { MockCopy, MockRoot, reducedMotion, useReady } from "../components/mock";
 import { toast } from "../components/toasts";
 import { getPref, setPref } from "../prefs";
@@ -38,22 +39,19 @@ function ResetPanel({ course, c, onDone }: { course: string; c: CourseOverview; 
     };
     return (
         <div className="k-reset" role="group" aria-label="Reset progress">
-            <label>
-                What to reset
-                <select value={scope} onChange={(e) => setScope(e.target.value)}>
-                    <option value="all">The whole course</option>
-                    {c.projects.map((p) => (
-                        <option key={`p${p.number}`} value={`p:${p.number}`}>
-                            {projectLabel(p.number, p.title)} (all its modules)
-                        </option>
-                    ))}
-                    {c.projects.flatMap((p) => p.modules).map((m) => (
-                        <option key={m.code} value={`m:${m.code}`}>
-                            Module {m.code.toUpperCase()} · {m.title}
-                        </option>
-                    ))}
-                </select>
-            </label>
+            <div className="k-fld">
+                <span>What to reset</span>
+                <Select
+                    label="What to reset"
+                    value={scope}
+                    onChange={setScope}
+                    options={[
+                        ["all", "The whole course"],
+                        ...c.projects.map((p) => [`p:${p.number}`, `${projectLabel(p.number, p.title)} (all its modules)`] as const),
+                        ...c.projects.flatMap((p) => p.modules).map((m) => [`m:${m.code}`, `Module ${m.code.toUpperCase()} · ${m.title}`] as const),
+                    ]}
+                />
+            </div>
             <p>Forgets passed stages, runs and opened hints. Your code is not touched.</p>
             <label>
                 Type <b>reset</b> to confirm
