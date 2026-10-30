@@ -52,25 +52,26 @@ function Read({ r }: { r: Reading }) {
 
 function Work({ f }: { f: Frame }) {
     const w = f.work;
-    if (w.kind === "fixed") {
-        const top = Math.max(w.brute, 1);
-        return (
-            <div className="id-work">
-                <h3>ADDITIONS SO FAR</h3>
-                <div className="id-wr"><span>Recompute each window</span><div className="id-bar id-bad"><b style={{ width: `${(w.brute / top) * 100}%` }} /></div><em>{w.brute}</em></div>
-                <div className="id-wr"><span>Slide</span><div className="id-bar id-good"><b style={{ width: `${(w.slide / top) * 100}%` }} /></div><em>{w.slide}</em></div>
-                <p>Recomputing adds k numbers for every window. Sliding adds one and takes one away. Make k bigger above and the gap grows.</p>
-            </div>
-        );
-    }
     return (
         <div className="id-work">
-            <h3>EACH LETTER COMES IN ONCE AND GOES OUT AT MOST ONCE</h3>
-            <div className="id-wr"><span>Came in</span><div className="id-bar id-good"><b style={{ width: `${(w.enters / w.n) * 100}%` }} /></div><em>{w.enters}/{w.n}</em></div>
-            <div className="id-wr"><span>Went out</span><div className="id-bar id-bad"><b style={{ width: `${(w.leaves / w.n) * 100}%` }} /></div><em>{w.leaves}/{w.n}</em></div>
-            <p>The inner while loop looks like extra work, but the left end never moves back, so it can never move more than n times in total. That is why this is O(n).</p>
+            <h3>{w.title}</h3>
+            {w.bars.map((b) => (
+                <div className="id-wr" key={b.label}><span>{b.label}</span><div className={`id-bar id-${b.tone}`}><b style={{ width: `${(b.value / Math.max(b.of, 1)) * 100}%` }} /></div><em>{b.value}{b.ratio ? `/${b.of}` : ""}</em></div>
+            ))}
+            <p>{w.note}</p>
         </div>
     );
+}
+
+/** Markers on one cell stack, so two never sit on top of each other. */
+function placed(f: Frame) {
+    const count = new Map<string, number>();
+    return f.pointers.map((p) => {
+        const key = `${p.at}:${p.below ? 1 : 0}`;
+        const k = count.get(key) ?? 0;
+        count.set(key, k + 1);
+        return { ...p, k };
+    });
 }
 
 /** The step-through of an Idea tab: the input as cells with the window over them, the readings, the Python with the running lines lit,
@@ -92,8 +93,8 @@ export function IdeaDemo({ names }: { names: string[] }) {
     // the typed text follows the demo shown
     useEffect(() => {
         if (!input) return;
-        setText(input.items.join(input.type === "numbers" ? "," : ""));
-        setK(input.type === "numbers" ? String(input.k) : "");
+        setText(input.items.join(demo?.letters ? "" : ","));
+        setK(input.param !== undefined ? String(input.param) : "");
         setInvalid(false);
     }, [name]); // eslint-disable-line react-hooks/exhaustive-deps
     useEffect(() => {
@@ -107,8 +108,15 @@ export function IdeaDemo({ names }: { names: string[] }) {
 
     if (!demo || !input || frames.length === 0) return null;
     const f = frames[Math.min(i, last)]!;
-    const cells = input.items;
-    const right = f.probe ?? (f.r > f.l ? f.r - 1 : null);
+    const cells = f.cells ?? input.items;
+    const pointers = placed(f);
+    // room for the markers that stack: the most any step has above and below the row
+    const rooms = frames.reduce((m, fr) => {
+        const above = new Map<number, number>();
+        const below = new Map<number, number>();
+        for (const p of fr.pointers) { const mm = p.below ? below : above; mm.set(p.at, (mm.get(p.at) ?? 0) + 1); }
+        return [Math.max(m[0], ...above.values(), 1), Math.max(m[1], ...below.values(), 1)] as const;
+    }, [1, 1] as readonly [number, number]);
     const apply = () => {
         const next = demo.parse(text, k);
         setInvalid(!next);
@@ -133,26 +141,37 @@ export function IdeaDemo({ names }: { names: string[] }) {
             <div className="id-col">
                 {known.length > 1 && <Segmented label="Demo" value={name} onChange={(v) => { setName(v); setI(0); setPlaying(false); }} options={known.map((n) => [n, DEMOS[n]!.title] as const)} />}
                 <div className="id-try">
-                    <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={input.type === "numbers" ? "Numbers, separated by commas" : "A string of lowercase letters"} maxLength={input.type === "numbers" ? 40 : 14} /></label>
-                    {input.type === "numbers" && <label>k <input className="id-k" type="number" min={1} value={k} onChange={(e) => setK(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} aria-label="Window size k" /></label>}
+                    <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={demo.fields.text} maxLength={demo.letters ? 14 : 40} /></label>
+                    {demo.fields.param && <label>{demo.fields.param.label.replace(/^Window size /, "")} <input className="id-k" type="number" min={demo.fields.param.min} max={demo.fields.param.max} value={k} onChange={(e) => setK(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} aria-label={demo.fields.param.label} /></label>}
                 </div>
-                <div className="id-stage" role="img" aria-label={`The window over ${cells.join(", ")}, from index ${f.l} to ${f.r - 1}`}>
-                    <div className="id-row" style={{ width: cells.length * CELL, "--cell": `${CELL}px` } as CSSProperties}>
-                        <div className="id-brace" style={{ left: f.l * CELL, width: Math.max(f.r - f.l, 1) * CELL, opacity: f.r > f.l ? 1 : 0.35 }} />
-                        {right !== null && <div className="id-ptr id-r" style={{ transform: `translateX(${right * CELL}px)` }}><span>R</span></div>}
-                        <div className="id-ptr id-l" style={{ transform: `translateX(${f.l * CELL}px)` }}><span>L</span></div>
-                        {cells.map((v, j) => {
-                            const inside = j >= f.l && j < f.r;
-                            const letter = input.type === "letters";
-                            return (
-                                <div key={j} className={`id-cell${inside ? " id-in" : ""}${f.dup === j ? " id-dup" : ""}${f.enter === j ? " id-enter" : ""}${f.leave === j ? " id-leave" : ""}`} style={{ left: j * CELL, ...(letter ? { "--h": hue(v) } : {}) } as CSSProperties}>
-                                    <b>{v}</b>
-                                    <small>{j}</small>
-                                    {f.enter === j && <u className="id-tag id-e">IN</u>}
-                                    {f.leave === j && <u className="id-tag id-l">OUT</u>}
+                <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 }}>
+                    <div className="id-body">
+                        <div className="id-row" style={{ width: cells.length * CELL, "--cell": `${CELL}px` } as CSSProperties}>
+                            {f.win && <div className="id-brace" style={{ left: f.win[0] * CELL, width: Math.max(f.win[1] - f.win[0], 1) * CELL, opacity: f.win[1] > f.win[0] ? 1 : 0.35 }} />}
+                            {pointers.map((p) => (
+                                <div key={`${p.label}${p.below ? "b" : "a"}`} className={`id-ptr id-${p.tone}${p.below ? " id-below" : ""}`} style={{ transform: `translateX(${p.at * CELL}px)`, "--k": p.k } as CSSProperties}><span>{p.label}</span></div>
+                            ))}
+                            {cells.map((v, j) => {
+                                const inside = !!f.win && j >= f.win[0] && j < f.win[1];
+                                const cls = [inside && "id-in", f.dim?.includes(j) && "id-gone", f.cur?.includes(j) && "id-cur", f.hit?.includes(j) && "id-hit", f.dup === j && "id-dup", f.enter === j && "id-enter", f.leave === j && "id-leave"].filter(Boolean).join(" ");
+                                return (
+                                    <div key={j} className={`id-cell ${cls}`} style={{ left: j * CELL, ...(demo.letters ? { "--h": hue(v) } : {}) } as CSSProperties}>
+                                        <b>{v}</b>
+                                        <small>{j}</small>
+                                        {f.enter === j && <u className="id-tag id-e">IN</u>}
+                                        {f.leave === j && <u className="id-tag id-l">OUT</u>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        {f.stack && (
+                            <div className="id-stackwrap">
+                                <span className="id-stl">{f.stack.label}</span>
+                                <div className="id-stack" aria-label={`${f.stack.label}: ${f.stack.items.join(" ") || "empty"}`}>
+                                    {f.stack.items.map((v, n) => <div key={`${n}${v}`} className={`id-cell id-s${f.stack?.top === "push" && n === f.stack.items.length - 1 ? " id-enter" : ""}`}><b>{v}</b></div>)}
                                 </div>
-                            );
-                        })}
+                            </div>
+                        )}
                     </div>
                 </div>
                 <div className="id-reads">{f.read.map((r) => <Read key={r.label} r={r} />)}</div>

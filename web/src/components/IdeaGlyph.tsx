@@ -1,11 +1,17 @@
 /** The small picture beside a row of "which one": the cells, and where the window or pointers sit. Names are `IDEA_GLYPHS` in `crates/content/src/dsa.rs`. */
-const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, number][]; dots?: number[]; bars?: number[] }> = {
+const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, number][]; dots?: number[]; bars?: number[]; ptr?: number[] }> = {
     fixed: { n: 10, w: [[3, 6]] },
     longest: { n: 10, w: [[1, 8]] },
     shortest: { n: 10, w: [[4, 6]] },
     counting: { n: 10, w: [[1, 7]], w2: [[1, 4]] },
     frequency: { n: 10, w: [[2, 8]], dots: [3, 5, 7] },
     deque: { n: 10, w: [[3, 6]], bars: [9, 7, 6, 8, 4, 3, 5, 2, 6, 3] },
+    opposite: { n: 10, w: [[0, 10]], ptr: [0, 9] },
+    samedir: { n: 10, w: [], w2: [[0, 4]], ptr: [3, 7] },
+    ksum: { n: 10, w: [], dots: [1], ptr: [3, 9] },
+    merge: { n: 10, w: [[0, 5]], w2: [[5, 10]], ptr: [2, 7] },
+    greedy: { n: 10, w: [], dots: [0, 9], ptr: [0, 9] },
+    peaks: { n: 10, w: [], bars: [3, 1, 4, 2, 6, 2, 3, 5, 2, 1], ptr: [2, 9] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {
@@ -20,6 +26,7 @@ export function IdeaGlyph({ kind }: { kind: string }) {
                 const h = g.bars ? (g.bars[i] ?? 1) * 1.6 : c;
                 return <rect key={i} className="id-gc" x={i * step} y={g.bars ? 20 - h : 6} width={c} height={h} rx={g.bars ? 2 : 2.5} style={{ animationDelay: `${i * 28}ms` }} />;
             })}
+            {(g.ptr ?? []).map((i) => <path key={`p${i}`} className="id-gp" d={`M${i * step + c / 2 - 3} 22 L${i * step + c / 2} 17 L${i * step + c / 2 + 3} 22Z`} />)}
             {(g.dots ?? []).map((i) => <circle key={i} className="id-gd" cx={i * step + c / 2} cy={10.5} r={2.2} />)}
             {g.w.map(([a, b]) => <rect key={`w${a}`} className="id-gw" x={a * step - 1.5} y={2} width={(b - a) * step} height={g.bars ? 19 : 17} rx={4} />)}
             {(g.w2 ?? []).map(([a, b]) => <rect key={`v${a}`} className="id-gw2" x={a * step - 1.5} y={0.5} width={(b - a) * step} height={21} rx={4} />)}

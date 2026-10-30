@@ -31,11 +31,23 @@
 .id-cell .id-tag{position:absolute;top:-10px;right:-7px;text-decoration:none;font:700 9.5px var(--mono);letter-spacing:.1em;padding:2px 6px;border-radius:7px;color:#fff;animation:id-pop .4s var(--ease)}
 .id-cell .id-tag.id-e{background:var(--grn)}.id-cell .id-tag.id-l{background:var(--bad)}
 .id-brace{position:absolute;top:-7px;height:66px;border:2.5px solid var(--id-win);border-radius:16px;background:color-mix(in oklab,var(--id-win) 6%,transparent);pointer-events:none;box-shadow:0 0 0 5px color-mix(in oklab,var(--id-win) 11%,transparent),0 14px 30px -12px color-mix(in oklab,var(--id-win) 60%,transparent);transition:left .6s var(--ease),width .6s var(--ease),opacity .3s;animation:id-glow 2.8s ease-in-out infinite}
+.id-body{display:flex;align-items:flex-end;gap:34px;margin:0 auto;flex:none}
 .id-ptr{position:absolute;top:0;width:var(--cell);display:grid;place-items:center;pointer-events:none;transition:transform .6s var(--ease)}
-.id-ptr span{position:absolute;display:grid;place-items:center;width:23px;height:23px;border-radius:50%;font:700 11px var(--mono);color:#fff}
+.id-ptr span{position:absolute;display:grid;place-items:center;min-width:23px;height:23px;padding:0 7px;border-radius:12px;white-space:nowrap;font:700 11px var(--mono);color:#fff;top:calc(-39px - var(--k,0)*27px)}
+.id-ptr.id-below span{top:calc(84px + var(--k,0)*27px)}
 .id-ptr span::after{content:"";position:absolute;border:5px solid transparent}
-.id-ptr.id-r span{top:-39px;background:var(--acc);color:var(--on-acc,#fff);animation:id-bob 1.6s ease-in-out infinite}.id-ptr.id-r span::after{top:100%;border-top-color:var(--acc)}
-.id-ptr.id-l span{top:84px;background:var(--id-win)}.id-ptr.id-l span::after{bottom:100%;border-bottom-color:var(--id-win)}
+.id-ptr.id-r span{background:var(--acc);color:var(--on-acc,#fff)}.id-ptr.id-r span::after{top:100%;border-top-color:var(--acc)}
+.id-ptr.id-m span{background:var(--grn)}.id-ptr.id-m span::after{top:100%;border-top-color:var(--grn)}
+.id-ptr.id-l span{background:var(--id-win)}.id-ptr.id-l span::after{top:100%;border-top-color:var(--id-win)}
+.id-ptr.id-l.id-below span::after{top:auto;bottom:100%;border-top-color:transparent;border-bottom-color:var(--id-win)}
+.id-ptr:not(.id-below) span{animation:id-bob 1.6s ease-in-out infinite}
+.id-cell.id-gone{opacity:.28}
+.id-cell.id-cur{border-color:var(--acc);background:var(--acc-bg)}
+.id-cell.id-hit{border-color:var(--grn);background:var(--grn-bg);animation:id-pop .55s var(--ease)}
+.id-stackwrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+.id-stl{font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
+.id-stack{display:flex;flex-direction:column-reverse;gap:6px;min-width:64px;min-height:132px;padding:8px;border:2px solid var(--line);border-top:0;border-radius:0 0 14px 14px;background:color-mix(in oklab,var(--id-win) 5%,transparent)}
+.id-stack .id-cell{position:relative;left:auto;top:auto;margin:0;width:100%}
 .id-reads{display:flex;gap:10px;flex-wrap:wrap}
 .id-read{border:1px solid var(--line2);border-radius:12px;padding:8px 14px;background:var(--bg);min-width:124px;transition:border-color .2s}
 .id-read span{display:block;font:600 10px var(--mono);letter-spacing:.16em;color:var(--dim)}
@@ -81,7 +93,7 @@
 .id-card tbody tr{transition:background .15s}.id-card tbody tr:hover{background:color-mix(in oklab,var(--fg) 3%,transparent)}
 .id-card td b{color:var(--fg)}.id-card tr:last-child td{border-bottom:0}
 .id-card td.id-gl{width:104px}.id-glyph{width:96px;height:22px;display:block}
-.id-glyph .id-gc{fill:var(--raise);animation:id-pop .45s var(--ease) backwards}.id-glyph .id-gd{fill:var(--id-win)}.id-glyph .id-gw{fill:none;stroke:var(--id-win);stroke-width:1.6}.id-glyph .id-gw2{fill:none;stroke:var(--acc);stroke-width:1.4;stroke-dasharray:3 2}
+.id-glyph .id-gc{fill:var(--raise);animation:id-pop .45s var(--ease) backwards}.id-glyph .id-gd{fill:var(--id-win)}.id-glyph .id-gp{fill:var(--acc)}.id-glyph .id-gw{fill:none;stroke:var(--id-win);stroke-width:1.6}.id-glyph .id-gw2{fill:none;stroke:var(--acc);stroke-width:1.4;stroke-dasharray:3 2}
 .id-card a.id-go{font:600 11px var(--mono);color:var(--acc);white-space:nowrap;text-decoration:none}.id-card a.id-go:hover{text-decoration:underline}
 .id-cx{display:inline-block;font:600 12px var(--mono);padding:3px 10px;border-radius:9px;border:1px solid;white-space:nowrap;background:transparent}
 .id-cx.id-good{color:var(--grn);border-color:color-mix(in oklab,var(--grn) 45%,transparent);background:var(--grn-bg)}

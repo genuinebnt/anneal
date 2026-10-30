@@ -82,7 +82,7 @@ test("a row of 'which one' opens its technique card, and a 'with' row opens the 
     await expect(page).toHaveURL(/\/d\/sliding-window-maximum$/);
     await page.goto("/dsa/patterns/D3/idea");
     await page.locator(".id-w .id-who", { hasText: "Two Pointers" }).click();
-    await expect(page).toHaveURL(/\/dsa\/patterns\/D2$/);
+    await expect(page).toHaveURL(/\/dsa\/patterns\/D2\/idea$/);
 });
 
 test("the Idea tab does not scroll sideways on a phone", async ({ page }) => {
@@ -90,4 +90,60 @@ test("the Idea tab does not scroll sideways on a phone", async ({ page }) => {
     await page.goto("/dsa/patterns/D3/idea");
     await expect(page.getByRole("heading", { name: "TIME AND SPACE" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});
+
+test("every pattern that has an Idea tab shows every section, steps its animations to an answer, and fits a phone", async ({ page, request }) => {
+    test.setTimeout(30_000 + 40_000 * 20); // a pass over every pattern that has one
+    const o = await (await request.get("/api/dsa")).json();
+    const withIdea = (o.patterns as { code: string; name: string; has_idea: boolean }[]).filter((p) => p.has_idea);
+    expect(withIdea.length).toBeGreaterThan(1);
+    for (const p of withIdea) {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`/dsa/patterns/${p.code}/idea`);
+        for (const h of ["WHAT IT IS", "WATCH IT RUN", "WHERE IT APPLIES", `IS IT ${p.name.toUpperCase()}?`, `WHICH ${p.name.toUpperCase()}?`, "TIME AND SPACE", "HOW TO APPLY IT"]) {
+            await expect(page.getByRole("heading", { name: h }), `${p.name}: ${h}`).toBeVisible();
+        }
+        // each animation runs to its end and shows an answer
+        const demos = page.getByRole("radiogroup", { name: "Demo" }).getByRole("radio");
+        const n = (await demos.count()) || 1;
+        for (let d = 0; d < n; d++) {
+            if ((await demos.count()) > 0) await demos.nth(d).click();
+            await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+            await expect(page.locator(".id-res"), `${p.name} demo ${d + 1}`).toContainText("ANSWER");
+        }
+        expect(await page.locator("table.id-cost tbody tr").count(), `${p.name} costs`).toBeGreaterThanOrEqual(4);
+        await page.setViewportSize({ width: 390, height: 800 });
+        await expect(page.getByRole("heading", { name: "TIME AND SPACE" })).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${p.name} on a phone`).toBeLessThanOrEqual(0);
+    }
+});
+
+test("Two Pointers: labelled pointers close in on a pair, and the reader and writer keep what is new", async ({ page }) => {
+    await page.goto("/dsa/patterns/D2/idea");
+    await expect(page.locator(".id-ptr span").filter({ hasText: "lo" })).toBeVisible();
+    await expect(page.locator(".id-ptr span").filter({ hasText: "hi" })).toBeVisible();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-cell.id-cur")).toHaveCount(2);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-cell.id-gone")).toHaveCount(2);
+    await expect(page.locator(".id-cell.id-hit")).toHaveCount(2);
+    await expect(page.locator(".id-res")).toContainText("3 + 11");
+    // the savings bars: far fewer pairs than trying every one
+    const [all, used] = await page.locator(".id-work .id-wr em").allInnerTexts();
+    expect(parseInt(used!, 10)).toBeLessThan(parseInt(all!, 10));
+    // a target with no pair ends with none, and a typed row is sorted for you
+    await page.getByLabel("Target").fill("100");
+    await page.getByLabel("Target").blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("none");
+    // the other animation
+    await page.getByRole("radio", { name: /Same direction/ }).click();
+    await expect(page.locator(".id-ptr span").filter({ hasText: "slow" })).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("4");
+    // a row of "which one" opens its technique
+    await page.getByRole("link", { name: "See the technique →" }).first().click();
+    await expect(page).toHaveURL(/\/dsa\/patterns\/D2#t-opposite$/);
+    await expect(page.locator("#t-opposite")).toHaveClass(/open/);
 });

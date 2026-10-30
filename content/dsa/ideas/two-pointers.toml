@@ -1,0 +1,137 @@
+pattern = "Two Pointers"
+
+what = [
+    "Keep **two indexes** in the same input and move them by a rule, so that each step lets you rule something out for good. Because the rule never makes you look back, one pass is enough where a nested loop would compare everything with everything.",
+    "There are two shapes. **Opposite ends**: one pointer at each end of a sorted input, walking toward each other. **Same direction**: a fast pointer that reads and a slow pointer that marks what is already done. Run each one below.",
+]
+
+demos = ["pointers-opposite", "pointers-same"]
+
+applies = [
+    "The input is **sorted**, or can be sorted without losing what you need (values, not original positions).",
+    "The question is about a **pair** (or a triple) with a sum or a difference, or about **two places** in one sequence: a palindrome, a merge, a partition.",
+    "You must work **in place**: remove, compact, reverse or partition an array without a second one.",
+]
+
+yes = [
+    "Looking at the two items at the pointers tells you which one **can no longer be part of an answer**.",
+    "The input is ordered, so a too-big sum can only be fixed by moving the big end in.",
+    "Every step moves at least one pointer and never moves one back, so the walk must end.",
+]
+
+no = [
+    "The input is unsorted and the **original positions** are the answer (two sum with indexes): use a hash map.",
+    "You need a **stretch of items with a running summary** (longest, shortest, a count): that is a sliding window.",
+    "Moving a pointer could skip a good answer, so the rule cannot rule an item out: think DP or backtracking.",
+]
+
+apply = [
+    "**Say what each pointer means.** \"The smallest candidate still alive\" and \"the largest\", or \"the last kept\" and \"the next to read\".",
+    "**Decide where they start.** Both ends of a sorted row, or both at the front.",
+    "**Write the rule that moves one.** Which pointer moves, and why the item it leaves behind can never be part of an answer.",
+    "**Check that every step moves one.** If a step can leave both in place, the loop never ends.",
+    "**State the invariant.** \"Everything outside [lo, hi] has been ruled out.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"a **pair** with sum / difference ... in a **sorted** array\""
+kind = "Opposite ends"
+move = "Start at both ends. Too small: move the left in. Too big: move the right in."
+glyph = "opposite"
+technique = "Two Pointers:opposite"
+
+[[which]]
+says = "\"**remove** / **move** ... **in place**\", \"keep the first of each\""
+kind = "Reader and writer"
+move = "The fast pointer reads every item; the slow pointer writes only what is kept."
+glyph = "samedir"
+technique = "Two Pointers:in-place"
+
+[[which]]
+says = "\"all **triples** / **quadruples** that add to ...\""
+kind = "Sort, fix one"
+move = "Sort, fix one item, then run opposite ends on the rest. Skip repeated values."
+glyph = "ksum"
+technique = "Two Pointers:ksum"
+
+[[which]]
+says = "\"**merge** two sorted ...\""
+kind = "Merge walk"
+move = "One pointer per list. Take the smaller, move that pointer."
+glyph = "merge"
+technique = "Two Pointers:merge-sorted"
+
+[[which]]
+says = "\"**pair up** the lightest with the heaviest\""
+kind = "Greedy pairs"
+move = "Sort, then decide about the two ends together, and move one or both."
+glyph = "greedy"
+technique = "Two Pointers:greedy-pair"
+
+[[which]]
+says = "\"water **trapped**\", \"the best **so far** from each side\""
+kind = "Running maximum"
+move = "Move the pointer with the smaller side, because that side limits the answer."
+glyph = "peaks"
+technique = "Two Pointers:running-max"
+
+[[cost]]
+name = "Try every pair"
+time = "O(n²)"
+space = "O(1)"
+why = "Two nested loops look at all n(n − 1)/2 pairs, and most of them are ones a sorted order already proves useless. This is the cost to beat."
+
+[[cost]]
+name = "Opposite ends on sorted input"
+time = "O(n)"
+space = "O(1)"
+why = "Each step moves one pointer inward and neither ever turns back, so there are at most n − 1 steps. If the input is not sorted yet, sorting first costs O(n log n), which then dominates."
+
+[[cost]]
+name = "Reader and writer (same direction)"
+time = "O(n)"
+space = "O(1)"
+why = "The fast pointer reads each item once and the slow pointer only follows it, so the array is written in place with no second array."
+
+[[cost]]
+name = "Sort, fix one, two pointers (3Sum)"
+time = "O(n²)"
+space = "O(1)"
+why = "Fixing one of n items and running an O(n) pass on the rest is n passes. The sort is O(n log n), smaller than that. For k-sum it is O(n^(k−1))."
+
+[[cost]]
+name = "Merging two sorted lists"
+time = "O(n + m)"
+space = "O(1)"
+why = "Every step takes one item from one list, so the walk is exactly n + m steps. Writing into a new list costs O(n + m) space; merging into the first array from the back costs none."
+
+[[cost]]
+name = "Running maximum from both sides"
+time = "O(n)"
+space = "O(1)"
+why = "One pass with two pointers and two numbers replaces two prefix arrays of size n, so the time stays linear and the space drops to constant."
+
+[[with]]
+pattern = "Sliding Window"
+how = "A window is two pointers that move the same way, with a summary kept between them. If you need that summary (a sum, a set of letters), it is a window; if only the two items at the pointers matter, it is two pointers."
+example = "longest-substring-without-repeating-characters"
+
+[[with]]
+pattern = "Binary Search"
+how = "Both are about ruling out part of a sorted input. Binary search halves it with one pointer pair and a middle; two pointers rules out one end at a time. Searching for each partner with binary search costs O(n log n) where two pointers costs O(n)."
+example = "heaters"
+
+[[with]]
+pattern = "Linked List"
+how = "On a linked list there is no index, so the same idea uses a slow and a fast node: meeting means a cycle, and when the fast one ends, the slow one is at the middle."
+example = "linked-list-cycle"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "When the input is not sorted and you need positions, a hash map of what you have seen finds the partner in one pass. Sorting to use two pointers throws the positions away."
+example = "two-sum"
+
+[[with]]
+pattern = "Greedy"
+how = "Pairing the two ends is often a greedy choice: pair the heaviest with the lightest if it fits, otherwise the heaviest goes alone. The pointers carry the choice out."
+example = "boats-to-save-people"

@@ -2,8 +2,11 @@
 // Plain functions with no React, so they can be tested with `node --test web/src/ideaDemos.test.ts`. A demo's name here must also be in
 // `IDEA_DEMOS` in `crates/content/src/dsa.rs`, which is what a content file may ask for.
 
-/** What the learner can change: a row of numbers and a window size, or a string of letters. */
-export type DemoInput = { type: "numbers"; items: string[]; k: number } | { type: "letters"; items: string[] };
+/** What the learner can change: a row of cells and, for some demos, one number (a window size, a target). */
+export interface DemoInput {
+    items: string[];
+    param?: number;
+}
 
 export interface Reading {
     label: string;
@@ -12,16 +15,36 @@ export interface Reading {
     chips?: string[];
 }
 
-export type Work = { kind: "fixed"; brute: number; slide: number } | { kind: "variable"; enters: number; leaves: number; n: number };
+/** A marker over a cell: `r` copper above, `l` blue below, `m` green above (a middle). Markers on one cell stack. */
+export interface Pointer {
+    at: number;
+    label: string;
+    tone: "l" | "r" | "m";
+    below?: boolean;
+}
 
-/** One step: the window is `[l, r)`; `probe` is the right end being looked at; `enter`, `leave` and `dup` mark cells; `lines` are the 1-based code lines that run. */
+/** What a method saves, as bars: each is `value` of `of`. */
+export interface Work {
+    title: string;
+    /** `ratio` shows it as "value/of" (a count out of a known total) and not just the value. */
+    bars: { label: string; value: number; of: number; tone: "good" | "bad"; ratio?: boolean }[];
+    note: string;
+}
+
+/** One step. The window `win` is `[l, r)` and is drawn as a brace; `dim` cells are ruled out; `cur` cells are being looked at; `hit` cells are the answer;
+ *  `enter`, `leave` and `dup` mark a cell coming in, going out and repeating; `cells` replaces the values (an array being written in place);
+ *  `stack` draws a second structure beside the row; `lines` are the 1-based code lines that run. */
 export interface Frame {
-    l: number;
-    r: number;
-    probe?: number;
+    win?: [number, number];
+    pointers: Pointer[];
+    cells?: string[];
+    dim?: number[];
+    cur?: number[];
+    hit?: number[];
     enter?: number;
     leave?: number;
     dup?: number;
+    stack?: { label: string; items: string[]; top?: "push" | "pop" };
     lines: number[];
     read: Reading[];
     work: Work;
@@ -34,12 +57,20 @@ export interface Demo {
     title: string;
     code: string[];
     initial: DemoInput;
+    /** Draw each cell in a colour of its letter. */
+    letters?: boolean;
+    /** The labels of what can be typed: the cells, and the number if there is one. */
+    fields: { text: string; param?: { label: string; min: number; max: number } };
     /** Reads what was typed; null when it is not a valid input. */
-    parse: (text: string, k: string) => DemoInput | null;
+    parse: (text: string, param: string) => DemoInput | null;
     simulate: (input: DemoInput) => Frame[];
 }
 
 const MAX_CELLS = 10;
+const numbers = (text: string) => text.split(",").map((x) => x.trim()).filter(Boolean);
+const smallInts = (xs: string[]) => xs.every((x) => /^-?\d{1,3}$/.test(x));
+
+// ---------------------------------------------------------------- sliding window
 
 const fixedCode = [
     "def max_sum(nums, k):",
@@ -65,18 +96,28 @@ const variableCode = [
     "    return best",
 ];
 
+/** The two ends of a window: L under its left cell, R over the cell being looked at (or its right end). */
+const windowPointers = (l: number, r: number, probe?: number): Pointer[] => {
+    const right = probe ?? (r > l ? r - 1 : null);
+    return [{ at: l, label: "L", tone: "l", below: true }, ...(right === null ? [] : [{ at: right, label: "R", tone: "r" as const }])];
+};
+
 function simulateFixed(input: DemoInput): Frame[] {
-    if (input.type !== "numbers") return [];
     const a = input.items.map(Number);
-    const k = input.k;
+    const k = input.param ?? 0;
     if (k < 1 || k > a.length) return [];
     let sum = a.slice(0, k).reduce((x, y) => x + y, 0);
     let best = sum;
     let slide = k;
     let brute = k;
     const reading = (): Reading[] => [{ label: "WINDOW SUM", value: sum }, { label: "BEST SO FAR", value: best }];
+    const work = (): Work => ({
+        title: "ADDITIONS SO FAR",
+        bars: [{ label: "Recompute each window", value: brute, of: Math.max(brute, 1), tone: "bad" }, { label: "Slide", value: slide, of: Math.max(brute, 1), tone: "good" }],
+        note: "Recomputing adds k numbers for every window. Sliding adds one and takes one away. Make k bigger above and the gap grows.",
+    });
     const out: Frame[] = [
-        { l: 0, r: k, lines: [2, 3], read: reading(), work: { kind: "fixed", brute, slide }, say: `Start with the first ${k} items: ${a.slice(0, k).join(" + ")} = ${sum}. This is the only time ${k} numbers are added together.` },
+        { win: [0, k], pointers: windowPointers(0, k), lines: [2, 3], read: reading(), work: work(), say: `Start with the first ${k} items: ${a.slice(0, k).join(" + ")} = ${sum}. This is the only time ${k} numbers are added together.` },
     ];
     for (let j = k; j < a.length; j++) {
         const before = sum;
@@ -86,24 +127,22 @@ function simulateFixed(input: DemoInput): Frame[] {
         brute += k;
         slide += 2;
         out.push({
-            l: j - k + 1,
-            r: j + 1,
-            probe: j,
+            win: [j - k + 1, j + 1],
+            pointers: windowPointers(j - k + 1, j + 1, j),
             enter: j,
             leave: j - k,
             lines: [5, 6, 7],
             read: reading(),
-            work: { kind: "fixed", brute, slide },
+            work: work(),
             say: `${a[j]} comes in, ${a[j - k]} goes out: ${before} + ${a[j]} − ${a[j - k]} = ${sum}.${better ? " A new best." : ""}`,
         });
     }
     const last = out[out.length - 1]!;
-    out.push({ l: last.l, r: last.r, lines: [8], read: last.read, work: last.work, result: String(best), say: `Done. The answer is ${best}. Each item came in once and went out once: ${slide} additions, where recomputing every window would take ${brute}.` });
+    out.push({ ...last, pointers: windowPointers(last.win![0], last.win![1]), enter: undefined, leave: undefined, lines: [8], result: String(best), say: `Done. The answer is ${best}. Each item came in once and went out once: ${slide} additions, where recomputing every window would take ${brute}.` });
     return out;
 }
 
 function simulateVariable(input: DemoInput): Frame[] {
-    if (input.type !== "letters") return [];
     const s = input.items;
     if (!s.length) return [];
     let l = 0;
@@ -112,11 +151,15 @@ function simulateVariable(input: DemoInput): Frame[] {
     let leaves = 0;
     const set = new Set<string>();
     const reading = (): Reading[] => [{ label: "IN THE SET", value: [...set].join(""), chips: [...set] }, { label: "BEST LENGTH", value: best }];
-    const work = (extraLeave = 0): Work => ({ kind: "variable", enters, leaves: leaves + extraLeave, n: s.length });
-    const out: Frame[] = [{ l: 0, r: 0, lines: [2, 3], read: reading(), work: work(), say: "Start with an empty window and an empty set. The set is the summary: it says which letters are inside." }];
+    const work = (extraLeave = 0): Work => ({
+        title: "EACH LETTER COMES IN ONCE AND GOES OUT AT MOST ONCE",
+        bars: [{ label: "Came in", value: enters, of: s.length, tone: "good", ratio: true }, { label: "Went out", value: leaves + extraLeave, of: s.length, tone: "bad", ratio: true }],
+        note: "The inner while loop looks like extra work, but the left end never moves back, so it can never move more than n times in total. That is why this is O(n).",
+    });
+    const out: Frame[] = [{ win: [0, 0], pointers: windowPointers(0, 0), lines: [2, 3], read: reading(), work: work(), say: "Start with an empty window and an empty set. The set is the summary: it says which letters are inside." }];
     for (let r = 0; r < s.length; r++) {
         while (set.has(s[r]!)) {
-            out.push({ l, r, probe: r, dup: s.indexOf(s[r]!, l), leave: l, lines: [5, 6, 7], read: reading(), work: work(1), say: `“${s[r]}” is already in the window, so the window is broken. Drop “${s[l]}” from the left.` });
+            out.push({ win: [l, r], pointers: windowPointers(l, r, r), dup: s.indexOf(s[r]!, l), leave: l, lines: [5, 6, 7], read: reading(), work: work(1), say: `“${s[r]}” is already in the window, so the window is broken. Drop “${s[l]}” from the left.` });
             set.delete(s[l]!);
             l++;
             leaves++;
@@ -126,10 +169,101 @@ function simulateVariable(input: DemoInput): Frame[] {
         const len = r - l + 1;
         const better = len > best;
         best = Math.max(best, len);
-        out.push({ l, r: r + 1, probe: r, enter: r, lines: [5, 8, 9], read: reading(), work: work(), say: `Take in “${s[r]}”. The window “${s.slice(l, r + 1).join("")}” has no repeats, length ${len}.${better ? " A new best." : ""}` });
+        out.push({ win: [l, r + 1], pointers: windowPointers(l, r + 1, r), enter: r, lines: [5, 8, 9], read: reading(), work: work(), say: `Take in “${s[r]}”. The window “${s.slice(l, r + 1).join("")}” has no repeats, length ${len}.${better ? " A new best." : ""}` });
     }
     const last = out[out.length - 1]!;
-    out.push({ l: last.l, r: last.r, lines: [10], read: last.read, work: last.work, result: String(best), say: `Done. The answer is ${best}. The right end only moved forward and the left end never moved back, so the inner loop does not make it slower: ${enters} in, ${leaves} out.` });
+    out.push({ ...last, pointers: windowPointers(last.win![0], last.win![1]), enter: undefined, lines: [10], result: String(best), say: `Done. The answer is ${best}. The right end only moved forward and the left end never moved back, so the inner loop does not make it slower: ${enters} in, ${leaves} out.` });
+    return out;
+}
+
+// ---------------------------------------------------------------- two pointers
+
+const oppositeCode = [
+    "def pair_sum(nums, target):  # nums is sorted",
+    "    lo, hi = 0, len(nums) - 1",
+    "    while lo < hi:",
+    "        s = nums[lo] + nums[hi]",
+    "        if s == target:",
+    "            return [lo, hi]",
+    "        if s < target:",
+    "            lo += 1  # too small: only a bigger left helps",
+    "        else:",
+    "            hi -= 1  # too big: only a smaller right helps",
+    "    return []",
+];
+
+function simulateOpposite(input: DemoInput): Frame[] {
+    const a = input.items.map(Number);
+    const target = input.param ?? 0;
+    const n = a.length;
+    if (n < 2) return [];
+    const all = (n * (n - 1)) / 2;
+    let lo = 0;
+    let hi = n - 1;
+    let looked = 0;
+    const ruledOut = () => [...a.keys()].filter((i) => i < lo || i > hi);
+    const ptrs = (): Pointer[] => (lo === hi ? [{ at: lo, label: "lo = hi", tone: "l", below: true }] : [{ at: lo, label: "lo", tone: "l", below: true }, { at: hi, label: "hi", tone: "r" }]);
+    const work = (): Work => ({
+        title: "PAIRS LOOKED AT",
+        bars: [{ label: "Try every pair", value: all, of: all, tone: "bad" }, { label: "Two pointers", value: looked, of: all, tone: "good", ratio: true }],
+        note: `Each step rules out a whole row of pairs for good, so at most n − 1 = ${n - 1} pairs are ever looked at, not ${all}.`,
+    });
+    const out: Frame[] = [{ pointers: ptrs(), lines: [2], read: [{ label: "LEFT", value: a[lo]! }, { label: "RIGHT", value: a[hi]! }, { label: "TARGET", value: target }], work: work(), say: `Look for two numbers that add to ${target}. The row is sorted, so start with the smallest and the largest.` }];
+    while (lo < hi) {
+        const s = a[lo]! + a[hi]!;
+        looked++;
+        const read: Reading[] = [{ label: "SUM", value: s }, { label: "TARGET", value: target }];
+        if (s === target) {
+            out.push({ pointers: ptrs(), dim: ruledOut(), hit: [lo, hi], lines: [4, 5, 6], read, work: work(), result: `${a[lo]} + ${a[hi]}`, say: `${a[lo]} + ${a[hi]} = ${s}. Found, at indexes ${lo} and ${hi}, after looking at ${looked} pair${looked === 1 ? "" : "s"}.` });
+            return out;
+        }
+        if (s < target) {
+            out.push({ pointers: ptrs(), dim: ruledOut(), cur: [lo, hi], lines: [4, 7, 8], read, work: work(), say: `${a[lo]} + ${a[hi]} = ${s}, too small. ${a[lo]} can't pair with anything smaller than ${a[hi]}, so it can never be part of the answer. Move the left pointer in.` });
+            lo++;
+        } else {
+            out.push({ pointers: ptrs(), dim: ruledOut(), cur: [lo, hi], lines: [4, 9, 10], read, work: work(), say: `${a[lo]} + ${a[hi]} = ${s}, too big. ${a[hi]} can't pair with anything bigger than ${a[lo]}, so it can never be part of the answer. Move the right pointer in.` });
+            hi--;
+        }
+    }
+    out.push({ pointers: [], dim: [...a.keys()], lines: [11], read: [{ label: "SUM", value: "–" }, { label: "TARGET", value: target }], work: work(), result: "none", say: `The pointers met, and no pair added to ${target}. ${looked} pairs were enough to be sure.` });
+    return out;
+}
+
+const sameCode = [
+    "def remove_duplicates(nums):  # nums is sorted",
+    "    slow = 0  # the last unique value",
+    "    for fast in range(1, len(nums)):",
+    "        if nums[fast] != nums[slow]:  # a new value",
+    "            slow += 1",
+    "            nums[slow] = nums[fast]  # write it",
+    "    return slow + 1",
+];
+
+function simulateSame(input: DemoInput): Frame[] {
+    const a = [...input.items];
+    const n = a.length;
+    if (n < 2) return [];
+    let slow = 0;
+    let writes = 0;
+    const work = (fast: number): Work => ({
+        title: "READS AND WRITES",
+        bars: [{ label: "Items read", value: fast + 1, of: n, tone: "good", ratio: true }, { label: "Items written", value: writes, of: n, tone: "bad", ratio: true }],
+        note: "The fast pointer reads every item once. The slow pointer only moves when there is something new to keep, so nothing is ever moved twice.",
+    });
+    const read = (): Reading[] => [{ label: "KEPT SO FAR", value: a.slice(0, slow + 1).join(" ") }, { label: "COUNT", value: slow + 1 }];
+    const ptrs = (fast: number | null): Pointer[] => [{ at: slow, label: "slow", tone: "l", below: true }, ...(fast === null ? [] : [{ at: fast, label: "fast", tone: "r" as const }])];
+    const out: Frame[] = [{ win: [0, 1], pointers: ptrs(1), cells: [...a], lines: [2], read: read(), work: work(0), say: "Keep the first value. The slow pointer marks the end of the part that is already clean; the fast pointer reads ahead." }];
+    for (let fast = 1; fast < n; fast++) {
+        if (a[fast] !== a[slow]) {
+            slow++;
+            a[slow] = a[fast]!;
+            writes++;
+            out.push({ win: [0, slow + 1], pointers: ptrs(fast), cells: [...a], enter: slow, cur: [fast], lines: [3, 4, 5, 6], read: read(), work: work(fast), say: `${a[fast]} is new, so the slow pointer steps on and the value is written there.` });
+        } else {
+            out.push({ win: [0, slow + 1], pointers: ptrs(fast), cells: [...a], dup: fast, lines: [3, 4], read: read(), work: work(fast), say: `${a[fast]} is the same as the last value kept, so it is skipped: the slow pointer stays.` });
+        }
+    }
+    out.push({ win: [0, slow + 1], pointers: ptrs(null), cells: [...a], dim: [...a.keys()].filter((i) => i > slow), lines: [7], read: read(), work: work(n - 1), result: String(slow + 1), say: `Done: ${slow + 1} unique values, kept at the front, in one pass and with no extra array.` });
     return out;
 }
 
@@ -137,23 +271,49 @@ export const DEMOS: Record<string, Demo> = {
     "window-fixed": {
         title: "Fixed size · best sum",
         code: fixedCode,
-        initial: { type: "numbers", items: ["2", "1", "5", "1", "3", "2", "6", "1"], k: 4 },
-        parse: (text, k) => {
-            const items = text.split(",").map((x) => x.trim()).filter(Boolean);
-            const size = Number(k);
-            const ok = items.length >= 2 && items.length <= MAX_CELLS && items.every((x) => /^-?\d{1,3}$/.test(x)) && Number.isInteger(size) && size >= 1 && size <= items.length;
-            return ok ? { type: "numbers", items, k: size } : null;
+        initial: { items: ["2", "1", "5", "1", "3", "2", "6", "1"], param: 4 },
+        fields: { text: "Numbers, separated by commas", param: { label: "Window size k", min: 1, max: MAX_CELLS } },
+        parse: (text, param) => {
+            const items = numbers(text);
+            const k = Number(param);
+            return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) && Number.isInteger(k) && k >= 1 && k <= items.length ? { items, param: k } : null;
         },
         simulate: simulateFixed,
     },
     "window-variable": {
         title: "Variable · longest without a repeat",
         code: variableCode,
-        initial: { type: "letters", items: [..."abcabcbb"] },
+        initial: { items: [..."abcabcbb"] },
+        letters: true,
+        fields: { text: "A string of lowercase letters" },
         parse: (text) => {
             const s = text.toLowerCase().replace(/[^a-z]/g, "");
-            return s.length >= 2 && s.length <= 14 ? { type: "letters", items: [...s] } : null;
+            return s.length >= 2 && s.length <= 14 ? { items: [...s] } : null;
         },
         simulate: simulateVariable,
+    },
+    "pointers-opposite": {
+        title: "Opposite ends · find a pair",
+        code: oppositeCode,
+        initial: { items: ["1", "3", "4", "6", "8", "11", "15"], param: 14 },
+        fields: { text: "Sorted numbers, separated by commas", param: { label: "Target", min: -999, max: 999 } },
+        parse: (text, param) => {
+            const items = numbers(text);
+            const target = Number(param);
+            if (items.length < 2 || items.length > MAX_CELLS || !smallInts(items) || !Number.isInteger(target) || param.trim() === "") return null;
+            return { items: items.map(Number).sort((x, y) => x - y).map(String), param: target };
+        },
+        simulate: simulateOpposite,
+    },
+    "pointers-same": {
+        title: "Same direction · remove duplicates",
+        code: sameCode,
+        initial: { items: ["1", "1", "2", "2", "2", "3", "4", "4"] },
+        fields: { text: "Sorted numbers, separated by commas" },
+        parse: (text) => {
+            const items = numbers(text);
+            return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) ? { items: items.map(Number).sort((x, y) => x - y).map(String) } : null;
+        },
+        simulate: simulateSame,
     },
 };
