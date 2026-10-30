@@ -5,6 +5,7 @@ import { api, type Counted, type ProgressOverview, type ProgressStats, type Revi
 import { Header } from "../components/Header";
 import { LEVEL_COLOR, pctColor } from "../components/bits";
 import { SECTION_NAMES } from "../curriculum";
+import { DATA_STRUCTURES, counted, readinessRows, type ReadyRow } from "../dsa";
 
 type Tab = "overview" | "rust" | "reviews";
 const TABS: [Tab, string][] = [
@@ -328,7 +329,53 @@ function Overview({ o }: { o: ProgressOverview }) {
           </table>
         </Box>
       </div>
+      <DsaReadiness />
     </>
+  );
+}
+
+/** How ready you are for each DSA pattern and each data structure, over the problems of the plan's goal list, weakest first. */
+function DsaReadiness() {
+  const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
+  const o = dsa.data;
+  if (!o) return null;
+  const list = o.settings.goal.list;
+  const scope = o.problems.filter((p) => p.lists.includes(list) && counted(o, p));
+  type Has = [string, (p: (typeof scope)[number]) => boolean];
+  const patterns = readinessRows(scope, o.patterns.map((t): Has => [t.name, (p) => p.pattern === t.code]));
+  const structures = readinessRows(scope, DATA_STRUCTURES.map(([name, tags]): Has => [name, (p) => p.tags.some((t) => tags.includes(t))]));
+  const listName = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "all problems", practice: "practice" }[list];
+  const sub = `Your goal list (${listName}), weakest first. Weighted by difficulty; help counts half; recall fades between reviews.`;
+  const table = (rows: ReadyRow[], head: string) => (
+    <table className="ptable">
+      <thead>
+        <tr>
+          <th>{head}</th>
+          <th className="num">SOLVED</th>
+          <th className="num">READY</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.name}>
+            <td>{r.name}</td>
+            <td className="num">{r.solved} / {r.total}</td>
+            <td className="num">
+              <span className="rdy">
+                <i className="rdy-bar"><b style={{ width: `${r.ready}%`, background: pctColor(r.ready) }} /></i>
+                <span style={{ color: r.ready > 0 ? pctColor(r.ready) : "var(--dim)" }}>{Math.round(r.ready)}%</span>
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return (
+    <div className="pgrid even">
+      <Box title="Readiness by pattern" sub={sub}>{table(patterns, "PATTERN")}</Box>
+      <Box title="Readiness by data structure" sub="The same measure, by the data structure a problem is tagged with. A problem counts under each one it uses.">{table(structures, "DATA STRUCTURE")}</Box>
+    </div>
   );
 }
 

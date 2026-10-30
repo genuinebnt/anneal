@@ -61,3 +61,9 @@
 .rec-foot span{display:block;font:500 11px var(--mono);letter-spacing:.14em;color:var(--dim)}
 .rec-foot b{display:block;margin-top:4px;font:700 22px var(--mono)}
 .heat-day{margin-top:10px;font:500 12px var(--mono);color:var(--mut);line-height:1.7}.heat-day b{color:var(--fg)}.heat-day a{color:var(--acc)}.heat rect.d.pick{stroke:var(--fg);stroke-width:1.5}
+
+/* readiness by pattern and data structure */
+.rdy{display:inline-flex;align-items:center;gap:10px;justify-content:flex-end}
+.rdy-bar{display:block;width:84px;height:6px;border-radius:3px;background:var(--line2);overflow:hidden}
+.rdy-bar b{display:block;height:100%;border-radius:3px;min-width:0}
+.rdy>span{min-width:38px;text-align:right}

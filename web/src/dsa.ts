@@ -167,3 +167,42 @@ export function inDays(days: number): string {
   if (days < 60) return `in ${Math.round(days / 7)} weeks`;
   return `in ${Math.round(days / 30)} months`;
 }
+
+/** The data structures readiness is shown for, each with the LeetCode tags that put a problem under it. */
+export const DATA_STRUCTURES: [name: string, tags: string[]][] = [
+  ["Array", ["Array"]],
+  ["String", ["String"]],
+  ["Hash table", ["Hash Table"]],
+  ["Matrix", ["Matrix"]],
+  ["Stack", ["Stack", "Monotonic Stack"]],
+  ["Queue", ["Queue", "Monotonic Queue"]],
+  ["Linked list", ["Linked List", "Doubly-Linked List"]],
+  ["Tree", ["Tree", "Binary Tree", "Binary Search Tree"]],
+  ["Heap", ["Heap (Priority Queue)"]],
+  ["Graph", ["Graph Theory", "Directed Acyclic Graph"]],
+  ["Trie", ["Trie"]],
+  ["Union-Find", ["Union-Find"]],
+  ["Segment and Fenwick tree", ["Segment Tree", "Binary Indexed Tree"]],
+];
+
+export interface ReadyRow {
+  name: string;
+  solved: number;
+  total: number;
+  /** 0 to 100, the way the Rust tracks count it: weight (easy 1, medium 2, hard 3) times credit (1 on my own, half with help, 0 unsolved) times current recall. */
+  ready: number;
+}
+
+/** Readiness for each group of problems; a problem can sit in several groups. Groups with no problem are left out. Weakest first. */
+export function readinessRows(problems: DsaProblem[], groups: [name: string, has: (p: DsaProblem) => boolean][]): ReadyRow[] {
+  const weight: Record<Band, number> = { easy: 1, medium: 2, hard: 3 };
+  const rows: ReadyRow[] = [];
+  for (const [name, has] of groups) {
+    const ps = problems.filter(has);
+    if (!ps.length) continue;
+    const total = ps.reduce((n, p) => n + weight[p.difficulty], 0);
+    const earned = ps.reduce((n, p) => n + (p.state.solved ? weight[p.difficulty] * (p.state.assisted ? 0.5 : 1) * (p.state.retrievability ?? 1) : 0), 0);
+    rows.push({ name, solved: ps.filter((p) => p.state.solved).length, total: ps.length, ready: Math.round((1000 * earned) / total) / 10 });
+  }
+  return rows.sort((a, b) => a.ready - b.ready || a.name.localeCompare(b.name));
+}
