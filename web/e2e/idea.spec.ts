@@ -417,3 +417,19 @@ test("Greedy: the jump game moves a reach marker and Kadane restarts its run whe
     await expect(page.locator(".id-res")).toContainText("6");
     await expect(page.locator(".id-cell.id-hit")).toHaveCount(4);
 });
+
+test("Intervals: bars on a line merge into one lane, and a sweep line counts the meetings in progress", async ({ page }) => {
+    await page.goto("/dsa/patterns/D16/idea");
+    await expect(page.locator(".id-rn .id-rn-b")).toHaveCount(4);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-rn-b.id-rn-merged")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3 intervals");
+    await expect(page.locator(".id-rn-b.id-rn-merged")).toHaveCount(3);
+    await page.getByRole("radio", { name: /sweep a line/i }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-rn-m")).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3 rooms");
+});

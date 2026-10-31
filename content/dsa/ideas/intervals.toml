@@ -1,0 +1,148 @@
+pattern = "Intervals"
+
+tagline = "Sort the ranges by an end, and each one only has to be compared with its neighbour, never with all the others."
+
+what = [
+    "An interval is a start and an end: a meeting, a booking, a stretch of road. Most interval problems look like they need every pair compared, but **sorting changes that**. Sort by *start* and a new interval can only touch the one before it. Sort by *end* and the earliest-ending choice leaves the most room for whatever comes next.",
+    "The other half of the pattern is the **sweep**: turn each interval into two events, a start and an end, sort the events, and walk along the line with a running count. Run a merge and a sweep below.",
+]
+
+demos = ["intervals-merge", "intervals-sweep"]
+
+applies = [
+    "\"**Merge** overlapping ranges\", \"insert a range into a sorted list\", \"the union of these ranges\".",
+    "\"Keep as many **non-overlapping** as possible\", or \"remove the fewest\": meetings, arrows, tasks.",
+    "\"How many **rooms** or resources are needed at once?\", \"the busiest moment\".",
+    "**Booking** problems: reject a booking that overlaps, or count the most overlapping.",
+    "\"For each **query point**, which range contains it?\", answered offline after sorting.",
+]
+
+yes = [
+    "The data is **ranges on a line** (time, position, a number scale) and the question is about how they overlap.",
+    "You can state a **sort key** after which only neighbours matter.",
+    "The answer depends on **overlap counts or gaps**, not on the exact contents of the ranges.",
+]
+
+no = [
+    "The ranges are **really points**, and you only need membership: a set or sorted list is enough.",
+    "Positions are **huge and sparse** and you need arbitrary range updates or queries as they come: a segment tree.",
+    "The structure is a **tree or graph** of dependencies, not a line: use graph methods.",
+]
+
+apply = [
+    "**Sort.** By start for merging and calendars, by end for \"fit the most\", or break into start and end events for a sweep.",
+    "**Say what state you carry.** The last merged interval, the last kept end, a running count of overlaps.",
+    "**Decide overlap carefully.** Do `[1, 3]` and `[3, 5]` overlap? Read the problem: it changes `<` to `<=`, and the order of events at a tie.",
+    "**Compare only with the neighbour** (the last merged, the last kept), because the sort guarantees nothing earlier can matter.",
+    "**State the invariant.** \"Everything before the current interval is already merged or decided.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"**merge** overlapping\", \"insert a new interval\", \"the union\""
+kind = "Merge"
+move = "Sort by start. If the next one starts no later than the last ends, extend the last; otherwise start a new one."
+glyph = "mergeiv"
+technique = "Intervals:merge"
+
+[[which]]
+says = "\"**most** non-overlapping\", \"remove the **fewest**\", \"fewest arrows\""
+kind = "Earliest end first"
+move = "Sort by end. Keep an interval if it starts after the last kept one ends; ending earliest leaves the most room."
+glyph = "byend"
+technique = "Intervals:by-end"
+
+[[which]]
+says = "\"bookings arrive one at a time\": accept or reject, or the **most overlapping**"
+kind = "Calendar"
+move = "Keep the existing bookings ordered; a new one conflicts if it overlaps its neighbour, or add 1 at its start and subtract at its end."
+glyph = "calendar"
+technique = "Intervals:calendar"
+
+[[which]]
+says = "\"how many at the **busiest** moment\", \"minimum rooms\""
+kind = "Line sweep"
+move = "Make a +1 at each start and a −1 at each end, sort the events, and keep a running sum. The peak is the answer."
+glyph = "sweepiv"
+technique = "Intervals:sweep"
+
+[[which]]
+says = "\"how many rooms\" with the **actual rooms** reused"
+kind = "Heap of ends"
+move = "Sort by start; keep a min-heap of end times. If the earliest end is before the next start, reuse that room."
+glyph = "roomheap"
+technique = "Intervals:room-heap"
+
+[[which]]
+says = "\"intersection of two lists of intervals\""
+kind = "Two-pointer intersection"
+move = "Walk both sorted lists; the overlap is the max of starts to the min of ends; advance the one that ends first."
+glyph = "intersectiv"
+technique = "Intervals:intersect"
+
+[[which]]
+says = "\"add 1 to a **range**\" many times, then read the totals"
+kind = "Difference array"
+move = "Add 1 at the start and subtract 1 after the end, then take a running sum."
+glyph = "diffarr"
+technique = "Intervals:difference-array"
+
+[[cost]]
+name = "Compare every pair"
+time = "O(n²)"
+space = "O(1)"
+why = "Checking each interval against every other grows with the square of the count: n²/2 pairs. This is the cost to beat."
+
+[[cost]]
+name = "Sort, then one pass"
+time = "O(n log n)"
+space = "O(n)"
+why = "The sort costs n log n and the pass afterwards costs n, because each interval is compared only with the last merged or kept one. The sort dominates. The output list takes O(n) space in the worst case where nothing merges."
+
+[[cost]]
+name = "Earliest-end greedy"
+time = "O(n log n)"
+space = "O(1) extra"
+why = "Sorting by end costs n log n; the scan only remembers the end of the last kept interval. The greedy choice is safe because an interval that ends earlier can never block more of the rest than one that ends later."
+
+[[cost]]
+name = "Line sweep"
+time = "O(n log n)"
+space = "O(n)"
+why = "There are 2n events to sort, then one pass keeps a running count. The busiest moment is always the instant a meeting starts, so checking the 2n events is enough and the length of the timeline does not matter."
+
+[[cost]]
+name = "Heap of end times"
+time = "O(n log n)"
+space = "O(n)"
+why = "After sorting by start, each meeting does at most one pop and one push on a heap that holds the meetings in progress, each log n. The heap's final size is the number of rooms."
+
+[[cost]]
+name = "Difference array"
+time = "O(n + m)"
+space = "O(m)"
+why = "Each range update touches two cells instead of the whole range, and one running sum rebuilds every total. With m positions and n updates that is linear, where updating each position would be n × length."
+
+[[with]]
+pattern = "Greedy"
+how = "Choosing the interval that ends earliest is a greedy choice with a proof: it leaves the largest remaining space, so nothing else could do better."
+example = "non-overlapping-intervals"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "A heap of end times tells you the earliest room to free up: reuse it if its meeting is over, otherwise open a new room."
+example = "meeting-rooms-ii"
+
+[[with]]
+pattern = "Two Pointers"
+how = "Two sorted lists of intervals are intersected by walking one pointer in each, advancing whichever interval ends first."
+example = "interval-list-intersections"
+
+[[with]]
+pattern = "Binary Search"
+how = "A calendar kept in sorted order lets you find where a new booking would go in log n, and check only its two neighbours for a clash."
+example = "my-calendar-i"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "A difference array turns \"add to a range\" into two point updates; a map of counts does the same when the positions are huge and sparse."
+example = "car-pooling"

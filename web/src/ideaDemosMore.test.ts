@@ -205,3 +205,68 @@ test("the best run extends while it helps and restarts when the old run drags it
     assert.ok(frames.some((f) => /Start a new run/.test(f.say)));
     assert.equal(frames.length, 1 + 8 + 1);
 });
+
+test("merging sorts by start, stretches an overlapping interval and starts a new one after a gap", () => {
+    const frames = run("intervals-merge");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3 intervals");
+    assert.deepEqual(last.ranges!.bars.filter((b) => b.tone === "merged").map((b) => b.label), ["1-6", "8-10", "15-18"]);
+    assert.equal(frames.length, 1 + 4 + 1);
+    assert.ok(frames.some((f) => /Stretch/.test(f.say)));
+    const unsorted = DEMOS["intervals-merge"]!.simulate({ items: ["8-10", "1-3", "2-6"] });
+    assert.equal(unsorted[unsorted.length - 1]!.result, "2 intervals", "the input order does not matter");
+    assert.equal(DEMOS["intervals-merge"]!.parse("5-2, 1-3", ""), null, "an interval must end after it starts");
+});
+
+test("the sweep counts meetings in progress at each start and end and reports the peak", () => {
+    const frames = run("intervals-sweep");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3 rooms");
+    assert.equal(frames.length, 1 + 10 + 1);
+    assert.equal(Math.max(...frames.map((f) => Number(value(f, "ROOMS IN USE")))), 3);
+    assert.ok(frames.every((f) => Number(value(f, "ROOMS IN USE")) >= 0));
+    assert.equal(value(frames[frames.length - 2]!, "ROOMS IN USE"), 0, "the last event ends the last meeting");
+    const touching = DEMOS["intervals-sweep"]!.simulate({ items: ["1-3", "3-5"] });
+    assert.equal(touching[touching.length - 1]!.result, "1 room", "one ends exactly when the next starts, so it can reuse the room");
+});
+
+test("rotating transposes then flips each row, ending with the matrix turned clockwise", () => {
+    const frames = run("math-rotate");
+    const last = frames[frames.length - 1]!;
+    assert.deepEqual(last.grid!.cells, [["7", "4", "1"], ["8", "5", "2"], ["9", "6", "3"]]);
+    assert.equal(frames.length, 1 + 3 + 1 + 3 + 1);
+    const four = DEMOS["math-rotate"]!.simulate({ items: [], param: 4 });
+    assert.deepEqual(four[four.length - 1]!.grid!.cells[0], ["13", "9", "5", "1"]);
+});
+
+test("fast power multiplies by x for each set bit of the exponent and squares x between bits", () => {
+    const frames = run("math-pow");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, String(3 ** 13));
+    assert.deepEqual(last.cells, ["1", "1", "0", "1"]);
+    assert.equal(last.work.bars[1]!.value, 3 + 3, "three squarings fewer than the bits, plus one multiply per set bit");
+    assert.ok((last.work.bars[0]!.value as number) > (last.work.bars[1]!.value as number));
+    const big = DEMOS["math-pow"]!.simulate({ items: ["9"], param: 30 });
+    assert.equal(big[big.length - 1]!.result, String(9n ** 30n), "exact even beyond 2^53");
+});
+
+test("XOR cancels what appears twice and flips only the bits that differ", () => {
+    const frames = run("bits-xor");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "4");
+    assert.equal(frames.length, 1 + 5 + 1);
+    assert.deepEqual(last.grid!.cells[1], ["0", "1", "0", "0"]);
+    assert.equal(value(frames[3]!, "RESULT"), 7, "4 ^ 1 ^ 2 = 7 before the second 1 arrives");
+    assert.equal(DEMOS["bits-xor"]!.parse("1,2", ""), null, "at least three numbers");
+    assert.equal(DEMOS["bits-xor"]!.parse("1,2,16", ""), null, "four bits only");
+});
+
+test("counting set bits clears the lowest one each step, so it runs once per 1 bit", () => {
+    const frames = run("bits-count");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3", "148 = 10010100 has three set bits");
+    assert.equal(frames.length, 1 + 3 + 1);
+    assert.deepEqual(frames[0]!.cells, ["1", "0", "0", "1", "0", "1", "0", "0"]);
+    assert.deepEqual(frames[1]!.cells, ["1", "0", "0", "1", "0", "0", "0", "0"], "the lowest set bit is gone");
+    assert.equal(value(frames[3]!, "n"), 0);
+});

@@ -104,6 +104,13 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     smallest: { n: 10, w: [[0, 3]], w2: [[3, 6]], bars: [1, 2, 3, 2, 3, 4, 5, 6, 7, 8], ptr: [0] },
     digits: { n: 10, w: [], dots: [0, 1, 2, 3, 4], bars: [9, 7, 5, 3, 1, 2, 4, 6, 8, 10], ptr: [0] },
     rangebal: { n: 10, w: [], w2: [[2, 8]], dots: [2, 8], ptr: [5] },
+    mergeiv: { n: 10, w: [[0, 4]], w2: [[2, 7]], dots: [8] },
+    byend: { n: 10, w: [], w2: [[0, 3], [3, 6], [6, 9]], dots: [2, 5, 8], ptr: [2, 5, 8] },
+    calendar: { n: 10, w: [[1, 3], [4, 6], [7, 9]], dots: [5] },
+    sweepiv: { n: 10, w: [], bars: [1, 2, 3, 2, 3, 4, 3, 2, 1, 0], ptr: [5] },
+    roomheap: { n: 10, w: [[0, 3]], w2: [[2, 5], [4, 8]], dots: [6] },
+    intersectiv: { n: 10, w: [[0, 5]], w2: [[3, 9]], dots: [4], ptr: [3, 5] },
+    diffarr: { n: 10, w: [], bars: [1, 1, 3, 3, 3, 2, 2, 1, 1, 1], dots: [2, 5] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 
