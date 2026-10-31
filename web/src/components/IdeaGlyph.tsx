@@ -64,6 +64,15 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     gridtrie: { n: 10, w: [[1, 5]], w2: [[5, 9]], dots: [2, 6] },
     bitstrie: { n: 10, w: [], bars: [3, 3, 3, 3, 6, 6, 6, 6, 9, 9], dots: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
     counts: { n: 10, w: [], bars: [9, 6, 6, 3, 3, 3, 2, 1, 1, 1], ptr: [0] },
+    incexc: { n: 10, w: [[0, 5]], w2: [[5, 10]], dots: [1, 3, 6, 8] },
+    reuse: { n: 10, w: [], dots: [2, 2, 5, 5, 5], bars: [2, 2, 5, 5, 5, 3, 3, 3, 1, 1], ptr: [2] },
+    skipdup: { n: 10, w: [[0, 2]], w2: [[4, 6]], bars: [1, 1, 2, 2, 2, 3, 3, 4, 5, 5], ptr: [4] },
+    permute: { n: 10, w: [], dots: [0, 3, 6, 9], w2: [[0, 3], [3, 6], [6, 9]] },
+    construct: { n: 10, w: [[0, 6]], dots: [0, 1, 2, 3, 4, 5], ptr: [6] },
+    gridpath: { n: 10, w: [[1, 5]], dots: [1, 2, 3, 4], ptr: [4] },
+    queens: { n: 10, w: [], dots: [1, 3, 5, 7], ptr: [1, 3, 5, 7] },
+    groupsk: { n: 10, w: [[0, 3]], w2: [[3, 6], [6, 10]], dots: [1, 4, 8] },
+    split: { n: 10, w: [[0, 3]], w2: [[3, 7]], dots: [3, 7], ptr: [7] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 

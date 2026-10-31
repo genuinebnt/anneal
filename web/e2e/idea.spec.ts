@@ -340,3 +340,19 @@ test("Tries: words grow a tree that reuses shared letters, and a lookup follows 
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("prefix only");
 });
+
+test("Backtracking: the decision tree grows, a choice is undone on the way back, and N-Queens prunes on a board", async ({ page }) => {
+    await page.goto("/dsa/patterns/D9/idea");
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(1);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(2);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("8 subsets");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(15);
+    await page.getByRole("radio", { name: /N-Queens/i }).click();
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(16);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("columns 2 4 1 3");
+    await expect(page.locator(".id-tb-c.id-tb-done")).toHaveCount(4);
+});

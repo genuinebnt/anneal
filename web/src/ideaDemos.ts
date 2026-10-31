@@ -716,6 +716,7 @@ function simulateSignature(input: DemoInput): Frame[] {
 }
 
 import { ADV_GRAPH_DEMOS, GRAPH_DEMOS } from "./ideaDemosGraphs.ts";
+import { SEARCH_DEMOS } from "./ideaDemosSearch.ts";
 import { HEAP_DEMOS, TRIE_DEMOS } from "./ideaDemosHeap.ts";
 import { TREE_DEMOS } from "./ideaDemosTrees.ts";
 
@@ -724,6 +725,7 @@ export const DEMOS: Record<string, Demo> = {
     ...GRAPH_DEMOS,
     ...HEAP_DEMOS,
     ...TRIE_DEMOS,
+    ...SEARCH_DEMOS,
     ...ADV_GRAPH_DEMOS,
     "window-fixed": {
         title: "Fixed size · best sum",

@@ -1,0 +1,163 @@
+pattern = "Backtracking"
+
+tagline = "Try a choice, explore everything it allows, then undo it and try the next: a search that walks every option without keeping them all."
+
+what = [
+    "Backtracking builds an answer **one decision at a time**. At each step you choose, recurse to decide the rest, and then **undo the choice** so the next option starts from a clean slate. The options form a tree, but you never store it: you only hold the single path you are on.",
+    "Its strength is **pruning**: the moment a partial answer cannot work, you stop and back up, and everything below that point is never visited. Run the two below: subsets, where every branch is valid, and N-Queens, where most branches are cut.",
+]
+
+demos = ["bt-subsets", "bt-queens"]
+
+applies = [
+    "\"**All** subsets, combinations or permutations\" of some items.",
+    "\"Build every **valid** string or sequence\": balanced brackets, a phone-number's letters.",
+    "**Constraint puzzles**: N-Queens, Sudoku, splitting into equal groups.",
+    "**Paths in a grid** that must spell a word, using each cell once.",
+    "\"Split a string into pieces\" so that each piece satisfies a rule, listing every way.",
+]
+
+yes = [
+    "You must **list or count every solution**, not just find one number: there is no formula, so you search.",
+    "The answer is built from a **sequence of choices**, and an early choice can make later ones impossible.",
+    "You can **tell early** that a partial answer is doomed, so pruning pays off.",
+]
+
+no = [
+    "You want only the **best value** (a maximum, a count) and subproblems repeat: that is dynamic programming, which remembers instead of re-exploring.",
+    "A **greedy** choice is provably safe: there is no need to try the other branches.",
+    "The input is large and you need **one** answer fast: exhaustive search grows exponentially.",
+]
+
+apply = [
+    "**Say what the state is.** The path so far, and where you are in the input (an index, a row, a remaining amount).",
+    "**Say when it is complete.** The base case that records an answer: all items decided, all rows filled, remaining equals zero.",
+    "**Say what the choices are** at this step, and in what order, so you never produce the same answer twice (move forward through the input, or skip equal neighbours).",
+    "**Choose, recurse, undo.** Every change made before the recursive call is reversed after it, so the caller sees what it passed in.",
+    "**Prune early.** Add a check that returns before recursing whenever the partial answer already breaks a rule.",
+    "**State the invariant.** \"When the call returns, the state is exactly what it was when the call began.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"all **subsets**\", \"all selections from a list\""
+kind = "Include or exclude"
+move = "For each item, branch twice: leave it out, or put it in. The leaves are the subsets."
+glyph = "incexc"
+technique = "Backtracking:include-exclude"
+
+[[which]]
+says = "\"combinations that **add up** to a target\", an item may be used **many times**"
+kind = "Reuse"
+move = "From the current index, try each item again (stay at the same index) while the remainder is positive."
+glyph = "reuse"
+technique = "Backtracking:reuse"
+
+[[which]]
+says = "the input has **repeated values** but the answers must not repeat"
+kind = "Skip duplicates"
+move = "Sort first; at a given depth, skip a value equal to the one just tried."
+glyph = "skipdup"
+technique = "Backtracking:skip-dups"
+
+[[which]]
+says = "\"all **orderings**\", \"all permutations\""
+kind = "Permutations"
+move = "Pick any unused item for the next place, using a used marker (or swapping into place)."
+glyph = "permute"
+technique = "Backtracking:permute"
+
+[[which]]
+says = "\"generate every **valid** string\": balanced brackets, letter combinations"
+kind = "Construct under a rule"
+move = "Add one character at a time, only if the rule still holds (never more closers than openers)."
+glyph = "construct"
+technique = "Backtracking:construct"
+
+[[which]]
+says = "\"find a **path** in a grid that spells a word\", each cell once"
+kind = "Grid with visited marks"
+move = "Mark the cell visited, try its four neighbours, then unmark it so another path can use it."
+glyph = "gridpath"
+technique = "Backtracking:grid"
+
+[[which]]
+says = "\"place pieces so **none attack**\": N-Queens, Sudoku"
+kind = "Constraint satisfaction"
+move = "Fill one row or cell at a time, test each option against the rules, and back up when none fit."
+glyph = "queens"
+technique = "Backtracking:n-queens"
+
+[[which]]
+says = "\"split into **k groups** with equal sums\""
+kind = "Bitmask state"
+move = "Assign items to groups one by one, with a bitmask of what is used, and prune on a group going over."
+glyph = "groupsk"
+technique = "Backtracking:partition-k"
+
+[[which]]
+says = "\"split a string into **dictionary words**\", list every way"
+kind = "Backtracking vs DP"
+move = "Try each prefix that is a word and recurse on the rest; memoise the rest to avoid repeating work."
+glyph = "split"
+technique = "Backtracking:split-memo"
+
+[[cost]]
+name = "Subsets, include or exclude"
+time = "O(n · 2ⁿ)"
+space = "O(n)"
+why = "Each of the n items doubles the number of branches, so there are 2ⁿ complete subsets, and copying each one out costs up to n. The path and the recursion hold only n items at a time, so the extra memory is O(n), not O(2ⁿ)."
+
+[[cost]]
+name = "Permutations"
+time = "O(n · n!)"
+space = "O(n)"
+why = "The first place has n choices, the next n−1, and so on: n! orderings, each copied out at cost n. The recursion is n deep."
+
+[[cost]]
+name = "Combination sum"
+time = "O(n^(T/m))"
+space = "O(T/m)"
+why = "With target T and smallest item m, a path can be T/m items long and each step has up to n choices, so the tree can have about n^(T/m) leaves. It is an upper bound: pruning on a remainder that goes below zero cuts it a lot."
+
+[[cost]]
+name = "N-Queens"
+time = "O(n!)"
+space = "O(n)"
+why = "Each row has at most n columns, and each placed queen removes a column and two diagonals from the next row, so there are about n! placements to look at. Without pruning, a brute force would try nⁿ full boards."
+
+[[cost]]
+name = "Grid word search"
+time = "O(R · C · 3^L)"
+space = "O(L)"
+why = "Any cell can start the word, and after the first step each move has at most three new directions (not back where you came from), for L letters. The recursion is at most L deep."
+
+[[cost]]
+name = "With memoisation (split into words)"
+time = "O(n²) states"
+space = "O(n)"
+why = "Once the answer for \"the rest of the string from position i\" is stored, each position is solved once instead of once per way of reaching it, which turns an exponential search into a polynomial one. This is where backtracking becomes dynamic programming."
+
+[[with]]
+pattern = "Trees"
+how = "Backtracking is a depth-first walk of a tree you do not build: the decision tree. The recursion, the path and the undo are the same shapes as a tree traversal with a stack."
+example = "subsets"
+
+[[with]]
+pattern = "Graphs"
+how = "A path search in a graph that must not reuse a node is backtracking on the visited set: mark on the way in, unmark on the way out."
+example = "word-search"
+
+[[with]]
+pattern = "Tries"
+how = "A trie tells you when a prefix cannot spell any word, so a grid search for many words can prune the instant a path leaves the trie."
+example = "word-break-ii"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "If the same sub-state is reached by different paths, store its answer: memoised backtracking is top-down DP. When you only need a count or a best value, go straight to DP."
+example = "word-break"
+
+[[with]]
+pattern = "Bit Manipulation"
+how = "A bitmask is a compact set of what is used. It makes the \"used\" check one operation and lets you memoise on the mask."
+example = "partition-to-k-equal-sum-subsets"

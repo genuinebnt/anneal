@@ -125,3 +125,25 @@ test("a trie reuses shared prefixes, and a search follows one edge per letter", 
     const none = DEMOS["trie-search"]!.simulate({ items: ["car", "cow"] });
     assert.equal(none[none.length - 1]!.result, "not found");
 });
+
+test("the subsets tree finds every subset once, records each at a leaf, and undoes each choice it made", () => {
+    const frames = run("bt-subsets");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "8 subsets");
+    assert.equal(last.work.bars[1]!.value, 7, "one path.pop for each of the 7 take-branches");
+    assert.equal(Math.max(...frames.map((f) => f.stack!.items.length)), 3, "the path is never longer than the number of items");
+    assert.equal(frames.filter((f) => /complete subset/.test(f.say)).length, 8);
+    assert.equal(last.graph!.nodes.length, 15, "the whole decision tree has been drawn by the end");
+    assert.equal(DEMOS["bt-subsets"]!.parse("1,2,3,4", ""), null, "at most three items");
+});
+
+test("N-Queens prunes attacked squares, backs up when a row is full, and ends with a safe board", () => {
+    const frames = run("bt-queens");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "columns 2 4 1 3");
+    assert.equal(last.grid!.cells.flat().filter((c) => c === "♛").length, 4);
+    assert.ok(frames.some((f) => /Prune/.test(f.say)));
+    assert.ok(frames.some((f) => /undo/.test(f.say)), "the first column fails and has to be undone");
+    assert.ok((last.work.bars[0]!.value as number) < 4 ** 4, "far fewer squares than full boards");
+    assert.equal(DEMOS["bt-queens"]!.simulate({ items: [], param: 5 }).at(-1)!.result, "columns 1 3 5 2 4");
+});
