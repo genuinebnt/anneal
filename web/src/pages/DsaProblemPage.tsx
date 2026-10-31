@@ -11,6 +11,7 @@ import { ConfirmButton } from "../components/ui";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
+import { AskPanel } from "../components/AskPanel";
 import { getPref, setPref } from "../prefs";
 import { useShowIdeas } from "../spoilers";
 import { DIFF, MINUTES, boxExamples, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
@@ -535,6 +536,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         )}
                     </div>
 
+                    <AskPanel kind="dsa-problem" id={p.id} title="Ask about this problem" hint="Ask for a hint without the answer, why an approach works, or what an interviewer would push on." />
                     <NotesLink id={p.id} />
 
                     {s.last_grade && previews !== null && <RecallCurve id={p.id} version={s.reps} />}

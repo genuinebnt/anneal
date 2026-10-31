@@ -26,6 +26,7 @@ pub mod solutions;
 pub mod streaks;
 pub mod statement;
 mod store;
+pub mod ai;
 pub mod meaning;
 pub mod sd;
 pub mod system;
@@ -61,6 +62,8 @@ pub struct AppState {
     pub courses: Arc<Vec<anneal_content::course::Course>>,
     /// Meaning vectors for the DSA problems, and the model that embeds a search ([`meaning`]).
     pub meaning: Arc<meaning::Meaning>,
+    /// AI help, when a provider is configured ([`ai`]); `None` turns every AI endpoint off.
+    pub ai: Option<ai::AiConfig>,
 }
 
 /// The API under `/api`. If `web_dist` is a built web app, it's served for every other path.
@@ -129,6 +132,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/sd/checks", post(sd::mark_check))
         .route("/sd/review", get(sd::review))
         .route("/sd/review/{card}", post(sd::grade))
+        .route("/sd/attempts/{id}/ai-review", post(ai::review_attempt))
+        .route("/ai", get(ai::status))
+        .route("/ai/ask", post(ai::ask))
         .route("/dsa/mock/config", put(mock::put_config))
         .route("/dsa/mock/rounds", post(mock::post_round))
         .route("/dsa/handwritten/{pattern}", get(practice::for_pattern))

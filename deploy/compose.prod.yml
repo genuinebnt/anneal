@@ -44,6 +44,10 @@ services:
       ANNEAL_RUNNER_IMAGE: ghcr.io/genuinebnt/anneal-runner:${ANNEAL_TAG:-latest}
       # Sandbox mounts are resolved by the host's Docker daemon, so the work root has the same path on both sides.
       ANNEAL_WORK_ROOT: /srv/anneal/work
+      # AI help is off unless deploy/.env on the server sets these (crates/api/src/ai.rs); the key never goes in the repository.
+      ANNEAL_AI_PROVIDER: ${ANNEAL_AI_PROVIDER:-}
+      ANNEAL_AI_KEY: ${ANNEAL_AI_KEY:-}
+      ANNEAL_AI_MODEL: ${ANNEAL_AI_MODEL:-}
       CARGO_HOME: /srv/anneal/cargo
       HOME: /srv/anneal/home
     volumes:

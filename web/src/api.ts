@@ -1034,6 +1034,9 @@ export const api = {
   sdMark: (id: number, marks: Record<string, SdMark>) => request<{ score: number | null; cards: number }>("PUT", `/sd/attempts/${id}/marks`, { marks }),
   sdCheck: (concept: string, index: number, mark: SdMark) => request<{ ok: boolean }>("POST", "/sd/checks", { concept, index, mark }),
   sdReview: () => request<SdReviewView>("GET", "/sd/review"),
+  aiStatus: () => request<{ enabled: boolean; provider?: string; model?: string }>("GET", "/ai"),
+  aiAsk: (kind: "sd-concept" | "sd-problem" | "dsa-problem", id: string, turns: { role: "user" | "model"; text: string }[]) => request<{ answer: string; model: string }>("POST", "/ai/ask", { kind, id, turns }),
+  sdAiReview: (attempt: number) => request<SdAiReview>("POST", `/sd/attempts/${attempt}/ai-review`),
   sdGrade: (card: string, grade: Grade) => request<{ due: string; days: number }>("POST", `/sd/review/${encodeURIComponent(card)}`, { grade }),
   /** Problems that mean the most nearly the same as a problem (`like`) or a piece of text (`q`): exact, over every problem. */
   meaning: (ask: { like?: string; q?: string; k?: number }) =>
@@ -1108,7 +1111,8 @@ export interface SdPoint { id: string; text: string; level: "mid" | "senior" | "
 export interface SdStep { name: string; minutes: number; prompt: string; reference: string; points: SdPoint[] }
 export interface SdProblem { id: string; title: string; kind: string; order: number; minutes: number; prompt: string; uses: string[]; companies: string[]; hints: string[]; steps: SdStep[]; probes: { question: string; answer: string }[] }
 export interface SdDiagram { nodes?: { id: string; x: number; y: number; label: string; kind: "box" | "store" | "queue" }[]; edges?: { from: string; to: string }[] }
-export interface SdAttempt { id: number; finished_at: string; seconds: number; steps: Record<string, { answer: string; seconds: number }>; diagram: SdDiagram; hints: number; marks: Record<string, SdMark> }
+export interface SdAttempt { id: number; finished_at: string; seconds: number; steps: Record<string, { answer: string; seconds: number }>; diagram: SdDiagram; hints: number; marks: Record<string, SdMark>; ai_review?: SdAiReview | null }
+export interface SdAiReview { points: Record<string, { mark: SdMark; why: string }>; followups: string[]; summary: string; model: string }
 export interface SdProblemView { problem: SdProblem; uses: { id: string; title: string }[]; attempts: SdAttempt[] }
 export interface SdCard { card_id: string; kind: "point" | "check"; due: string; reps: number; lapses: number; last_grade: string | null; source: { type: "problem" | "concept"; id: string; title: string; step?: string }; prompt: string; answer: string; level: string | null }
 export interface SdReviewView { today: string; due: SdCard[]; week: { day: string; n: number }[] }

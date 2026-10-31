@@ -26,7 +26,7 @@ const MAX_DIAGRAM_BYTES: usize = 64 * 1024;
 type AttemptRow = (i64, String, chrono::DateTime<chrono::Utc>, i32, Jsonb<Value>, Option<chrono::DateTime<chrono::Utc>>);
 type CardRow = (String, String, NaiveDate, Option<f32>, Option<f32>, Option<NaiveDate>, Option<String>, i32, i32);
 /// An attempt as the problem page shows it: id, when, seconds, steps, diagram, hints, marks.
-type FullAttempt = (i64, chrono::DateTime<chrono::Utc>, i32, Jsonb<Value>, Jsonb<Value>, i32, Jsonb<Value>);
+type FullAttempt = (i64, chrono::DateTime<chrono::Utc>, i32, Jsonb<Value>, Jsonb<Value>, i32, Jsonb<Value>, Option<Jsonb<Value>>);
 
 fn today() -> NaiveDate {
     crate::activity::today()
@@ -94,8 +94,8 @@ pub async fn concept(State(s): State<AppState>, Path(id): Path<String>) -> ApiRe
 pub async fn problem(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let p = s.catalog.sd.problems.get(&id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
     let attempts: Vec<FullAttempt> =
-        sqlx::query_as("SELECT id, finished_at, seconds, steps, diagram, hints, marks FROM sd_attempts WHERE problem_id = $1 ORDER BY id DESC").bind(&id).fetch_all(&s.db).await?;
-    let attempts: Vec<Value> = attempts.into_iter().map(|(aid, at, secs, steps, diagram, hints, marks)| json!({ "id": aid, "finished_at": at, "seconds": secs, "steps": steps.0, "diagram": diagram.0, "hints": hints, "marks": marks.0 })).collect();
+        sqlx::query_as("SELECT id, finished_at, seconds, steps, diagram, hints, marks, ai_review FROM sd_attempts WHERE problem_id = $1 ORDER BY id DESC").bind(&id).fetch_all(&s.db).await?;
+    let attempts: Vec<Value> = attempts.into_iter().map(|(aid, at, secs, steps, diagram, hints, marks, ai)| json!({ "id": aid, "finished_at": at, "seconds": secs, "steps": steps.0, "diagram": diagram.0, "hints": hints, "marks": marks.0, "ai_review": ai.map(|j| j.0) })).collect();
     let uses: Vec<Value> = p.uses.iter().filter_map(|u| s.catalog.sd.concepts.get(u)).map(|c| json!({ "id": c.id, "title": c.title })).collect();
     Ok(Json(json!({ "problem": p, "uses": uses, "attempts": attempts })))
 }

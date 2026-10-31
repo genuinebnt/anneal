@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type SdAttempt, type SdDiagram, type SdMark, type SdProblem } from "../../api";
+import { api, type SdAiReview, type SdAttempt, type SdDiagram, type SdMark, type SdProblem } from "../../api";
+import { AskPanel } from "../../components/AskPanel";
 import { HowFound, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdMd } from "../../components/SdMd";
 import { mmss } from "../../focusStore";
@@ -145,6 +146,9 @@ export function SdPractice({ id }: { id: string }) {
     const [attemptId, setAttemptId] = useState<number | null>(null);
     const [marks, setMarks] = useState<Record<string, SdMark>>({});
     const [saved, setSaved] = useState<{ score: number | null; cards: number } | null>(null);
+    const ai = useQuery({ queryKey: ["ai"], queryFn: api.aiStatus, staleTime: 5 * 60_000 });
+    const [aiReview, setAiReview] = useState<SdAiReview | null>(null);
+    const askAi = useMutation({ mutationFn: () => api.sdAiReview(attemptId!), onSuccess: setAiReview });
     useEffect(() => {
         if (phase !== "drill") return;
         const t = window.setInterval(() => setNow(Date.now()), 1000);
@@ -261,6 +265,25 @@ export function SdPractice({ id }: { id: string }) {
                     <span className="sd-k">COMPARE · {mmss(Math.round((Date.now() - Date.parse(started)) / 1000))} USED OF {p.minutes}:00</span>
                     <h2>How your design measures up</h2>
                     <p className="sd-lede">Your answer and the reference, step by step. Mark each point honestly: a miss comes back in Review today, a partly in two days, a got it in a week.</p>
+                    {ai.data?.enabled && attemptId && (
+                        <div className="sd-ai">
+                            {!aiReview ? (
+                                <div className="sd-row">
+                                    <button className="sd-ghost" disabled={askAi.isPending} onClick={() => askAi.mutate()}>{askAi.isPending ? "The interviewer is reading your answer…" : "Ask the AI interviewer to mark it"}</button>
+                                    <span className="sd-dim">suggestions only; your marks are yours</span>
+                                    {askAi.isError && <span className="sd-bad">{(askAi.error as Error).message}</span>}
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="sd-ref"><b>The interviewer</b><p>{aiReview.summary}</p>{aiReview.followups.length > 0 && <ul>{aiReview.followups.map((f) => <li key={f}>{f}</li>)}</ul>}</div>
+                                    <div className="sd-row">
+                                        <button className="sd-ghost" disabled={!!saved} onClick={() => setMarks((m) => ({ ...Object.fromEntries(Object.entries(aiReview.points).map(([k, v]) => [k, v.mark])), ...m }))}>Use its marks where I have not marked</button>
+                                        <span className="sd-dim">{aiReview.model}</span>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </section>
                 {p.steps.map((s, i) => (
                     <section key={s.name} id={`sd-step-${i}`} className="ly-pn sd-cmp">
@@ -273,7 +296,10 @@ export function SdPractice({ id }: { id: string }) {
                         <div className="sd-rub">
                             {s.points.map((pt) => (
                                 <div key={pt.id}>
-                                    <span>{pt.text}<em className={`sd-lvl ${pt.level}`}>{LEVEL[pt.level]}</em></span>
+                                    <span>
+                                        {pt.text}<em className={`sd-lvl ${pt.level}`}>{LEVEL[pt.level]}</em>
+                                        {aiReview?.points[pt.id] && <small className="sd-aisug"><b className={aiReview.points[pt.id]!.mark}>AI: {MARKS.find(([m]) => m === aiReview.points[pt.id]!.mark)?.[1]}</b>{aiReview.points[pt.id]!.why}</small>}
+                                    </span>
                                     <div className="sd-seg" role="group" aria-label={pt.text}>
                                         {MARKS.map(([m, l]) => <button key={m} data-m={m} className={marks[pt.id] === m ? "on" : ""} disabled={!!saved} onClick={() => setMarks((x) => ({ ...x, [pt.id]: m }))}>{l}</button>)}
                                     </div>
@@ -310,6 +336,7 @@ export function SdPractice({ id }: { id: string }) {
             </>
         ) : (
             <>
+                {phase === "compare" && <AskPanel kind="sd-problem" id={id} title="Ask about this design" hint="Ask why the reference chose something, what breaks at 10× the load, or how to say it in the interview." />}
                 {v.uses.length > 0 && (
                     <Panel title="Leans on">
                         <div className="sd-list">{v.uses.map((u) => <Link key={u.id} to="/sd/learn/$id" params={{ id: u.id }}>{u.title}</Link>)}</div>

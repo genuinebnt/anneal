@@ -106,6 +106,7 @@ fn test_app_full(db: PgPool, content: &Path, auth: AuthConfig, web_dist: Option<
             auth,
             courses: Arc::new(vec![anneal_content::course::Course::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../courses/bustub")).expect("courses/bustub")]),
             meaning: anneal_api::meaning::Meaning::off(),
+            ai: None,
         },
         web_dist,
     )
@@ -646,6 +647,17 @@ async fn a_system_design_drill_marked_makes_review_cards_that_grading_schedules(
     assert_eq!(history[0]["grade"], "good");
     let (_, backup) = call(&app, Method::GET, "/api/export", None).await;
     assert_eq!(backup["tables"]["sd_attempts"].as_array().unwrap().len(), 1);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn ai_help_says_plainly_when_it_is_off(db: PgPool) {
+    let app = test_app(db);
+    let (status, s) = call(&app, Method::GET, "/api/ai", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s["enabled"], false);
+    let (status, e) = call(&app, Method::POST, "/api/ai/ask", Some(json!({ "kind": "sd-concept", "id": "kafka", "turns": [{ "role": "user", "text": "why?" }] }))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(e["message"].as_str().unwrap().contains("ANNEAL_AI_PROVIDER"));
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]

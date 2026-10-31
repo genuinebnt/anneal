@@ -26,6 +26,7 @@ use tracing_subscriber::EnvFilter;
 /// | `ANNEAL_ADDR` | `127.0.0.1:8787` |
 /// | `ANNEAL_PASSPHRASE_HASH` | unset: no login, allowed only on a loopback address. Make one with `anneal passphrase` |
 /// | `ANNEAL_COOKIE_SECURE` | `false`; set `true` when served over HTTPS |
+/// | `ANNEAL_AI_PROVIDER`, `ANNEAL_AI_KEY`, `ANNEAL_AI_MODEL`, `ANNEAL_AI_URL` | unset: no AI help. See `anneal_api::ai` |
 /// | `ANNEAL_MODEL` | unset: no search by meaning text. The bge-small-en-v1.5 directory (`tools/fetch-model.sh`) |
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -143,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
         auth,
         courses: Arc::new(courses),
         meaning,
+        ai: anneal_api::ai::AiConfig::from_env(),
     };
     let listener = tokio::net::TcpListener::bind(addr)
         .await

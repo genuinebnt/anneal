@@ -124,3 +124,13 @@ Typeahead is a problem with an advanced page on tries behind it; CRDTs are an ad
 Markdown with callouts (`> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`, `> [!INTERVIEW]` for what to say, `> [!ASIDE]`), tables,
 code (Rust, Python, SQL, HTTP), and animated figures (`[[figures]]`, drawn by the web app). Every page ends with open
 checks; problems carry a rubric tagged by level and probes for the deep dives.
+
+## AI help (owner asked 2026-10-31)
+
+Off unless the server's environment sets it (`crates/api/src/ai.rs`): `ANNEAL_AI_PROVIDER` (`gemini`, or `openai` for any
+OpenAI-compatible server such as Ollama on a Mac), `ANNEAL_AI_KEY`, `ANNEAL_AI_MODEL` (default `gemini-3.5-flash`),
+`ANNEAL_AI_URL` (for `openai`, default `http://localhost:11434/v1`). On production the key goes in `deploy/.env` on the
+server only; `deploy/compose.prod.yml` passes it through and leaves it empty otherwise. What it does: "Ask about this page"
+on concept pages, the DSA problem page and a drill's Compare; and in Compare, an interviewer that marks the attempt against
+the rubric (a suggested mark and reason per point, two or three follow-ups, a summary), kept in `sd_attempts.ai_review`
+(migration 0023). The owner's marks stay theirs; "Use its marks where I have not marked" only fills gaps.

@@ -4,6 +4,7 @@ import { useState, type CSSProperties } from "react";
 import { api, type SdMark } from "../../api";
 import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdFigure } from "../../components/SdFigure";
+import { AskPanel } from "../../components/AskPanel";
 import { SdMd } from "../../components/SdMd";
 import { SD_GROUPS, SdFrame, groupOf } from "./SdHome";
 
@@ -132,6 +133,7 @@ export function SdConceptPage({ id }: { id: string }) {
     );
     const right = (
         <>
+            <AskPanel kind="sd-concept" id={id} />
             {v.used_in.length > 0 && (
                 <Panel title="Used in">
                     <div className="ly-cards">
