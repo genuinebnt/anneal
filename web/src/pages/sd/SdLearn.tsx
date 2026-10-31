@@ -124,6 +124,17 @@ export function SdConceptPage({ id }: { id: string }) {
                     </section>
                 ))}
                 <aside className="sd-call sd-call-interview"><b>Say it like this</b><p>“{c.say}”</p></aside>
+                {(c.sources?.length || c.credit) && (
+                    <section className="sd-srcs">
+                        <h4>Sources and further reading</h4>
+                        {c.sources && c.sources.length > 0 && (
+                            <ul>
+                                {c.sources.map((x) => <li key={x.url}><a href={x.url} target="_blank" rel="noreferrer">{x.title}</a>{x.note && <span> · {x.note}</span>}</li>)}
+                            </ul>
+                        )}
+                        {c.credit && <div className="sd-credit"><SdMd text={c.credit} /></div>}
+                    </section>
+                )}
             </article>
             <section className="ly-pn sd-checks">
                 <h5 className="ly-pnh"><span>Check yourself</span><span className="sd-dim">open answers, then compare</span></h5>
@@ -146,7 +157,7 @@ export function SdConceptPage({ id }: { id: string }) {
                     <div className="sd-list">{c.related.map((r) => <Link key={r} to="/sd/learn/$id" params={{ id: r }}>{titleOf(r)}</Link>)}</div>
                 </Panel>
             )}
-            <HowFound title="About this page" text="Written for anneal and checked against the official documentation. The checks are open questions: write, compare with the answer, and mark yourself; each mark becomes a review card." rows={[["Reading", `${c.minutes} min`], ["Checks", `${v.marked.length}/${c.checks.length} marked`]]} />
+            <HowFound title="About this page" text={`${c.credit ? "Builds on openly licensed material, credited at the end." : "Written for anneal."}${c.sources?.length ? " Facts are checked against the sources listed at the end." : ""} The checks are open questions: write, compare with the answer, and mark yourself; each mark becomes a review card.`} rows={[["Reading", `${c.minutes} min`], ["Checks", `${v.marked.length}/${c.checks.length} marked`]]} />
         </>
     );
     return (

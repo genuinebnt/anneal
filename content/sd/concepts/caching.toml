@@ -1,36 +1,235 @@
 title = "Caching"
 group = "core"
 order = 3
-minutes = 9
-lede = "Keeping a copy of hot data in memory, close to where it is read, so most reads skip the slower database."
-say = "Redirects read through a Redis cache keyed by short code with a one-day TTL; a cache hit costs under a millisecond and the database only sees misses."
-related = ["redis", "scaling-reads", "consistent-hashing"]
+minutes = 24
+lede = "Keeping a copy of hot data in memory, close to where it is read, so most reads skip the slower system behind it. Caches are the cheapest way to cut latency and protect a database, and the source of the hardest bugs: stale data, stampedes and hot keys."
+say = "Redirects read through a Redis cache keyed by short code with a one-day TTL plus jitter; a hit costs under a millisecond, the database only sees misses, writes delete the key, and a lease stops a hot key's expiry from stampeding the database."
+related = ["redis", "scaling-reads", "consistent-hashing", "probabilistic-structures", "load-balancing"]
+credit = "Parts of the sections on cache layers, query and object caching, and the update strategies are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#cache) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+[[sections]]
+heading = "Why caching works"
+body = """
+Two facts about real traffic make caches pay off:
+
+- **Skew**: access follows a power law. A small share of items (the top posts, the popular products, today's links) receives most of the reads, so a cache holding a few percent of the data can answer most requests.
+- **Locality in time**: something read now is likely to be read again soon.
+
+The win is measured by the **hit ratio** h. With a cache read costing t_c and a miss costing t_c + t_db:
+
+`average latency = t_c + (1 − h) × t_db`
+
+| Hit ratio | Average read (cache 0.5 ms, DB 10 ms) | Reads reaching the DB (of 100,000/s) |
+|---|---|---|
+| 0% (no cache) | 10 ms | 100,000/s |
+| 90% | 1.5 ms | 10,000/s |
+| 99% | 0.6 ms | 1,000/s |
+| 99.9% | 0.51 ms | 100/s |
+
+Going from 90% to 99% looks small but cuts database load **tenfold**. That is why caches protect databases as much as they speed up reads, and why a cache that suddenly empties (a restart, a flush, an outage) can take the database down with it.
+
+> [!NOTE]
+> A cache only helps reads that repeat. Unique reads (a user's own search history, one-off reports) or write-heavy data gain little; measure the expected hit ratio before adding one.
+"""
 
 [[sections]]
 heading = "Where caches sit"
 body = """
-- **Client** (browser, app): free, but you cannot invalidate it.
-- **CDN**: static files and cacheable responses near users.
-- **Application cache** (Redis, Memcached): shared by all app servers; the usual answer.
-- **In-process**: fastest, but each server has its own copy.
+Caches exist at every layer between the user and the disk. Each layer that answers a request saves every layer behind it.
+
+| Layer | Examples | Typical latency | You control invalidation? |
+|---|---|---|---|
+| Client | browser cache, app memory, OS DNS cache | 0 (no network) | no, only through expiry headers |
+| CDN | CloudFront, Fastly, Cloudflare | 5-30 ms (nearby edge) | partly: purge APIs, short TTLs |
+| Web server / reverse proxy | Varnish, NGINX, the API gateway | sub-millisecond on the server | yes |
+| Application cache | Redis, Memcached | 0.2-1 ms in the same data centre | yes: the usual answer |
+| In-process | a map or LRU inside each app server | nanoseconds | yes, but every server holds its own copy |
+| Database | Postgres shared buffers, the OS page cache, InnoDB buffer pool | in RAM, no disk | tuned by configuration |
+
+**Client caching** saves the most but you cannot take it back: once a browser has a response with `max-age=86400`, it may use it for a day. **CDNs** are caches for static files and cacheable responses close to users. **Reverse proxies** can serve whole responses without touching the application. **Databases** already cache hot pages in memory; tuning their memory for the workload is often the first step before adding another system.
+
+The **application cache**, an in-memory key-value store between the application and its storage, is what "add a cache" usually means. Because data is held in RAM it is far faster than a database reading from disk, but RAM is limited, so an eviction policy such as least recently used (LRU) drops cold entries to keep hot ones. Redis adds persistence options and data structures such as sorted sets and lists; Memcached is a simpler, multithreaded key-value cache.
+
+Avoid file-based caches on the application servers: they make cloning and autoscaling harder, because each server's disk holds different data.
 """
 
 [[sections]]
-heading = "Cache-aside"
+heading = "What to cache, and how to key it"
 body = """
-The common pattern: read the cache; on a miss, read the database and store the result with a TTL. On a write, update the database and **delete** the cache key (not update it: two racing writers could leave a stale value).
+There are two broad choices: cache **database queries** or cache **objects**.
 
-Other patterns: **write-through** (write cache and database together, reads always hit), **write-behind** (write cache now, database later; fast, but data can be lost).
+**Query-level caching**: hash the query text as the key and store its result. It is easy to add, but invalidation is hard:
+
+- a query with joins and filters can depend on many rows, so it is hard to know which cached results a change affects;
+- if one cell changes, every cached query that might include it must be deleted.
+
+**Object-level caching**: treat the data as the objects your code uses. The application assembles the object from the database (a user with their settings, a product with its price and stock summary) and caches that.
+
+- When the underlying data changes, delete that object's key: the dependency is clear.
+- Workers can assemble objects asynchronously and keep the cache filled.
+
+Good candidates: user sessions, fully rendered pages or fragments, activity streams and feeds, social graph data, configuration and feature flags, results of expensive computations (recommendations, aggregates), and anything read far more often than it changes.
+
+**Key design**:
+
+- Namespace and version keys: `user:v3:42`. Changing the format means bumping `v3` to `v4`; old entries simply expire instead of being read by new code.
+- Include everything the value depends on: `feed:42:page:1:lang:en`, not `feed:42`.
+- Keep values small: a 1 MB value costs network time on every hit and fragments memory. Cache the parts that are read, not whole aggregates.
 """
 
 [[sections]]
-heading = "What goes wrong"
+heading = "Reading and writing: the patterns"
 body = """
-- **Stale data**: choose TTLs per kind of data, and delete on write.
-- **Stampede**: a hot key expires and thousands of requests hit the database at once. Let one request refill (a lock or request coalescing), or refresh before expiry.
-- **Hot key**: one key gets more traffic than one cache node handles; replicate it, or keep a small in-process copy.
-- **Cold start**: a new or flushed cache sends everything to the database; warm it, or bring it in gradually.
-- **Eviction**: memory is finite; LRU evicts the least recently used.
+A cache holds limited data, so you choose how entries get in and how writes reach the database.
+
+**Cache-aside (lazy loading)**: the application talks to both; the cache never touches the database.
+
+1. Look up the key in the cache.
+2. On a miss, read the database.
+3. Store the result in the cache with a TTL.
+4. Return it.
+
+```rust
+async fn get_user(cache: &Cache, db: &Db, id: u64) -> Result<Option<User>> {
+    let key = format!("user:v3:{id}");
+    if let Some(bytes) = cache.get(&key).await? {
+        return Ok(Some(decode(&bytes)?));
+    }
+    let Some(user) = db.user(id).await? else { return Ok(None) };
+    cache.set_ex(&key, &encode(&user)?, Duration::from_secs(3600)).await?;
+    Ok(Some(user))
+}
+
+async fn update_user(cache: &Cache, db: &Db, user: &User) -> Result<()> {
+    db.save(user).await?;               // the database first
+    cache.del(&format!("user:v3:{}", user.id)).await?; // then delete, never set
+    Ok(())
+}
+```
+
+Only requested data is cached, and a failed cache only makes reads slower. The costs: each miss takes three trips (cache, database, cache), data can go stale until the TTL ends or the key is deleted, and a replaced cache node starts empty.
+
+**Read-through**: the cache library or service loads from the database on a miss itself (Caffeine's loading cache, a DAX-style proxy). Same behaviour as cache-aside, but the loading logic lives in one place.
+
+**Write-through**: the application writes to the cache, and the cache writes to the database synchronously before returning. Reads of recently written data are fast and never stale. Writes are slower (users tolerate slow writes better than slow reads), a new cache node holds nothing until entries are written again (combine with cache-aside for reads), and much of what is written may never be read (add a TTL).
+
+**Write-behind (write-back)**: the application writes to the cache, and the cache writes to the database **asynchronously**, often batched. Writes are very fast and the database sees a smoothed load. The risk is **data loss** if the cache fails before flushing, and it is more complex to build. Fits counters, view counts and other data that can tolerate losing a few seconds.
+
+**Refresh-ahead**: the cache reloads recently used entries **before** they expire. When it predicts well, readers never see a miss on hot keys; when it predicts badly, it wastes work refreshing entries nobody reads.
+
+| Pattern | Read path | Write path | Stale reads | Data loss risk | Use when |
+|---|---|---|---|---|---|
+| cache-aside | app fills on miss | DB, then delete key | until delete or TTL | none | the default for most reads |
+| read-through | cache fills on miss | DB, then delete | until delete or TTL | none | a cache layer that owns loading |
+| write-through | cache | cache and DB together | none | none | recently written data is read soon |
+| write-behind | cache | cache now, DB later | none | yes, on cache failure | write-heavy, loss-tolerant counters |
+| refresh-ahead | cache | any | short | none | a few very hot keys with predictable reads |
+"""
+
+[[sections]]
+heading = "Invalidation: keeping the copy honest"
+body = """
+"There are only two hard things in computer science: cache invalidation and naming things." The tools, from simplest to strongest:
+
+1. **TTL only**: every entry expires after a fixed time. Simple; staleness is bounded by the TTL. Fine for data where minutes of staleness are acceptable (a product's review count).
+2. **Delete on write**: after the database commits, delete the key; the next read reloads it. Staleness lasts only between the commit and the delete.
+3. **Versioned keys**: store a version number with the entity (`user:42` has version 17) and key the cache by it (`user:42:v17`). A write bumps the version; old entries are never read again and simply expire.
+4. **Change data capture**: a process tails the database's commit log and deletes affected keys. The database's log is the source of truth, so invalidations are not lost when an application server crashes between commit and delete. Facebook's memcache deployment works this way: a daemon (mcsqueal) reads the MySQL commit log and broadcasts deletes to every cache cluster.
+
+**Why delete instead of set?** Two writers race:
+
+| Time | Writer A | Writer B |
+|---|---|---|
+| 1 | DB: price = 10 | |
+| 2 | | DB: price = 12 |
+| 3 | | cache: set 12 |
+| 4 | cache: set 10 | |
+
+The database says 12, the cache says 10, and it stays wrong until the TTL. Deleting makes the order of cache operations irrelevant: the next read loads the current value.
+
+Even delete has a narrow race: a reader misses, reads the **old** value from the database, a writer commits and deletes, then the reader sets the old value. Short TTLs bound it; **leases** (below) close it.
+
+> [!TIP]
+> **Read-your-writes**: after a user edits their profile, a stale cache can show the old one. Delete synchronously in the write path (before responding), or route that user's next reads to the database for a few seconds.
+"""
+
+[[sections]]
+heading = "Eviction: what to drop when memory is full"
+body = """
+| Policy | Drops | Good for | Weakness |
+|---|---|---|---|
+| LRU | the least recently used | most workloads with skew | one big scan flushes the hot set |
+| LFU | the least frequently used | stable popularity | slow to adapt when popularity shifts |
+| FIFO | the oldest inserted | simple queues of data | ignores how often items are read |
+| Random | any | uniform access | ignores recency and frequency |
+| TTL-based | those expiring soonest | data with natural lifetimes | needs good TTLs |
+
+**Redis** applies a policy only when `maxmemory` is reached (`maxmemory-policy`): `noeviction` (refuse writes; the default), `allkeys-lru`, `allkeys-lfu`, `allkeys-random`, the `volatile-*` versions that only evict keys with a TTL, and `volatile-ttl`. Its LRU is **approximate**: it samples a few keys (`maxmemory-samples`, 5 by default) and evicts the oldest of them, which is close to true LRU at a fraction of the memory. Use `allkeys-lru` as the default for a cache.
+
+**W-TinyLFU** (in Java's Caffeine) keeps a tiny frequency sketch and admits a new entry only if it is likely to be read more than the one it would evict, so a one-off scan cannot flush the hot set. It beats LRU on most real traces.
+
+**Sizing**: estimate the **working set**, the data read in a typical window. For a URL shortener with 100 million links where 20% receive 80% of reads: 20M links × ~500 bytes ≈ 10 GB, which fits on one node with room to spare.
+"""
+
+[[sections]]
+heading = "When caches fail"
+body = """
+**Stampede (thundering herd, dog-piling)**: a hot key expires, and in the same millisecond thousands of requests miss and all query the database for the same value. Remedies:
+
+- **One rebuilder**: the first miss takes a short lock (`SET lock:key 1 NX PX 5000` in Redis) and recomputes; the others wait briefly and retry the cache, or serve the stale value.
+- **Leases**: Facebook's memcache hands a lease token to the first client that misses a key and returns a token only once every 10 seconds per key; other clients are told to wait briefly. The lease also stops stale sets: a delete invalidates the token, so a client holding an old value cannot write it back.
+- **Request coalescing**: inside one server, concurrent requests for the same key share a single in-flight load (a "singleflight").
+- **Early probabilistic refresh** (XFetch): each reader recomputes early with a probability that rises as expiry nears, `now − Δ·β·ln(rand()) ≥ expiry`, where Δ is how long a recompute takes. One reader refreshes just before expiry, without coordination.
+
+**Avalanche**: many keys expire at the same moment (all written by a job at midnight with the same TTL) and the database is hit by all of them. Add **jitter**: TTL = base ± a random 10%.
+
+**Penetration**: requests for keys that do not exist (a bot probing random ids) always miss and always reach the database. Cache the absence (**negative caching**: store "not found" with a short TTL) or check a **Bloom filter** of existing ids first.
+
+**Hot key**: one key receives more traffic than one cache node can serve (a celebrity's profile, a flash-sale item). Replicate it under several keys (`item:9#0` … `item:9#7`, readers pick one at random), or keep a small in-process copy for a second or two.
+
+**Cache down**: if the cache cluster fails, every read hits the database, which was sized for 1% of them. Rate-limit the fallback path, serve degraded responses, or keep a spare pool: Facebook routes requests for failed memcached servers to a small set of **Gutter** machines (about 1% of a cluster) instead of rehashing their keys onto healthy servers.
+
+**Cold start**: a new or flushed cache sends everything to the database. Warm it from logs of popular keys before taking traffic, or shift traffic over gradually.
+"""
+
+[[sections]]
+heading = "Distributed caches"
+body = """
+One node is rarely enough for both memory and throughput, so keys are spread over a cluster:
+
+- **Sharding by consistent hashing**: Memcached clients hash each key onto a ring of servers; adding a server moves only a slice of keys. Redis Cluster divides keys into 16,384 hash slots spread over primaries; clients learn the slot map and talk to the right node directly.
+- **Replication**: Redis replicas take over when a primary fails (with Sentinel or Cluster). Replication is asynchronous, so a failover can lose the last writes: acceptable for a cache, not for a source of truth.
+- **Two tiers**: a small in-process cache (milliseconds of TTL, or invalidated by messages) in front of the shared cache absorbs hot keys. Redis's client-side caching can track which keys a client holds and push invalidations when they change.
+- **Across regions**: each region keeps its own cache, invalidated by the replicated database's change stream; never make a cross-region call on the read path.
+"""
+
+[[sections]]
+heading = "HTTP caching"
+body = """
+For responses served to browsers and CDNs, the protocol does the caching:
+
+- `Cache-Control: public, max-age=31536000, immutable` for versioned static files (`app.3f9a.js`): cached for a year, a new deploy changes the file name.
+- `Cache-Control: private, max-age=60` for a user's own data: browsers may cache it, CDNs must not.
+- `Cache-Control: no-cache` means "revalidate before use", not "do not cache"; `no-store` means do not store at all.
+- `s-maxage` sets a different lifetime for shared caches such as CDNs.
+- **Validators**: the server sends an `ETag`; the client asks with `If-None-Match`, and an unchanged resource returns `304 Not Modified` with no body.
+- `stale-while-revalidate=30` lets a cache serve a stale response for up to 30 seconds while it refetches in the background: users never wait for the refresh.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+A strong answer about caching says:
+
+1. **What** is cached (objects, not queries), the key, and the value's size.
+2. **Where** (CDN for static and public, Redis for shared application data, in-process for very hot small data).
+3. **How it is filled**: cache-aside by default; write-through or write-behind only with a reason.
+4. **How it stays fresh**: TTL with jitter plus delete on write, or CDC invalidation; the staleness the product accepts.
+5. **The hit ratio and what the database must handle** on a miss, and on a cold or failed cache.
+6. **Failure modes** for this workload: stampede protection on hot keys, hot-key replication, negative caching.
+
+> [!INTERVIEW]
+> Interviewers probe with "what if the cache goes down?" and "how do you keep it consistent?". Have an answer for both before they ask.
 """
 
 [[checks]]
@@ -41,7 +240,73 @@ answer = "Two concurrent writers can update the database in one order and the ca
 prompt = "A popular key expires and the database falls over. What happened and how do you stop it?"
 answer = "A cache stampede: every request missed at once and went to the database. Let one request rebuild the value while others wait or get the stale copy (locking, request coalescing), refresh hot keys before they expire, or add jitter to TTLs."
 
+[[checks]]
+prompt = "The hit ratio drops from 99% to 95% after a deploy. The database handled 2,000 reads a second before. Roughly what does it handle now, and why does a small drop matter so much?"
+answer = "Misses go from 1% to 5% of the same traffic: five times as many, about 10,000 reads a second. The database sees only the misses, so its load is proportional to (1 − hit ratio); small changes near 100% are large relative changes in database load."
+
+[[checks]]
+prompt = "Bots request random product ids that do not exist, and every request reaches the database. Name two fixes."
+answer = "Negative caching: store a 'not found' marker for the id with a short TTL so repeats are answered by the cache. Or check a Bloom filter of existing ids before the cache and database, rejecting ids that definitely do not exist. Rate limiting the client also helps."
+
+[[checks]]
+prompt = "When is write-behind a reasonable choice, and what do you give up?"
+answer = "For write-heavy data that can tolerate losing a few seconds of updates, such as view or like counters: writes go to memory and are flushed to the database in batches, smoothing its load. You give up durability (a cache failure before the flush loses the writes) and accept more complexity."
+
+[[sources]]
+title = "The System Design Primer: Cache"
+url = "https://github.com/donnemartin/system-design-primer#cache"
+note = "layers, query vs object caching, update strategies (CC BY 4.0)"
+
+[[sources]]
+title = "Scaling Memcache at Facebook (NSDI 2013)"
+url = "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+note = "leases against stale sets and stampedes, Gutter, invalidation from the commit log"
+
+[[sources]]
+title = "Optimal Probabilistic Cache Stampede Prevention (VLDB 2015)"
+url = "https://www.vldb.org/pvldb/vol8/p886-vattani.pdf"
+note = "the XFetch early-refresh rule"
+
+[[sources]]
+title = "Redis: key eviction"
+url = "https://redis.io/docs/latest/develop/reference/eviction/"
+note = "maxmemory policies and the approximated LRU"
+
+[[sources]]
+title = "Redis: client-side caching"
+url = "https://redis.io/docs/latest/develop/clients/client-side-caching/"
+note = "server-assisted invalidation of in-process copies"
+
+[[sources]]
+title = "Caffeine: efficiency"
+url = "https://github.com/ben-manes/caffeine/wiki/Efficiency"
+note = "W-TinyLFU against LRU on real traces"
+
+[[sources]]
+title = "AWS ElastiCache: caching strategies"
+url = "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html"
+note = "lazy loading, write-through and TTLs in practice"
+
+[[sources]]
+title = "MDN: HTTP caching"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching"
+note = "Cache-Control, validators, heuristics"
+
+[[sources]]
+title = "RFC 9111: HTTP Caching"
+url = "https://www.rfc-editor.org/rfc/rfc9111"
+note = "the standard"
+
+[[sources]]
+title = "RFC 5861: stale-while-revalidate and stale-if-error"
+url = "https://www.rfc-editor.org/rfc/rfc5861"
+
 [[figures]]
 name = "cache-aside"
-after = "Cache-aside"
+after = "Reading and writing: the patterns"
 caption = "A hit comes from memory; a miss goes to the database and fills the cache."
+
+[[figures]]
+name = "cache-stampede"
+after = "When caches fail"
+caption = "Without protection every miss hits the database; with a lease one request rebuilds and the rest wait."

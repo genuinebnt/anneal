@@ -15,7 +15,7 @@ pub const SD_LEVELS: &[&str] = &["mid", "senior", "staff"];
 /// The kinds of practice problem.
 pub const SD_KINDS: &[&str] = &["hld", "api", "lld"];
 /// The animated drawings the web app can show on a concept page (`web/src/components/SdFigure.tsx`). A name here needs a drawing there.
-pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream", "lsm-tree", "saga", "circuit-breaker", "quorum", "bloom-filter", "inverted-index"];
+pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream", "lsm-tree", "saga", "circuit-breaker", "quorum", "bloom-filter", "inverted-index", "cache-stampede"];
 
 #[derive(Debug, Clone, Default)]
 pub struct SdCatalog {
@@ -45,6 +45,23 @@ pub struct Concept {
     /// Animated drawings shown on the page, by name (one of [`SD_FIGURES`]), each placed after the section it names.
     #[serde(default)]
     pub figures: Vec<Figure>,
+    /// The attribution an openly licensed source asks for when the page adapts its text (Markdown), such as
+    /// "Adapted in part from the System Design Primer by Donne Martin, CC BY 4.0". Listed in `content/sd/NOTICE.md` too.
+    #[serde(default)]
+    pub credit: Option<String>,
+    /// Where the facts come from and where to read further: official documentation, papers, book chapters, articles.
+    #[serde(default)]
+    pub sources: Vec<Source>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub title: String,
+    pub url: String,
+    /// What it is or what to read it for, in a few words.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,6 +175,14 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
         }
         if c.checks.is_empty() || c.checks.iter().any(|k| blank(&k.prompt) || blank(&k.answer)) {
             bad.push("at least one check, each with a prompt and an answer".to_owned());
+        }
+        for src in &c.sources {
+            if blank(&src.title) || !src.url.starts_with("https://") {
+                bad.push(format!("source {:?} needs a title and an https:// url", src.title));
+            }
+        }
+        if c.credit.as_deref().is_some_and(blank) {
+            bad.push("`credit` must not be empty when given".to_owned());
         }
         for f in &c.figures {
             if !SD_FIGURES.contains(&f.name.as_str()) {

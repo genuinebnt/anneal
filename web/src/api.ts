@@ -1110,7 +1110,7 @@ export type SdMark = "got" | "part" | "miss";
 export interface SdConceptRow { id: string; title: string; group: string; order: number; minutes: number; lede: string; checks: number; checked: number }
 export interface SdProblemRow { id: string; title: string; kind: "hld" | "api" | "lld"; order: number; minutes: number; uses: string[]; companies: string[]; points: number; attempts: number; best: number | null; last: string | null; last_id: number | null; unmarked: boolean }
 export interface SdOverview { today: string; concepts: SdConceptRow[]; problems: SdProblemRow[]; due: number; week: number; cards: number }
-export interface SdConcept { id: string; title: string; group: string; order: number; minutes: number; lede: string; sections: { heading: string; body: string }[]; say: string; checks: { prompt: string; answer: string }[]; related: string[]; figures: { name: string; after: string; caption: string }[] }
+export interface SdConcept { id: string; title: string; group: string; order: number; minutes: number; lede: string; sections: { heading: string; body: string }[]; say: string; checks: { prompt: string; answer: string }[]; related: string[]; figures: { name: string; after: string; caption: string }[]; credit?: string | null; sources?: { title: string; url: string; note?: string | null }[] }
 export interface SdConceptView { concept: SdConcept; marked: string[]; used_in: { id: string; title: string; kind: string }[] }
 export interface SdPoint { id: string; text: string; level: "mid" | "senior" | "staff" }
 export interface SdStep { name: string; minutes: number; prompt: string; reference: string; points: SdPoint[] }

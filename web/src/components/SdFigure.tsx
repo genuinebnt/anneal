@@ -222,6 +222,27 @@ const FIGS: Record<string, { steps: number; ms: number; draw: (t: number) => Rea
             </>
         ),
     },
+    "cache-stampede": {
+        steps: 10,
+        ms: 800,
+        draw: (t) => {
+            const lease = t >= 5;
+            const k = t % 5;
+            return (
+                <>
+                    <text className="sf-lab" x={14} y={20}>{lease ? "with a lease" : "no protection"}</text>
+                    {[0, 1, 2, 3, 4].map((i) => <Box key={i} x={14} y={30 + i * 34} w={86} h={26} label={`request ${i + 1}`} tone={lease && i === 0 ? "acc" : "line"} r={6} />)}
+                    <Box x={250} y={84} w={120} label="Cache" tone={k >= 3 ? "grn" : "warn"} sub={k >= 3 ? "refilled" : "key expired"} />
+                    <Box x={480} y={84} w={130} label="Database" tone={!lease && k >= 1 && k < 3 ? "bad" : "line"} sub={lease ? (k >= 1 && k < 3 ? "1 query" : "") : k >= 1 && k < 3 ? "5 identical queries" : ""} />
+                    {[0, 1, 2, 3, 4].map((i) => <Arrow key={i} d={`M100 ${43 + i * 34} L248 ${90 + i * 6}`} on={k === 0} />)}
+                    {k >= 1 && k < 3 && (lease ? [2] : [0, 1, 2, 3, 4]).map((i) => <Arrow key={i} d={`M370 ${90 + i * 6} L478 ${90 + i * 6}`} on />)}
+                    {lease && k >= 1 && k < 3 && <text className="sf-lab" x={120} y={204}>requests 2-5 wait a moment, then read the cache</text>}
+                    {!lease && k >= 1 && k < 3 && <text className="sf-lab" x={120} y={204}>every miss rebuilds the same value</text>}
+                    {k >= 3 && <text className="sf-lab" x={120} y={204}>{lease ? "the database saw one query" : "the database saw five; at scale, thousands"}</text>}
+                </>
+            );
+        },
+    },
     "lsm-tree": {
         steps: 10,
         ms: 800,

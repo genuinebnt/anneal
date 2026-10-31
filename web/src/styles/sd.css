@@ -180,3 +180,9 @@
 .sd-aisug b.got{color:var(--grn)}.sd-aisug b.part{color:var(--warn)}.sd-aisug b.miss{color:var(--bad)}
 .sd-rub>div>span{display:block}
 @media (prefers-reduced-motion:reduce){.ai-think i{animation:none}}
+.sd-srcs{margin-top:28px}
+.sd-srcs ul{margin:8px 0 0;padding-left:18px;display:grid;gap:6px;font-size:13.5px}
+.sd-srcs a{color:var(--fg);text-decoration:none;font-weight:500}.sd-srcs a:hover{color:var(--acc)}
+.sd-srcs li span{color:var(--dim)}
+.sd-credit{margin-top:14px;padding:10px 14px;border-radius:10px;background:var(--inset);font-size:12.5px;color:var(--dim)}
+.sd-credit p{margin:0}

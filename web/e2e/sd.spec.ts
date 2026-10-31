@@ -11,6 +11,10 @@ test("System design is an area: home, the groups, and a concept page with its dr
     await expect(page.locator(".ly-h1")).toHaveText("Kafka");
     await expect(page.locator(".sd-fig svg").first()).toBeVisible();
     await expect(page.locator(".sd-md table").first()).toBeVisible();
+    // an adapted page credits its licensed source and lists where its facts come from
+    await page.goto("/sd/learn/caching");
+    await expect(page.locator(".sd-credit")).toContainText("CC BY 4.0");
+    await expect(page.locator(".sd-srcs li").first()).toBeVisible();
 });
 
 test("a concept check marked as missed comes back in Review, and grading schedules it", async ({ page }) => {
