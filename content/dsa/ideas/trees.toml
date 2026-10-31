@@ -1,0 +1,174 @@
+pattern = "Trees"
+
+tagline = "Do the same small thing at every node, and let the shape of the tree tell you what order to do it in."
+
+what = [
+    "A tree is a node plus smaller trees, so almost every tree problem has the same shape: **handle this node, then trust the same function on each child**. The only choices are *when* you handle the node (before the children, between them, or after them) and *what each call hands back*.",
+    "Two walks cover most of it. **Depth-first** goes as deep as it can and uses a stack (the call stack) to find the way back. **Breadth-first** goes level by level and uses a queue. Run both below, and watch what each one has to remember.",
+]
+
+demos = ["tree-dfs", "tree-bfs"]
+
+applies = [
+    "Any question about a **binary tree**: its depth, a path, whether two trees match, whether it is balanced.",
+    "\"**Level by level**\", \"the right side view\", \"the largest value in each row\".",
+    "**Search trees**: find, insert, delete, the k-th smallest, is it a valid BST.",
+    "A graph that has **no cycles** and a chosen root, such as an org chart or a folder tree.",
+    "**Building** a tree from its traversals, or turning one into a string and back.",
+]
+
+yes = [
+    "The structure is **hierarchical**: every item has one parent and the answer for a node depends on its subtrees.",
+    "A function written for one node **works unchanged** on each child.",
+    "The question is about a **path, a depth, a level or an ordering** of the nodes.",
+]
+
+no = [
+    "The data has **cycles or several parents** (a general graph): you need a visited set, which a tree walk does not have.",
+    "You need the **shortest route** through weighted links: that is a graph search, not a tree walk.",
+    "The tree is really a **sorted list** in disguise and you only look things up: binary search on an array is simpler.",
+]
+
+apply = [
+    "**Say what one call returns for a node.** A height, a count, a boolean, a best path that *ends* here.",
+    "**Say what a call does at an empty place.** Usually `0`, `None` or `True`: the base case.",
+    "**Decide when to act.** Before the children (preorder, carrying something down), between them (inorder, a BST gives sorted order) or after them (postorder, combining what they return).",
+    "**Choose DFS or BFS.** Anything about depth, paths or subtrees is DFS. Anything about *levels* or the nearest node is BFS.",
+    "**State the invariant.** \"When a call returns, it has done its whole subtree and handed back its answer.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"do the same thing at **every node**\": invert, compare, count, find the depth"
+kind = "Depth-first traversal"
+move = "Recurse into both children and combine the two answers at the node."
+glyph = "descend"
+technique = "Trees:dfs"
+
+[[which]]
+says = "\"the best **path** through a node\", \"the longest chain\", \"the diameter\""
+kind = "Subtree aggregation"
+move = "Each call returns the best path that *ends* at the node; the best path *through* it is combined on the way and kept on the side."
+glyph = "bubble"
+technique = "Trees:dfs-return"
+
+[[which]]
+says = "\"the answer depends on the **path from the root**\": good nodes, path sum"
+kind = "Carry state down"
+move = "Pass what the path has seen as a parameter, and each node uses it."
+glyph = "carry"
+technique = "Trees:dfs-carry"
+
+[[which]]
+says = "a binary **search** tree: find, the lowest common ancestor, closest value"
+kind = "BST walk"
+move = "Compare with the node and go left or right, throwing away half the tree each time."
+glyph = "bstwalk"
+technique = "Trees:bst-walk"
+
+[[which]]
+says = "\"the **k-th smallest**\", \"is this a **valid** search tree\""
+kind = "Inorder"
+move = "An inorder walk of a BST visits the values in sorted order, so count as you go or check each step is larger."
+glyph = "inorderw"
+technique = "Trees:inorder"
+
+[[which]]
+says = "\"**level by level**\", \"right side view\", \"the minimum depth\""
+kind = "Breadth-first"
+move = "A queue; process exactly the nodes that were in it when the level began."
+glyph = "levels"
+technique = "Trees:bfs-levels"
+
+[[which]]
+says = "the tree is given as a list of **edges**, so there are no node objects"
+kind = "Tree as a graph"
+move = "Build an adjacency list, pick a root, and walk with a parent so you never step back."
+glyph = "edgelist"
+technique = "Trees:tree-as-graph"
+
+[[which]]
+says = "\"**rebuild** the tree from preorder and inorder\""
+kind = "Construction"
+move = "Preorder gives the root; its position in inorder splits left from right. Look positions up in a map."
+glyph = "rebuild"
+technique = "Trees:from-traversals"
+
+[[which]]
+says = "\"**serialize** and deserialize\", \"encode a tree as a string\""
+kind = "Serialize"
+move = "Write preorder with a marker for each empty place; reading it back consumes the same order."
+glyph = "rebuild"
+technique = "Trees:serialize"
+
+[[cost]]
+name = "Recompute for every node"
+time = "O(n²)"
+space = "O(h)"
+why = "If each node separately walks its own subtree (for example to find its height), a long chain makes the first node walk n nodes, the next n−1, and so on. This is the cost to beat: let each call return what its parent needs."
+
+[[cost]]
+name = "Depth-first walk"
+time = "O(n)"
+space = "O(h)"
+why = "Every node is entered once and left once, so the time is linear. The call stack holds only the path from the root to the current node, which is the height h: about log n for a balanced tree, but n for a chain."
+
+[[cost]]
+name = "Breadth-first walk"
+time = "O(n)"
+space = "O(w)"
+why = "Every node joins the queue once and leaves once. The queue holds up to a whole level, the width w, which for a bushy tree is about n/2, so BFS can use much more memory than DFS."
+
+[[cost]]
+name = "Subtree aggregation"
+time = "O(n)"
+space = "O(h)"
+why = "It is the same single walk; each call hands its answer up so the parent never looks into the subtree again. The extra variable that tracks the best answer costs O(1)."
+
+[[cost]]
+name = "BST search, insert, delete"
+time = "O(h)"
+space = "O(h)"
+why = "Each comparison discards one whole side, so you take one step per level. That is O(log n) when the tree is balanced and O(n) when sorted input has made it a chain. Recursion needs h stack frames; a loop needs O(1)."
+
+[[cost]]
+name = "Inorder for the k-th smallest"
+time = "O(h + k)"
+space = "O(h)"
+why = "Go down the left spine (h steps), then step to the next value k times, stopping at the k-th. You never visit the rest of the tree."
+
+[[cost]]
+name = "Build from two traversals"
+time = "O(n)"
+space = "O(n)"
+why = "A map from value to inorder position makes each root's split a lookup, instead of a scan that would make the whole build O(n²). The map and the recursion each take up to n."
+
+[[cost]]
+name = "Serialize and deserialize"
+time = "O(n)"
+space = "O(n)"
+why = "Each node, and each empty place, is written once and read once. The string has about 2n tokens."
+
+[[with]]
+pattern = "Stack"
+how = "Depth-first search *is* a stack. Replace the recursion with your own stack and you can walk a tree of any height without overflowing: push the root, pop a node, visit it, push its children."
+example = "binary-tree-inorder-traversal"
+
+[[with]]
+pattern = "Graphs"
+how = "A tree is a graph with no cycles, so the same two walks apply. In a general graph you add a visited set, and BFS then finds the fewest edges."
+example = "number-of-islands"
+
+[[with]]
+pattern = "Binary Search"
+how = "A balanced BST is binary search laid out as pointers: every comparison throws away half. The inorder walk is the sorted array you would have searched."
+example = "kth-smallest-element-in-a-bst"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Tree DP is DP where the subproblems are subtrees. Each node returns two values (take it, skip it), and the parent combines them: the same take-or-skip idea as a line, on a tree."
+example = "house-robber-iii"
+
+[[with]]
+pattern = "Backtracking"
+how = "Backtracking is a depth-first walk of a tree you do not have in memory: the decision tree. The recursion, the path and the undo step are the same shapes you use here."
+example = "subsets"

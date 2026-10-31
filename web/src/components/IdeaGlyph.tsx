@@ -39,6 +39,14 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     streak: { n: 10, w: [[2, 7]], dots: [2, 3, 4, 5, 6] },
     vote: { n: 10, w: [], w2: [[0, 10]], dots: [0, 1, 3, 4, 6, 7, 9] },
     marks: { n: 10, w: [], dots: [2, 6], ptr: [2, 6] },
+    descend: { n: 10, w: [[0, 10]], w2: [[0, 5]], dots: [0, 2, 4], ptr: [4] },
+    bubble: { n: 10, w: [], bars: [2, 3, 5, 8, 9, 6, 4, 3, 2, 1], ptr: [4] },
+    carry: { n: 10, w: [[0, 6]], dots: [0, 1, 2, 3, 4, 5], ptr: [5] },
+    bstwalk: { n: 10, w: [[0, 10]], w2: [[5, 10]], dots: [7], ptr: [7] },
+    inorderw: { n: 10, w: [], bars: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dots: [4], ptr: [4] },
+    levels: { n: 10, w: [[0, 1]], w2: [[1, 3]], dots: [3, 4, 5, 6] },
+    edgelist: { n: 10, w: [], dots: [1, 3, 5, 7, 9], ptr: [0, 8] },
+    rebuild: { n: 10, w: [[0, 4]], w2: [[5, 10]], dots: [4] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {

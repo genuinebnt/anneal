@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { DEMOS, type DemoInput, type Frame, type Reading } from "../ideaDemos";
 import { highlightPy } from "./dsaBits";
+import { GraphView, GridView, QueueView, RangesView } from "./IdeaStages";
 import { Segmented } from "./ui";
 
 const hue = (c: string) => (c.charCodeAt(0) * 47) % 360;
@@ -13,7 +14,7 @@ function Num({ value }: { value: string | number }) {
     useEffect(() => {
         if (Number.isNaN(target)) return;
         const calm = document.documentElement.dataset.motion === "reduce" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-        if (calm || from.current === target) {
+        if (calm || from.current === target || Number.isNaN(from.current)) {
             from.current = target;
             setShown(target);
             return;
@@ -149,6 +150,7 @@ export function IdeaDemo({ names }: { names: string[] }) {
     const cells = f.cells ?? input.items;
     const farLinks = frames.some((fr) => fr.links?.some((l) => l.to >= 0 && Math.abs(l.to - l.from) > 1));
     const pointers = placed(f);
+    const multi = !demo.noRow && frames.some((fr) => fr.graph || fr.grid || fr.ranges);
     const mapRows = Math.max(1, ...frames.map((fr) => fr.map?.rows.length ?? 0));
     // room for the markers that stack: the most any step has above and below the row
     const rooms = frames.reduce((m, fr) => {
@@ -184,8 +186,9 @@ export function IdeaDemo({ names }: { names: string[] }) {
                     <label>Try your own <input value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} className={invalid ? "id-bad" : ""} aria-label={demo.fields.text} maxLength={demo.letters || demo.compact ? 14 : 40} /></label>
                     {demo.fields.param && <label>{demo.fields.param.label.replace(/^Window size /, "")} <input className="id-k" type="number" min={demo.fields.param.min} max={demo.fields.param.max} value={k} onChange={(e) => setK(e.target.value)} onBlur={apply} onKeyDown={(e) => e.key === "Enter" && apply()} aria-label={demo.fields.param.label} /></label>}
                 </div>
-                <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 + (farLinks ? 34 : 0) }}>
-                    <div className="id-body">
+                <div className="id-stage" role="img" aria-label={`${demo.noRow ? "" : `${cells.join(", ")}. `}${f.say}`} style={demo.noRow ? { paddingTop: 26, paddingBottom: 26 } : { paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 + (farLinks ? 34 : 0) }}>
+                    <div className={`id-body${multi ? " id-multi" : ""}`}>
+                        {!demo.noRow && <div className={multi ? "id-rowwrap" : undefined}>
                         <div className={`id-row${demo.words ? " id-wordy" : ""}`} style={{ width: cells.length * CELL, "--cell": `${CELL}px`, "--gap": `${GAP}px` } as CSSProperties}>
                             {f.links && <Links links={f.links} n={cells.length} cell={CELL} gap={GAP} />}
                             {f.win && <div className="id-brace" style={{ left: f.win[0] * CELL, width: Math.max(f.win[1] - f.win[0], 1) * CELL, opacity: f.win[1] > f.win[0] ? 1 : 0.35 }} />}
@@ -205,6 +208,11 @@ export function IdeaDemo({ names }: { names: string[] }) {
                                 );
                             })}
                         </div>
+                        </div>}
+                        {f.graph && <GraphView g={f.graph} />}
+                        {f.grid && <GridView t={f.grid} />}
+                        {f.ranges && <RangesView r={f.ranges} />}
+                        {f.queue && <QueueView q={f.queue} />}
                         {f.stack && (
                             <div className="id-stackwrap">
                                 <span className="id-stl">{f.stack.label}</span>

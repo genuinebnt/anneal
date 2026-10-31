@@ -274,3 +274,24 @@ test("Arrays & Hashing: the map fills as the scan goes, a lookup finds the partn
     await expect(page.locator(".id-res")).toContainText("3 groups");
     await expect(page.locator(".id-map .id-mrow")).toHaveCount(3);
 });
+
+test("Trees: the tree is drawn, a depth-first walk keeps a call stack, and a breadth-first walk keeps a queue", async ({ page }) => {
+    await page.goto("/dsa/patterns/D7/idea");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(7);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-nv-n.id-nv-cur")).toHaveCount(1);
+    await expect(page.locator(".id-stack .id-cell")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("4 2 1 3 6 5 7");
+    await page.getByRole("radio", { name: /breadth-first/i }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-qu .id-cell")).toHaveCount(3);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("4 2 6 1 3 5 7");
+    // own tree, with an empty place
+    const box = page.getByLabel(/A tree level by level/);
+    await box.fill("1,_,3,9,_,4");
+    await box.blur();
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(3);
+});

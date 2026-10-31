@@ -31,6 +31,42 @@ export interface Work {
     note: string;
 }
 
+/** A node of a drawn graph or tree: `x` and `y` are 0..1 in the picture. `tone` is how it looks now. */
+export interface GNode {
+    id: number;
+    x: number;
+    y: number;
+    label: string;
+    tone?: "cur" | "seen" | "done" | "hit" | "new" | "front" | "dim";
+    /** A small note under the node (a distance, a count). */
+    sub?: string;
+}
+
+export interface GEdge {
+    a: number;
+    b: number;
+    tone?: "on" | "new" | "cut" | "hit";
+    directed?: boolean;
+    /** A weight, drawn on the edge. */
+    w?: string;
+}
+
+/** A table of cells (a DP table, a board, a matrix). `marks` colour single cells: `cur` is being written, `read` is being read from. */
+export interface GridMark {
+    r: number;
+    c: number;
+    tone: "cur" | "read" | "done" | "hit" | "bad" | "new";
+}
+
+/** Bars on a number line: each `from`..`to` on its own lane (`lane`), with a marker (a sweep) optionally. */
+export interface Range {
+    from: number;
+    to: number;
+    label: string;
+    lane: number;
+    tone?: "cur" | "keep" | "drop" | "merged" | "done";
+}
+
 /** One step. The window `win` is `[l, r)` and is drawn as a brace; `dim` cells are ruled out; `cur` cells are being looked at; `hit` cells are the answer;
  *  `enter`, `leave` and `dup` mark a cell coming in, going out and repeating; `cells` replaces the values (an array being written in place);
  *  `stack` draws a second structure beside the row; `lines` are the 1-based code lines that run. */
@@ -50,6 +86,14 @@ export interface Frame {
     leave?: number;
     dup?: number;
     stack?: { label: string; items: string[]; top?: "push" | "pop" };
+    /** A drawn graph or tree beside (or instead of) the row. */
+    graph?: { nodes: GNode[]; edges: GEdge[]; w?: number; h?: number };
+    /** A table: `cells[r][c]`, with optional labels and coloured cells. */
+    grid?: { cells: string[][]; rowLabels?: string[]; colLabels?: string[]; marks?: GridMark[]; small?: boolean };
+    /** Intervals on a line over `axis` = [min, max]; `marker` is a vertical sweep line. */
+    ranges?: { bars: Range[]; axis: [number, number]; marker?: number; lanes: number };
+    /** A queue drawn as a row, front on the left. */
+    queue?: { label: string; items: string[]; top?: "push" | "pop" };
     /** A hash map beside the row: `new` is the entry just written, `hit` the one a lookup found. */
     map?: { label: string; rows: { k: string; v: string; tone?: "new" | "hit" }[] };
     lines: number[];
@@ -72,6 +116,8 @@ export interface Demo {
     wide?: boolean;
     /** Each cell holds a short word, so the cells are wider and the type smaller. */
     words?: boolean;
+    /** No row of cells: the picture is a graph, a grid or ranges. */
+    noRow?: boolean;
     /** The labels of what can be typed: the cells, and the number if there is one. */
     fields: { text: string; param?: { label: string; min: number; max: number } };
     /** Reads what was typed; null when it is not a valid input. */
@@ -669,7 +715,10 @@ function simulateSignature(input: DemoInput): Frame[] {
     return out;
 }
 
+import { TREE_DEMOS } from "./ideaDemosTrees.ts";
+
 export const DEMOS: Record<string, Demo> = {
+    ...TREE_DEMOS,
     "window-fixed": {
         title: "Fixed size · best sum",
         code: fixedCode,
