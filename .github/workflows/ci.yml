@@ -92,8 +92,13 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: Browser tests (Playwright)
+    name: Browser tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    # Four shards, each with its own database and API, so the tests stay one worker per database but run four at once.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:18-alpine
@@ -120,6 +125,9 @@ jobs:
         working-directory: web
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e
+          save-if: ${{ matrix.shard == 1 }}
       - run: cargo build --locked -p anneal-api
       # The meaning model (bge-small-en-v1.5, pinned and checksummed), kept between runs.
       - uses: actions/cache@v4
@@ -139,9 +147,19 @@ jobs:
           ./target/debug/anneal-api > api.log 2>&1 &
           for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8791/courses && exit 0; sleep 1; done
           cat api.log; exit 1
+      # The browser download is kept between runs; only its system libraries are installed each time.
+      - uses: actions/cache@v4
+        id: browsers
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
       - run: pnpm exec playwright install --with-deps chromium
+        if: steps.browsers.outputs.cache-hit != 'true'
         working-directory: web
-      - run: pnpm e2e
+      - run: pnpm exec playwright install-deps chromium
+        if: steps.browsers.outputs.cache-hit == 'true'
+        working-directory: web
+      - run: pnpm e2e --shard=${{ matrix.shard }}/4
         working-directory: web
       - name: API log on failure
         if: failure()
@@ -177,18 +195,13 @@ jobs:
           path: out/anneal-${{ matrix.name }}
           if-no-files-found: error
 
-  deploy:
-    name: Deploy to production
+  # The images build while the tests run, tagged with the commit only; the deploy job tags them latest and ships them once every
+  # check passed, so a failing commit never becomes latest.
+  images:
+    name: Build the images
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [rust, web, e2e, cli]
+    needs: [cli]
     runs-on: ubuntu-latest
-    # One deploy at a time; a newer commit waits and then ships, older queued ones are skipped.
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    environment:
-      name: production
-      url: https://anneal.genuinebasil.dev
     permissions:
       contents: read
       packages: write
@@ -216,9 +229,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/genuinebnt/anneal:${{ github.sha }}
-            ghcr.io/genuinebnt/anneal:latest
+          tags: ghcr.io/genuinebnt/anneal:${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=app
           cache-to: type=gha,scope=app,mode=max
@@ -228,12 +239,36 @@ jobs:
           context: docker
           file: docker/runner.Dockerfile
           push: true
-          tags: |
-            ghcr.io/genuinebnt/anneal-runner:${{ github.sha }}
-            ghcr.io/genuinebnt/anneal-runner:latest
+          tags: ghcr.io/genuinebnt/anneal-runner:${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=runner
           cache-to: type=gha,scope=runner,mode=max
+
+  deploy:
+    name: Deploy to production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [rust, web, e2e, images]
+    runs-on: ubuntu-latest
+    # One deploy at a time; a newer commit waits and then ships, older queued ones are skipped.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://anneal.genuinebasil.dev
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the tested images latest
+        run: |
+          docker buildx imagetools create -t ghcr.io/genuinebnt/anneal:latest ghcr.io/genuinebnt/anneal:${{ github.sha }}
+          docker buildx imagetools create -t ghcr.io/genuinebnt/anneal-runner:latest ghcr.io/genuinebnt/anneal-runner:${{ github.sha }}
       - name: Deploy
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}

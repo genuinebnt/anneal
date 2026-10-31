@@ -1027,6 +1027,14 @@ export const api = {
   unmarkDay: (id: number) => request<Streaks>("DELETE", `/streaks/marks/${id}`),
   stats: () => request<ProgressStats>("GET", "/stats"),
   system: () => request<SystemView>("GET", "/system"),
+  sd: () => request<SdOverview>("GET", "/sd"),
+  sdConcept: (id: string) => request<SdConceptView>("GET", `/sd/concepts/${id}`),
+  sdProblem: (id: string) => request<SdProblemView>("GET", `/sd/problems/${id}`),
+  sdAttempt: (body: { problem_id: string; started_at: string; seconds: number; steps: Record<string, { answer: string; seconds: number }>; diagram: SdDiagram; hints: number }) => request<{ id: number }>("POST", "/sd/attempts", body),
+  sdMark: (id: number, marks: Record<string, SdMark>) => request<{ score: number | null; cards: number }>("PUT", `/sd/attempts/${id}/marks`, { marks }),
+  sdCheck: (concept: string, index: number, mark: SdMark) => request<{ ok: boolean }>("POST", "/sd/checks", { concept, index, mark }),
+  sdReview: () => request<SdReviewView>("GET", "/sd/review"),
+  sdGrade: (card: string, grade: Grade) => request<{ due: string; days: number }>("POST", `/sd/review/${encodeURIComponent(card)}`, { grade }),
   /** Problems that mean the most nearly the same as a problem (`like`) or a piece of text (`q`): exact, over every problem. */
   meaning: (ask: { like?: string; q?: string; k?: number }) =>
     request<MeaningAnswer>("GET", `/dsa/meaning?${new URLSearchParams(Object.entries(ask).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])).toString()}`),
@@ -1089,6 +1097,22 @@ export interface SystemSample { t: number; cpu: number | null; load1: number | n
 export interface SystemContainer { name: string; image: string; state: string; status: string; cpu: string | null; mem: string | null; mem_pct: string | null; net: string | null; block: string | null }
 export interface SystemHit { t: number; method: string; path: string; status: number; ms: number }
 export interface SystemMinute { t: number; n: number; errors: number; ms_sum: number; ms_max: number }
+/** System design prep (docs/SYSTEM_DESIGN.md). */
+export type SdMark = "got" | "part" | "miss";
+export interface SdConceptRow { id: string; title: string; group: string; order: number; minutes: number; lede: string; checks: number; checked: number }
+export interface SdProblemRow { id: string; title: string; kind: "hld" | "api" | "lld"; order: number; minutes: number; uses: string[]; companies: string[]; points: number; attempts: number; best: number | null; last: string | null; last_id: number | null; unmarked: boolean }
+export interface SdOverview { today: string; concepts: SdConceptRow[]; problems: SdProblemRow[]; due: number; week: number; cards: number }
+export interface SdConcept { id: string; title: string; group: string; order: number; minutes: number; lede: string; sections: { heading: string; body: string }[]; say: string; checks: { prompt: string; answer: string }[]; related: string[]; figures: { name: string; after: string; caption: string }[] }
+export interface SdConceptView { concept: SdConcept; marked: string[]; used_in: { id: string; title: string; kind: string }[] }
+export interface SdPoint { id: string; text: string; level: "mid" | "senior" | "staff" }
+export interface SdStep { name: string; minutes: number; prompt: string; reference: string; points: SdPoint[] }
+export interface SdProblem { id: string; title: string; kind: string; order: number; minutes: number; prompt: string; uses: string[]; companies: string[]; hints: string[]; steps: SdStep[]; probes: { question: string; answer: string }[] }
+export interface SdDiagram { nodes?: { id: string; x: number; y: number; label: string; kind: "box" | "store" | "queue" }[]; edges?: { from: string; to: string }[] }
+export interface SdAttempt { id: number; finished_at: string; seconds: number; steps: Record<string, { answer: string; seconds: number }>; diagram: SdDiagram; hints: number; marks: Record<string, SdMark> }
+export interface SdProblemView { problem: SdProblem; uses: { id: string; title: string }[]; attempts: SdAttempt[] }
+export interface SdCard { card_id: string; kind: "point" | "check"; due: string; reps: number; lapses: number; last_grade: string | null; source: { type: "problem" | "concept"; id: string; title: string; step?: string }; prompt: string; answer: string; level: string | null }
+export interface SdReviewView { today: string; due: SdCard[]; week: { day: string; n: number }[] }
+
 /** Where meaning search stands, and its hits (`GET /api/dsa/meaning`). */
 export interface MeaningAnswer {
   phase: "off" | "building" | "ready" | "failed";

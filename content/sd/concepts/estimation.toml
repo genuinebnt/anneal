@@ -1,0 +1,42 @@
+title = "Back-of-envelope estimates"
+group = "fundamentals"
+order = 3
+minutes = 7
+lede = "Rough arithmetic that answers one question at a time: requests a second, storage over years, bandwidth. The aim is a decision, not a precise figure."
+say = "Writes are about 1,000 a second and reads 100,000, so the read path gets a cache and replicas; storage is 5 TB over five years, so one database holds it."
+related = ["numbers-to-know"]
+
+[[sections]]
+heading = "The method"
+body = """
+1. Start from users: daily active users × actions per user per day.
+2. Divide by 100,000 to get a second; multiply by 2 or 3 for the peak.
+3. Storage: items a day × size × 365 × years, plus replication (×3).
+4. Round hard: powers of ten, one significant figure.
+5. **Say what the number means** before moving on: fits on one box, needs a cache, needs sharding.
+"""
+
+[[sections]]
+heading = "A worked example"
+body = """
+A URL shortener with 100 million new links a month and 100 redirects per link:
+
+- Writes: 100M / 2.5M s ≈ **40 a second** (peak ~100). Trivial for one database.
+- Reads: 100× writes ≈ **4,000 a second** (peak ~10k). A cache absorbs most of it.
+- Storage: 100M links × 500 bytes = 50 GB a month, **3 TB over five years**. One database, or a few shards for headroom.
+- Codes: 6 base62 characters give 62⁶ ≈ 57 billion codes, enough for decades at this rate.
+"""
+
+[[sections]]
+heading = "When to skip it"
+body = """
+Estimate when a number changes the design. If the answer is obviously "small", say so in one sentence and move on; interviewers value the decision more than the arithmetic.
+"""
+
+[[checks]]
+prompt = "A chat app has 50 million daily users sending 40 messages each. Messages a second at peak, and storage a year at 200 bytes each?"
+answer = "2 billion messages a day / 100k s = 20,000 a second, so peak about 50,000. Storage: 2 billion × 200 B = 400 GB a day, about 150 TB a year before replication. That needs a store built for write-heavy horizontal scale."
+
+[[checks]]
+prompt = "How many base62 characters does a short code need for 1 trillion links?"
+answer = "62⁷ is about 3.5 trillion, so 7 characters; 6 give only about 57 billion."

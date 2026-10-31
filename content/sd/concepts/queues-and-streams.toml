@@ -1,0 +1,57 @@
+title = "Queues and streams"
+group = "pattern"
+order = 5
+minutes = 9
+lede = "Two ways to hand work from one service to another without waiting: a queue hands each message to one worker and forgets it once done; a stream keeps an ordered log that many readers replay."
+say = "Sending the welcome email is a job, so it goes on a queue with retries and a dead-letter queue; the order events go on a stream because billing, search and analytics all read them."
+related = ["kafka", "scaling-writes"]
+
+[[sections]]
+heading = "Why go asynchronous"
+body = """
+- **Absorb spikes**: the producer writes fast, workers drain at their own rate.
+- **Decouple**: the producer does not know or wait for who handles the work.
+- **Retry**: a failed step is tried again without the user waiting.
+
+The price: the result is not there when the request returns, so the product must accept "it will happen shortly", and you now run something that can back up.
+"""
+
+[[sections]]
+heading = "A queue"
+body = """
+Each message goes to **one** consumer. The consumer **acknowledges** it when done; until then it is hidden (a *visibility timeout*), and if the ack never comes it reappears for another worker.
+
+- Retries happen by redelivery, so handlers must be **idempotent**.
+- After N failures, move the message to a **dead-letter queue** to look at, rather than retrying forever.
+- Order is usually not guaranteed (FIFO queues exist, with lower throughput).
+- Examples: SQS, RabbitMQ, a Redis list or stream used as a queue.
+"""
+
+[[sections]]
+heading = "A stream"
+body = """
+Messages are appended to a **log** and kept for a while. Each reader keeps its own position, so many independent readers consume everything, and a reader can rewind and replay.
+
+- Order is kept per partition (per key).
+- Good for events: "order placed", "location updated", consumed by many services.
+- Examples: Kafka, Kinesis, Redis Streams, Pulsar.
+"""
+
+[[sections]]
+heading = "Back pressure"
+body = """
+When producers outrun consumers, the backlog grows. Watch **queue depth and age of the oldest message**, scale workers on them, and decide what happens at the limit: slow the producer, shed low-priority work, or accept a longer delay. A queue hides a slow consumer until the backlog is days long.
+"""
+
+[[checks]]
+prompt = "When would you choose a queue over a stream for background work?"
+answer = "When each message is a job that one worker should do once, with per-message retries, visibility timeouts and a dead-letter queue, and nobody needs to replay it (sending an email, resizing an image). A stream fits when many readers need the same ordered events or replay."
+
+[[checks]]
+prompt = "Your image-resize queue keeps growing during the day and empties at night. What do you measure and what do you change?"
+answer = "Measure queue depth and the age of the oldest message against how long users can wait. Autoscale workers on depth or age, and if the peak still exceeds capacity, prioritise interactive work and push bulk work to off-peak."
+
+[[figures]]
+name = "queue-vs-stream"
+after = "A stream"
+caption = "A queue gives each message to one worker; a stream keeps the log and every reader moves through it."

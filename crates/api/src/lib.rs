@@ -27,6 +27,7 @@ pub mod streaks;
 pub mod statement;
 mod store;
 pub mod meaning;
+pub mod sd;
 pub mod system;
 mod views;
 
@@ -120,6 +121,14 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/review", get(review::queue))
         .route("/dsa/mock", get(mock::get))
         .route("/dsa/meaning", get(meaning::get))
+        .route("/sd", get(sd::overview))
+        .route("/sd/concepts/{id}", get(sd::concept))
+        .route("/sd/problems/{id}", get(sd::problem))
+        .route("/sd/attempts", post(sd::add_attempt))
+        .route("/sd/attempts/{id}/marks", axum::routing::put(sd::mark_attempt))
+        .route("/sd/checks", post(sd::mark_check))
+        .route("/sd/review", get(sd::review))
+        .route("/sd/review/{card}", post(sd::grade))
         .route("/dsa/mock/config", put(mock::put_config))
         .route("/dsa/mock/rounds", post(mock::post_round))
         .route("/dsa/handwritten/{pattern}", get(practice::for_pattern))

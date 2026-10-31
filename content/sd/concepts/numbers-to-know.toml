@@ -1,0 +1,51 @@
+title = "Numbers to know"
+group = "fundamentals"
+order = 2
+minutes = 6
+lede = "A handful of orders of magnitude, enough to say whether something fits on one machine, how long a request costs, and whether a cache is worth it."
+say = "That's about 1,200 writes a second at peak, which one Postgres primary handles; the read side is 100 times that, so it needs a cache."
+related = ["estimation", "caching"]
+
+[[sections]]
+heading = "Latency"
+body = """
+| Operation | Roughly |
+|---|---|
+| Read from memory | 100 ns |
+| Read 1 MB from memory | 10 µs |
+| SSD random read | 100 µs |
+| Round trip inside a data centre | 0.5 ms |
+| Redis get, over the network | under 1 ms |
+| Indexed database query | 1 to 10 ms |
+| Round trip across a continent | 50 to 150 ms |
+
+Memory is about a thousand times faster than SSD; the network inside a region costs about as much as an SSD read.
+"""
+
+[[sections]]
+heading = "What one machine does"
+body = """
+- A modern server: 64 cores, 256 GB to 1 TB memory, several TB of NVMe.
+- Postgres on such a box: thousands to tens of thousands of simple writes a second, many more reads, terabytes of data.
+- Redis: about 100k operations a second per node; data must fit in memory.
+- Kafka broker: hundreds of MB/s.
+- An application server: thousands of requests a second for simple work.
+
+Most products do not need sharding as early as interviews assume; say the number and decide.
+"""
+
+[[sections]]
+heading = "Time and size"
+body = """
+- A day is about 100,000 seconds (86,400). A month is about 2.5 million seconds.
+- 1 million requests a day is about 12 a second; 1 billion a day is about 12,000 a second.
+- A character is a byte; a tweet with metadata about 1 KB; a photo about 1 MB; a minute of HD video about 50 MB.
+"""
+
+[[checks]]
+prompt = "500 million users, each viewing 20 posts a day. Average and peak reads a second?"
+answer = "10 billion reads a day / 100,000 s is about 100,000 a second on average; peak is often 2 to 3 times that, so 200k to 300k a second."
+
+[[checks]]
+prompt = "Is a 2 TB dataset with 3,000 writes a second a reason to shard?"
+answer = "Not by itself: one large Postgres server holds a few TB and takes thousands of writes a second. Replicas for reads and good indexes come first; shard when writes or size outgrow one primary with headroom."

@@ -6,7 +6,7 @@ import { niceDate } from "../dsa";
 import { getPref } from "../prefs";
 import { useShowIdeas } from "../spoilers";
 
-type AreaId = "dsa" | "rust" | "courses";
+type AreaId = "dsa" | "rust" | "courses" | "sd";
 type Item = { key: string; label: string; value: string; of?: string; note?: string; bar?: number; tone?: "ok" | "warn" | "bad" | "hot"; spark?: number[] };
 
 const pct = (a: number, b: number) => (b > 0 ? Math.max(0, Math.min(1, a / b)) : 0);
@@ -18,6 +18,7 @@ export function StatsBar({ area }: { area: AreaId }) {
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
     const tracks = useQuery({ queryKey: ["tracks"], queryFn: api.tracks });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
+    const sd = useQuery({ queryKey: ["sd"], queryFn: api.sd, staleTime: 60_000, enabled: area === "sd" });
 
     // Hidden from Settings; the choice is a preference, so it follows the owner to another laptop.
     const [hidden, setHidden] = useState(() => getPref("statusbar.hidden", false));
@@ -71,9 +72,18 @@ export function StatsBar({ area }: { area: AreaId }) {
             if (c.challenges != null) out.push({ key: "ch", label: "CHALLENGES", value: String(c.challenges_done ?? 0), of: `/${c.challenges}`, bar: pct(c.challenges_done ?? 0, c.challenges) });
             if (c.current) out.push({ key: "cur", label: "CONTINUE", value: c.current });
             if (c.last_run) out.push({ key: "run", label: "LAST RUN", value: c.last_run.stage_id, note: `${c.last_run.passed}/${c.last_run.total} passing`, tone: c.last_run.ok ? "ok" : "bad" });
+        } else if (area === "sd" && sd.data) {
+            const v = sd.data;
+            const checks = v.concepts.reduce((n, c) => n + c.checks, 0);
+            const done = v.concepts.reduce((n, c) => n + Math.min(c.checked, c.checks), 0);
+            const drilled = v.problems.filter((x) => x.attempts > 0).length;
+            out.push({ key: "chk", label: "CHECKS ANSWERED", value: String(done), of: `/${checks}`, bar: pct(done, checks), tone: "ok" });
+            out.push({ key: "dr", label: "PROBLEMS DRILLED", value: String(drilled), of: `/${v.problems.length}`, bar: pct(drilled, v.problems.length) });
+            out.push({ key: "due", label: "REVIEWS DUE", value: String(v.due), tone: v.due > 0 ? "hot" : undefined, note: `${v.week} this week` });
+            out.push({ key: "pages", label: "PAGES", value: String(v.concepts.length), note: "to learn" });
         }
         return out;
-    }, [area, dsa.data, progress.data, tracks.data, course.data, showIdeas]);
+    }, [area, dsa.data, progress.data, tracks.data, course.data, sd.data, showIdeas]);
 
     if (hidden || items.length === 0) return null;
     const render = (copy: number) =>

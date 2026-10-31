@@ -1,0 +1,85 @@
+title = "Kafka"
+group = "technology"
+order = 1
+minutes = 12
+lede = "A distributed, replicated log. Producers append records to the end of a partition; consumers read forward from an offset they keep, so many readers can replay the same history at their own pace."
+say = "I'd put the events on Kafka, partitioned by order id so each order's events stay in order, and let each downstream service read them as its own consumer group."
+related = ["queues-and-streams", "replication", "scaling-writes"]
+
+[[sections]]
+heading = "The model"
+body = """
+A **topic** is a named stream, split into **partitions**. Each partition is an append-only log on disk: records get increasing **offsets** (0, 1, 2…) and are never changed in place.
+
+- Producers choose the partition, usually by hashing a **key** (all records with key `order-42` land in one partition, so they stay in order).
+- Order is guaranteed **within a partition only**. Across partitions there is no global order.
+- Records are kept for a **retention** time or size (say 7 days), whether or not anyone read them. Reading does not delete.
+"""
+
+[[sections]]
+heading = "Consumers and groups"
+body = """
+A consumer reads a partition from an offset and **commits** how far it got. A **consumer group** shares a topic's partitions: each partition goes to exactly one member, so the group reads in parallel.
+
+- More consumers than partitions: the extra ones sit idle. **Partitions cap parallelism**, so choose the count for the peak you expect (it is hard to lower later).
+- A new group starts from the beginning or the end; two groups read the same data independently (search indexing and billing can both consume `orders`).
+- When a member joins or dies, the group **rebalances** and partitions move. Work in flight can be read twice.
+"""
+
+[[sections]]
+heading = "Durability and replication"
+body = """
+Each partition has a **leader** on one broker and **followers** on others that copy its log. The followers that are caught up form the **in-sync replicas (ISR)**.
+
+- `acks=all`: the leader answers the producer only after every in-sync replica has the record. Lose a broker, lose nothing.
+- `acks=1`: faster, but a leader that dies before followers copied the record loses it.
+- If the leader dies, a follower from the ISR takes over. A controller (KRaft, formerly ZooKeeper) decides who leads.
+"""
+
+[[sections]]
+heading = "Delivery guarantees"
+body = """
+- **At most once**: commit the offset before processing. A crash loses the record.
+- **At least once** (the usual): process, then commit. A crash means the record is processed again, so **make consumers idempotent** (dedupe on an event id, or upsert).
+- **Exactly once** inside Kafka: idempotent producers plus transactions that write output and commit offsets together. It does not cover side effects outside Kafka (an email sent twice is still sent twice).
+"""
+
+[[sections]]
+heading = "Why it is fast"
+body = """
+Sequential disk writes, batching, compression, and the OS page cache: a partition is mostly appended to and read from the tail, so reads come from memory. Consumers pull in batches. A single broker handles hundreds of MB/s.
+"""
+
+[[sections]]
+heading = "When to use it, and when not"
+body = """
+| Reach for it | Look elsewhere |
+|---|---|
+| Event streams many services consume | One-off background jobs with retries per job (a queue such as SQS fits better) |
+| Replaying history, rebuilding a view | Request-reply with low latency |
+| High write throughput, ordered per key | Per-message priorities, delays or routing rules |
+
+A **hot key** sends everything to one partition; spread it (key plus a bucket) if order across that key does not matter.
+"""
+
+[[checks]]
+prompt = "You have 12 partitions and scale your consumer group to 20 instances. What happens, and what would you change?"
+answer = "Only 12 instances get a partition; 8 sit idle, because a partition is read by one member of a group. To use 20, the topic needs at least 20 partitions, chosen up front for the peak."
+
+[[checks]]
+prompt = "A consumer charges a card and then crashes before committing its offset. What happens next, and how do you keep the customer from being charged twice?"
+answer = "The record is delivered again after the rebalance (at least once). Make the charge idempotent: pass an idempotency key (the event id) to the payment provider, or record processed event ids and skip repeats."
+
+[[checks]]
+prompt = "Why does Kafka only promise order within a partition, and how do you keep all events of one order in sequence?"
+answer = "Partitions are independent logs on different brokers, read in parallel, so there is no shared sequence. Key the records by order id so every event of an order goes to the same partition."
+
+[[figures]]
+name = "kafka-log"
+after = "The model"
+caption = "Producers append to the end of each partition; two consumers read at their own offsets."
+
+[[figures]]
+name = "consumer-groups"
+after = "Consumers and groups"
+caption = "A group splits the partitions between its members; a second group reads everything again."

@@ -1,0 +1,42 @@
+title = "Data modeling"
+group = "core"
+order = 1
+minutes = 8
+lede = "Choosing what to store, how to key it, and which database fits the way it is read and written."
+say = "Links go in Postgres keyed by short code; clicks are append-only and huge, so they go to a column store and get rolled up by day."
+related = ["indexes", "sharding", "postgres"]
+
+[[sections]]
+heading = "Start from the queries"
+body = """
+List the hot reads and writes first ("get a link by code", "a user's links, newest first", "clicks per day"), then shape tables and keys so each is one lookup. A model that is elegant but needs a join across shards on the hot path is wrong for the interview.
+"""
+
+[[sections]]
+heading = "Choosing a database"
+body = """
+| Need | Usually |
+|---|---|
+| Relations, transactions, ad-hoc queries | Postgres or MySQL (the default) |
+| Huge write volume, simple key lookups, many regions | Cassandra or DynamoDB |
+| Hot data in memory, counters, leaderboards | Redis |
+| Text search, filters, ranking | Elasticsearch |
+| Large files | object storage (S3) with metadata in a database |
+| Metrics over time | a time-series database |
+
+Say the default and the reason to leave it: "Postgres, until writes outgrow one primary."
+"""
+
+[[sections]]
+heading = "Normalise or not"
+body = """
+**Normalised** (each fact once, joined at read time) keeps writes simple and data consistent. **Denormalised** (copies placed where they are read, such as a precomputed feed) makes reads one lookup and writes more work. Read-heavy hot paths usually denormalise; the source of truth stays normalised.
+"""
+
+[[checks]]
+prompt = "Clicks on short links: 4,000 a second, never updated, queried as counts per link per day. How would you store them?"
+answer = "Append-only events, not rows in the links table: write them to a log or queue and into a store built for heavy writes and aggregation (a column store, or Cassandra), and keep a rolled-up count per link per day for the dashboard."
+
+[[checks]]
+prompt = "When is a denormalised copy worth its cost?"
+answer = "When a hot read would otherwise need joins or many lookups and reads far outnumber writes, such as a home timeline; the copy is rebuilt or updated on write, and the normalised data stays the source of truth."

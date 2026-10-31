@@ -1,0 +1,42 @@
+title = "Consistency and CAP"
+group = "core"
+order = 7
+minutes = 7
+lede = "When the network splits, a distributed system either refuses some requests to stay consistent, or answers them all and lets copies disagree for a while. Choose per feature, not per system."
+say = "Seat booking must be consistent, so it goes through one primary with a transaction; the event listing can be eventually consistent and served from replicas and a cache."
+related = ["replication", "contention"]
+
+[[sections]]
+heading = "CAP in one line"
+body = """
+During a network **partition**, choose **consistency** (every read sees the latest write, or gets an error) or **availability** (every request gets an answer, possibly stale). Without a partition you can have both; the real everyday trade is latency against consistency.
+"""
+
+[[sections]]
+heading = "Choosing per feature"
+body = """
+| Needs strong consistency | Fine with eventual |
+|---|---|
+| booking a seat, payments, inventory | likes and view counts |
+| unique usernames | a news feed |
+| a bank balance | search results, recommendations |
+
+Say it per requirement: "No double booking, so this write is strongly consistent; the browse page can be seconds behind."
+"""
+
+[[sections]]
+heading = "Levels in between"
+body = """
+- **Read your own writes**: you always see what you wrote.
+- **Monotonic reads**: you never see time go backwards.
+- **Causal**: a reply never appears before the message it answers.
+- **Eventual**: copies agree if writes stop.
+"""
+
+[[checks]]
+prompt = "For a ticketing site, which parts need strong consistency and which can be eventual?"
+answer = "Holding and buying a seat must be strongly consistent (one owner per seat, through a transaction or a lock on one primary). Event pages, search and seat maps for browsing can be eventually consistent, served from replicas or a cache, with the final check at purchase."
+
+[[checks]]
+prompt = "Why is 'we chose AP' an incomplete answer for a whole system?"
+answer = "Different features need different guarantees; the answer is per feature and per operation, and most of the time the trade is latency against consistency, not a partition."

@@ -1,0 +1,45 @@
+title = "Replication"
+group = "core"
+order = 5
+minutes = 8
+lede = "Keeping copies of the same data on several machines: to survive a machine dying, and to serve more reads than one machine can."
+say = "Postgres with one primary and two replicas: writes go to the primary, timelines read from replicas, and a user's own reads go to the primary for a few seconds after they post."
+related = ["sharding", "consistency-cap", "scaling-reads"]
+
+[[sections]]
+heading = "Leader and followers"
+body = """
+One **leader** takes the writes and streams them to **followers**, which serve reads. If the leader dies, a follower is promoted.
+
+- **Synchronous**: the leader waits for a follower before confirming. No data loss on failover, slower writes.
+- **Asynchronous**: the leader confirms at once. Fast, but a failover can lose the last writes, and followers lag behind.
+"""
+
+[[sections]]
+heading = "Replication lag"
+body = """
+An asynchronous follower may be seconds behind. A user who posts and then reloads from a follower may not see their post.
+
+- **Read your own writes**: read from the leader for a short time after the user writes, or route by a version the client carries.
+- **Monotonic reads**: pin a user to one follower so time never goes backwards for them.
+"""
+
+[[sections]]
+heading = "Other shapes"
+body = """
+- **Multi-leader**: a leader per region takes writes; conflicts must be resolved (last write wins, or merge).
+- **Leaderless** (Dynamo, Cassandra): write to N nodes, wait for W to confirm, read from R; with W + R > N, a read sees the latest write.
+"""
+
+[[checks]]
+prompt = "A user edits their profile and the page shows the old name on reload. Why, and how do you fix it without reading everything from the primary?"
+answer = "The reload went to an asynchronous replica that had not caught up (replication lag). Read that user's own data from the primary for a short window after a write, or send a write version with the request and read from a replica only once it has caught up."
+
+[[checks]]
+prompt = "With N = 3 replicas, which W and R make a read always see the latest acknowledged write?"
+answer = "Any with W + R > N, such as W = 2 and R = 2: every read set overlaps every write set in at least one node."
+
+[[figures]]
+name = "replication"
+after = "Leader and followers"
+caption = "Writes go to the leader and stream to followers; a lagging follower serves an old value."

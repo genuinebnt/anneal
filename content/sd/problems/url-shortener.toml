@@ -1,0 +1,134 @@
+title = "URL shortener"
+kind = "hld"
+order = 1
+minutes = 35
+prompt = "Design a service like Bitly: users paste a long URL and get a short link; anyone who opens the short link is redirected to the long one."
+uses = ["delivery-framework", "estimation", "caching", "sharding", "data-modeling", "api-styles"]
+companies = ["Google", "Amazon", "Microsoft", "Meta"]
+hints = [
+  "How many links are created a second, and how many redirects? The ratio decides where the effort goes.",
+  "Where does a short code come from, so that two servers never hand out the same one?",
+  "What is the hot path, and what can sit in memory in front of it?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "List 3 to 4 functional requirements ('Users should be able to…'), the non-functional ones made measurable, and a quick estimate if it changes a decision."
+reference = """
+**Functional**: users can create a short link from a long URL (optionally a custom alias and an expiry); anyone can open a short link and be redirected.
+
+**Non-functional**: redirects are fast (under 100 ms p99) and highly available; codes are unique; links are durable once created; scale to about 100M new links a month.
+
+**Estimate**: about 40 writes a second, about 4,000 redirects a second (100× reads); about 3 TB over five years. Read-heavy, small enough for one database with a cache in front.
+"""
+[[steps.points]]
+id = "req-core"
+text = "Core features named: create a short link, redirect; custom alias and expiry as options"
+level = "mid"
+[[steps.points]]
+id = "req-latency"
+text = "Low-latency, highly available redirect called out as the priority"
+level = "mid"
+[[steps.points]]
+id = "req-ratio"
+text = "Estimated that reads far outnumber writes, and said what that means for the design"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Link` (short code, long URL, owner, created, expires), `User`; optionally `Click` events for analytics."
+[[steps.points]]
+id = "ent-link"
+text = "Link with code, long URL, owner and expiry; clicks kept apart from links"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Write the endpoints: method, path, what goes in, what comes back."
+reference = """
+```
+POST /links            { long_url, alias?, expires_at? } -> 201 { short_code, short_url }
+GET  /{short_code}     -> 302 Location: long_url   (404 if unknown or expired)
+```
+302 rather than 301: a 301 is cached by browsers forever, so expiry, edits and click counts stop working. The owner comes from the auth token. A taken alias returns 409.
+"""
+[[steps.points]]
+id = "api-shape"
+text = "Create and redirect endpoints with the right inputs and outputs"
+level = "mid"
+[[steps.points]]
+id = "api-302"
+text = "302 for the redirect, and why not 301"
+level = "senior"
+[[steps.points]]
+id = "api-conflict"
+text = "A taken custom alias returns 409 Conflict"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Draw the boxes and arrows that satisfy each requirement, one endpoint at a time. Note the key table next to the database."
+reference = """
+Client → load balancer → **write service** (validates the URL, gets a unique code, stores the link) and **redirect service** (looks the code up, returns 302).
+
+- **Database**: `links(short_code PK, long_url, user_id, created_at, expires_at)`. Postgres is fine at this scale; a unique key on the code enforces uniqueness.
+- **Unique codes**: a counter turned into base62 (each write server reserves a range of ids, so there is no per-request coordination), or hash the URL and check for a collision.
+- **Cache**: Redis in front of the redirect lookup, keyed by code; most redirects never reach the database.
+"""
+[[steps.points]]
+id = "hld-split"
+text = "Read (redirect) path separated from the write path, with a cache in front of the lookup"
+level = "mid"
+[[steps.points]]
+id = "hld-codes"
+text = "A concrete way to make codes unique: counter + base62, or hash + collision check"
+level = "mid"
+[[steps.points]]
+id = "hld-store"
+text = "Datastore chosen with a reason, and the links table sketched"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 10
+prompt = "Meet the non-functional requirements: scale the hot path, remove the single points of failure, handle the awkward cases."
+reference = """
+- **Code generation at scale**: no single counter on the hot path; hand each server a block of ids from a coordinator (or a Redis `INCRBY 1000`), refill before it runs out. Gaps are fine.
+- **Hot links**: cache with a TTL, add a CDN or edge cache for the most popular codes; a stampede guard on expiry.
+- **Availability**: replicas behind the database, several redirect servers, the cache as a buffer if the database blips.
+- **Expiry**: check `expires_at` on read; a background job removes expired links later.
+- **Analytics**: write click events to a stream, aggregate asynchronously; never on the redirect's critical path.
+"""
+[[steps.points]]
+id = "dd-counter"
+text = "Code generation without a single counter as a bottleneck (id ranges per server)"
+level = "senior"
+[[steps.points]]
+id = "dd-hot"
+text = "Hot links handled: cache with TTL, CDN or edge, stampede guard"
+level = "senior"
+[[steps.points]]
+id = "dd-expiry"
+text = "Expiry checked on read, cleaned up in the background"
+level = "mid"
+[[steps.points]]
+id = "dd-analytics"
+text = "Click analytics moved off the redirect path, through a stream"
+level = "staff"
+
+[[probes]]
+question = "Your counter is a single Postgres sequence. What breaks at 10,000 creates a second, and what do you change?"
+answer = "Every create waits on one sequence on one primary; it becomes the bottleneck and a single point of failure. Give each write server a block of ids (say 1,000) from a coordinator and hand them out from memory; a crash only leaves a gap."
+
+[[probes]]
+question = "A link goes viral: 200,000 redirects a second for one code. Walk through what happens."
+answer = "The cache key for that code becomes hot. Serve it from a CDN or edge cache with a short TTL, keep a small in-process copy on redirect servers, and replicate the hot key, so the cache node and the database are protected."
+
+[[probes]]
+question = "A user deletes a link but people still land on the old page. Why?"
+answer = "Caches still hold it: the Redis entry until its TTL, the CDN, and browsers if a 301 was used. Delete the cache key on delete, purge the CDN, and use 302 so browsers ask every time."

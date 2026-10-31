@@ -1,0 +1,126 @@
+title = "News feed"
+kind = "hld"
+order = 3
+minutes = 45
+prompt = "Design the home feed of a social network: users follow others, post, and see a feed of recent posts from the people they follow, newest first."
+uses = ["delivery-framework", "estimation", "caching", "sharding", "scaling-reads", "scaling-writes", "queues-and-streams", "api-styles"]
+companies = ["Meta", "LinkedIn", "X", "Instagram"]
+hints = [
+  "Is it cheaper to assemble a feed when it is read, or to place each post into followers' feeds when it is written?",
+  "What happens to your answer when someone with 50 million followers posts?",
+  "How does the client page through a feed that gains posts while they scroll?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and the estimate that drives the design."
+reference = """
+**Functional**: users can post; follow and unfollow; see a feed of posts from people they follow, newest first, paginated.
+
+**Non-functional**: the feed loads fast (under 200 ms p99); a new post appears in followers' feeds within seconds (eventual consistency is fine); highly available; 500M daily users.
+
+**Estimate**: about 100k feed reads a second against a few thousand posts a second: very read-heavy. Some users have tens of millions of followers.
+"""
+[[steps.points]]
+id = "req-core"
+text = "Post, follow, and a paginated newest-first feed"
+level = "mid"
+[[steps.points]]
+id = "req-eventual"
+text = "Eventual consistency accepted for the feed, with a freshness target"
+level = "senior"
+[[steps.points]]
+id = "req-skew"
+text = "Read-heavy ratio and the celebrity follower skew identified up front"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`User`, `Follow` (follower, followee), `Post` (author, text, media, created), and a `Feed` (per-user list of post ids) if precomputed."
+[[steps.points]]
+id = "ent-follow"
+text = "Follow as its own entity, and the feed as a list of post ids"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Endpoints for posting, following and reading the feed."
+reference = """
+```
+POST   /posts                      { text, media_ids? } -> 201 { post }
+POST   /users/{id}/follow           -> 204        DELETE /users/{id}/follow -> 204
+GET    /feed?cursor=&limit=20      -> { items[], next_cursor }
+```
+A cursor (created_at plus id of the last item) rather than pages; the author comes from the token.
+"""
+[[steps.points]]
+id = "api-cursor"
+text = "Cursor pagination for the feed, not offsets"
+level = "mid"
+[[steps.points]]
+id = "api-auth"
+text = "The author and follower come from the auth token"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "A design that works: posting, following and reading the feed."
+reference = """
+- **Post service** writes posts to a posts store (sharded by author). **Follow service** keeps `follows` both ways (followers of X, X follows).
+- **Feed (fan-out on write)**: on a new post, a worker looks up the author's followers and pushes the post id to each follower's feed list in a cache (Redis list per user, trimmed to the latest ~500).
+- **Read**: GET /feed reads the cached id list, hydrates posts (batch get, cached), returns a page.
+- The fan-out runs **asynchronously** through a queue, so posting is fast.
+"""
+[[steps.points]]
+id = "hld-fanout"
+text = "Fan-out on write into per-user feed lists, done asynchronously through a queue"
+level = "mid"
+[[steps.points]]
+id = "hld-hydrate"
+text = "Feed stores post ids; posts hydrated in a batch from a cache"
+level = "senior"
+[[steps.points]]
+id = "hld-stores"
+text = "Posts and follows stored and keyed for their hot queries"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Celebrities, freshness, scale and failure."
+reference = """
+- **Celebrities**: fanning a post out to 50M feeds is too slow and costly. **Hybrid**: fan out on write for normal authors; for authors above a threshold, skip fan-out and **merge their recent posts at read time**.
+- **Inactive users**: do not maintain feeds for users who have not opened the app in weeks; rebuild on their next visit.
+- **Hot posts**: post bodies cached and replicated; counters (likes) split and aggregated.
+- **Failure**: the fan-out queue absorbs spikes and retries; the feed cache can be rebuilt from posts and follows.
+- **Ranking** (if asked): candidates from the same sources, a ranking service scores them; keep it out of the base design.
+"""
+[[steps.points]]
+id = "dd-hybrid"
+text = "Hybrid fan-out: push for most authors, pull celebrity posts at read time"
+level = "senior"
+[[steps.points]]
+id = "dd-inactive"
+text = "No feed upkeep for inactive users; rebuild on return"
+level = "staff"
+[[steps.points]]
+id = "dd-rebuild"
+text = "The feed cache is derived data and can be rebuilt; the queue gives retries"
+level = "senior"
+
+[[probes]]
+question = "A user with 50 million followers posts. With pure fan-out on write, what happens?"
+answer = "One post becomes 50 million cache writes: the fan-out queue backs up for minutes and other users' posts are delayed. Mark such authors and merge their posts into followers' feeds at read time instead."
+
+[[probes]]
+question = "A user follows someone new. When do that person's past posts show up in the feed?"
+answer = "With fan-out on write they would not until the next post; backfill the new followee's recent posts into the follower's feed list at follow time (asynchronously), or merge at read time until the feed catches up."
+
+[[probes]]
+question = "The feed cache cluster loses a node. What do affected users see, and how do you recover?"
+answer = "Their feed lists are gone from cache; rebuild them on read from the follow graph and recent posts (slower first load), then refill. The posts and follows remain the source of truth."

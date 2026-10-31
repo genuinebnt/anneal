@@ -35,6 +35,11 @@ import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { GraphPage } from "./pages/GraphPage";
 import { LogPage } from "./pages/LogPage";
 import { CompanyPage } from "./pages/CompanyPage";
+import { SdHome } from "./pages/sd/SdHome";
+import { SdConceptPage, SdLearn } from "./pages/sd/SdLearn";
+import { SdProblems } from "./pages/sd/SdProblems";
+import { SdPractice } from "./pages/sd/SdPractice";
+import { SdReview } from "./pages/sd/SdReview";
 import "./styles/design.css";
 import "./styles/app.css";
 import "./styles/catalog.css";
@@ -66,6 +71,7 @@ import "./styles/mockint.css";
 import "./styles/analytics.css";
 import "./styles/graph.css";
 import "./styles/palette.css";
+import "./styles/sd.css";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -178,6 +184,26 @@ const routes = [
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/analytics", component: AnalyticsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dsa/graph", component: GraphPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/sd", component: SdHome }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/sd/learn", component: SdLearn }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/sd/learn/$id",
+    component: function SdConceptRoute() {
+      const { id } = sdConceptRoute.useParams();
+      return <SdConceptPage key={id} id={id} />;
+    },
+  }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/sd/problems", component: SdProblems }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/sd/practice/$id",
+    component: function SdPracticeRoute() {
+      const { id } = sdPracticeRoute.useParams();
+      return <SdPractice key={id} id={id} />;
+    },
+  }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/sd/review", component: SdReview }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];
@@ -189,6 +215,8 @@ const courseStageRoute = routes[16];
 const courseConceptRoute = routes[17];
 const patternProblemsRoute = routes[18];
 const patternIdeaRoute = routes[23];
+const sdConceptRoute = routes[28];
+const sdPracticeRoute = routes[30];
 
 // Pages are preloaded when their link is hovered, scroll positions come back with Back, and a page that throws shows a way out instead of a blank screen.
 const router = createRouter({ routeTree: rootRoute.addChildren([...routes]), defaultPreload: "intent", defaultPreloadStaleTime: 30_000, scrollRestoration: true, defaultErrorComponent: ErrorScreen });

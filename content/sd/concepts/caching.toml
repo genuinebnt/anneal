@@ -1,0 +1,47 @@
+title = "Caching"
+group = "core"
+order = 3
+minutes = 9
+lede = "Keeping a copy of hot data in memory, close to where it is read, so most reads skip the slower database."
+say = "Redirects read through a Redis cache keyed by short code with a one-day TTL; a cache hit costs under a millisecond and the database only sees misses."
+related = ["redis", "scaling-reads", "consistent-hashing"]
+
+[[sections]]
+heading = "Where caches sit"
+body = """
+- **Client** (browser, app): free, but you cannot invalidate it.
+- **CDN**: static files and cacheable responses near users.
+- **Application cache** (Redis, Memcached): shared by all app servers; the usual answer.
+- **In-process**: fastest, but each server has its own copy.
+"""
+
+[[sections]]
+heading = "Cache-aside"
+body = """
+The common pattern: read the cache; on a miss, read the database and store the result with a TTL. On a write, update the database and **delete** the cache key (not update it: two racing writers could leave a stale value).
+
+Other patterns: **write-through** (write cache and database together, reads always hit), **write-behind** (write cache now, database later; fast, but data can be lost).
+"""
+
+[[sections]]
+heading = "What goes wrong"
+body = """
+- **Stale data**: choose TTLs per kind of data, and delete on write.
+- **Stampede**: a hot key expires and thousands of requests hit the database at once. Let one request refill (a lock or request coalescing), or refresh before expiry.
+- **Hot key**: one key gets more traffic than one cache node handles; replicate it, or keep a small in-process copy.
+- **Cold start**: a new or flushed cache sends everything to the database; warm it, or bring it in gradually.
+- **Eviction**: memory is finite; LRU evicts the least recently used.
+"""
+
+[[checks]]
+prompt = "Why delete the cache key on a write instead of writing the new value into the cache?"
+answer = "Two concurrent writers can update the database in one order and the cache in the other, leaving the cache with the older value until the TTL ends. Deleting makes the next read fetch the current value."
+
+[[checks]]
+prompt = "A popular key expires and the database falls over. What happened and how do you stop it?"
+answer = "A cache stampede: every request missed at once and went to the database. Let one request rebuild the value while others wait or get the stale copy (locking, request coalescing), refresh hot keys before they expire, or add jitter to TTLs."
+
+[[figures]]
+name = "cache-aside"
+after = "Cache-aside"
+caption = "A hit comes from memory; a miss goes to the database and fills the cache."

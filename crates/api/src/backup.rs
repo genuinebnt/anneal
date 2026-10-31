@@ -35,6 +35,11 @@ const TABLES: &[&str] = &[
     "course_repos",
     "reset_archive",
     "data_archive",
+    "day_plan",
+    "review_events",
+    "streak_marks",
+    "sd_attempts",
+    "sd_cards",
 ];
 
 const FORMAT: &str = "anneal-backup";

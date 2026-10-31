@@ -1,0 +1,50 @@
+title = "Sharding"
+group = "core"
+order = 4
+minutes = 9
+lede = "Splitting one database's rows across many machines by a key, so writes and storage grow past what one machine holds."
+say = "I'll shard by short code, hashed, because every read and write knows it and the spread stays even."
+related = ["consistent-hashing", "replication", "scaling-writes"]
+
+[[sections]]
+heading = "When you need it"
+body = """
+- Writes outgrow one primary (tens of thousands a second and rising).
+- The data outgrows one machine's disk, even after archiving old rows.
+- Not for reads alone: read replicas and a cache come first, and are far simpler.
+"""
+
+[[sections]]
+heading = "Choosing the key"
+body = """
+| Key | Good for | Breaks when |
+|---|---|---|
+| `user_id` | a user's data together, queries by user | one user is enormous (a celebrity) |
+| hash of an id | an even spread | you need ranges (all of last week) |
+| time range | recent-first reads, easy archiving | every new write hits the newest shard |
+| region | data near its users, residency rules | regions grow unevenly |
+
+The key should be in **every hot query**, so a request touches one shard.
+"""
+
+[[sections]]
+heading = "What it costs"
+body = """
+- **Queries across shards**: scatter-gather, or a second index keyed the other way.
+- **Joins and transactions across shards**: avoid them in the design, or use a saga.
+- **Resharding**: moving data while serving traffic. Start with many virtual shards mapped to few machines, or consistent hashing, so growth moves a fraction of the data.
+- **Hot shards**: one key with outsized traffic; split it (key plus a suffix) or cache in front.
+"""
+
+[[checks]]
+prompt = "Your shard key is user_id and a celebrity posts. What happens, and two ways out?"
+answer = "Their shard takes all the writes and reads for that post and becomes a hotspot. Split the hot key across several shards (user id plus a bucket suffix) and put a cache in front for reads; for feeds, pull the celebrity's posts at read time instead of fanning out."
+
+[[checks]]
+prompt = "Why start with, say, 256 virtual shards even when you only run 4 machines?"
+answer = "Moving to more machines then means reassigning whole virtual shards, not rehashing every row, so growth is a data move of known pieces with no change to the key."
+
+[[figures]]
+name = "shards"
+after = "Choosing the key"
+caption = "Keys hash to shards; a hot key piles load onto one of them."

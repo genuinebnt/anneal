@@ -2,6 +2,12 @@ import { expect, test } from "@playwright/test";
 
 const stage = "/courses/bustub/4a-04";
 
+// A failing run of the stage, so the run strip has one to name; the tests no longer rely on another file having made it.
+test.beforeAll(async ({ request }) => {
+    const tests = ["a_passes", "b_fails", "c_passes"].map((name) => ({ name, ok: name !== "b_fails", detail: name === "b_fails" ? "assertion failed" : "" }));
+    await request.post("/api/courses/bustub/runs", { data: { stage_id: "4a-04", tests, commit: "5e2d0c1a", duration_ms: 1200 } });
+});
+
 test.beforeEach(async ({ page }) => {
     await page.goto(stage);
     await expect(page.locator(".k-tabs")).toBeVisible();

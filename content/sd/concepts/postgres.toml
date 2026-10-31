@@ -1,0 +1,38 @@
+title = "Postgres"
+group = "technology"
+order = 3
+minutes = 10
+lede = "The default relational database: transactions, joins, constraints and rich indexes, MVCC so readers never block writers, and a write-ahead log that makes commits durable and feeds replicas."
+say = "Postgres for links and users: a unique index on the code enforces no duplicates, and a primary with two streaming replicas carries the reads."
+related = ["indexes", "replication", "contention", "data-modeling"]
+
+[[sections]]
+heading = "Inside"
+body = """
+- **Write-ahead log (WAL)**: every change is written to the log and flushed before the commit returns; data pages are written later. A crash replays the log. Replicas stream the same log.
+- **MVCC**: an update writes a new version of the row; readers see the snapshot from when their transaction started, so reads do not block writes. Old versions are cleaned up by **vacuum**.
+- **B-tree indexes** by default; also GIN (full text, JSON), GiST (geometry), BRIN (huge append-only tables).
+"""
+
+[[sections]]
+heading = "Transactions and isolation"
+body = """
+- **Read committed** (the default): each statement sees committed data; two transactions can both read a value and both write based on it.
+- **Repeatable read** / **serializable**: stronger; serializable aborts one of two conflicting transactions, which the app retries.
+- `SELECT … FOR UPDATE` locks the rows you read, the usual way to stop a double booking.
+- Constraints (unique, foreign keys, checks) are enforced by the database even when the code forgets.
+"""
+
+[[sections]]
+heading = "Limits and how to grow"
+body = """
+One primary takes all writes (thousands to tens of thousands a second). Grow with read replicas, connection pooling (PgBouncer: each connection is a process), partitioning big tables by time, and finally sharding (Citus, or by hand). Many products never need the last step.
+"""
+
+[[checks]]
+prompt = "Two users try to book the last seat at the same moment. How do you make Postgres let only one succeed?"
+answer = "Do it in one transaction that locks or conditions on the seat: SELECT the seat FOR UPDATE then update it, or a conditional UPDATE … WHERE status = 'free' and check the row count, or a unique constraint on (event, seat) in a bookings table. The second transaction waits or fails and is told the seat is gone."
+
+[[checks]]
+prompt = "Why do long-running read queries not block writers in Postgres?"
+answer = "MVCC: writers create new row versions and readers keep reading the snapshot taken when they started, so neither waits for the other; vacuum later removes versions nobody can see."

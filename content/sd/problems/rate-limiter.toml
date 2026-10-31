@@ -1,0 +1,120 @@
+title = "Distributed rate limiter"
+kind = "hld"
+order = 2
+minutes = 35
+prompt = "Design a rate limiter that sits in front of an API used by millions of clients: each client gets a limit such as 100 requests a minute, enforced across many API servers."
+uses = ["delivery-framework", "redis", "consistency-cap", "api-styles"]
+companies = ["Stripe", "Amazon", "Google", "Cloudflare"]
+hints = [
+  "Which algorithm lets a client burst a little but holds the average? What state does it need per client?",
+  "The API runs on 50 servers. Where does the count live so they all see the same one?",
+  "What should happen when the store holding the counts is down?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate if it matters."
+reference = """
+**Functional**: limit requests per client (API key, user or IP) by rules per endpoint; reject over-limit requests with 429 and tell the client when to retry.
+
+**Non-functional**: adds under a few milliseconds per request; works across all servers (a global limit, not per server); highly available; a little overshoot is acceptable.
+
+**Estimate**: 1M requests a second at peak, one counter update each: memory-speed storage is needed.
+"""
+[[steps.points]]
+id = "req-identity"
+text = "Who is limited (key, user, IP) and by which rules"
+level = "mid"
+[[steps.points]]
+id = "req-latency"
+text = "Low added latency and a global (not per-server) limit stated"
+level = "mid"
+[[steps.points]]
+id = "req-overshoot"
+text = "Said a small overshoot is acceptable, trading exactness for speed"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Rule` (who, which endpoint, limit, window), the per-client counter or bucket state, and the request being checked."
+[[steps.points]]
+id = "ent-rule"
+text = "Rules kept apart from per-client counter state"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "How do services call it, and what does a client see when it is limited?"
+reference = """
+An internal check `allow(client_id, endpoint) -> { allowed, remaining, reset_at }`, usually inside the gateway rather than a network hop. Clients see `429 Too Many Requests` with `Retry-After` and `X-RateLimit-Remaining` headers.
+"""
+[[steps.points]]
+id = "api-429"
+text = "429 with Retry-After and remaining-quota headers"
+level = "mid"
+[[steps.points]]
+id = "api-inline"
+text = "The check runs in the gateway or as a library, not as an extra slow hop"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Choose an algorithm and draw where the check and the counts live."
+reference = """
+- **Algorithm**: a **token bucket** per client (capacity = burst, refill rate = limit) allows short bursts and holds the average; a sliding-window counter is the alternative. A fixed window is simplest but lets double the limit through at a window edge.
+- **Where**: the API gateway calls the limiter on every request; rules are loaded from a config store and cached in the gateway.
+- **State**: Redis, keyed by client (and endpoint), shared by all gateways. The check and update run atomically in a Lua script (read tokens, refill by elapsed time, take one, write back with an expiry).
+"""
+[[steps.points]]
+id = "hld-algo"
+text = "An algorithm chosen and compared (token bucket or sliding window vs fixed window and its edge burst)"
+level = "mid"
+[[steps.points]]
+id = "hld-shared"
+text = "Shared state in Redis so every server sees the same count"
+level = "mid"
+[[steps.points]]
+id = "hld-atomic"
+text = "Check and update done atomically (Lua script or one command), no read-then-write race"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 10
+prompt = "Scale, failure, and fairness."
+reference = """
+- **Scale**: shard counters across a Redis cluster by client id; one client's key stays on one node.
+- **Redis down**: **fail open** (let requests through) for most APIs, fail closed for abuse-sensitive ones such as login; keep a local in-memory limiter as a fallback.
+- **Latency**: local pre-check plus periodic sync for very hot clients; batch updates.
+- **Hot clients**: a single huge customer's key is hot; give it its own shard or a local token allowance synced every few hundred ms.
+- **Multi-region**: per-region limits, or accept that a global limit is approximate.
+"""
+[[steps.points]]
+id = "dd-shard"
+text = "Counters sharded by client across a cluster"
+level = "senior"
+[[steps.points]]
+id = "dd-failopen"
+text = "Behaviour when the store is down: fail open or closed, chosen per endpoint"
+level = "senior"
+[[steps.points]]
+id = "dd-local"
+text = "Local limiting or batching to cut latency for hot clients"
+level = "staff"
+
+[[probes]]
+question = "With a fixed one-minute window and a limit of 100, how can a client send 200 requests in two seconds?"
+answer = "100 in the last second of one window and 100 in the first second of the next; both windows allow them. A sliding window or a token bucket smooths this out."
+
+[[probes]]
+question = "Two gateways read the bucket at the same moment, both see one token left, and both allow the request. How do you stop it?"
+answer = "Make the read-modify-write atomic in Redis: a Lua script (or a single INCR with a check) runs as one command on the single-threaded server, so the second caller sees the updated value."
+
+[[probes]]
+question = "Redis has a 30-second outage. What do your users see?"
+answer = "That depends on the choice made in advance: fail open, so traffic continues unlimited (with a local per-server limiter as a rough guard), or fail closed for sensitive endpoints like login, where blocking is safer than abuse."

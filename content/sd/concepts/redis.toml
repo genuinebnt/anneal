@@ -1,0 +1,52 @@
+title = "Redis"
+group = "technology"
+order = 2
+minutes = 10
+lede = "An in-memory data structure server: single-threaded command execution over strings, hashes, lists, sets, sorted sets and streams, with optional persistence. Sub-millisecond, and every command is atomic."
+say = "A Redis sorted set per leaderboard, scores updated with ZINCRBY; the top 100 is one ZREVRANGE, and the whole board fits in memory."
+related = ["caching", "contention", "scaling-reads"]
+
+[[sections]]
+heading = "Inside"
+body = """
+Commands run **one at a time** on a single thread over data in memory, so each command is atomic without locks and latency is predictable. Network I/O can use extra threads; the data work does not. Throughput is about 100k operations a second per node.
+
+Persistence is optional: **RDB** snapshots (fast restart, lose the last minutes) or the **AOF** log (every write, slower). Treat Redis as a cache or a fast store you can rebuild, unless you have configured and tested durability.
+"""
+
+[[sections]]
+heading = "The structures, and what they solve"
+body = """
+| Structure | Solves |
+|---|---|
+| string + `INCR`, `SET NX EX` | counters, rate limits, a simple lock with expiry |
+| hash | an object's fields, updated one at a time |
+| list | a simple queue (`LPUSH` / `BRPOP`) |
+| set | unique visitors, who liked this |
+| sorted set | leaderboards, top-k, a delay queue by timestamp |
+| stream | an append-only log with consumer groups |
+| geo | drivers near a point |
+| pub/sub | fan a message out to live subscribers (not kept) |
+"""
+
+[[sections]]
+heading = "Scaling it"
+body = """
+- **Replicas** for reads and failover (Sentinel promotes one).
+- **Redis Cluster** shards keys over 16,384 hash slots across nodes; a multi-key command must stay in one slot (use `{tags}` in keys).
+- A **hot key** still lands on one node: replicate it or keep a local copy.
+- Memory is the limit: set `maxmemory` and an eviction policy.
+"""
+
+[[checks]]
+prompt = "Why can INCR on a counter not lose an update when two app servers call it at the same moment?"
+answer = "Redis executes commands one at a time on one thread, so each INCR reads and writes the value atomically; the two calls run one after the other."
+
+[[checks]]
+prompt = "How would you build a top-100 leaderboard for 10 million players that updates in real time?"
+answer = "A sorted set: ZINCRBY player score on each event, ZREVRANGE 0 99 WITHSCORES for the top 100 and ZREVRANK for a player's position; each is logarithmic. Ten million members fit in memory on one node; shard by region or time window if it grows."
+
+[[figures]]
+name = "redis-structures"
+after = "The structures, and what they solve"
+caption = "One thread runs commands in order; each structure answers a different question."

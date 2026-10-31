@@ -1,0 +1,35 @@
+title = "API styles"
+group = "core"
+order = 8
+minutes = 7
+lede = "How clients and services talk: REST for most product APIs, GraphQL when clients need flexible shapes, gRPC between services, plus the details every API needs: pagination, idempotency, errors."
+say = "A REST API: POST /links returns the code, GET /{code} redirects with a 302; lists use a cursor, and creates take an idempotency key."
+related = ["delivery-framework", "realtime-updates"]
+
+[[sections]]
+heading = "REST, GraphQL, gRPC"
+body = """
+| Style | Use it for |
+|---|---|
+| REST over HTTP | public and product APIs; resources and verbs; cacheable GETs |
+| GraphQL | many clients wanting different fields of a graph; one round trip |
+| gRPC | service to service; typed, fast binary, streaming |
+"""
+
+[[sections]]
+heading = "The details that get marked"
+body = """
+- **Resources are nouns**, the method is the verb: `POST /tweets`, not `/createTweet`.
+- **The user comes from the auth token**, never from the request body.
+- **Pagination**: a **cursor** (the last item's sort key) for feeds that change; offsets skip or repeat items as new ones arrive.
+- **Idempotency key** on retried writes (payments, posts): the server stores the result for the key and returns it again on a retry.
+- **Status codes** that tell the client what to do: 201 created, 400 their fault, 404, 409 conflict, 429 slow down (with `Retry-After`), 5xx try later.
+"""
+
+[[checks]]
+prompt = "Why use a cursor rather than page numbers for a home feed?"
+answer = "New posts arrive while the user scrolls, so offset pages shift and items repeat or are skipped. A cursor (the last seen item's timestamp and id) continues from exactly where they were, and it is a fast index range scan."
+
+[[checks]]
+prompt = "A mobile client retries POST /payments after a timeout. How does the API keep from charging twice?"
+answer = "The client sends an Idempotency-Key; the server records the key with the result of the first request and returns that same result for any retry with the key, without charging again."

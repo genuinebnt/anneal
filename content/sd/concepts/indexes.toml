@@ -1,0 +1,47 @@
+title = "Indexes"
+group = "core"
+order = 2
+minutes = 7
+lede = "A sorted structure beside a table that turns a full scan into a few page reads, at the cost of slower writes and more storage."
+say = "An index on (user_id, created_at desc) serves 'a user's newest links' as one range scan."
+related = ["data-modeling", "postgres"]
+
+[[sections]]
+heading = "B-tree"
+body = """
+The default in Postgres and MySQL. Keys are kept sorted in a shallow tree of pages (three or four levels for millions of rows), so a lookup or a range reads a handful of pages. Good for equality, ranges, sorting and prefixes of a composite key.
+"""
+
+[[sections]]
+heading = "Composite keys"
+body = """
+An index on `(user_id, created_at)` serves "by user" and "by user, newest first", but not "by created_at" alone: the leftmost column has to be used. Put the equality column first, then the range or sort column.
+"""
+
+[[sections]]
+heading = "Other kinds"
+body = """
+- **Hash**: equality only.
+- **LSM tree** (Cassandra, RocksDB): writes go to memory and are flushed and merged in sorted files; very fast writes, reads may check several files.
+- **Inverted index** (Elasticsearch): word to list of documents, for text search.
+- **Geospatial** (geohash, R-tree): points near a place.
+"""
+
+[[sections]]
+heading = "The cost"
+body = """
+Every index is updated on every write. A write-heavy table with ten indexes writes ten times. Index what the hot queries need, nothing more.
+"""
+
+[[checks]]
+prompt = "An index on (created_at, user_id) is not used by WHERE user_id = 7 ORDER BY created_at DESC. Why, and which index fits?"
+answer = "A B-tree is sorted by its leftmost column first, so user_id is scattered across the index. Use (user_id, created_at): equality on the first column, then the order by the second."
+
+[[checks]]
+prompt = "Why do LSM trees suit write-heavy workloads?"
+answer = "Writes go to memory and are flushed sequentially to sorted files, never updating pages in place on disk, so writes are cheap; the cost moves to reads (several files) and background compaction."
+
+[[figures]]
+name = "btree-index"
+after = "B-tree"
+caption = "A lookup walks a few levels of sorted pages instead of scanning every row."

@@ -7,6 +7,7 @@ pub mod bundle;
 mod catalog;
 pub mod course;
 mod dsa;
+pub mod sd;
 pub mod model;
 pub mod test_source;
 

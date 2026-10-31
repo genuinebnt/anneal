@@ -1,0 +1,40 @@
+title = "Consistent hashing"
+group = "core"
+order = 6
+minutes = 7
+lede = "A way to spread keys over servers so that adding or removing one server moves only about 1/N of the keys, instead of almost all of them."
+say = "The cache nodes sit on a consistent-hash ring with virtual nodes, so adding a node moves only its share of keys and the rest stay cached."
+related = ["sharding", "caching"]
+
+[[sections]]
+heading = "The problem with modulo"
+body = """
+`server = hash(key) % N` spreads keys evenly, but when N changes from 4 to 5, about 80% of keys map to a different server: every cache misses at once and the database takes the full load.
+"""
+
+[[sections]]
+heading = "The ring"
+body = """
+Hash servers and keys onto the same circle (0 to 2³²). A key belongs to the **first server clockwise** from it. Add a server and it takes keys only from its clockwise neighbour; remove one and its keys go to the next server.
+"""
+
+[[sections]]
+heading = "Virtual nodes"
+body = """
+With few servers, their points on the ring are uneven and one server gets a big arc. Give each server many points (100 to 200 **virtual nodes**): the load evens out, and when a server leaves, its keys spread across many servers instead of one. Bigger machines can get more virtual nodes.
+
+Used by Dynamo-style databases (Cassandra, DynamoDB), CDNs, and distributed caches.
+"""
+
+[[checks]]
+prompt = "You add a fifth cache server to four. Roughly what share of keys move with modulo hashing, and with a consistent-hash ring?"
+answer = "With modulo, most keys move (about 80%) because the divisor changed. With consistent hashing, about 1/5 of keys move, only those now owned by the new server."
+
+[[checks]]
+prompt = "What problem do virtual nodes solve?"
+answer = "Uneven arcs: with one point per server some servers own much more of the ring. Many points per server even out the load and spread a departing server's keys across many others."
+
+[[figures]]
+name = "hash-ring"
+after = "The ring"
+caption = "Keys go to the next server clockwise; a new server takes over only one arc."

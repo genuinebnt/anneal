@@ -618,6 +618,37 @@ async fn system_reports_the_database_and_counts_requests(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_system_design_drill_marked_makes_review_cards_that_grading_schedules(db: PgPool) {
+    let app = test_app_with(db.clone(), &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    let (status, o) = call(&app, Method::GET, "/api/sd", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(o["concepts"].as_array().unwrap().len() >= 10);
+    let (status, a) = call(&app, Method::POST, "/api/sd/attempts", Some(json!({ "problem_id": "url-shortener", "started_at": "2026-10-31T10:00:00Z", "seconds": 1800, "steps": { "API": { "answer": "POST /links", "seconds": 300 } }, "diagram": {}, "hints": 1 }))).await;
+    assert_eq!(status, StatusCode::OK, "{a}");
+    let id = a["id"].as_i64().unwrap();
+    // a step the problem does not have is refused
+    let (status, _) = call(&app, Method::POST, "/api/sd/attempts", Some(json!({ "problem_id": "url-shortener", "started_at": "2026-10-31T10:00:00Z", "seconds": 1, "steps": { "Nope": { "answer": "", "seconds": 0 } } }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, m) = call(&app, Method::PUT, &format!("/api/sd/attempts/{id}/marks"), Some(json!({ "marks": { "api-302": "miss", "api-shape": "got", "hld-codes": "part" } }))).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    // only the miss is due today; the partly and the got it come later
+    let (_, r) = call(&app, Method::GET, "/api/sd/review", None).await;
+    let due: Vec<&str> = r["due"].as_array().unwrap().iter().map(|c| c["card_id"].as_str().unwrap()).collect();
+    assert_eq!(due, ["point:url-shortener:api-302"]);
+    assert_eq!(r["due"][0]["level"], "senior");
+    let (status, g) = call(&app, Method::POST, "/api/sd/review/point:url-shortener:api-302", Some(json!({ "grade": "good" }))).await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert!(g["days"].as_u64().unwrap() >= 1);
+    let (_, r) = call(&app, Method::GET, "/api/sd/review", None).await;
+    assert!(r["due"].as_array().unwrap().is_empty());
+    // the history keeps the grade, and the attempt is in the backup
+    let history: serde_json::Value = sqlx::query_scalar("SELECT history FROM sd_cards WHERE card_id = 'point:url-shortener:api-302'").fetch_one(&db).await.unwrap();
+    assert_eq!(history[0]["grade"], "good");
+    let (_, backup) = call(&app, Method::GET, "/api/export", None).await;
+    assert_eq!(backup["tables"]["sd_attempts"].as_array().unwrap().len(), 1);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn meaning_search_says_when_it_is_off(db: PgPool) {
     // the test app has neither the vectors file nor the model: the answer says so instead of failing
     let app = test_app(db);

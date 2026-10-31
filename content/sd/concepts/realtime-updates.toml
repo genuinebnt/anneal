@@ -1,0 +1,34 @@
+title = "Realtime updates"
+group = "pattern"
+order = 4
+minutes = 7
+lede = "Getting new data to a client as it happens: polling, long polling, server-sent events or WebSockets, and the pub/sub behind them when there are many servers."
+say = "Clients hold a WebSocket to a gateway; each gateway subscribes to the chats its users are in on a Redis pub/sub channel and pushes new messages down."
+related = ["queues-and-streams", "api-styles"]
+
+[[sections]]
+heading = "Four ways"
+body = """
+| Way | How | Fits |
+|---|---|---|
+| Polling | ask every few seconds | rare updates, simplest |
+| Long polling | the server holds the request until there is news | modest scale, no special infrastructure |
+| Server-sent events | one long HTTP response the server writes to | one-way updates: feeds, prices, notifications |
+| WebSocket | a two-way connection | chat, games, collaboration |
+"""
+
+[[sections]]
+heading = "Many servers"
+body = """
+A user's connection lives on one gateway server, but the event happens elsewhere. Gateways **subscribe** to the topics their connected users care about (Redis pub/sub, or a stream), and services **publish** to them. Keep a map of user to gateway if you need to target one user.
+
+Connections are long-lived: plan for reconnects (clients resume from the last event id), load balancers that support them, and the memory each connection holds.
+"""
+
+[[checks]]
+prompt = "Live comments on a video with a million viewers: WebSockets or server-sent events, and why?"
+answer = "Server-sent events fit: the traffic is one-way to viewers (comments are posted with a normal POST), SSE is plain HTTP, reconnects with the last event id, and is cheaper to run. WebSockets are needed when the client streams too."
+
+[[checks]]
+prompt = "A message is published on server A, but the recipient's socket is on server B. How does it get there?"
+answer = "Through pub/sub: B subscribes to a channel for the chat (or for the user) and A publishes the message there; or a registry maps user to gateway and A forwards to B."

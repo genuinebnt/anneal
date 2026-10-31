@@ -19,6 +19,8 @@ pub struct Catalog {
     /// Ids of problems that were removed on purpose (`content/retired.txt`). Their progress is deleted at startup
     /// instead of blocking a deploy.
     pub retired: HashSet<String>,
+    /// System design prep: concept pages and practice problems (`content/sd`, docs/SYSTEM_DESIGN.md).
+    pub sd: crate::sd::SdCatalog,
 }
 
 #[derive(Debug)]
@@ -111,11 +113,12 @@ impl Catalog {
         check_catalog(&tracks, &mut issues);
         check_unlocks(&tracks, &mut issues);
         let retired = read_retired(root);
+        let sd = crate::sd::load(root, &mut issues);
         for id in tracks.iter().flat_map(|t| &t.problems).map(|p| &p.id).filter(|id| retired.contains(*id)) {
             issues.push(Issue { path: root.join("retired.txt"), message: format!("{id} is retired but also a current problem") });
         }
         Ok(Loaded {
-            catalog: Catalog { tracks, dsa, practice_tracks, retired },
+            catalog: Catalog { tracks, dsa, practice_tracks, retired, sd },
             issues,
         })
     }

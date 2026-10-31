@@ -1,0 +1,53 @@
+title = "The delivery framework"
+group = "fundamentals"
+order = 1
+minutes = 8
+lede = "A fixed order for a 45-minute design round, so you never stall and the interviewer always knows where you are: requirements, core entities, API, data flow, high-level design, deep dives."
+say = "Let me start with requirements, then the core entities and the API, sketch a design that works, and spend the rest of the time on the parts that make it hard."
+related = ["estimation", "api-styles"]
+
+[[sections]]
+heading = "Requirements (about 5 minutes)"
+body = """
+- **Functional**: what users can do, as 3 to 5 lines starting "Users should be able to…". Pick the core ones out loud and park the rest.
+- **Non-functional**: the qualities that shape the design, made concrete: "redirects in under 100 ms at the 99th percentile", "a post is visible to followers within 5 seconds", "no double booking". Consistency or availability for each part, latency, scale, durability.
+- **Capacity**: estimate only what changes a decision (does it fit on one machine? is it read-heavy?). Say the number, then what it means.
+"""
+
+[[sections]]
+heading = "Core entities (about 2 minutes)"
+body = """
+The nouns the system stores and moves: `User`, `Link`, `Click`. A list is enough here; fields come later when they matter. They anchor the API and the data model.
+"""
+
+[[sections]]
+heading = "API (about 5 minutes)"
+body = """
+One endpoint per functional requirement, usually REST: method, path, what goes in, what comes back. Take the user from the auth token, never from the request body. Mention pagination for lists and an idempotency key for anything retried.
+"""
+
+[[sections]]
+heading = "Data flow (optional, about 5 minutes)"
+body = """
+For pipelines and batch systems (a crawler, an ad-click aggregator), list the stages data passes through before drawing boxes. Skip it for request-response products.
+"""
+
+[[sections]]
+heading = "High-level design (10 to 15 minutes)"
+body = """
+Boxes and arrows that satisfy the **functional** requirements, one endpoint at a time: client, gateway, services, databases, caches. Keep it simple and correct first; say "this will be a bottleneck, I'll come back to it" rather than over-building now. Write the key tables and fields next to the database.
+"""
+
+[[sections]]
+heading = "Deep dives (about 10 minutes)"
+body = """
+Now meet the **non-functional** requirements: scale the hot path, remove single points of failure, handle the edge cases (a celebrity, a retry, a region down). Lead them yourself when you are senior; at staff level, choose the two or three that matter most and say why the others matter less.
+"""
+
+[[checks]]
+prompt = "Why design the high-level boxes against the functional requirements first, and leave the non-functional ones to the deep dives?"
+answer = "A simple design that works end to end gives a correct base and something concrete to improve; scaling and resilience changes then have a clear target. Optimising before the design works wastes time and often solves the wrong bottleneck."
+
+[[checks]]
+prompt = "Turn 'it should be fast and scalable' into non-functional requirements you could design against."
+answer = "Make them measurable and specific to the parts of the system: for example redirects under 100 ms at p99, 10k new links a second at peak, and links never lost once created (durable). Add consistency or availability per feature."

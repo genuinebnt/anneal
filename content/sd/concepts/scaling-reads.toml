@@ -1,0 +1,30 @@
+title = "Scaling reads"
+group = "pattern"
+order = 1
+minutes = 7
+lede = "Most products read far more than they write. The moves, in the order to reach for them: indexes, a cache, read replicas, precomputed views, a CDN."
+say = "Reads are 100 times writes, so: an index for the lookup, Redis in front for hot links, two replicas behind, and the redirect cached at the CDN for the most popular codes."
+related = ["caching", "replication", "indexes"]
+
+[[sections]]
+heading = "In order"
+body = """
+1. **Make each read cheap**: the right index, fewer round trips, only the fields needed.
+2. **Cache** hot reads in memory (cache-aside with TTLs).
+3. **Read replicas** for the long tail the cache misses; mind replication lag.
+4. **Precompute**: store the answer the page needs (a feed, a count) instead of computing it per read.
+5. **CDN / edge** for content that is the same for everyone.
+"""
+
+[[sections]]
+heading = "The traps"
+body = """
+- Hot keys that one cache node or replica cannot serve.
+- Stale data the product cannot tolerate (prices at checkout).
+- Stampedes on expiry.
+- Precomputed views that are expensive to keep current when writes spike (a celebrity post fanned out to 50 million feeds).
+"""
+
+[[checks]]
+prompt = "In what order would you reach for indexes, caching, replicas and precomputation, and why?"
+answer = "Indexes first (cheapest, fixes slow queries at the source), then a cache (absorbs most hot reads), then replicas (the misses and the long tail), then precomputed views for reads that are still expensive. Each adds more moving parts than the one before."

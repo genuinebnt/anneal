@@ -1,0 +1,36 @@
+title = "Dealing with contention"
+group = "pattern"
+order = 3
+minutes = 8
+lede = "Many users wanting the same thing at once: the last seat, the last item, the same counter. Correctness first (one winner), then throughput."
+say = "Holding a seat is a conditional update on its row in one transaction; the hold expires after ten minutes, and a virtual waiting room meters the rush when sales open."
+related = ["postgres", "redis", "consistency-cap"]
+
+[[sections]]
+heading = "Getting one winner"
+body = """
+- **Pessimistic locking**: `SELECT … FOR UPDATE`; others wait. Simple, slow under heavy contention.
+- **Optimistic concurrency**: read a version, `UPDATE … WHERE version = v`; if no row changed, someone else won, retry or fail. Great when conflicts are rare.
+- **Conditional writes / constraints**: `UPDATE seat SET holder = me WHERE id = s AND holder IS NULL`, or a unique constraint; the database decides.
+- **A distributed lock** (Redis `SET key NX EX`, ZooKeeper) when the resource is not one database row; give it an expiry and a fencing token.
+"""
+
+[[sections]]
+heading = "Holding, then confirming"
+body = """
+Checkout takes minutes. Hold the item with an **expiry** (a status plus `held_until`, or a Redis key with a TTL), confirm on payment, release on expiry. Never hold by keeping a database lock open for minutes.
+"""
+
+[[sections]]
+heading = "When everyone arrives at once"
+body = """
+A sale opening or a concert drop: put a **virtual waiting room** (a queue that admits users at a rate) in front, so the booking path sees a load it can serve; or sell from pre-split stock buckets per shard.
+"""
+
+[[checks]]
+prompt = "Why not hold a seat for a user by keeping a database row lock open while they pay?"
+answer = "Payment takes minutes; a held lock blocks other transactions and connections, and a crashed client leaves it held. Use a hold with an expiry (status and held_until, or a TTL key) and confirm or release it later."
+
+[[checks]]
+prompt = "When does optimistic concurrency beat pessimistic locking?"
+answer = "When conflicts are rare: most updates succeed with no waiting, and the occasional loser retries. Under heavy contention on one item, retries pile up and a lock or a queue is better."

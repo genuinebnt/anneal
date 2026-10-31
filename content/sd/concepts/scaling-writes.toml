@@ -1,0 +1,32 @@
+title = "Scaling writes"
+group = "pattern"
+order = 2
+minutes = 7
+lede = "When writes outgrow one machine: shard by a key, batch, buffer through a queue, and pick a store built for writes."
+say = "Clicks go to Kafka first, partitioned by link; workers batch them into per-minute counts, so the database sees a few thousand upserts instead of millions of inserts."
+related = ["sharding", "kafka", "queues-and-streams"]
+
+[[sections]]
+heading = "The moves"
+body = """
+- **Shard** by a key that spreads the load and is in every write.
+- **Buffer** with a queue or log: accept the write fast, process it at a steady rate.
+- **Batch and aggregate**: turn a million +1s into one +1,000,000.
+- **A write-optimised store** (LSM-based: Cassandra, RocksDB) when the volume is huge and queries are simple.
+- **Do less on the hot path**: write the event, compute the rest asynchronously.
+"""
+
+[[sections]]
+heading = "Hot keys"
+body = """
+A viral post's like counter takes one key's worth of traffic. Split it into N sub-counters (`likes:post:{0..15}`) incremented at random and summed on read, or count in memory and flush periodically.
+"""
+
+[[checks]]
+prompt = "A viral post gets 50,000 likes a second on one counter row. What do you do?"
+answer = "Split the counter: write to one of N sub-counters chosen at random (or buffer increments in memory or a stream and flush aggregated counts every second), and sum the sub-counters on read, cached. The single hot row disappears."
+
+[[figures]]
+name = "write-fanout"
+after = "The moves"
+caption = "Writes land in a log, workers batch them, the database gets a steady trickle."

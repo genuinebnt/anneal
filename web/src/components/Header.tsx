@@ -16,18 +16,19 @@ import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 // the three areas as one switcher with their progress, a search field, the date and time, the focus timer, the accent, and the tools. The second answers "what can I do here": the pages of the current area,
 // a breadcrumb and a few counters. On a phone the areas move to a bar at the bottom.
 
-type AreaId = "dsa" | "rust" | "courses";
+type AreaId = "dsa" | "rust" | "courses" | "sd";
 
-const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses"; color: string }[] = [
+const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/sd"; color: string }[] = [
     { id: "dsa", label: "DSA", to: "/dsa", color: "var(--acc)" },
     { id: "rust", label: "Rust", to: "/rust", color: "var(--vio)" },
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
+    { id: "sd", label: "System design", to: "/sd", color: "var(--warn)" },
 ];
 
 /** How long the Mock page's data counts as fresh, so coming back to it within a minute shows it at once. */
 export const MOCK_FRESH = 60_000;
 
-type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
+type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses" | "/sd" | "/sd/learn" | "/sd/problems" | "/sd/review"; label: string; match: (path: string) => boolean; badge?: "due" };
 
 /** Pages about everything, not one area: Progress covers DSA, Rust and Courses; it has its own place beside the areas. */
 const GLOBAL: Tab[] = [
@@ -54,14 +55,21 @@ const TABS: Record<AreaId, Tab[]> = {
     courses: [
         { to: "/courses", label: "BusTub", match: (p) => p.startsWith("/courses") },
     ],
+    sd: [
+        { to: "/sd", label: "Home", match: (p) => p === "/sd" },
+        { to: "/sd/learn", label: "Learn", match: (p) => p.startsWith("/sd/learn") },
+        { to: "/sd/problems", label: "Problems", match: (p) => p.startsWith("/sd/problems") || p.startsWith("/sd/practice") },
+        { to: "/sd/review", label: "Review", match: (p) => p.startsWith("/sd/review") },
+    ],
 };
 
 /** Pages that are designed but not built yet; dimmed, in the area they belong to. */
-const LATER: Record<AreaId, string[]> = { dsa: [], rust: ["Library"], courses: ["Readiness"] };
+const LATER: Record<AreaId, string[]> = { dsa: [], rust: ["Library"], courses: ["Readiness"], sd: ["Stories", "Mock interview"] };
 
 const AREA_KEY = "anneal.area";
 const areaFromPath = (path: string): AreaId | null => {
     if (path.startsWith("/courses")) return "courses";
+    if (path.startsWith("/sd")) return "sd";
     if (path.startsWith("/rust") || path.startsWith("/t/") || path.startsWith("/p/")) return "rust";
     if (path.startsWith("/dsa") || path.startsWith("/d/")) return "dsa";
     return null;
@@ -106,6 +114,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const course = useQuery({ queryKey: ["course", "bustub"], queryFn: () => api.course("bustub") });
     const progress = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+    const sd = useQuery({ queryKey: ["sd"], queryFn: api.sd, staleTime: 60_000 });
     const streaks = useStreaks();
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]), enabled: current === "dsa" });
     const [paletteOpen, setPaletteOpen] = useState(false);
@@ -123,6 +132,8 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
         dsa: { done: dsa.data ? dsaDone : undefined, total: dsaTotal },
         rust: { done: tracks.data ? rust.solved : undefined, total: rust.total },
         courses: { done: course.data?.done, total: course.data?.total ?? 0 },
+        // system design: concept checks answered and problems drilled, over all there are
+        sd: { done: sd.data ? sd.data.concepts.reduce((n, c) => n + Math.min(c.checked, c.checks), 0) + sd.data.problems.filter((p) => p.attempts > 0).length : undefined, total: sd.data ? sd.data.concepts.reduce((n, c) => n + c.checks, 0) + sd.data.problems.length : 0 },
     };
 
     // The page measures itself against the header: layouts that stick below it read --hdr-h.
@@ -302,9 +313,11 @@ function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; c
             setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
         };
         place();
+        // the labels' width changes when the web font arrives and when the counts load
+        void document.fonts?.ready.then(place);
         addEventListener("resize", place);
         return () => removeEventListener("resize", place);
-    }, [current, progress, counts.dsa.done, counts.rust.done, counts.courses.done]);
+    }, [current, progress, counts.dsa.done, counts.rust.done, counts.courses.done, counts.sd.done]);
     const color = current ? AREAS.find((a) => a.id === current)!.color : "var(--acc)";
     return (
         <nav className="hd-areas" ref={box} aria-label="Areas">
