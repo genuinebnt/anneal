@@ -1,0 +1,187 @@
+pattern = "Arrays & Hashing"
+
+tagline = "Remember what you have seen in a map, and every question about the past costs one lookup instead of a rescan."
+
+what = [
+    "A hash map answers \"have I seen this, and what do I know about it?\" in **one step**, however much it holds. Instead of looking back over the input every time a new item arrives, you write down what matters about each item as you pass it, and the next item just asks the map.",
+    "That turns a nested loop into **one pass**: the time falls from O(n²) to O(n) and you pay with O(n) memory. The skill is choosing **what to use as the key** (the value, a count, a sorted word, a running sum) and **what to store under it** (an index, a count, a list). Run two of them below.",
+]
+
+demos = ["hash-complement", "hash-signature"]
+
+applies = [
+    "\"Have I seen this **before**?\", \"find a **duplicate**\", \"are these all distinct\".",
+    "\"Find **two things that add up** to a target\" or any pair where one item tells you exactly which partner you need.",
+    "**Counting**: how many of each, anagrams, the most frequent, the first that appears once.",
+    "\"**Group** the items that are the same in some way\": anagrams, words with the same shape.",
+    "A question about every **subarray** that sums to something, where a running total and a map replace the inner loop.",
+]
+
+yes = [
+    "Each item can be **summarised under a key** (its value, its count, its sorted letters, its running sum) and the question is about keys.",
+    "The brute force **looks back** at earlier items for each new one, and what it looks for is *exactly* determined by the new item.",
+    "The **order** of the items does not matter, only what they are or how many.",
+]
+
+no = [
+    "The input is **already sorted** and you can use O(1) space: two pointers find the pair with no map.",
+    "You need a **contiguous stretch** that keeps a summary as it slides: that is a sliding window (which may use a map inside).",
+    "You need the **smallest, largest or nearest** item, not an exact match: a sorted structure or a heap, because a hash map has no order.",
+    "The keys are **not exact** (\"close to\", \"within k\"): a map only finds equal keys.",
+]
+
+apply = [
+    "**Say the question the brute force asks.** \"For this item, is there an earlier item with property P?\"",
+    "**Turn P into a key.** The partner's value (`target − x`), the item itself, its sorted letters, or the running sum minus `k`.",
+    "**Decide what to store under the key.** An index if you must return a position, a count if you must count, a list if you must group.",
+    "**Decide the order of lookup and insert.** Look up *before* you insert, so an item never matches itself.",
+    "**State the invariant.** \"After i items, the map describes exactly the first i items.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"have I **seen** this?\", \"contains **duplicate**\", \"all values **distinct**\""
+kind = "Seen set"
+move = "Keep a set of what you have passed. An item that is already in it is the repeat."
+glyph = "lookup"
+technique = "Arrays & Hashing:seen-set"
+
+[[which]]
+says = "\"how many of **each**\", \"**anagram**\", \"the first character that appears **once**\""
+kind = "Frequency counting"
+move = "Count every item into a map (or a 26-slot array), then read the counts."
+glyph = "tally"
+technique = "Arrays & Hashing:counting"
+
+[[which]]
+says = "\"two numbers that **add up** to a target\", \"a pair with a given **difference**\""
+kind = "Complement lookup"
+move = "For each item, look up the one partner that would complete it, then remember the item."
+glyph = "ksum"
+technique = "Arrays & Hashing:complement"
+
+[[which]]
+says = "\"**group** the anagrams\", \"words with the **same pattern**\""
+kind = "Canonical key"
+move = "Reduce every item to a form that is equal for equal items, and group by that form."
+glyph = "groups"
+technique = "Arrays & Hashing:signature"
+
+[[which]]
+says = "\"the number of **subarrays** that sum to k\", \"longest subarray with sum k\""
+kind = "Prefix sum with a map"
+move = "Keep the running total; the earlier total you need is `total − k`, found in the map."
+glyph = "runsum"
+technique = "Arrays & Hashing:prefix-map"
+
+[[which]]
+says = "\"the **k most frequent**\", \"sort by frequency\""
+kind = "Count, then bucket"
+move = "Count with a map, then put each value in the bucket numbered by its count and read from the top."
+glyph = "buckets"
+technique = "Arrays & Hashing:top-k"
+
+[[which]]
+says = "\"the **longest run** of consecutive numbers\", in any order, in O(n)"
+kind = "Set of starts"
+move = "Put everything in a set; only start counting at a number whose predecessor is missing."
+glyph = "streak"
+technique = "Arrays & Hashing:consecutive"
+
+[[which]]
+says = "\"the element that appears **more than half** the time\", with O(1) space"
+kind = "Majority vote"
+move = "Pair off different elements with a counter; what survives is the majority."
+glyph = "vote"
+technique = "Arrays & Hashing:majority-vote"
+
+[[which]]
+says = "\"the product of the array **except self**\", \"everything to the left and right\""
+kind = "Prefix and suffix"
+move = "One pass left to right and one right to left, so each cell combines what is on each side."
+glyph = "answer"
+technique = "Arrays & Hashing:prefix"
+
+[[which]]
+says = "values are in **1..n**: \"find the duplicates\", \"the missing number\", no extra memory"
+kind = "The array as its own map"
+move = "Use the index as the key: mark a position by flipping a sign, or swap each value to its own index."
+glyph = "marks"
+technique = "Arrays & Hashing:index-marks"
+
+[[cost]]
+name = "Compare every pair"
+time = "O(n²)"
+space = "O(1)"
+why = "For each item you look back over all the earlier ones, so n items cost about n²/2 comparisons. This is the cost to beat."
+
+[[cost]]
+name = "Seen set, complement lookup"
+time = "O(n)"
+space = "O(n)"
+why = "Each item is looked up once and inserted once, and a hash lookup does not get slower as the map grows (on average). The map can end up holding every item, so the memory is O(n). In the worst case, many keys landing in one slot, a lookup degrades, which is why this is an average-case claim."
+
+[[cost]]
+name = "Frequency counting"
+time = "O(n)"
+space = "O(k)"
+why = "One pass adds one to a count per item. The map has one entry per *distinct* value, k. For lowercase letters k is at most 26, so the space is O(1) for a fixed alphabet."
+
+[[cost]]
+name = "Canonical key (group anagrams)"
+time = "O(n · m log m)"
+space = "O(n · m)"
+why = "Every word of length m is sorted to make its key, which costs m log m, once per word. Counting the 26 letters instead makes the key in O(m), so the total drops to O(n · m). Every word is stored once in its group."
+
+[[cost]]
+name = "Prefix sum with a map"
+time = "O(n)"
+space = "O(n)"
+why = "The running total is updated in O(1) and the earlier total you need is one lookup. The map holds at most one entry per distinct prefix total, so up to n."
+
+[[cost]]
+name = "Count, then bucket (top k)"
+time = "O(n)"
+space = "O(n)"
+why = "Counting is one pass. A count can be at most n, so there are at most n buckets, and filling and reading them is linear. A heap of size k would cost O(n log k) instead, and uses less space when k is small."
+
+[[cost]]
+name = "Set of starts (longest consecutive)"
+time = "O(n)"
+space = "O(n)"
+why = "A number is only the start of a run if its predecessor is missing, so each run is walked once, from its start. The inner loop looks nested, but every number is stepped over by at most one run."
+
+[[cost]]
+name = "Majority vote and index marks"
+time = "O(n)"
+space = "O(1)"
+why = "Both keep their \"map\" inside a few variables or inside the input array itself. A counter and a candidate are enough for the majority; the sign of each cell is the mark when values are in 1..n. The price is that the input is changed, or that the question has a special shape."
+
+[[with]]
+pattern = "Sliding Window"
+how = "A window that must know what is inside it keeps a map of counts: add one when an item enters, take one away when it leaves. The map is the window's summary."
+example = "minimum-window-substring"
+
+[[with]]
+pattern = "Two Pointers"
+how = "On a sorted array, two pointers find a pair in O(1) space where the map needs O(n). Unsorted, the map pays for the order that sorting would give you."
+example = "two-sum-ii-input-array-is-sorted"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "Counting is the first half of every top-k question. The second half picks the k biggest counts: buckets in O(n), or a heap of size k in O(n log k)."
+example = "top-k-frequent-elements"
+
+[[with]]
+pattern = "Linked List"
+how = "A map from each old node to its copy lets you copy a list whose nodes point at random other nodes, in one pass and one more."
+example = "copy-list-with-random-pointer"
+
+[[with]]
+pattern = "Graphs"
+how = "A map from original node to clone is both the answer and the \"visited\" set: if a node is already in it, link to its copy instead of walking again."
+example = "clone-graph"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Top-down DP is a map from a subproblem to its answer. Checking the map before recursing is the same \"have I seen this?\" question."
+example = "word-break"

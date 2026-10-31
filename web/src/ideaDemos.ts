@@ -50,6 +50,8 @@ export interface Frame {
     leave?: number;
     dup?: number;
     stack?: { label: string; items: string[]; top?: "push" | "pop" };
+    /** A hash map beside the row: `new` is the entry just written, `hit` the one a lookup found. */
+    map?: { label: string; rows: { k: string; v: string; tone?: "new" | "hit" }[] };
     lines: number[];
     read: Reading[];
     work: Work;
@@ -68,6 +70,8 @@ export interface Demo {
     compact?: boolean;
     /** Cells set wider apart, so an arrow fits between them (linked lists). */
     wide?: boolean;
+    /** Each cell holds a short word, so the cells are wider and the type smaller. */
+    words?: boolean;
     /** The labels of what can be typed: the cells, and the number if there is one. */
     fields: { text: string; param?: { label: string; min: number; max: number } };
     /** Reads what was typed; null when it is not a valid input. */
@@ -571,6 +575,100 @@ function simulateCycle(input: DemoInput): Frame[] {
     return out;
 }
 
+// ---------------------------------------------------------------- arrays and hashing
+
+const complementCode = [
+    "def two_sum(nums, target):",
+    "    seen = {}  # value -> index",
+    "    for i, x in enumerate(nums):",
+    "        need = target - x",
+    "        if need in seen:  # one lookup",
+    "            return [seen[need], i]",
+    "        seen[x] = i  # remember x for later",
+    "    return []",
+];
+
+function simulateComplement(input: DemoInput): Frame[] {
+    const a = input.items.map(Number);
+    const target = input.param ?? 0;
+    const n = a.length;
+    if (n < 2) return [];
+    const seen = new Map<number, number>();
+    let lookups = 0;
+    let pairs = 0;
+    const rows = (tone?: "new" | "hit", key?: number) => [...seen].map(([k, v]) => ({ k: String(k), v: `at ${v}`, ...(tone && k === key ? { tone } : {}) }));
+    const map = (tone?: "new" | "hit", key?: number) => ({ label: "SEEN  value → index", rows: rows(tone, key) });
+    const work = (): Work => ({
+        title: "WORK SO FAR",
+        bars: [{ label: "Compare every pair", value: pairs, of: Math.max(pairs, 1), tone: "bad" }, { label: "One lookup per item", value: lookups, of: Math.max(pairs, 1), tone: "good" }],
+        note: "Comparing every pair checks each earlier item again for each new one. The map remembers them, so the new item asks one question: is my partner already in there?",
+    });
+    const read = (need: string): Reading[] => [{ label: "NEED", value: need }, { label: "IN THE MAP", value: seen.size }];
+    const out: Frame[] = [{ pointers: [], map: map(), lines: [2], read: read("?"), work: work(), say: `Find two numbers that add up to ${target}. The map will hold every number seen so far and where it was.` }];
+    for (let i = 0; i < n; i++) {
+        const x = a[i]!;
+        const need = target - x;
+        lookups++;
+        pairs += i;
+        const p: Pointer[] = [{ at: i, label: "i", tone: "r" }];
+        const at = seen.get(need);
+        if (at !== undefined) {
+            out.push({ pointers: p, hit: [at, i], map: map("hit", need), lines: [3, 4, 5, 6], read: read(String(need)), work: work(), result: `${need} + ${x}`, say: `x = ${x}, so the partner is ${target} − ${x} = ${need}. It is in the map, at index ${at}. Found with ${lookups} lookup${lookups === 1 ? "" : "s"}; comparing pairs would have made ${pairs}.` });
+            return out;
+        }
+        seen.set(x, i);
+        out.push({ pointers: p, cur: [i], map: map("new", x), lines: [3, 4, 5, 7], read: read(String(need)), work: work(), say: `x = ${x}, so the partner is ${target} − ${x} = ${need}. Not in the map yet, so remember ${x} at index ${i}.` });
+    }
+    out.push({ pointers: [], map: map(), lines: [8], read: read("–"), work: work(), result: "none", say: "Every item was looked up and none had its partner waiting, so no two numbers add up to the target." });
+    return out;
+}
+
+const signatureCode = [
+    "def group_anagrams(words):",
+    "    groups = {}  # signature -> words",
+    "    for w in words:",
+    "        key = \"\".join(sorted(w))  # same letters, same key",
+    "        groups.setdefault(key, []).append(w)",
+    "    return list(groups.values())",
+];
+
+function simulateSignature(input: DemoInput): Frame[] {
+    const words = input.items;
+    const n = words.length;
+    if (n < 2) return [];
+    const groups = new Map<string, string[]>();
+    let lookups = 0;
+    let pairs = 0;
+    const map = (tone?: "new" | "hit", key?: string) => ({ label: "GROUPS  key → words", rows: [...groups].map(([k, v]) => ({ k, v: v.join(" "), ...(tone && k === key ? { tone } : {}) })) });
+    const work = (): Work => ({
+        title: "WORK SO FAR",
+        bars: [{ label: "Compare every pair", value: pairs, of: Math.max(pairs, 1), tone: "bad" }, { label: "One key per word", value: lookups, of: Math.max(pairs, 1), tone: "good" }],
+        note: "Asking \"are these two anagrams?\" for every pair grows with the square of the list. Give each word a canonical key and equal words land in the same slot with no comparing.",
+    });
+    const read = (key: string): Reading[] => [{ label: "KEY", value: key }, { label: "GROUPS", value: groups.size }];
+    const out: Frame[] = [{ pointers: [], map: map(), lines: [2], read: read("?"), work: work(), say: "Two words are anagrams when their sorted letters match. So the sorted letters are the key, and every word with that key belongs together." }];
+    for (let i = 0; i < n; i++) {
+        const w = words[i]!;
+        const key = [...w].sort().join("");
+        lookups++;
+        pairs += i;
+        const fresh = !groups.has(key);
+        groups.set(key, [...(groups.get(key) ?? []), w]);
+        out.push({
+            pointers: [{ at: i, label: "w", tone: "r" }],
+            cur: [i],
+            ok: words.slice(0, i).map((_, j) => j),
+            map: map(fresh ? "new" : "hit", key),
+            lines: [3, 4, 5],
+            read: read(key),
+            work: work(),
+            say: fresh ? `“${w}” sorted is “${key}”. No group has that key yet, so start one.` : `“${w}” sorted is “${key}”, the key of a group that exists. It joins ${groups.get(key)!.slice(0, -1).map((x) => `“${x}”`).join(", ")}.`,
+        });
+    }
+    out.push({ pointers: [], ok: words.map((_, j) => j), map: map(), lines: [6], read: read("–"), work: work(), result: `${groups.size} group${groups.size === 1 ? "" : "s"}`, say: `One pass, one key per word: ${groups.size} group${groups.size === 1 ? "" : "s"}. No pair of words was ever compared.` });
+    return out;
+}
+
 export const DEMOS: Record<string, Demo> = {
     "window-fixed": {
         title: "Fixed size · best sum",
@@ -692,5 +790,29 @@ export const DEMOS: Record<string, Demo> = {
             return items.length >= 2 && items.length <= 7 && smallInts(items) && Number.isInteger(tail) && tail >= -1 && tail < items.length && param.trim() !== "" ? { items, param: tail } : null;
         },
         simulate: simulateCycle,
+    },
+    "hash-complement": {
+        title: "Two Sum · remember what you have seen",
+        code: complementCode,
+        initial: { items: ["3", "8", "5", "1", "9", "6"], param: 14 },
+        fields: { text: "Numbers, separated by commas", param: { label: "Target", min: -999, max: 999 } },
+        parse: (text, param) => {
+            const items = numbers(text);
+            const target = Number(param);
+            return items.length >= 2 && items.length <= MAX_CELLS && smallInts(items) && Number.isInteger(target) && param.trim() !== "" ? { items, param: target } : null;
+        },
+        simulate: simulateComplement,
+    },
+    "hash-signature": {
+        title: "Group anagrams by a shared key",
+        code: signatureCode,
+        words: true,
+        initial: { items: ["eat", "tea", "tan", "ate", "nat", "bat"] },
+        fields: { text: "Short words, separated by commas" },
+        parse: (text) => {
+            const items = text.toLowerCase().split(/[\s,]+/).filter(Boolean);
+            return items.length >= 2 && items.length <= 8 && items.every((w) => /^[a-z]{1,4}$/.test(w)) ? { items } : null;
+        },
+        simulate: simulateSignature,
     },
 };

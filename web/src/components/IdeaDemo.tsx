@@ -144,11 +144,12 @@ export function IdeaDemo({ names }: { names: string[] }) {
 
     if (!demo || !input || frames.length === 0) return null;
     const f = frames[Math.min(i, last)]!;
-    const CELL = demo.wide ? 72 : 56;
+    const CELL = demo.wide ? 72 : demo.words ? 66 : 56;
     const GAP = demo.wide ? 28 : 6;
     const cells = f.cells ?? input.items;
     const farLinks = frames.some((fr) => fr.links?.some((l) => l.to >= 0 && Math.abs(l.to - l.from) > 1));
     const pointers = placed(f);
+    const mapRows = Math.max(1, ...frames.map((fr) => fr.map?.rows.length ?? 0));
     // room for the markers that stack: the most any step has above and below the row
     const rooms = frames.reduce((m, fr) => {
         const above = new Map<number, number>();
@@ -185,7 +186,7 @@ export function IdeaDemo({ names }: { names: string[] }) {
                 </div>
                 <div className="id-stage" role="img" aria-label={`${cells.join(", ")}. ${f.say}`} style={{ paddingTop: 22 + rooms[0] * 27, paddingBottom: 30 + rooms[1] * 27 + (farLinks ? 34 : 0) }}>
                     <div className="id-body">
-                        <div className="id-row" style={{ width: cells.length * CELL, "--cell": `${CELL}px`, "--gap": `${GAP}px` } as CSSProperties}>
+                        <div className={`id-row${demo.words ? " id-wordy" : ""}`} style={{ width: cells.length * CELL, "--cell": `${CELL}px`, "--gap": `${GAP}px` } as CSSProperties}>
                             {f.links && <Links links={f.links} n={cells.length} cell={CELL} gap={GAP} />}
                             {f.win && <div className="id-brace" style={{ left: f.win[0] * CELL, width: Math.max(f.win[1] - f.win[0], 1) * CELL, opacity: f.win[1] > f.win[0] ? 1 : 0.35 }} />}
                             {pointers.map((p) => (
@@ -209,6 +210,15 @@ export function IdeaDemo({ names }: { names: string[] }) {
                                 <span className="id-stl">{f.stack.label}</span>
                                 <div className="id-stack" aria-label={`${f.stack.label}: ${f.stack.items.join(" ") || "empty"}`}>
                                     {f.stack.items.map((v, n) => <div key={`${n}${v}`} className={`id-cell id-s${f.stack?.top === "push" && n === f.stack.items.length - 1 ? " id-enter" : ""}`}><b>{v}</b></div>)}
+                                </div>
+                            </div>
+                        )}
+                        {f.map && (
+                            <div className="id-mapwrap">
+                                <span className="id-stl">{f.map.label}</span>
+                                <div className="id-map" style={{ minHeight: mapRows * 34 + 16 }} aria-label={`${f.map.label}: ${f.map.rows.map((r) => `${r.k} ${r.v}`).join(", ") || "empty"}`}>
+                                    {f.map.rows.map((r) => <div key={r.k} className={`id-mrow${r.tone ? ` id-m-${r.tone}` : ""}`}><b>{r.k}</b><i>→</i><span>{r.v}</span></div>)}
+                                    {f.map.rows.length === 0 && <em>empty</em>}
                                 </div>
                             </div>
                         )}

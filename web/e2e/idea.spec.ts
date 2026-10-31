@@ -6,7 +6,7 @@ test("only a pattern with content has an Idea tab, and the API says which", asyn
     expect(withIdea).toContain("Sliding Window");
     await page.goto("/dsa/patterns/D3");
     await expect(page.getByRole("tab", { name: /^Idea/ })).toBeVisible();
-    await page.goto("/dsa/patterns/D1");
+    await page.goto("/dsa/patterns/D7");
     await expect(page.getByRole("tab", { name: /^Learn/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /^Idea/ })).toHaveCount(0);
     // the old tabs keep their keys
@@ -243,4 +243,34 @@ test("Linked List: links are drawn, reversing flips them one at a time, and slow
     await expect(page.locator(".id-links path.far")).toHaveCount(0);
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("no cycle");
+});
+
+test("Arrays & Hashing: the map fills as the scan goes, a lookup finds the partner, and words land in groups", async ({ page }) => {
+    await page.goto("/dsa/patterns/D1/idea");
+    const rows = page.locator(".id-map .id-mrow");
+    await expect(rows).toHaveCount(0);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first().locator("b")).toHaveText("3");
+    await expect(page.locator(".id-map .id-mrow.id-m-new")).toHaveCount(1);
+    // the last step finds the partner already in the map and marks it
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("5 + 9");
+    await expect(page.locator(".id-map .id-mrow.id-m-hit")).toHaveCount(1);
+    await expect(page.locator(".id-cell.id-hit")).toHaveCount(2);
+    // own input: no partner at all
+    const box = page.getByLabel("Numbers, separated by commas");
+    await box.fill("1,2,3");
+    await page.getByLabel("Target", { exact: true }).fill("100");
+    await page.getByLabel("Target", { exact: true }).blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("none");
+    // grouping: three groups, and a word joins the group that already has its key
+    await page.getByRole("radio", { name: /anagrams/i }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-map .id-mrow.id-m-hit b")).toHaveText("aet");
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3 groups");
+    await expect(page.locator(".id-map .id-mrow")).toHaveCount(3);
 });

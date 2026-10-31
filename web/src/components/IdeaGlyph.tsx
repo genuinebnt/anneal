@@ -31,6 +31,14 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     clone: { n: 10, w: [[0, 5]], w2: [[5, 10]], dots: [1, 6] },
     lru: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5], ptr: [0, 5] },
     kmerge: { n: 10, w: [], bars: [2, 4, 3, 6, 5, 7, 6, 8, 7, 9], ptr: [0] },
+    lookup: { n: 10, w: [], w2: [[0, 7]], dots: [2], ptr: [7] },
+    tally: { n: 10, w: [], bars: [4, 2, 3, 1, 2, 1, 3, 1, 2, 1] },
+    groups: { n: 10, w: [[0, 3]], w2: [[4, 7]], dots: [1, 5, 8] },
+    runsum: { n: 10, w: [], w2: [[3, 8]], bars: [1, 2, 3, 3, 4, 5, 5, 6, 7, 8], ptr: [2, 7] },
+    buckets: { n: 10, w: [[3, 4], [7, 8]], bars: [2, 7, 3, 9, 1, 5, 2, 8, 4, 1] },
+    streak: { n: 10, w: [[2, 7]], dots: [2, 3, 4, 5, 6] },
+    vote: { n: 10, w: [], w2: [[0, 10]], dots: [0, 1, 3, 4, 6, 7, 9] },
+    marks: { n: 10, w: [], dots: [2, 6], ptr: [2, 6] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {

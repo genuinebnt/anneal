@@ -188,3 +188,45 @@ test("slow and fast meet inside a loop and never meet without one", () => {
     assert.equal(d.parse("1,2,3", "5"), null, "the loop must point at a node of the list");
     assert.deepEqual(d.parse("1,2,3", "-1"), { items: ["1", "2", "3"], param: -1 });
 });
+
+test("Two Sum remembers each number once and stops at the first partner already in the map", () => {
+    const frames = run("hash-complement");
+    // 3 8 5 1 9 6, target 14: 3, 8, 5, 1 are remembered; 9 needs 5, which is at index 2
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "5 + 9");
+    assert.deepEqual(last.hit, [2, 4]);
+    assert.equal(frames.length, 1 + 5, "the start and five looks");
+    assert.deepEqual(last.map!.rows.map((r) => r.k), ["3", "8", "5", "1"], "the map holds only what came before the answer");
+    assert.equal(last.map!.rows.find((r) => r.tone === "hit")!.k, "5");
+    assert.equal(last.work.bars[1]!.value, 5, "one lookup per item");
+    assert.equal(last.work.bars[0]!.value, 0 + 1 + 2 + 3 + 4, "comparing every pair would have made 10");
+    assert.equal(frames[1]!.map!.rows.find((r) => r.tone === "new")!.k, "3", "a miss writes the item it just looked at");
+});
+
+test("Two Sum ends with none when nothing adds up, and a repeated number still pairs with itself", () => {
+    const none = DEMOS["hash-complement"]!.simulate({ items: ["1", "2", "3"], param: 100 });
+    assert.equal(none[none.length - 1]!.result, "none");
+    assert.equal(none[none.length - 1]!.map!.rows.length, 3);
+    const twice = DEMOS["hash-complement"]!.simulate({ items: ["3", "3"], param: 6 });
+    assert.equal(twice[twice.length - 1]!.result, "3 + 3");
+});
+
+test("grouping by a signature puts every word in one slot and never compares two words", () => {
+    const frames = run("hash-signature");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3 groups");
+    assert.deepEqual(last.map!.rows.map((r) => [r.k, r.v]), [["aet", "eat tea ate"], ["ant", "tan nat"], ["abt", "bat"]]);
+    assert.equal(frames.length, 1 + 6 + 1);
+    assert.equal(frames[2]!.map!.rows.find((r) => r.tone === "hit")!.k, "aet", "tea joins the group eat started");
+    assert.equal(frames[1]!.map!.rows[0]!.tone, "new");
+    assert.equal(last.work.bars[1]!.value, 6, "one key per word");
+    assert.equal(last.work.bars[0]!.value, 0 + 1 + 2 + 3 + 4 + 5, "comparing every pair would have made 15");
+});
+
+test("the hashing inputs reject what the page cannot draw", () => {
+    const sig = DEMOS["hash-signature"]!;
+    assert.deepEqual(sig.parse("Eat tea", "")!.items, ["eat", "tea"]);
+    assert.equal(sig.parse("eat", ""), null, "needs two words");
+    assert.equal(sig.parse("eat, tooooo", ""), null, "words are at most four letters");
+    assert.equal(DEMOS["hash-complement"]!.parse("1,2", ""), null, "a target is required");
+});

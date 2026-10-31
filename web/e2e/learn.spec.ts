@@ -80,6 +80,7 @@ test("a technique an Idea tab describes has a moving thumbnail in its card heade
     expect(await card.locator(".lr-thumb .id-gw").first().evaluate((e) => getComputedStyle(e).animationName)).toBe("lr-gw");
     await expect(page.locator("#t-running-best .lr-thumb")).toHaveCount(0);
     await page.goto("/dsa/patterns/D1");
-    await expect(page.locator(".lr-card").first()).toBeVisible();
-    await expect(page.locator(".lr-thumb")).toHaveCount(0);
+    await expect(page.locator("#t-seen-set .lr-head .lr-thumb svg")).toBeVisible();
+    await expect(page.locator("#t-simulation")).toBeVisible();
+    await expect(page.locator("#t-simulation .lr-thumb")).toHaveCount(0);
 });
