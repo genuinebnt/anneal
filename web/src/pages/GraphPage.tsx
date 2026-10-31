@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type DsaOverview } from "../api";
 import { Header } from "../components/Header";
-import { HowFound, ListCard, Page3, Panel, ReadingPath, Tile, PageLoading } from "../components/layout";
+import { HowFound, ListCard, Page3, Panel, ReadingPath, Tile, PageLoading, LoadFailed } from "../components/layout";
 import { counted, statusOf } from "../dsa";
 import { buildGraph, cosine, fastRP, rng, sharedTags, shortestPath, type EdgeKind, type GNode, type Graph } from "../graph";
 
@@ -17,7 +17,7 @@ export function GraphPage() {
         <>
             <Header area="dsa" />
             <div className="gr-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                {o ? <Workpage o={o} /> : <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Graph"]} title="Graph" error={dsa.isError ? <p className="notice bad">Couldn't reach the API.</p> : undefined} />}
+                {o ? <Workpage o={o} /> : <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Graph"]} title="Graph" error={dsa.isError ? <LoadFailed what="the graph" error={dsa.error} retry={() => void dsa.refetch()} /> : undefined} />}
             </div>
         </>
     );

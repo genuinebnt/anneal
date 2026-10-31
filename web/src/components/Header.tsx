@@ -470,7 +470,7 @@ function MiniTimer() {
     const brk = cfg.mode === "pom" && s.phase !== "focus";
     const label = sw ? "Stopwatch" : cfg.mode === "timer" ? "Countdown" : brk ? "Break" : "Focus";
     return (
-        <span className={`hd-timer${s.running ? " run" : ""}${brk ? " brk" : ""}${s.running || s.secs !== fresh(cfg).secs ? " live" : ""}`}>
+        <span className={`hd-timer${s.running ? " hd-trun" : ""}${brk ? " hd-tbrk" : ""}${s.running || s.secs !== fresh(cfg).secs ? " hd-tlive" : ""}`}>
             <button className="hd-tring" onClick={toggleTimer} aria-label={`${s.running ? "Pause" : "Start"} the focus timer`} title={`${label}: ${s.running ? "pause" : "start"} (the same timer as the problem page)`}>
                 <span className="hd-tarc" style={{ "--p": p } as React.CSSProperties} />
                 {s.running ? (

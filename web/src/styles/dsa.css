@@ -118,9 +118,9 @@
 .d-tsearch:focus{border-color:var(--ca)}
 .d-tog{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;color:var(--mut);padding:5px 0}
 .d-tog small{display:block;font:400 11px var(--sans);color:var(--dim)}
-.d-sw{width:32px;height:18px;border-radius:8px;background:var(--line);position:relative;flex:none}
-.d-sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg);transition:left .15s}
-.d-sw.on{background:var(--ca)}.d-sw.on::after{left:16px;background:var(--on-acc)}
+/* a choice too wide to sit beside its label goes under it, full width */
+.d-tog-col{flex-direction:column;align-items:stretch;gap:8px}
+.d-tog-col .ui-seg{display:flex;width:100%;box-sizing:border-box}.d-tog-col .ui-seg button{flex:1;min-width:0}
 .d-tip{position:fixed;pointer-events:none;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font:500 11px var(--mono);color:var(--fg);box-shadow:0 8px 20px var(--shadow);z-index:50;max-width:320px}
 @media (max-width:900px){.d-goals{grid-template-columns:1fr}.d-pcard{grid-template-columns:34px minmax(0,1fr)}.d-pside{grid-column:2;flex-direction:row;align-items:center;justify-content:space-between}}
 

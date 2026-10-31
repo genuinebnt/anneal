@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type SdAiReview, type SdAttempt, type SdDiagram, type SdMark, type SdProblem } from "../../api";
 import { AskPanel } from "../../components/AskPanel";
-import { HowFound, Page3, Panel, Tile, PageLoading } from "../../components/layout";
+import { HowFound, Page3, Panel, Tile, PageLoading, LoadFailed } from "../../components/layout";
 import { SdMd } from "../../components/SdMd";
 import { mmss } from "../../focusStore";
 import { SdFrame } from "./SdHome";
@@ -181,7 +181,7 @@ export function SdPractice({ id }: { id: string }) {
     });
 
     const v = q.data;
-    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "PRACTICE"]} title="Practice" error={q.isError ? <p className="notice bad">No problem called {id}.</p> : undefined} /></SdFrame>;
+    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "PRACTICE"]} title="Practice" error={q.isError ? <LoadFailed what="this drill" missing={`There is no drill called ${id}.`} back={{ to: "/sd/problems", label: "All drills" }} error={q.error} retry={() => void q.refetch()} /> : undefined} /></SdFrame>;
     const p = v.problem;
     const cur = p.steps[step]!;
     const elapsed = Math.round((now - Date.parse(started)) / 1000);

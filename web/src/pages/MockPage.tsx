@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header, MOCK_FRESH } from "../components/Header";
 import { Segmented, Stepper } from "../components/ui";
-import { HowFound, Page3, Panel, Tile, PageLoading } from "../components/layout";
+import { HowFound, Page3, Panel, Tile, PageLoading, LoadFailed } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { DIFF, leetcode, niceDate, statusOf } from "../dsa";
 import {
@@ -65,7 +65,7 @@ export function MockPage() {
                 {q.data ? (
                     <MockApp data={q.data} />
                 ) : (
-                    <PageLoading crumb={["DSA", "Mock interview"]} title="Mock interview" error={q.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
+                    <PageLoading crumb={["DSA", "Mock interview"]} title="Mock interview" error={q.isError ? <LoadFailed what="the mock interview" error={q.error} retry={() => void q.refetch()} /> : undefined} />
                 )}
             </div>
         </>

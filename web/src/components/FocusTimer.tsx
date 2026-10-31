@@ -100,17 +100,22 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
                 </div>
                 <div className="ft-ctl">
                     <button className="ft-go" onClick={toggleTimer}>
+                        {s.running ? (
+                            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3" width="3" height="10" rx="1" /><rect x="9.5" y="3" width="3" height="10" rx="1" /></svg>
+                        ) : (
+                            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.6-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5z" /></svg>
+                        )}
                         {s.running ? "Pause" : finished ? "Restart" : fresh0 ? "Start" : "Resume"}
                     </button>
                     <div className="ft-btns">
                         <button className="ft-sb" aria-label="Reset" title="Reset" onClick={() => setTimer(fresh(cfg))}>
-                            ↺
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7" /><path d="M4 4v4.5h4.5" /></svg>
                         </button>
                         <button className="ft-sb" aria-label="Skip to the next phase" title="Skip to the next phase" disabled={sw || cfg.mode === "timer"} onClick={() => setTimer((x) => ({ ...advance({ ...x, running: true }, x.secs + 1, cfg, cfg.mode), running: x.running }))}>
-                            ⏭
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6.5v11l8-5.5-8-5.5z" /><path d="M18 6v12" /></svg>
                         </button>
                         <button className="ft-sb" aria-label="Settings" aria-expanded={settings} title="Settings" onClick={() => setSettings(!settings)}>
-                            ⚙
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
                         </button>
                     </div>
                 </div>

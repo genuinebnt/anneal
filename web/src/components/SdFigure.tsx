@@ -1,16 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { StepControls, stepKeys } from "./SdMd";
 
-/** A step counter that ticks while the figure is on screen, unless motion is reduced (then it holds a still frame). */
-function useTick(ms: number, steps: number) {
+/** The figure's step and whether it plays. It plays on its own (motion is always on) and loops, unless motion is reduced; stepping
+ *  by hand pauses it, as on the Idea tab. */
+function useSteps(ms: number, steps: number) {
     const [t, setT] = useState(0);
-    const [paused, setPaused] = useState(false);
+    const [playing, setPlaying] = useState(() => !(window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.dataset.motion === "reduce"));
     useEffect(() => {
-        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.documentElement.dataset.motion === "reduce";
-        if (reduce || paused) return;
+        if (!playing) return;
         const id = window.setInterval(() => setT((x) => (x + 1) % steps), ms);
         return () => window.clearInterval(id);
-    }, [ms, steps, paused]);
-    return { t, paused, toggle: () => setPaused((p) => !p) };
+    }, [ms, steps, playing]);
+    return { t, setT, playing, setPlaying };
 }
 
 const W = 640;
@@ -392,10 +393,11 @@ const FIGS: Record<string, { steps: number; ms: number; draw: (t: number) => Rea
 /** An animated drawing for a system design page, by name (the names are listed in `crates/content/src/sd.rs`). */
 export function SdFigure({ name, caption }: { name: string; caption: string }) {
     const fig = FIGS[name];
-    const { t, paused, toggle } = useTick(fig?.ms ?? 1000, fig?.steps ?? 1);
+    const steps = fig?.steps ?? 1;
+    const { t, setT, playing, setPlaying } = useSteps(fig?.ms ?? 1000, steps);
     if (!fig) return null;
     return (
-        <figure className="sd-fig">
+        <figure className="sd-fig" tabIndex={0} onKeyDown={stepKeys(t, steps, setT, setPlaying)}>
             <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={caption}>
                 <defs>
                     <marker id="sf-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
@@ -404,10 +406,8 @@ export function SdFigure({ name, caption }: { name: string; caption: string }) {
                 </defs>
                 {fig.draw(t)}
             </svg>
-            <figcaption>
-                <span>{caption}</span>
-                <button onClick={toggle}>{paused ? "Play" : "Pause"}</button>
-            </figcaption>
+            <figcaption>{caption}</figcaption>
+            <StepControls i={t} n={steps} playing={playing} set={setT} play={setPlaying} />
         </figure>
     );
 }

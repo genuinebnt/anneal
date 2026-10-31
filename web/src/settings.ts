@@ -62,7 +62,9 @@ export function useEditorSettings() {
       if (prev) qc.setQueryData(["settings"], prev);
     },
   });
-  useEffect(() => applyEditor(editor), [editor.font_family, editor.font_size, editor.ligatures]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    applyEditor(editor);
+  }, [editor.font_family, editor.font_size, editor.ligatures]); // eslint-disable-line react-hooks/exhaustive-deps
   return {
     editor,
     families: settings.data?.font_families ?? [DEFAULT_EDITOR.font_family],

@@ -13,8 +13,13 @@ export function AskPanel({ kind, id, title = "Ask about this page", hint }: { ki
     const [turns, setTurns] = useState<Turn[]>([]);
     const [text, setText] = useState("");
     const box = useRef<HTMLDivElement>(null);
-    useEffect(() => setTurns([]), [kind, id]);
-    useEffect(() => box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" }), [turns]);
+    useEffect(() => {
+        setTurns([]);
+    }, [kind, id]);
+    // braces matter: scrollTo returns a promise in current browsers, and an effect must return nothing or a cleanup function
+    useEffect(() => {
+        box.current?.scrollTo({ top: box.current.scrollHeight, behavior: "smooth" });
+    }, [turns]);
     const ask = useMutation({
         mutationFn: (next: Turn[]) => api.aiAsk(kind, id, next),
         onSuccess: (r, next) => setTurns([...next, { role: "model", text: r.answer }]),

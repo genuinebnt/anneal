@@ -29,7 +29,7 @@ import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Tips } from "./components/Tips";
 import { WelcomeBack } from "./components/WelcomeBack";
 import { ConnectionBanner } from "./components/ConnectionBanner";
-import { ErrorScreen } from "./components/ErrorScreen";
+import { ErrorScreen, NotFound } from "./components/ErrorScreen";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { GraphPage } from "./pages/GraphPage";
@@ -221,7 +221,7 @@ const sdConceptRoute = routes[28];
 const sdPracticeRoute = routes[30];
 
 // Pages are preloaded when their link is hovered, scroll positions come back with Back, and a page that throws shows a way out instead of a blank screen.
-const router = createRouter({ routeTree: rootRoute.addChildren([...routes]), defaultPreload: "intent", defaultPreloadStaleTime: 30_000, scrollRestoration: true, defaultErrorComponent: ErrorScreen });
+const router = createRouter({ routeTree: rootRoute.addChildren([...routes]), defaultPreload: "intent", defaultPreloadStaleTime: 30_000, scrollRestoration: true, defaultErrorComponent: ErrorScreen, defaultNotFoundComponent: NotFound });
 
 declare module "@tanstack/react-router" {
   interface Register {

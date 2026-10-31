@@ -90,6 +90,8 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # the unit tests (Node 24 runs TypeScript directly)
+      - run: node --test src/*.test.ts
 
   e2e:
     name: Browser tests (${{ matrix.shard }}/4)

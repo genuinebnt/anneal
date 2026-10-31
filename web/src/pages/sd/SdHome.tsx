@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
 import { api, type SdOverview } from "../../api";
 import { Header } from "../../components/Header";
-import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
+import { HowFound, ListCard, Page3, Panel, Tile, PageLoading, LoadFailed } from "../../components/layout";
 
 /** The groups of concept pages, in order, with what each holds. */
 export const SD_GROUPS: { id: string; name: string; blurb: string; color: string }[] = [
@@ -41,7 +41,7 @@ function nextUp(o: SdOverview) {
 export function SdHome() {
     const q = useQuery({ queryKey: ["sd"], queryFn: api.sd });
     const o = q.data;
-    if (!o) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN"]} title="System design" error={q.isError ? <p className="notice bad">Couldn't reach the API.</p> : undefined} /></SdFrame>;
+    if (!o) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN"]} title="System design" error={q.isError ? <LoadFailed what="system design" error={q.error} retry={() => void q.refetch()} /> : undefined} /></SdFrame>;
     const checks = o.concepts.reduce((n, c) => n + c.checks, 0);
     const answered = o.concepts.reduce((n, c) => n + Math.min(c.checked, c.checks), 0);
     const drilled = o.problems.filter((p) => p.attempts > 0);

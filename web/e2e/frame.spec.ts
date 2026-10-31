@@ -16,14 +16,14 @@ test("the header's focus timer is the same timer as the problem page's card, and
     await page.goto("/d/two-sum");
     const card = page.getByRole("button", { name: /^(Start|Resume)$/ });
     await card.click();
-    await expect(page.locator(".hd-timer")).toHaveClass(/run/);
+    await expect(page.locator(".hd-timer")).toHaveClass(/hd-trun/);
     await page.getByRole("link", { name: "Calendar" }).first().click();
-    await expect(page.locator(".hd-timer")).toHaveClass(/run/);
+    await expect(page.locator(".hd-timer")).toHaveClass(/hd-trun/);
     const t1 = await page.locator(".hd-timer b").innerText();
     await page.waitForTimeout(1600);
     expect(await page.locator(".hd-timer b").innerText()).not.toBe(t1);
     await page.getByRole("button", { name: "Pause the focus timer" }).click();
-    await expect(page.locator(".hd-timer")).not.toHaveClass(/run/);
+    await expect(page.locator(".hd-timer")).not.toHaveClass(/hd-trun/);
     await page.locator(".hd-timer").hover();
     await page.getByRole("button", { name: "Reset the focus timer" }).click();
     await expect(page.locator(".hd-timer b")).toHaveText("25:00");

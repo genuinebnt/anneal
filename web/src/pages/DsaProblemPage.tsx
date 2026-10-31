@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
-import { Page3, PageLoading, Tile } from "../components/layout";
+import { Page3, PageLoading, Tile, LoadFailed } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { RecallCurve } from "../components/RecallCurve";
 import { ConfirmButton } from "../components/ui";
@@ -168,14 +168,20 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const preview = useQuery({ queryKey: ["dsa-preview", p?.id], queryFn: () => api.preview(p!.id), enabled: !!p });
     const [tab, setTab] = useState(0);
     const [practiceMode, setPracticeMode] = useState(false);
-    useEffect(() => setPracticeMode(false), [p?.id]);
+    useEffect(() => {
+        setPracticeMode(false);
+    }, [p?.id]);
     const [showIdeas] = useShowIdeas();
     const [revealIdea, setRevealIdea] = useState(false);
-    useEffect(() => setRevealIdea(false), [p?.id]);
+    useEffect(() => {
+        setRevealIdea(false);
+    }, [p?.id]);
     const ideaShown = showIdeas || revealIdea;
     const [reading, setReading] = useState(() => getPref("pp.reading", false));
     const [hintsShown, setHintsShown] = useState(0);
-    useEffect(() => setHintsShown(0), [p?.id]);
+    useEffect(() => {
+        setHintsShown(0);
+    }, [p?.id]);
     const [more, setMore] = useState(false);
     // the left panel's tabs: Same idea (the technique's problems) or Looks like it (other techniques that read alike, from the local model)
     const [leftTab, setLeftTabState] = useState<"same" | "alike">(() => getPref<"same" | "alike">("pp.left", "same"));
@@ -232,7 +238,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         return (
             <>
                 <Header area="dsa" />
-                <PageLoading crumb={["DSA", "Problem"]} title="…" error={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
+                <PageLoading crumb={["DSA", "Problem"]} title="…" error={overview.isError ? <LoadFailed what="this problem" error={overview.error} retry={() => void overview.refetch()} /> : undefined} />
             </>
         );
     if (!p) return frame(<p className="notice bad pp-pad">No problem called {slug}. <Link to="/dsa">Back to the list</Link></p>);

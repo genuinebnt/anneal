@@ -7,6 +7,14 @@ say = "Redirects read through a Redis cache keyed by short code with a one-day T
 related = ["redis", "scaling-reads", "consistent-hashing", "probabilistic-structures", "load-balancing"]
 credit = "Parts of the sections on cache layers, query and object caching, and the update strategies are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#cache) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
 
+summary = [
+  "Database load is proportional to **1 − hit ratio**: going from 90% to 99% hits cuts it tenfold.",
+  "Default to **cache-aside**: read the cache, fill it on a miss, and **delete** the key on a write.",
+  "Bound staleness with a **TTL plus jitter**; use change data capture when it must be tight.",
+  "Protect hot keys from **stampedes** with a lease, a lock or early refresh.",
+  "Know what happens when the cache is **empty or down** before an interviewer asks.",
+]
+
 [[sections]]
 heading = "Why caching works"
 body = """
@@ -15,9 +23,9 @@ Two facts about real traffic make caches pay off:
 - **Skew**: access follows a power law. A small share of items (the top posts, the popular products, today's links) receives most of the reads, so a cache holding a few percent of the data can answer most requests.
 - **Locality in time**: something read now is likely to be read again soon.
 
-The win is measured by the **hit ratio** h. With a cache read costing t_c and a miss costing t_c + t_db:
+The win is measured by the **hit ratio** \\(h\\), the share of reads the cache answers. Every read pays for the cache lookup, and a miss also pays for the database:
 
-`average latency = t_c + (1 − h) × t_db`
+$$\\text{average read} = \\htmlClass{tx-a}{t_{\\text{cache}}} + (1 - \\htmlClass{tx-b}{h}) \\cdot \\htmlClass{tx-c}{t_{\\text{db}}}$$
 
 | Hit ratio | Average read (cache 0.5 ms, DB 10 ms) | Reads reaching the DB (of 100,000/s) |
 |---|---|---|
@@ -89,7 +97,7 @@ A cache holds limited data, so you choose how entries get in and how writes reac
 3. Store the result in the cache with a TTL.
 4. Return it.
 
-```rust
+```rust title=cache_aside.rs hl=13 group=cache-aside
 async fn get_user(cache: &Cache, db: &Db, id: u64) -> Result<Option<User>> {
     let key = format!("user:v3:{id}");
     if let Some(bytes) = cache.get(&key).await? {
@@ -105,6 +113,22 @@ async fn update_user(cache: &Cache, db: &Db, user: &User) -> Result<()> {
     cache.del(&format!("user:v3:{}", user.id)).await?; // then delete, never set
     Ok(())
 }
+```
+```python title=cache_aside.py hl=14 group=cache-aside
+def get_user(cache, db, user_id):
+    key = f"user:v3:{user_id}"
+    cached = cache.get(key)
+    if cached is not None:
+        return decode(cached)
+    user = db.user(user_id)
+    if user is None:
+        return None
+    cache.set(key, encode(user), ex=3600)
+    return user
+
+def update_user(cache, db, user):
+    db.save(user)                       # the database first
+    cache.delete(f"user:v3:{user.id}")  # then delete, never set
 ```
 
 Only requested data is cached, and a failed cache only makes reads slower. The costs: each miss takes three trips (cache, database, cache), data can go stale until the TTL ends or the key is deleted, and a replaced cache node starts empty.
@@ -129,25 +153,29 @@ Only requested data is cached, and a failed cache only makes reads slower. The c
 [[sections]]
 heading = "Invalidation: keeping the copy honest"
 body = """
-"There are only two hard things in computer science: cache invalidation and naming things." The tools, from simplest to strongest:
+"There are only two hard things in computer science: cache invalidation and naming things."^[Usually credited to Phil Karlton, an engineer at Netscape.] The tools, from simplest to strongest:
 
 1. **TTL only**: every entry expires after a fixed time. Simple; staleness is bounded by the TTL. Fine for data where minutes of staleness are acceptable (a product's review count).
 2. **Delete on write**: after the database commits, delete the key; the next read reloads it. Staleness lasts only between the commit and the delete.
 3. **Versioned keys**: store a version number with the entity (`user:42` has version 17) and key the cache by it (`user:42:v17`). A write bumps the version; old entries are never read again and simply expire.
 4. **Change data capture**: a process tails the database's commit log and deletes affected keys. The database's log is the source of truth, so invalidations are not lost when an application server crashes between commit and delete. Facebook's memcache deployment works this way: a daemon (mcsqueal) reads the MySQL commit log and broadcasts deletes to every cache cluster.
 
-**Why delete instead of set?** Two writers race:
+**Why delete instead of set?** Step through two writers that each write the database and then set the cache:
 
-| Time | Writer A | Writer B |
-|---|---|---|
-| 1 | DB: price = 10 | |
-| 2 | | DB: price = 12 |
-| 3 | | cache: set 12 |
-| 4 | cache: set 10 | |
+:::steps Two writers race when writes set the cache
+- writer A | DB: price = 10 | A updates the database first.
+- writer B | DB: price = 12 | B updates it a moment later; the database now says 12.
+- writer B | cache: set 12 | B happens to reach the cache first.
+- writer A | cache: set 10 | A's late write puts the old 10 back, and the cache stays wrong until the TTL ends.
+:::
 
-The database says 12, the cache says 10, and it stays wrong until the TTL. Deleting makes the order of cache operations irrelevant: the next read loads the current value.
+Deleting makes the order of cache operations irrelevant: whichever delete lands last, the next read loads the current value from the database.
 
-Even delete has a narrow race: a reader misses, reads the **old** value from the database, a writer commits and deletes, then the reader sets the old value. Short TTLs bound it; **leases** (below) close it.
+:::deeper The race that delete still has | 1 min
+A reader misses and reads the **old** value from the database; before it writes that value to the cache, a writer commits a new value and deletes the key; then the reader sets the old value it read. The cache is stale until the TTL ends.
+
+The window is small (the reader must be slower than a whole write), so short TTLs bound it, and **leases** (see "When caches fail") close it: the writer's delete invalidates the reader's lease token, so its late set is refused.
+:::
 
 > [!TIP]
 > **Read-your-writes**: after a user edits their profile, a stale cache can show the old one. Delete synchronously in the write path (before responding), or route that user's next reads to the database for a few seconds.
@@ -164,7 +192,7 @@ body = """
 | Random | any | uniform access | ignores recency and frequency |
 | TTL-based | those expiring soonest | data with natural lifetimes | needs good TTLs |
 
-**Redis** applies a policy only when `maxmemory` is reached (`maxmemory-policy`): `noeviction` (refuse writes; the default), `allkeys-lru`, `allkeys-lfu`, `allkeys-random`, the `volatile-*` versions that only evict keys with a TTL, and `volatile-ttl`. Its LRU is **approximate**: it samples a few keys (`maxmemory-samples`, 5 by default) and evicts the oldest of them, which is close to true LRU at a fraction of the memory. Use `allkeys-lru` as the default for a cache.
+**Redis** applies a policy only when `maxmemory` is reached (`maxmemory-policy`): `noeviction` (refuse writes; the default), `allkeys-lru`, `allkeys-lfu`, `allkeys-random`, the `volatile-*` versions that only evict keys with a TTL, and `volatile-ttl`. Its LRU is **approximate**: it samples a few keys (`maxmemory-samples`, 5 by default) and evicts the oldest of them, which is close to true LRU at a fraction of the memory.^[It also keeps a small pool of good eviction candidates between evictions, which brings the approximation closer to true LRU.] Use `allkeys-lru` as the default for a cache.
 
 **W-TinyLFU** (in Java's Caffeine) keeps a tiny frequency sketch and admits a new entry only if it is likely to be read more than the one it would evict, so a one-off scan cannot flush the hot set. It beats LRU on most real traces.
 
@@ -252,53 +280,159 @@ answer = "Negative caching: store a 'not found' marker for the id with a short T
 prompt = "When is write-behind a reasonable choice, and what do you give up?"
 answer = "For write-heavy data that can tolerate losing a few seconds of updates, such as view or like counters: writes go to memory and are flushed to the database in batches, smoothing its load. You give up durability (a cache failure before the flush loses the writes) and accept more complexity."
 
+
+[[terms]]
+term = "Hit ratio"
+means = "The share of reads the cache answers; the database sees the rest."
+section = "Why caching works"
+
+[[terms]]
+term = "Skew"
+means = "A few items get most of the reads, so a small cache answers most requests."
+section = "Why caching works"
+
+[[terms]]
+term = "CDN"
+means = "Caches spread near users that serve static files and cacheable responses."
+section = "Where caches sit"
+
+[[terms]]
+term = "Application cache"
+means = "A shared in-memory store, such as Redis or Memcached, between the app and its database."
+section = "Where caches sit"
+
+[[terms]]
+term = "Object-level caching"
+means = "Caching the objects the code uses, so a change maps to one key to delete."
+section = "What to cache, and how to key it"
+
+[[terms]]
+term = "Versioned key"
+means = "A key with a format version, like user:v3:42, so a format change never reads old entries."
+section = "What to cache, and how to key it"
+
+[[terms]]
+term = "Cache-aside"
+means = "The app reads the cache, fills it on a miss, and deletes the key on a write."
+section = "Reading and writing: the patterns"
+
+[[terms]]
+term = "Write-through"
+means = "Writes go to the cache, which writes the database before returning."
+section = "Reading and writing: the patterns"
+
+[[terms]]
+term = "Write-behind"
+means = "Writes go to the cache now and to the database later, in batches; a cache failure can lose them."
+section = "Reading and writing: the patterns"
+
+[[terms]]
+term = "TTL"
+means = "Time to live: how long an entry lasts before it expires on its own."
+section = "Invalidation: keeping the copy honest"
+
+[[terms]]
+term = "Change data capture"
+means = "Reading the database's commit log to act on every change, here to delete cached keys."
+section = "Invalidation: keeping the copy honest"
+
+[[terms]]
+term = "LRU"
+means = "Least recently used: evict the entry read longest ago."
+section = "Eviction: what to drop when memory is full"
+
+[[terms]]
+term = "Working set"
+means = "The data read in a typical window; the cache should hold it."
+section = "Eviction: what to drop when memory is full"
+
+[[terms]]
+term = "Stampede"
+means = "A hot key expires and many requests rebuild it from the database at once."
+section = "When caches fail"
+
+[[terms]]
+term = "Lease"
+means = "A token the cache gives the first client that misses; only its write is accepted."
+section = "When caches fail"
+
+[[terms]]
+term = "Negative caching"
+means = "Caching 'not found' so repeated lookups of missing keys stay off the database."
+section = "When caches fail"
+
+[[terms]]
+term = "Hash slot"
+means = "Redis Cluster's unit of sharding: 16,384 slots spread over the primaries."
+section = "Distributed caches"
+
+[[terms]]
+term = "ETag"
+means = "A version tag on a response; an unchanged resource is answered with 304 and no body."
+section = "HTTP caching"
+
+[[terms]]
+term = "stale-while-revalidate"
+means = "Serve a stale response for a while and refresh it in the background."
+section = "HTTP caching"
+
 [[sources]]
 title = "The System Design Primer: Cache"
+kind = "guide"
 url = "https://github.com/donnemartin/system-design-primer#cache"
 note = "layers, query vs object caching, update strategies (CC BY 4.0)"
 
 [[sources]]
 title = "Scaling Memcache at Facebook (NSDI 2013)"
+kind = "paper"
 url = "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
 note = "leases against stale sets and stampedes, Gutter, invalidation from the commit log"
 
 [[sources]]
 title = "Optimal Probabilistic Cache Stampede Prevention (VLDB 2015)"
+kind = "paper"
 url = "https://www.vldb.org/pvldb/vol8/p886-vattani.pdf"
 note = "the XFetch early-refresh rule"
 
 [[sources]]
 title = "Redis: key eviction"
+kind = "docs"
 url = "https://redis.io/docs/latest/develop/reference/eviction/"
 note = "maxmemory policies and the approximated LRU"
 
 [[sources]]
 title = "Redis: client-side caching"
+kind = "docs"
 url = "https://redis.io/docs/latest/develop/clients/client-side-caching/"
 note = "server-assisted invalidation of in-process copies"
 
 [[sources]]
 title = "Caffeine: efficiency"
+kind = "docs"
 url = "https://github.com/ben-manes/caffeine/wiki/Efficiency"
 note = "W-TinyLFU against LRU on real traces"
 
 [[sources]]
 title = "AWS ElastiCache: caching strategies"
+kind = "docs"
 url = "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html"
 note = "lazy loading, write-through and TTLs in practice"
 
 [[sources]]
 title = "MDN: HTTP caching"
+kind = "docs"
 url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching"
 note = "Cache-Control, validators, heuristics"
 
 [[sources]]
 title = "RFC 9111: HTTP Caching"
+kind = "standard"
 url = "https://www.rfc-editor.org/rfc/rfc9111"
 note = "the standard"
 
 [[sources]]
 title = "RFC 5861: stale-while-revalidate and stale-if-error"
+kind = "standard"
 url = "https://www.rfc-editor.org/rfc/rfc5861"
 
 [[figures]]

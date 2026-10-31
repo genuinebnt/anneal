@@ -13,7 +13,9 @@ import { ago } from "./shared";
 export function Prose({ text, className = "k-prose" }: { text: string; className?: string }) {
     const ref = useRef<HTMLDivElement>(null);
     const html = renderMd(text);
-    useLayoutEffect(() => initCodeTabs(ref.current), [html]);
+    useLayoutEffect(() => {
+        initCodeTabs(ref.current);
+    }, [html]);
     return <div ref={ref} className={className} onClick={handleCodeClick} onKeyDown={handleCodeKey} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -258,7 +260,9 @@ export function RunTab({ runs, stageId, sources = {} }: { runs: CourseRun[]; sta
     const [sel, setSel] = useState<number | null>(null);
     const newest = runs[0];
     // A run that arrives while the tab is open brings you back to the newest.
-    useEffect(() => setSel(null), [newest?.id]);
+    useEffect(() => {
+        setSel(null);
+    }, [newest?.id]);
     const [flt, setFlt] = useState<"all" | "bad" | "ok">("all");
     const [cmp, setCmp] = useState(false);
     const [passOpen, setPassOpen] = useState(false);

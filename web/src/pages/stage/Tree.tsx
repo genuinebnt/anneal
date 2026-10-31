@@ -16,7 +16,9 @@ export function Tree({ course, page, panels }: { course: string; page: Page; pan
     const o = withoutPlanned(overview.data, showPlanned);
     const here = page.module.code;
     const [open, setOpen] = useState<Set<string>>(() => new Set([here]));
-    useEffect(() => setOpen((prev) => (prev.has(here) ? prev : new Set(prev).add(here))), [here]);
+    useEffect(() => {
+        setOpen((prev) => (prev.has(here) ? prev : new Set(prev).add(here)));
+    }, [here]);
     const [find, setFind] = useState("");
     const [showPassed, setShowPassed] = useState<boolean>(() => getPref("tree.passed", true));
     const needle = find.trim().toLowerCase();

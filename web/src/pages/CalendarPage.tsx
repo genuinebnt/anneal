@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { api, type StreakDay, type Streaks, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
 import { Header } from "../components/Header";
 import { DayStrip, GLYPH_OF, MarkChoices, STREAK_LEGEND, fmt as fmtN, niceDay, offered, useStreaks } from "../components/Streaks";
-import { Page3, Panel, Tile, PageLoading } from "../components/layout";
+import { Page3, Panel, Tile, PageLoading, LoadFailed } from "../components/layout";
 
 /* ---------- dates ---------- */
 const DAY = 86400000;
@@ -218,7 +218,7 @@ export function CalendarPage() {
         return (
             <>
                 <Header area="dsa" />
-                <PageLoading crumb={["DSA", "Calendar"]} title="Plan" tiles={4} error={planQ.isError || first.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
+                <PageLoading crumb={["DSA", "Calendar"]} title="Plan" tiles={4} error={planQ.isError || first.isError ? <LoadFailed what="your plan" error={planQ.error ?? first.error} retry={() => { void planQ.refetch(); void first.refetch(); }} /> : undefined} />
             </>
         );
     }

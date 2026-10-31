@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
-import { PageLoading, Page3, Panel, Tile } from "../components/layout";
+import { PageLoading, Page3, Panel, Tile, LoadFailed } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { getPref, setPref } from "../prefs";
 import { usePremiumSwitch } from "../premium";
@@ -155,7 +155,7 @@ export function DsaPage() {
       <>
         <Header area="dsa" />
         <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-          <PageLoading crumb={["DSA", "PROBLEMS"]} title="Solve, review, remember." error={overview.isError ? <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p> : undefined} />
+          <PageLoading crumb={["DSA", "PROBLEMS"]} title="Solve, review, remember." error={overview.isError ? <LoadFailed what="your problems" error={overview.error} retry={() => void overview.refetch()} /> : undefined} />
         </div>
       </>
     );
@@ -1102,7 +1102,7 @@ function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f
         <h4>
           <span>OPTIONS</span>
         </h4>
-        <div className="d-tog">
+        <div className="d-tog d-tog-col">
           <span>Density<small>Compact trims the rows</small></span>
           <Segmented label="Density" value={ui.density} options={[["comfortable", "Comfortable"], ["compact", "Compact"]] as const} onChange={(v) => { setUi("ui.density", v); setUiState(readUi()); }} />
         </div>

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type Grade, type ReviewItem, type ReviewQueue } from "../api";
 import { Header } from "../components/Header";
-import { HowFound, ListCard, Page3, Tile, PageLoading } from "../components/layout";
+import { HowFound, ListCard, Page3, Tile, PageLoading, LoadFailed } from "../components/layout";
 import { Skeleton } from "../components/Skeleton";
 import { Companies, Md, PyCode } from "../components/dsaBits";
 import { RecallCurve } from "../components/RecallCurve";
@@ -35,7 +35,7 @@ export function ReviewPage() {
         {q.data ? (
           <Session queue={q.data} />
         ) : (
-          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" error={q.isError ? <p className="rempty">Couldn't reach the API. <Link to="/dsa">Back to DSA</Link></p> : undefined} />
+          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" error={q.isError ? <LoadFailed what="your reviews" error={q.error} retry={() => void q.refetch()} /> : undefined} />
         )}
       </div>
     </>

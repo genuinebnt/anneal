@@ -11,7 +11,7 @@ import { rust } from "@codemirror/lang-rust";
 import { highlightTree, tagHighlighter, tags as t } from "@lezer/highlight";
 import { Marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const span = (cls: string, text: string) => `<span class="${cls}">${esc(text)}</span>`;
 
 // ---------- highlighting ----------
@@ -27,7 +27,7 @@ const rustHighlighter = tagHighlighter([
     { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], class: "t-c" },
 ]);
 
-function highlightRust(code: string): string {
+export function highlightRust(code: string): string {
     const tree = rust().language.parser.parse(code);
     let out = "";
     let at = 0;
@@ -93,7 +93,7 @@ function highlightCpp(code: string): string {
 }
 
 /** Shell sessions: the prompt, the command and its flags. */
-function highlightShell(code: string): string {
+export function highlightShell(code: string): string {
     return code
         .split("\n")
         .map((line) => {

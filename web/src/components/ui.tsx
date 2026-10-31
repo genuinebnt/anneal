@@ -63,7 +63,7 @@ export function Stepper({ value, onChange, min, max, step = 1, label, compact = 
         el.classList.add("bump");
     }, [value]);
     const stop = () => window.clearTimeout(hold.current);
-    useEffect(() => stop, []);
+    useEffect(() => () => stop(), []);
     const nudge = (dir: 1 | -1) => {
         const next = Math.max(min, Math.min(max, latest.current + dir * step));
         if (next !== latest.current) onChange(next);

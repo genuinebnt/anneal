@@ -1,12 +1,10 @@
-import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type CSSProperties } from "react";
 import { api, type SdMark } from "../../api";
-import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
-import { SdFigure } from "../../components/SdFigure";
-import { AskPanel } from "../../components/AskPanel";
+import { HowFound, ListCard, Page3, Panel, Tile, PageLoading, LoadFailed } from "../../components/layout";
 import { SdMd } from "../../components/SdMd";
-import { SD_GROUPS, SdFrame, groupOf } from "./SdHome";
+import { SD_GROUPS, SdFrame } from "./SdHome";
+import { ConceptReader } from "./SdRead";
 
 /** Every concept page, by group. */
 export function SdLearn() {
@@ -88,81 +86,22 @@ function Check({ concept, index, prompt, answer, marked }: { concept: string; in
     );
 }
 
-/** A concept page: the article with its drawings, the sentence to say, and the checks. */
+/** A concept page: the reading view (SdRead.tsx) with the checks under the article. */
 export function SdConceptPage({ id }: { id: string }) {
     const q = useQuery({ queryKey: ["sd-concept", id], queryFn: () => api.sdConcept(id) });
     const all = useQuery({ queryKey: ["sd"], queryFn: api.sd });
     const v = q.data;
-    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" error={q.isError ? <p className="notice bad">No page called {id}.</p> : undefined} /></SdFrame>;
+    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" error={q.isError ? <LoadFailed what="this page" missing={`There is no page called ${id}.`} back={{ to: "/sd/learn", label: "All system design pages" }} error={q.error} retry={() => void q.refetch()} /> : undefined} /></SdFrame>;
     const c = v.concept;
-    const g = groupOf(c.group);
-    const siblings = (all.data?.concepts ?? []).filter((x) => x.group === c.group).sort((a, b) => a.order - b.order);
-    const titleOf = (cid: string) => all.data?.concepts.find((x) => x.id === cid)?.title ?? cid;
-    const left = (
-        <Panel title={g.name}>
-            <div className="sd-list">
-                {siblings.map((s) => (
-                    <Link key={s.id} to="/sd/learn/$id" params={{ id: s.id }} className={s.id === id ? "on" : ""}>
-                        <i className={s.checked >= s.checks && s.checks ? "done" : ""} />
-                        {s.title}
-                    </Link>
-                ))}
-            </div>
-        </Panel>
-    );
-    const center = (
-        <>
-            <article className="ly-pn sd-art">
-                <span className="sd-k" style={{ color: g.color }}>{g.name.toUpperCase()}</span>
-                <h2>{c.title}</h2>
-                <p className="sd-lede">{c.lede}</p>
-                {c.sections.map((s) => (
-                    <section key={s.heading}>
-                        <h4>{s.heading}</h4>
-                        <SdMd text={s.body} />
-                        {c.figures.filter((f) => f.after === s.heading).map((f) => <SdFigure key={f.name} name={f.name} caption={f.caption} />)}
-                    </section>
-                ))}
-                <aside className="sd-call sd-call-interview"><b>Say it like this</b><p>“{c.say}”</p></aside>
-                {(c.sources?.length || c.credit) && (
-                    <section className="sd-srcs">
-                        <h4>Sources and further reading</h4>
-                        {c.sources && c.sources.length > 0 && (
-                            <ul>
-                                {c.sources.map((x) => <li key={x.url}><a href={x.url} target="_blank" rel="noreferrer">{x.title}</a>{x.note && <span> · {x.note}</span>}</li>)}
-                            </ul>
-                        )}
-                        {c.credit && <div className="sd-credit"><SdMd text={c.credit} /></div>}
-                    </section>
-                )}
-            </article>
-            <section className="ly-pn sd-checks">
-                <h5 className="ly-pnh"><span>Check yourself</span><span className="sd-dim">open answers, then compare</span></h5>
-                {c.checks.map((k, i) => <Check key={i} concept={id} index={i} prompt={k.prompt} answer={k.answer} marked={v.marked.includes(`check:${id}:${i}`)} />)}
-            </section>
-        </>
-    );
-    const right = (
-        <>
-            <AskPanel kind="sd-concept" id={id} />
-            {v.used_in.length > 0 && (
-                <Panel title="Used in">
-                    <div className="ly-cards">
-                        {v.used_in.map((p, i) => <ListCard key={p.id} i={i} title={p.title} note={p.kind.toUpperCase()} to={{ to: "/sd/practice/$id", params: { id: p.id } }} />)}
-                    </div>
-                </Panel>
-            )}
-            {c.related.length > 0 && (
-                <Panel title="Read next">
-                    <div className="sd-list">{c.related.map((r) => <Link key={r} to="/sd/learn/$id" params={{ id: r }}>{titleOf(r)}</Link>)}</div>
-                </Panel>
-            )}
-            <HowFound title="About this page" text={`${c.credit ? "Builds on openly licensed material, credited at the end." : "Written for anneal."}${c.sources?.length ? " Facts are checked against the sources listed at the end." : ""} The checks are open questions: write, compare with the answer, and mark yourself; each mark becomes a review card.`} rows={[["Reading", `${c.minutes} min`], ["Checks", `${v.marked.length}/${c.checks.length} marked`]]} />
-        </>
+    const checks = (
+        <section className="ly-pn sd-checks">
+            <h5 className="ly-pnh"><span>Check yourself</span><span className="sd-dim">open answers, then compare</span></h5>
+            {c.checks.map((k, i) => <Check key={i} concept={id} index={i} prompt={k.prompt} answer={k.answer} marked={v.marked.includes(`check:${id}:${i}`)} />)}
+        </section>
     );
     return (
         <SdFrame>
-            <Page3 crumb={[<Link to="/sd">SYSTEM DESIGN</Link>, <Link to="/sd/learn">LEARN</Link>, g.name.toUpperCase()]} title={c.title} sub={`${g.name} · ${c.minutes} minutes · ${c.checks.length} checks`} left={left} center={center} right={right} label={g.name} />
+            <ConceptReader key={id} id={id} v={v} all={all.data} checks={checks} />
         </SdFrame>
     );
 }

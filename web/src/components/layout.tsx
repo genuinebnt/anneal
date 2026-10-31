@@ -1,12 +1,15 @@
 // The page frame of the 2026 redesign (styles/layout.css): a title row with summary tiles, then a left panel, the centre and a right panel.
 // On a phone the left panel is a drawer, opened from a bar under the header, and the right panel stacks below the centre.
 import { Link, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ApiError } from "../api";
 
 export function Page3({ crumb, title, sub, tiles, left, center, right, label, className = "" }: { crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: ReactNode; left?: ReactNode; center: ReactNode; right?: ReactNode; label?: string; className?: string }) {
     const [open, setOpen] = useState(false);
     const path = useRouterState({ select: (s) => s.location.pathname });
-    useEffect(() => setOpen(false), [path]);
+    useEffect(() => {
+        setOpen(false);
+    }, [path]);
     useEffect(() => {
         if (!open) return;
         const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -238,5 +241,53 @@ export function PageLoading({ crumb, title, sub, tiles = 3, left = true, right =
             }
             right={right && !error ? <section className="ly-pn ly-sk"><i className="h" />{bars(3, "row")}</section> : undefined}
         />
+    );
+}
+
+/** When a page's data did not load: what failed, a way to try now, a retry by itself after a few seconds (longer each time), and
+ *  the request's details. A missing thing (404) says so and offers a way back instead of retrying. */
+export function LoadFailed({ what, error, retry, missing, back = { to: "/dsa", label: "Go to the DSA home" } }: { what: string; error: unknown; retry: () => void; missing?: string; back?: { to: string; label: string } }) {
+    const status = error instanceof ApiError ? error.status : null;
+    const [attempt, setAttempt] = useState(0);
+    const wait = Math.min(30, 4 * 2 ** attempt);
+    const [left, setLeft] = useState(wait);
+    const notFound = status === 404;
+    useEffect(() => {
+        if (notFound) return;
+        setLeft(wait);
+        const id = window.setInterval(() => setLeft((n) => n - 1), 1000);
+        return () => window.clearInterval(id);
+    }, [wait, notFound]);
+    // the page passes a new function each render; the countdown must fire it once, so it is read from a ref
+    const again = useRef(retry);
+    again.current = retry;
+    useEffect(() => {
+        if (notFound || left > 0) return;
+        setAttempt((a) => a + 1);
+        again.current();
+    }, [left, notFound]);
+    const [at] = useState(() => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+    if (notFound)
+        return (
+            <div className="lf">
+                <div className="lf-h"><span className="lf-ico lf-miss" aria-hidden="true">?</span><h3>{missing ?? `There is no ${what}.`}</h3></div>
+                <p>The address may be old or mistyped.</p>
+                <div className="lf-acts"><Link className="lf-go" to={back.to as never}>{back.label}</Link></div>
+            </div>
+        );
+    const offline = status === null;
+    return (
+        <div className="lf" role="alert">
+            <div className="lf-h">
+                <svg className="lf-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></svg>
+                <h3>{what[0]!.toUpperCase() + what.slice(1)} did not load.</h3>
+            </div>
+            <p>{offline ? "anneal could not be reached: the network dropped or the server is restarting." : "The server had a problem answering. It is usually a blip."} Nothing you logged is affected.</p>
+            <div className="lf-acts">
+                <button className="lf-go" onClick={() => { setAttempt((a) => a + 1); retry(); }}>Try now</button>
+                <span>trying again by itself in {Math.max(0, left)} s</span>
+            </div>
+            <code>{status ? `${status} · ${(error as Error).message}` : (error as Error)?.message ?? "no answer"} · {at}</code>
+        </div>
     );
 }
