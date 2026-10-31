@@ -61,3 +61,16 @@ test("System design pages fit a phone", async ({ page }) => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), path).toBeLessThanOrEqual(1);
     }
 });
+
+test("⌘K finds system design pages and drills", async ({ page }) => {
+    await page.goto("/dsa");
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("caching");
+    const hit = page.locator(".pk-opt", { hasText: "Caching" }).first();
+    await expect(hit).toBeVisible();
+    await expect(hit).toContainText("page");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type("payment system");
+    await expect(page.locator(".pk-opt", { hasText: "Payment system" }).first()).toContainText("drill");
+});
