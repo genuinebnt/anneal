@@ -71,47 +71,67 @@ export function useEditorSettings() {
   };
 }
 
-export const ACCENTS: { id: Accent; label: string }[] = [
-  { id: "copper", label: "Copper" },
-  { id: "rose", label: "Rose" },
-  { id: "sky", label: "Sky" },
-  { id: "teal", label: "Teal" },
+/** The accent colours: six deep ones, three soft ones, and `custom` (any colour, picked in the header). */
+export const ACCENTS: { id: Accent; label: string; group: "deep" | "soft" }[] = [
+  { id: "red", label: "Red", group: "deep" },
+  { id: "teal", label: "Teal", group: "deep" },
+  { id: "orange", label: "Orange", group: "deep" },
+  { id: "blue", label: "Blue", group: "deep" },
+  { id: "purple", label: "Purple", group: "deep" },
+  { id: "yellow", label: "Yellow", group: "deep" },
+  { id: "copper", label: "Copper", group: "soft" },
+  { id: "rose", label: "Rose", group: "soft" },
+  { id: "sky", label: "Sky", group: "soft" },
 ];
 
 const ACCENT_KEY = "anneal-accent";
+const CUSTOM_KEY = "anneal-accent-custom";
 
-/** Sets the accent on the page and caches it, so index.html can apply it before first paint. */
-export function applyAccent(accent: Accent) {
+/** Sets the accent on the page and caches it, so index.html can apply it before first paint. A custom colour goes in --acc-custom;
+ *  the stylesheet keeps its lightness readable in each theme. */
+export function applyAccent(accent: Accent, custom?: string) {
   const root = document.documentElement;
   if (accent === "copper") delete root.dataset.accent;
   else root.dataset.accent = accent;
+  if (accent === "custom" && custom) root.style.setProperty("--acc-custom", custom);
+  else root.style.removeProperty("--acc-custom");
   try {
     localStorage.setItem(ACCENT_KEY, accent);
+    if (custom) localStorage.setItem(CUSTOM_KEY, custom);
   } catch {
     // Private windows can refuse storage; the server copy still applies after load.
   }
 }
 
-/** The saved accent, applied to the page, and a setter that saves it. */
+/** The saved accent, applied to the page, and setters that save it. */
 export function useAppearance() {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, staleTime: Infinity });
-  const accent = settings.data?.appearance.accent;
+  const appearance = settings.data?.appearance;
   const save = useMutation({
     mutationFn: api.saveAppearance,
     onMutate: (next) => {
       const prev = qc.getQueryData<Settings>(["settings"]);
       if (prev) qc.setQueryData<Settings>(["settings"], { ...prev, appearance: next });
+      applyAccent(next.accent, next.custom);
       return prev;
     },
     onError: (_e, _next, prev) => {
-      if (prev) qc.setQueryData(["settings"], prev);
+      if (prev) {
+        qc.setQueryData(["settings"], prev);
+        applyAccent(prev.appearance.accent, prev.appearance.custom);
+      }
     },
   });
   useEffect(() => {
-    if (accent) applyAccent(accent);
-  }, [accent]);
-  return { accent: accent ?? "copper", set: (next: Accent) => save.mutate({ accent: next }) };
+    if (appearance) applyAccent(appearance.accent, appearance.custom);
+  }, [appearance?.accent, appearance?.custom]); // eslint-disable-line react-hooks/exhaustive-deps
+  return {
+    accent: appearance?.accent ?? "copper",
+    custom: appearance?.custom,
+    set: (next: Accent) => save.mutate({ accent: next, ...(appearance?.custom ? { custom: appearance.custom } : {}) }),
+    setCustom: (colour: string) => save.mutate({ accent: "custom", custom: colour }),
+  };
 }
 
 export type PageWidth = "narrow" | "wide";

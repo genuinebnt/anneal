@@ -103,11 +103,20 @@ for (const theme of ["dark", "light"]) {
             }
         });
     }
-    for (const accent of ["rose", "sky", "teal"]) {
+    for (const accent of ["red", "teal", "orange", "blue", "purple", "yellow", "rose", "sky", "custom"]) {
         test(`the ${accent} accent reads well in ${theme}`, async ({ page }) => {
             test.setTimeout(120_000);
             const errors = watch(page);
-            await page.addInitScript(([t, a]) => { localStorage.setItem("anneal-theme", t!); localStorage.setItem("anneal-accent", a!); }, [theme, accent]);
+            const custom = "#e5484d"; // a strong red: the stylesheet must still keep it readable
+            await page.addInitScript(([t, a, c]) => { localStorage.setItem("anneal-theme", t!); localStorage.setItem("anneal-accent", a!); localStorage.setItem("anneal-accent-custom", c!); }, [theme, accent, custom]);
+            // the saved accent comes from the server after load, so answer with the one under test
+            await page.route("**/api/settings", async (route) => {
+                if (route.request().method() !== "GET") return route.continue();
+                const res = await route.fetch();
+                const body = await res.json();
+                body.appearance = accent === "custom" ? { accent, custom } : { accent };
+                await route.fulfill({ response: res, json: body });
+            });
             await page.setViewportSize({ width: 1440, height: 900 });
             for (const [name, path] of PAGES.filter(([n]) => ["dsa-home", "problem", "review", "settings", "calendar"].includes(n))) {
                 errors.length = 0;

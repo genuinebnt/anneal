@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { ACCENTS, useAppearance, usePageWidth } from "../settings";
+import { fresh, mmss, setTimer, toggleTimer, useFocus } from "../focusStore";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
 import { Palette } from "./Palette";
@@ -11,8 +12,8 @@ import { NotificationBell } from "./Notifications";
 import { fmt, useStreaks } from "./Streaks";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 
-// The header has two tiers (docs/mockups/navbar-v2.html). The first answers "where in the product am I": the three areas as one switcher
-// with their progress, a search field, Continue, and the tools. The second answers "what can I do here": the pages of the current area,
+// The header has two tiers (docs/mockups/navbar-v2.html, refined in the 2026-10-31 redesign). The first answers "where in the product am I":
+// the three areas as one switcher with their progress, a search field, the date and time, the focus timer, the accent, and the tools. The second answers "what can I do here": the pages of the current area,
 // a breadcrumb and a few counters. On a phone the areas move to a bar at the bottom.
 
 type AreaId = "dsa" | "rust" | "courses";
@@ -155,6 +156,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     return (
         <>
             <header className={`hdr${compact ? " compact" : ""}`} ref={box} data-area={current}>
+                <ScrollProgress />
                 <div className="hd-t1">
                     <div className="hd-l">
                     <Link className="logo" to="/" aria-label="anneal home">
@@ -179,13 +181,16 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                         <kbd>⌘K</kbd>
                     </button>
                     <div className="hdr-r">
-                        <Continue current={current} course={course.data} dsa={dsa.data} />
+                        <Clock />
+                        <MiniTimer />
+                        <span className="hd-vsep" aria-hidden="true" />
+                        <AccentPicker />
                         <WidthToggle />
                         <NotificationBell />
                         <Link className="hd-ib set" to="/settings" title="Settings" aria-label="Settings">
                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <circle cx="8" cy="8" r="2.3" />
-                                <path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2" />
+                                <path d="M6.9 1.5h2.2l.4 1.8 1.2.5 1.6-1 1.5 1.5-1 1.6.5 1.2 1.8.4v2.2l-1.8.4-.5 1.2 1 1.6-1.5 1.5-1.6-1-1.2.5-.4 1.8H6.9l-.4-1.8-1.2-.5-1.6 1-1.5-1.5 1-1.6-.5-1.2-1.8-.4V6.9l1.8-.4.5-1.2-1-1.6 1.5-1.5 1.6 1 1.2-.5z" />
+                                <circle cx="8" cy="8" r="2.2" />
                             </svg>
                         </Link>
                         <button className="hd-ib thm" onClick={cycleTheme} title={`Theme: ${theme}. Click for ${THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]}`} aria-label={`Theme: ${theme}`}>
@@ -362,46 +367,9 @@ function SubTabs({ area, path, due }: { area: AreaId; path: string; due: number 
     );
 }
 
-/** One button for "take me back to what I was doing": the current course stage, or the next DSA problem. */
-function Continue({ current, course, dsa }: { current: AreaId; course: Awaited<ReturnType<typeof api.course>> | undefined; dsa: Awaited<ReturnType<typeof api.dsa>> | undefined }) {
-    if (current === "courses" && course?.current) {
-        return (
-            <Link className="hd-cta" to="/courses/$course/$stage" params={{ course: "bustub", stage: course.current }}>
-                <span className="lbl">Continue</span>
-                <small>{course.current}</small>
-                <span aria-hidden="true">→</span>
-            </Link>
-        );
-    }
-    if (current === "dsa" && dsa) {
-        if (dsa.plan.due > 0) {
-            return (
-                <Link className="hd-cta" to="/dsa/review">
-                    <span className="lbl">Review</span>
-                    <small>{dsa.plan.due} due</small>
-                    <span aria-hidden="true">→</span>
-                </Link>
-            );
-        }
-        const id = dsa.plan.next_up[0];
-        const next = id ? dsa.problems.find((p) => p.id === id) : undefined;
-        if (next) {
-            return (
-                <Link className="hd-cta" to="/d/$slug" params={{ slug: next.slug }}>
-                    <span className="lbl">Continue</span>
-                    <small>{next.title}</small>
-                    <span aria-hidden="true">→</span>
-                </Link>
-            );
-        }
-    }
-    return null;
-}
-
-/** The avatar menu: accent colour, and Sign out when login is on. */
+/** The avatar menu: page width, links, and Sign out when login is on. The accent has its own picker in the header. */
 function Account() {
     const session = useQuery({ queryKey: ["session"], queryFn: api.session, staleTime: Infinity });
-    const { accent, set } = useAppearance();
     const { width, set: setWidth } = usePageWidth();
     const [open, setOpen] = useState(false);
     const box = useRef<HTMLDivElement>(null);
@@ -425,15 +393,6 @@ function Account() {
             </button>
             {open && (
                 <div className="acct-menu" ref={menu} role="menu">
-                    <span className="acct-lab">ACCENT</span>
-                    <div className="swatches" role="radiogroup" aria-label="Accent colour">
-                        {ACCENTS.map((a) => (
-                            <button key={a.id} role="radio" aria-checked={accent === a.id} className={`swatch${accent === a.id ? " on" : ""}`} data-swatch={a.id} onClick={() => set(a.id)} title={a.label}>
-                                <span />
-                                {a.label}
-                            </button>
-                        ))}
-                    </div>
                     <span className="acct-lab">PAGE WIDTH</span>
                     <div className="acct-seg" role="radiogroup" aria-label="Page width">
                         {(["narrow", "wide"] as const).map((w) => (
@@ -466,3 +425,108 @@ function Account() {
     );
 }
 
+
+/** The date and the time, kept current. */
+function Clock() {
+    const [now, setNow] = useState(() => new Date());
+    useEffect(() => {
+        const id = setInterval(() => setNow(new Date()), 15_000);
+        return () => clearInterval(id);
+    }, []);
+    return (
+        <span className="hd-clock" title={now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" })}>
+            <b>{now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b>
+            <span>{now.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}</span>
+        </span>
+    );
+}
+
+/** The focus timer in small: the same timer as the card on the problem page (focusStore), so a session started there shows here. */
+function MiniTimer() {
+    const { cfg, s } = useFocus();
+    const sw = cfg.mode === "sw";
+    const p = sw ? ((s.secs % 60) / 60) * 100 : s.total ? ((s.total - s.secs) / s.total) * 100 : 0;
+    const brk = cfg.mode === "pom" && s.phase !== "focus";
+    const label = sw ? "Stopwatch" : cfg.mode === "timer" ? "Countdown" : brk ? "Break" : "Focus";
+    return (
+        <span className={`hd-timer${s.running ? " run" : ""}${brk ? " brk" : ""}`}>
+            <button className="hd-tring" onClick={toggleTimer} aria-label={`${s.running ? "Pause" : "Start"} the focus timer`} title={`${label}: ${s.running ? "pause" : "start"} (the same timer as the problem page)`}>
+                <span className="hd-tarc" style={{ "--p": p } as React.CSSProperties} />
+                {s.running ? (
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5h2v9H5zM9 3.5h2v9H9z" /></svg>
+                ) : (
+                    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" /></svg>
+                )}
+            </button>
+            <b role="timer" aria-label={`${label} ${mmss(s.secs)}`}>{mmss(s.secs)}</b>
+            <button className="hd-treset" onClick={() => setTimer(fresh(cfg))} aria-label="Reset the focus timer" title="Reset">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5" /></svg>
+            </button>
+        </span>
+    );
+}
+
+/** The accent colour as its own control: deep colours, soft ones, and any colour you like. */
+function AccentPicker() {
+    const { accent, custom, set, setCustom } = useAppearance();
+    const [open, setOpen] = useState(false);
+    const box = useRef<HTMLSpanElement>(null);
+    useEffect(() => {
+        if (!open) return;
+        const close = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+        const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+        document.addEventListener("mousedown", close);
+        document.addEventListener("keydown", esc);
+        return () => {
+            document.removeEventListener("mousedown", close);
+            document.removeEventListener("keydown", esc);
+        };
+    }, [open]);
+    const group = (g: "deep" | "soft") =>
+        ACCENTS.filter((a) => a.group === g).map((a) => (
+            <button key={a.id} role="radio" aria-checked={accent === a.id} aria-label={a.label} title={a.label} className={`hd-sw${accent === a.id ? " on" : ""}`} data-swatch={a.id} onClick={() => set(a.id)} />
+        ));
+    return (
+        <span className="hd-accw" ref={box}>
+            <button className="hd-ib hd-acc" aria-haspopup="true" aria-expanded={open} aria-label="Accent colour" title="Accent colour" onClick={() => setOpen(!open)}>
+                <span className="hd-dot" />
+            </button>
+            {open && (
+                <div className="hd-accp" role="radiogroup" aria-label="Accent colour">
+                    <span className="hd-agl">Deep</span>
+                    {group("deep")}
+                    <span className="hd-asep" />
+                    <span className="hd-agl">Soft</span>
+                    {group("soft")}
+                    <span className="hd-asep" />
+                    <label className={`hd-cpick${accent === "custom" ? " on" : ""}`} title="Any colour">
+                        <input type="color" value={custom ?? "#c8875b"} onChange={(e) => setCustom(e.target.value)} aria-label="Pick any colour" />
+                        <span />
+                    </label>
+                    <button className="hd-areset" onClick={() => set("copper")} aria-label="Back to the default accent" title="Back to Copper">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5" /></svg>
+                    </button>
+                </div>
+            )}
+        </span>
+    );
+}
+
+/** A thin line along the bottom of the header that fills as the page scrolls. */
+function ScrollProgress() {
+    const bar = useRef<HTMLSpanElement>(null);
+    useEffect(() => {
+        const set = () => {
+            const h = document.documentElement;
+            bar.current?.style.setProperty("--sp", String(Math.min(1, h.scrollTop / Math.max(1, h.scrollHeight - innerHeight))));
+        };
+        set();
+        addEventListener("scroll", set, { passive: true });
+        addEventListener("resize", set);
+        return () => {
+            removeEventListener("scroll", set);
+            removeEventListener("resize", set);
+        };
+    }, []);
+    return <span className="hd-prog" ref={bar} aria-hidden="true" />;
+}

@@ -300,20 +300,40 @@ a.dcode:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lay .fill { fill: currentColor; }
 .lay button:not(.on) .fill { fill: transparent; }
 
-/* Accent palettes. Copper is design.css's own; the others swap --acc per theme and derive its tints.
-   Each light rule is one attribute more specific than its dark rule, so it wins in light mode. */
+/* Accent palettes. Copper is design.css's own; the others swap --acc per theme and derive its tints. Deep colours are kept at a calm
+   chroma (a deep red reads as a soft coral on the dark page). A custom colour keeps its hue and has its lightness and chroma held to a
+   readable range in each theme. Each light rule is one attribute more specific than its dark rule, so it wins in light mode. */
+:root[data-accent="red"] { --acc: oklch(0.68 0.13 28); }
+:root[data-accent="teal"] { --acc: oklch(0.73 0.095 185); }
+:root[data-accent="orange"] { --acc: oklch(0.74 0.12 55); }
+:root[data-accent="blue"] { --acc: oklch(0.71 0.11 255); }
+:root[data-accent="purple"] { --acc: oklch(0.71 0.12 296); }
+:root[data-accent="yellow"] { --acc: oklch(0.83 0.11 90); }
 :root[data-accent="rose"] { --acc: oklch(0.75 0.12 350); }
 :root[data-accent="sky"] { --acc: oklch(0.76 0.10 238); }
-:root[data-accent="teal"] { --acc: oklch(0.78 0.10 192); }
+:root[data-accent="custom"] { --acc: oklch(from var(--acc-custom, #c8875b) 0.72 min(c, 0.13) h); }
+:root[data-theme="light"][data-accent="red"] { --acc: oklch(0.52 0.16 27); }
+:root[data-theme="light"][data-accent="teal"] { --acc: oklch(0.49 0.09 190); }
+:root[data-theme="light"][data-accent="orange"] { --acc: oklch(0.53 0.14 50); }
+:root[data-theme="light"][data-accent="blue"] { --acc: oklch(0.49 0.14 258); }
+:root[data-theme="light"][data-accent="purple"] { --acc: oklch(0.50 0.17 298); }
+:root[data-theme="light"][data-accent="yellow"] { --acc: oklch(0.52 0.11 85); }
 :root[data-theme="light"][data-accent="rose"] { --acc: oklch(0.52 0.16 350); }
 :root[data-theme="light"][data-accent="sky"] { --acc: oklch(0.49 0.13 245); }
-:root[data-theme="light"][data-accent="teal"] { --acc: oklch(0.49 0.09 195); }
+:root[data-theme="light"][data-accent="custom"] { --acc: oklch(from var(--acc-custom, #c8875b) 0.50 min(c, 0.15) h); }
 @media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"])[data-accent="red"] { --acc: oklch(0.52 0.16 27); }
+  :root:not([data-theme="dark"])[data-accent="teal"] { --acc: oklch(0.49 0.09 190); }
+  :root:not([data-theme="dark"])[data-accent="orange"] { --acc: oklch(0.53 0.14 50); }
+  :root:not([data-theme="dark"])[data-accent="blue"] { --acc: oklch(0.49 0.14 258); }
+  :root:not([data-theme="dark"])[data-accent="purple"] { --acc: oklch(0.50 0.17 298); }
+  :root:not([data-theme="dark"])[data-accent="yellow"] { --acc: oklch(0.52 0.11 85); }
   :root:not([data-theme="dark"])[data-accent="rose"] { --acc: oklch(0.52 0.16 350); }
   :root:not([data-theme="dark"])[data-accent="sky"] { --acc: oklch(0.49 0.13 245); }
-  :root:not([data-theme="dark"])[data-accent="teal"] { --acc: oklch(0.49 0.09 195); }
+  :root:not([data-theme="dark"])[data-accent="custom"] { --acc: oklch(from var(--acc-custom, #c8875b) 0.50 min(c, 0.15) h); }
 }
-:root[data-accent] { --acc-bg: color-mix(in oklab, var(--acc) 13%, transparent); --sel: color-mix(in oklab, var(--acc) 7%, transparent); }
+:root[data-accent] { --acc-bg: color-mix(in oklab, var(--acc) 11%, transparent); --sel: color-mix(in oklab, var(--acc) 7%, transparent); }
+::selection { background: color-mix(in oklab, var(--acc) 30%, transparent); }
 
 /* account menu: accent swatches */
 .acct-lab { display: block; padding: 6px 10px 4px; font: 600 11px var(--mono); letter-spacing: .16em; color: var(--dim); }

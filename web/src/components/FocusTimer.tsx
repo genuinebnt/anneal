@@ -3,103 +3,32 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getPref, setPref } from "../prefs";
+import { advance, fresh, mmss, readyChime, setTimer, setTimerCfg, toggleTimer, useFocus, type Cfg, type Mode } from "../focusStore";
 
-type Mode = "pom" | "timer" | "sw";
-type Phase = "focus" | "break" | "long";
+export { advance } from "../focusStore";
 
-interface Cfg {
-    mode: Mode;
-    focus: number;
-    brk: number;
-    timer: number;
-    /** A short two-note chime when a phase or the countdown ends. Off unless chosen. */
-    chime: boolean;
-}
-
-const DEFAULTS: Cfg = { mode: "pom", focus: 25, brk: 5, timer: 45, chime: false };
 const MODES: [Mode, string][] = [
     ["pom", "POMODORO"],
     ["timer", "TIMER"],
     ["sw", "STOPWATCH"],
 ];
 
-interface State {
-    phase: Phase;
-    /** Seconds left (pomodoro, timer) or elapsed (stopwatch). */
-    secs: number;
-    total: number;
-    running: boolean;
-    /** Which of the four focus sessions this is, and how many are done. */
-    cycle: number;
-    done: number;
-    /** What just happened, for the status line. */
-    note: string;
-}
-
-const lengthOf = (c: Cfg, mode: Mode, phase: Phase) => (mode === "timer" ? c.timer : phase === "focus" ? c.focus : phase === "break" ? c.brk : c.brk * 3) * 60;
-
-function fresh(c: Cfg, mode: Mode = c.mode): State {
-    const total = mode === "sw" ? 0 : lengthOf(c, mode, "focus");
-    return { phase: "focus", secs: mode === "sw" ? 0 : total, total, running: false, cycle: 1, done: 0, note: "" };
-}
-
-/** The state `dt` seconds later. A finished phase moves to the next one (pomodoro) or stops (timer). */
-export function advance(s: State, dt: number, c: Cfg, mode: Mode): State {
-    if (!s.running) return s;
-    if (mode === "sw") return { ...s, secs: s.secs + dt };
-    const secs = s.secs - dt;
-    if (secs > 0) return { ...s, secs };
-    if (mode === "timer") return { ...s, secs: 0, running: false, note: "Time is up." };
-    if (s.phase === "focus") {
-        const done = s.done + 1;
-        const phase: Phase = done % 4 === 0 ? "long" : "break";
-        const total = lengthOf(c, mode, phase);
-        return { ...s, phase, done, secs: total, total, note: phase === "long" ? "Four sessions done. Take a long break." : "Focus session done. Break time." };
-    }
-    const cycle = s.phase === "long" ? 1 : Math.min(4, s.cycle + 1);
-    const total = lengthOf(c, mode, "focus");
-    return { ...s, phase: "focus", cycle, done: s.phase === "long" ? 0 : s.done, secs: total, total, note: "Break over. Back to it." };
-}
-
-/** Two soft notes. The context is made on a click (browsers refuse sound before one), so a chime is only possible once the timer was used. */
-function beep(ctx: AudioContext | null) {
-    if (!ctx) return;
-    void ctx.resume();
-    const t = ctx.currentTime;
-    [660, 880].forEach((freq, i) => {
-        const at = t + i * 0.25;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.0001, at);
-        gain.gain.exponentialRampToValueAtTime(0.2, at + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
-        osc.connect(gain).connect(ctx.destination);
-        osc.start(at);
-        osc.stop(at + 0.25);
-    });
-}
-
-const mmss = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(Math.floor(n % 60)).padStart(2, "0")}`;
-
-/** `suggest`: the minutes the problem is estimated to take. In Timer mode the countdown starts there unless the owner chose a length. */
+/** `suggest`: the minutes the problem is estimated to take. In Timer mode the countdown starts there unless the owner chose a length.
+ *  The timer itself is shared with the header (`focusStore`), so it keeps running while you move between pages. */
 export function FocusTimer({ suggest }: { suggest?: number }) {
     const suggested = suggest ? Math.max(5, Math.round(suggest / 5) * 5) : undefined;
-    const [cfg, setCfg] = useState<Cfg>(() => ({ ...DEFAULTS, ...(suggested ? { timer: suggested } : {}), ...getPref<Partial<Cfg>>("focus.cfg", {}) }));
-    const [s, setS] = useState<State>(() => fresh(cfg));
+    const { cfg, s, spent } = useFocus();
     const [settings, setSettings] = useState(false);
-    // Focus time spent since this page opened (nothing about it is stored).
-    const [visit, setVisit] = useState({ focus: 0 });
-    const cfgRef = useRef(cfg);
-    cfgRef.current = cfg;
-    const phaseRef = useRef<Phase>("focus");
-    phaseRef.current = s.phase;
-    const last = useRef(0);
-    const audio = useRef<AudioContext | null>(null);
     const baseTitle = useRef<string | null>(null);
-    const wake = () => {
-        if (cfgRef.current.chime && !audio.current && typeof AudioContext !== "undefined") audio.current = new AudioContext();
-    };
+    const chosen = () => getPref<Partial<Cfg>>("focus.cfg", {}).timer !== undefined;
+
+    // The problem's estimate is the countdown length unless the owner chose one; a running timer is left alone.
+    useEffect(() => {
+        if (!suggested || chosen() || cfg.timer === suggested || s.running) return;
+        const next = { ...cfg, timer: suggested };
+        setTimerCfg(next, false);
+        if (cfg.mode === "timer" && s.secs === s.total) setTimer(fresh(next));
+    }, [suggested]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // While the timer runs the tab title carries the time, so it can be read from the LeetCode tab. It never starts the timer.
     useEffect(() => {
@@ -117,40 +46,26 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
         },
         [],
     );
-    // A phase or the countdown ended (`note` is set only then).
-    useEffect(() => {
-        if (s.note && cfgRef.current.chime) beep(audio.current);
-    }, [s.note]);
-
-    useEffect(() => {
-        if (!s.running) return;
-        last.current = Date.now();
-        const id = setInterval(() => {
-            const now = Date.now();
-            const dt = (now - last.current) / 1000;
-            last.current = now;
-            setS((prev) => advance(prev, dt, cfgRef.current, cfgRef.current.mode));
-            if (cfgRef.current.mode !== "pom" || phaseRef.current === "focus") setVisit((v) => ({ focus: v.focus + dt }));
-        }, 500);
-        return () => clearInterval(id);
-    }, [s.running]);
 
     const save = (next: Cfg) => {
-        setCfg(next);
         // a countdown length that is only the problem's estimate is not stored as the owner's choice
-        const { timer, ...rest } = next;
-        setPref("focus.cfg", timer === suggested && getPref<Partial<Cfg>>("focus.cfg", {}).timer === undefined ? rest : next);
+        if (next.timer === suggested && !chosen()) {
+            const { timer: _estimate, ...rest } = next;
+            void _estimate;
+            setTimerCfg(next, false);
+            setPref("focus.cfg", rest);
+        } else setTimerCfg(next);
     };
     const setMode = (mode: Mode) => {
         const next = { ...cfg, mode };
         save(next);
-        setS(fresh(next, mode));
+        setTimer(fresh(next, mode));
     };
     const setLen = (key: "focus" | "brk" | "timer", v: number) => {
         const next = { ...cfg, [key]: v };
         save(next);
         // A change shows at once while the timer is stopped; a running one keeps its current phase.
-        if (!s.running && s.secs === s.total) setS(fresh(next));
+        if (!s.running && s.secs === s.total) setTimer(fresh(next));
     };
 
     const sw = cfg.mode === "sw";
@@ -162,7 +77,7 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
     // A countdown that ran out offers to start again, not to resume at zero.
     const finished = cfg.mode === "timer" && !s.running && s.secs === 0;
     const range = (min: number, max: number, v: number) => ({ "--v": `${(100 * (v - min)) / (max - min)}%` }) as React.CSSProperties;
-    const worked = Math.floor(visit.focus / 60);
+    const worked = Math.floor(spent / 60);
 
     return (
         <div className={`ft${tone}`} aria-label="Focus timer">
@@ -184,14 +99,14 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
                     </span>
                 </div>
                 <div className="ft-ctl">
-                    <button className="ft-go" onClick={() => { wake(); setS((x) => (finished ? { ...fresh(cfg), running: true } : { ...x, running: !x.running, note: "" })); }}>
+                    <button className="ft-go" onClick={toggleTimer}>
                         {s.running ? "Pause" : finished ? "Restart" : fresh0 ? "Start" : "Resume"}
                     </button>
                     <div className="ft-btns">
-                        <button className="ft-sb" aria-label="Reset" title="Reset" onClick={() => setS(fresh(cfg))}>
+                        <button className="ft-sb" aria-label="Reset" title="Reset" onClick={() => setTimer(fresh(cfg))}>
                             ↺
                         </button>
-                        <button className="ft-sb" aria-label="Skip to the next phase" title="Skip to the next phase" disabled={sw || cfg.mode === "timer"} onClick={() => setS((x) => ({ ...advance({ ...x, running: true }, x.secs + 1, cfg, cfg.mode), running: x.running }))}>
+                        <button className="ft-sb" aria-label="Skip to the next phase" title="Skip to the next phase" disabled={sw || cfg.mode === "timer"} onClick={() => setTimer((x) => ({ ...advance({ ...x, running: true }, x.secs + 1, cfg, cfg.mode), running: x.running }))}>
                             ⏭
                         </button>
                         <button className="ft-sb" aria-label="Settings" aria-expanded={settings} title="Settings" onClick={() => setSettings(!settings)}>
@@ -224,7 +139,7 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
                         <input type="range" min={3} max={20} value={cfg.brk} style={range(3, 20, cfg.brk)} onChange={(e) => setLen("brk", +e.target.value)} />
                     </label>
                     <label className="ft-chk">
-                        <input type="checkbox" checked={cfg.chime} onChange={(e) => { save({ ...cfg, chime: e.target.checked }); if (e.target.checked && !audio.current && typeof AudioContext !== "undefined") audio.current = new AudioContext(); }} />
+                        <input type="checkbox" checked={cfg.chime} onChange={(e) => { save({ ...cfg, chime: e.target.checked }); if (e.target.checked) readyChime(); }} />
                         <span>Chime when time is up</span>
                     </label>
                     {cfg.mode === "timer" && (
@@ -244,7 +159,7 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
                 ) : (
                     <>
                         <span>
-                            this visit <b>{worked} min</b>
+                            this session <b>{worked} min</b>
                         </span>
                         <span>
                             <b>{s.done}</b> pomodoro{s.done === 1 ? "" : "s"}

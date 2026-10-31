@@ -13,7 +13,7 @@
     <script>
       // Apply the saved theme before first paint, so there's no flash.
       try { const t = localStorage.getItem("anneal-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
-      try { const a = localStorage.getItem("anneal-accent"); if (a && a !== "copper") document.documentElement.dataset.accent = a; } catch {}
+      try { const a = localStorage.getItem("anneal-accent"), c = localStorage.getItem("anneal-accent-custom"); if (a && a !== "copper") document.documentElement.dataset.accent = a; if (a === "custom" && c) document.documentElement.style.setProperty("--acc-custom", c); } catch {}
       try { const r = document.documentElement.dataset, g = (k) => JSON.parse(localStorage.getItem("anneal:" + k) || "null");
         if (g("ui.motion") === "reduce") r.motion = "reduce"; if (["110", "125"].includes(g("ui.zoom"))) r.zoom = g("ui.zoom"); if (g("ui.contrast") === "high") r.contrast = "high"; } catch {}
     </script>

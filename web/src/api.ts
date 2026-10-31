@@ -239,10 +239,12 @@ export interface EditorSettings {
   format_on_pause: boolean;
 }
 
-export type Accent = "copper" | "rose" | "sky" | "teal";
+export type Accent = "red" | "teal" | "orange" | "blue" | "purple" | "yellow" | "copper" | "rose" | "sky" | "custom";
 
 export interface AppearanceSettings {
   accent: Accent;
+  /** The colour of the `custom` accent, `#rrggbb`. */
+  custom?: string;
 }
 
 export type Grade = "again" | "hard" | "good" | "easy";

@@ -12,7 +12,8 @@ use crate::error::{ApiError, ApiResult};
 pub const FONT_FAMILIES: &[&str] = &["Fira Code", "JetBrains Mono", "IBM Plex Mono", "Source Code Pro", "Roboto Mono", "system"];
 pub const FONT_SIZES: std::ops::RangeInclusive<u8> = 10..=24;
 /// Accent colours the web app has palettes for. Copper is the design's own.
-pub const ACCENTS: &[&str] = &["copper", "rose", "sky", "teal"];
+/// The accent colours a page can use. The first six are deep, the next three soft; `custom` uses the colour in `AppearanceSettings::custom`.
+pub const ACCENTS: &[&str] = &["red", "teal", "orange", "blue", "purple", "yellow", "copper", "rose", "sky", "custom"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditorSettings {
@@ -64,11 +65,14 @@ impl Default for EditorSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     pub accent: String,
+    /// The colour of the `custom` accent, as `#rrggbb`. Absent in settings saved before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<String>,
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
-        AppearanceSettings { accent: "copper".into() }
+        AppearanceSettings { accent: "copper".into(), custom: None }
     }
 }
 
@@ -123,6 +127,12 @@ pub async fn put_editor(State(s): State<AppState>, Json(e): Json<EditorSettings>
 pub async fn put_appearance(State(s): State<AppState>, Json(a): Json<AppearanceSettings>) -> ApiResult<Json<AppearanceSettings>> {
     if !ACCENTS.contains(&a.accent.as_str()) {
         return Err(ApiError::BadRequest(format!("accent must be one of {}", ACCENTS.join(", "))));
+    }
+    let hex = |c: &str| c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit());
+    match &a.custom {
+        Some(c) if !hex(c) => return Err(ApiError::BadRequest("custom must be a colour written #rrggbb".into())),
+        None if a.accent == "custom" => return Err(ApiError::BadRequest("the custom accent needs a colour in custom".into())),
+        _ => {}
     }
     store(&s, "appearance", &a).await?;
     Ok(Json(a))

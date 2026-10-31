@@ -581,6 +581,19 @@ async fn appearance_accent_round_trips_and_validates(db: PgPool) {
 
     let unknown = json!({ "accent": "chartreuse" });
     assert_eq!(call(&app, Method::PUT, "/api/settings/appearance", Some(unknown)).await.0, StatusCode::BAD_REQUEST);
+
+    // The deep colours, and any colour of your own.
+    for deep in ["red", "teal", "orange", "blue", "purple", "yellow"] {
+        assert_eq!(call(&app, Method::PUT, "/api/settings/appearance", Some(json!({ "accent": deep }))).await.0, StatusCode::OK, "{deep}");
+    }
+    let mine = json!({ "accent": "custom", "custom": "#e5484d" });
+    assert_eq!(call(&app, Method::PUT, "/api/settings/appearance", Some(mine.clone())).await.0, StatusCode::OK);
+    assert_eq!(call(&app, Method::GET, "/api/settings", None).await.1["appearance"], mine);
+    for bad in [json!({ "accent": "custom" }), json!({ "accent": "custom", "custom": "red" }), json!({ "accent": "red", "custom": "#12345" })] {
+        assert_eq!(call(&app, Method::PUT, "/api/settings/appearance", Some(bad.clone())).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // A saved choice survives: the last good one is still there.
+    assert_eq!(call(&app, Method::GET, "/api/settings", None).await.1["appearance"], mine);
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]

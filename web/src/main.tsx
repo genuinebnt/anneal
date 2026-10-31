@@ -58,6 +58,7 @@ import "./styles/loops.css";
 import "./styles/coursemap.css";
 import "./styles/streaks.css";
 import "./styles/patterncards.css";
+import "./styles/frame.css";
 
 const rootRoute = createRootRoute({
   component: () => (

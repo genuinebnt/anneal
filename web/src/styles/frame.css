@@ -1,0 +1,54 @@
+/* The app frame of the 2026-10-31 redesign: the header's clock, focus timer, accent picker and page progress, and the counters as one
+   segmented strip. Deep dark, no grey fills: hovers and pressed states are a soft wash of the accent. Classes are `hd-` prefixed. */
+.hdr{position:sticky}
+.hd-prog{position:absolute;left:0;right:0;bottom:-1px;height:2px;transform-origin:left;transform:scaleX(var(--sp,0));background:linear-gradient(90deg,var(--acc),color-mix(in oklab,var(--acc) 50%,var(--vio)));pointer-events:none;z-index:1}
+.hd-vsep{width:1px;height:22px;background:var(--line2);margin:0 2px;flex:none}
+.hd-clock{display:grid;line-height:1.15;text-align:right;padding:0 4px;flex:none}
+.hd-clock b{font:600 12.5px var(--mono);color:var(--fg)}
+.hd-clock span{font:500 10.5px var(--mono);color:var(--dim)}
+.hd-timer{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 4px 0 3px;border:1px solid var(--line2);border-radius:11px;background:var(--bg);flex:none;transition:border-color .2s}
+.hd-timer:hover{border-color:var(--line)}
+.hd-timer.run{border-color:color-mix(in oklab,var(--acc) 45%,var(--line))}
+.hd-timer.brk.run{border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
+.hd-timer>b{font:600 12.5px var(--mono);color:var(--mut);min-width:40px;font-variant-numeric:tabular-nums}
+.hd-timer.run>b{color:var(--fg)}
+.hd-tring{position:relative;width:26px;height:26px;border:0;background:none;padding:0;display:grid;place-items:center;color:var(--fg);cursor:pointer}
+.hd-tring svg{width:10px;height:10px;position:relative}
+.hd-tarc{position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--acc) calc(var(--p)*1%),var(--line2) 0);-webkit-mask:radial-gradient(circle,transparent 9.5px,#000 10px);mask:radial-gradient(circle,transparent 9.5px,#000 10px)}
+.hd-timer.brk .hd-tarc{background:conic-gradient(var(--grn) calc(var(--p)*1%),var(--line2) 0)}
+.hd-treset{width:22px;height:22px;border:0;border-radius:7px;background:none;color:var(--dim);display:grid;place-items:center;opacity:0;transition:opacity .2s,background .2s;cursor:pointer}
+.hd-timer:hover .hd-treset,.hd-treset:focus-visible{opacity:1}
+.hd-treset:hover{background:color-mix(in oklab,var(--acc) 9%,transparent);color:var(--fg)}
+.hd-treset svg{width:12px;height:12px}
+.hd-accw{position:relative;flex:none}
+.hd-acc .hd-dot{width:15px;height:15px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 3px var(--panel),0 0 0 4px var(--line);transition:background .3s}
+.hd-accp{position:absolute;right:-8px;top:calc(100% + 10px);z-index:50;display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--panel);box-shadow:0 24px 40px -24px var(--shadow);animation:hd-pop .2s var(--ease)}
+@keyframes hd-pop{from{opacity:0;transform:translateY(-4px)}}
+.hd-agl{font:600 9.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.hd-asep{width:1px;height:18px;background:var(--line);margin:0 2px}
+.hd-sw{width:22px;height:22px;border-radius:50%;border:0;padding:0;cursor:pointer;background:var(--s);box-shadow:0 0 0 2px var(--panel);transition:transform .2s var(--ease),box-shadow .2s}
+.hd-sw:hover{transform:scale(1.15)}
+.hd-sw.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--s)}
+.hd-sw[data-swatch="red"]{--s:oklch(0.68 0.13 28)}.hd-sw[data-swatch="teal"]{--s:oklch(0.73 0.095 185)}.hd-sw[data-swatch="orange"]{--s:oklch(0.74 0.12 55)}
+.hd-sw[data-swatch="blue"]{--s:oklch(0.71 0.11 255)}.hd-sw[data-swatch="purple"]{--s:oklch(0.71 0.12 296)}.hd-sw[data-swatch="yellow"]{--s:oklch(0.83 0.11 90)}
+.hd-sw[data-swatch="copper"]{--s:oklch(0.76 0.11 55)}.hd-sw[data-swatch="rose"]{--s:oklch(0.75 0.12 350)}.hd-sw[data-swatch="sky"]{--s:oklch(0.76 0.10 238)}
+.hd-cpick{position:relative;width:22px;height:22px;border-radius:50%;cursor:pointer;flex:none;background:conic-gradient(oklch(.66 .14 28),oklch(.83 .11 90),oklch(.72 .12 150),oklch(.72 .1 200),oklch(.7 .11 255),oklch(.7 .12 296),oklch(.66 .14 28));box-shadow:0 0 0 2px var(--panel);transition:transform .2s var(--ease)}
+.hd-cpick:hover{transform:scale(1.15)}
+.hd-cpick input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+.hd-cpick span{position:absolute;inset:6px;border-radius:50%;background:var(--panel);pointer-events:none}
+.hd-cpick.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--acc)}.hd-cpick.on span{background:var(--acc)}
+.hd-areset{width:26px;height:26px;border:0;border-radius:8px;background:none;color:var(--dim);display:grid;place-items:center;cursor:pointer}
+.hd-areset:hover{background:color-mix(in oklab,var(--acc) 9%,transparent);color:var(--fg)}
+.hd-areset svg{width:13px;height:13px}
+/* the counters as one strip */
+.hd-chips{gap:0!important;height:30px;border:1px solid var(--line2);border-radius:10px;background:var(--bg);overflow:hidden}
+.hd-chips>.hd-chip{height:100%;border:0;border-left:1px solid var(--line2);border-radius:0;padding:0 12px;background:none;transition:background .2s,color .2s}
+.hd-chips>.hd-chip:first-child{border-left:0}
+.hd-chips>a.hd-chip:hover{background:color-mix(in oklab,var(--acc) 8%,transparent);color:var(--fg)}
+.hd-ib:hover{background:color-mix(in oklab,var(--acc) 9%,transparent)}
+@media (max-width:1500px){.hd-clock span{display:none}}
+@media (max-width:1300px){.hd-clock,.hd-vsep{display:none}}
+@media (max-width:1100px){.hd-timer>b,.hd-treset{display:none}.hd-timer{padding:0 3px}}
+@media (max-width:760px){.hd-timer{display:none}.hd-accp{position:fixed;left:12px;right:12px;top:64px;flex-wrap:wrap;justify-content:center}}
+@media (prefers-reduced-motion:reduce){.hd-accp{animation:none}}
+html[data-motion="reduce"] .hd-accp{animation:none}
