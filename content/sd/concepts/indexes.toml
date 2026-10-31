@@ -1,21 +1,86 @@
 title = "Indexes"
 group = "core"
 order = 2
-minutes = 7
-lede = "A sorted structure beside a table that turns a full scan into a few page reads, at the cost of slower writes and more storage."
+minutes = 17
+lede = "A sorted structure beside a table that turns a full scan into a few page reads, at the cost of slower writes and more storage. Choosing indexes from the queries, reading a query plan, and knowing the special kinds are what separate a design that works on day one from one that works at a billion rows."
 say = "An index on (user_id, created_at desc) serves 'a user's newest links' as one range scan."
-related = ["data-modeling", "postgres", "storage-engines", "elasticsearch"]
+related = ["data-modeling", "postgres", "storage-engines", "elasticsearch", "proximity-search"]
+credit = "The points on what to index and what indexes cost draw on the \"Use good indices\" notes in [The System Design Primer](https://github.com/donnemartin/system-design-primer#sql-tuning) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "An index is a **sorted copy** of some columns pointing at rows: lookups and ranges read a few pages instead of the table.",
+  "Composite indexes follow the **leftmost prefix**: equality columns first, then the range or sort column.",
+  "**Covering, partial and expression** indexes make hot queries cheaper still.",
+  "Every index **slows every write**; index the hot queries, measure with `EXPLAIN ANALYZE`.",
+  "Special data gets special indexes: **GIN** for JSON and text, **GiST** for geometry, **BRIN** for huge append-only tables.",
+]
 
 [[sections]]
 heading = "B-tree"
 body = """
 The default in Postgres and MySQL. Keys are kept sorted in a shallow tree of pages (three or four levels for millions of rows), so a lookup or a range reads a handful of pages. Good for equality, ranges, sorting and prefixes of a composite key.
+
+Each page holds hundreds of keys, so the tree is wide and shallow: with 300 keys per page, three levels index 27 million rows and four index 8 billion. The top levels stay in memory, so a lookup usually costs one or two disk reads.
 """
 
 [[sections]]
 heading = "Composite keys"
 body = """
 An index on `(user_id, created_at)` serves "by user" and "by user, newest first", but not "by created_at" alone: the leftmost column has to be used. Put the equality column first, then the range or sort column.
+
+| Query | Uses `(user_id, created_at)`? |
+|---|---|
+| `WHERE user_id = 7` | yes (leftmost prefix) |
+| `WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20` | yes: one range scan, already sorted, stops after 20 |
+| `WHERE user_id = 7 AND created_at > now() - interval '7 days'` | yes |
+| `WHERE created_at > now() - interval '7 days'` | no (the leading column is not constrained) |
+| `WHERE user_id IN (7, 8) ORDER BY created_at` | partly: two ranges that must be merged and sorted |
+
+**Rule of thumb**: equality columns first (most selective first among them), then one range or sort column. Columns after a range condition cannot narrow the scan further.
+"""
+
+[[sections]]
+heading = "Making hot queries cheaper"
+body = """
+- **Covering index**: include every column the query reads, so it is answered from the index without visiting the table (an *index-only scan*). In Postgres: `CREATE INDEX ON links (user_id, created_at DESC) INCLUDE (code, title);`. Postgres can skip the table only for pages its visibility map marks all-visible, so frequent vacuuming matters.
+- **Partial index**: index only the rows queries look at. `CREATE INDEX ON jobs (run_at) WHERE status = 'pending';` stays tiny even when millions of finished jobs sit in the table.
+- **Expression index**: index a computed value. `CREATE INDEX ON users (lower(email));` serves `WHERE lower(email) = $1`; a plain index on `email` would not.
+- **Unique index**: enforces uniqueness and serves lookups; a partial unique index can say "one active subscription per user".
+
+```sql title=hot_queries.sql
+-- a user's newest links, answered from the index alone
+CREATE INDEX links_by_user ON links (user_id, created_at DESC) INCLUDE (code, title);
+
+-- the job queue: only pending jobs are ever looked up by time
+CREATE INDEX jobs_due ON jobs (run_at) WHERE status = 'pending';
+
+-- case-insensitive login
+CREATE UNIQUE INDEX users_email ON users (lower(email));
+```
+"""
+
+[[sections]]
+heading = "Reading a query plan"
+body = """
+`EXPLAIN ANALYZE` runs the query and shows what the planner chose:
+
+```sql title=explain.sql
+EXPLAIN ANALYZE
+SELECT code, title FROM links WHERE user_id = 7 ORDER BY created_at DESC LIMIT 20;
+--  Limit  (actual time=0.031..0.058 rows=20 loops=1)
+--    ->  Index Only Scan using links_by_user on links  (rows=20)
+--          Index Cond: (user_id = 7)
+--          Heap Fetches: 0
+```
+
+What to look for:
+
+- **Seq Scan** on a big table for a selective query: a missing or unusable index.
+- **Index Scan** vs **Index Only Scan**: the second never touched the table (`Heap Fetches: 0`).
+- **Rows estimated vs actual** far apart: stale statistics (`ANALYZE`), or correlated columns the planner cannot see.
+- **Sort** above an index scan: the index order does not match `ORDER BY`.
+
+The planner skips an index when a query matches a large share of the table (say "status = 'active'" on 90% of rows): reading the whole table sequentially is then cheaper than jumping around through the index. Indexes pay off for **selective** conditions.
 """
 
 [[sections]]
@@ -25,12 +90,33 @@ body = """
 - **LSM tree** (Cassandra, RocksDB): writes go to memory and are flushed and merged in sorted files; very fast writes, reads may check several files.
 - **Inverted index** (Elasticsearch): word to list of documents, for text search.
 - **Geospatial** (geohash, R-tree): points near a place.
+
+Postgres has several built-in index types beyond the B-tree:
+
+| Type | For | Example |
+|---|---|---|
+| GIN | values containing many items: arrays, `jsonb`, full-text search | `WHERE tags @> '{rust}'`, `WHERE doc @> '{"plan":"pro"}'` |
+| GiST | geometry, ranges, nearest-neighbour, exclusion constraints | PostGIS distance queries; "no two bookings overlap" |
+| SP-GiST | space-partitioned data (quadtrees, tries) | IP ranges, points |
+| BRIN | huge tables whose physical order follows a column (time-series, logs) | a few kilobytes summarising each block range of an append-only `events` table |
+| hash | equality only | rarely better than a B-tree |
+
+**MySQL InnoDB** stores the table itself as a B-tree ordered by the primary key (a **clustered index**); every secondary index stores the primary key, so a secondary lookup is two tree walks and a long primary key makes every index bigger. A random UUID primary key also scatters inserts across the tree; a time-ordered key appends.
 """
 
 [[sections]]
 heading = "The cost"
 body = """
 Every index is updated on every write. A write-heavy table with ten indexes writes ten times. Index what the hot queries need, nothing more.
+
+- **Writes**: each insert updates every index; an update that changes an indexed column rewrites index entries too. (Postgres can skip index updates for an update that changes no indexed column and fits on the same page: a HOT update.)
+- **Space and memory**: indexes compete with data for the cache; an index that does not fit in memory loses much of its speed.
+- **Building on a live table**: a plain `CREATE INDEX` blocks writes to the table while it builds; `CREATE INDEX CONCURRENTLY` (Postgres) builds without blocking writes, more slowly, and cannot run inside a transaction.
+- **Bulk loads**: loading millions of rows is often faster with indexes dropped and rebuilt afterwards.
+- **Unused indexes**: find them (Postgres: `pg_stat_user_indexes.idx_scan = 0`) and drop them.
+
+> [!INTERVIEW]
+> For each hot query in your design, name the index that serves it, column order included, and say whether it covers the query.
 """
 
 [[checks]]
@@ -40,6 +126,96 @@ answer = "A B-tree is sorted by its leftmost column first, so user_id is scatter
 [[checks]]
 prompt = "Why do LSM trees suit write-heavy workloads?"
 answer = "Writes go to memory and are flushed sequentially to sorted files, never updating pages in place on disk, so writes are cheap; the cost moves to reads (several files) and background compaction."
+
+[[checks]]
+prompt = "A jobs table has 50 million finished rows and a few thousand pending ones. The worker runs WHERE status = 'pending' ORDER BY run_at LIMIT 100. What index do you add?"
+answer = "A partial index on run_at WHERE status = 'pending'. It holds only the pending rows, so it stays tiny and in memory, and it is already sorted by run_at, so the query reads the first 100 entries and stops."
+
+[[checks]]
+prompt = "EXPLAIN shows a Seq Scan for WHERE status = 'active' even though status is indexed. Is that a bug?"
+answer = "Probably not: if most rows are active, the condition is not selective, and reading the whole table sequentially is cheaper than following the index to most of its pages. Indexes pay off for conditions that match a small share of rows; check the row estimates, and only worry if the estimate is far from the actual count."
+
+[[checks]]
+prompt = "Why does a long random primary key hurt every index in MySQL InnoDB?"
+answer = "InnoDB clusters the table by primary key and stores the primary key in every secondary index entry, so a long key makes every index larger; and random keys insert at random places in the clustered B-tree, causing page splits and poor cache use, whereas time-ordered keys append at the end."
+
+[[terms]]
+term = "B-tree"
+means = "A shallow, wide tree of sorted pages; lookups and ranges read a few pages."
+section = "B-tree"
+
+[[terms]]
+term = "Leftmost prefix"
+means = "A composite index helps only queries that constrain its first columns."
+section = "Composite keys"
+
+[[terms]]
+term = "Covering index"
+means = "An index holding every column a query needs, so the table is never read."
+section = "Making hot queries cheaper"
+
+[[terms]]
+term = "Partial index"
+means = "An index over only the rows that match a condition."
+section = "Making hot queries cheaper"
+
+[[terms]]
+term = "Selectivity"
+means = "How small a share of rows a condition matches; indexes need selective conditions."
+section = "Reading a query plan"
+
+[[terms]]
+term = "GIN"
+means = "A Postgres index for values with many items: arrays, JSON, text."
+section = "Other kinds"
+
+[[terms]]
+term = "Clustered index"
+means = "The table itself stored in primary-key order (InnoDB)."
+section = "Other kinds"
+
+[[terms]]
+term = "Index-only scan"
+means = "A query answered from the index without visiting the table."
+section = "Making hot queries cheaper"
+
+[[sources]]
+title = "PostgreSQL: index types"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-types.html"
+note = "B-tree, hash, GiST, SP-GiST, GIN, BRIN"
+
+[[sources]]
+title = "PostgreSQL: index-only scans and covering indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+
+[[sources]]
+title = "PostgreSQL: partial indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-partial.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX (CONCURRENTLY, INCLUDE)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+[[sources]]
+title = "MySQL: clustered and secondary indexes"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html"
+
+[[sources]]
+title = "Use The Index, Luke"
+kind = "guide"
+url = "https://use-the-index-luke.com/"
+note = "SQL indexing explained for developers"
+
+[[sources]]
+title = "The System Design Primer: SQL tuning"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#sql-tuning"
+note = "what to index and what it costs (CC BY 4.0)"
 
 [[figures]]
 name = "btree-index"

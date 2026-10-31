@@ -1,34 +1,145 @@
 title = "Replication"
 group = "core"
 order = 5
-minutes = 8
-lede = "Keeping copies of the same data on several machines: to survive a machine dying, and to serve more reads than one machine can."
-say = "Postgres with one primary and two replicas: writes go to the primary, timelines read from replicas, and a user's own reads go to the primary for a few seconds after they post."
-related = ["sharding", "consistency-cap", "scaling-reads", "quorums", "storage-engines"]
+minutes = 20
+lede = "Keeping copies of the same data on several machines: to survive a machine dying, to serve more reads than one machine can, and to put data near its users. The hard part is not copying; it is what readers see while copies disagree, and what happens when the leader dies."
+say = "Postgres with one primary and two replicas: writes go to the primary, timelines read from replicas, and a user's own reads go to the primary for a few seconds after they post; one replica is synchronous so a failover never loses an acknowledged write."
+related = ["sharding", "consistency-cap", "scaling-reads", "quorums", "storage-engines", "leases-and-fencing"]
+credit = "The failover patterns and the availability arithmetic in \"Failover and availability in numbers\" are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#availability-patterns) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "Replicate for **availability, read scale and latency**; it is not a backup, because mistakes replicate too.",
+  "**Asynchronous** is fast but can lose acknowledged writes on failover; **synchronous or quorum** commits do not.",
+  "Replicas lag, so give users **read-your-writes** and **monotonic reads** where it matters.",
+  "Failover needs detection, promotion and **fencing**, or two leaders accept writes (split brain).",
+  "Multi-leader and leaderless setups trade conflicts for availability across regions.",
+]
+
+[[sections]]
+heading = "Why replicate"
+body = """
+- **Availability**: when a machine dies, another copy takes over.
+- **Read scale**: replicas serve reads, so the leader handles only writes.
+- **Latency**: a copy in each region serves nearby users.
+- **Isolation**: analytics and backups run on a replica, not on the machine serving users.
+
+> [!WARNING]
+> Replication is not a backup. `DELETE FROM orders` without a `WHERE` replicates to every copy in milliseconds. Keep point-in-time backups (base backups plus the archived write-ahead log) as well.
+"""
 
 [[sections]]
 heading = "Leader and followers"
 body = """
-One **leader** takes the writes and streams them to **followers**, which serve reads. If the leader dies, a follower is promoted.
+One **leader** (primary) takes every write and appends it to its log; **followers** (replicas) apply the same log in the same order and serve reads. Postgres streams its write-ahead log to hot standbys; MySQL ships its binary log.
 
-- **Synchronous**: the leader waits for a follower before confirming. No data loss on failover, slower writes.
-- **Asynchronous**: the leader confirms at once. Fast, but a failover can lose the last writes, and followers lag behind.
+**When does the leader say "committed"?**
+
+| Mode | The leader confirms after | On leader failure | Write latency |
+|---|---|---|---|
+| asynchronous | its own disk | recent acknowledged writes can be lost | lowest |
+| semi-synchronous (MySQL) | at least one replica has received the change | nothing acknowledged is lost, if that replica is promoted | + one round trip |
+| synchronous | named replicas have flushed (or applied) it | nothing acknowledged is lost | + one round trip, and a slow replica slows every write |
+| quorum synchronous | any K of N replicas confirm | nothing lost, survives slow replicas | + the K-th fastest round trip |
+
+In Postgres, `synchronous_standby_names = 'ANY 1 (s1, s2)'` waits for whichever of two replicas answers first; `synchronous_commit` chooses how far: `remote_write`, `on` (flushed) or `remote_apply` (visible to reads on the replica).
+
+:::steps An asynchronous failover loses an acknowledged write
+- client | write order #42 · leader says OK | The leader confirms as soon as the change is on its own disk.
+- leader | crashes | The change is still in its log; no follower has received it yet.
+- follower | promoted to leader | It never saw order #42.
+- client | read order #42 · not found | An acknowledged write is gone. A synchronous or quorum commit prevents this.
+:::
 """
 
 [[sections]]
-heading = "Replication lag"
+heading = "What gets shipped"
 body = """
-An asynchronous follower may be seconds behind. A user who posts and then reloads from a follower may not see their post.
-
-- **Read your own writes**: read from the leader for a short time after the user writes, or route by a version the client carries.
-- **Monotonic reads**: pin a user to one follower so time never goes backwards for them.
+- **Statement-based**: send the SQL. Small, but `NOW()`, `RAND()` and auto-increments can give different results on each replica. Rarely used now.
+- **Physical (write-ahead log) shipping**: send the bytes the storage engine wrote. Exact and efficient, but replicas must run the same database version and layout, which makes zero-downtime upgrades harder. Postgres streaming replication works this way.
+- **Logical (row-based)**: send "row 42 of `orders` changed to …". Independent of storage layout, so it can replicate across versions, to a subset of tables, or to other systems. MySQL's row-format binlog and Postgres logical replication work this way, and **change data capture** (feeding search indexes, caches and Kafka) is built on it.
 """
 
 [[sections]]
-heading = "Other shapes"
+heading = "Replication lag and what users see"
 body = """
-- **Multi-leader**: a leader per region takes writes; conflicts must be resolved (last write wins, or merge).
-- **Leaderless** (Dynamo, Cassandra): write to N nodes, wait for W to confirm, read from R; with W + R > N, a read sees the latest write.
+An asynchronous replica may be milliseconds or, under load, minutes behind. Three anomalies follow, each with a standard fix:
+
+| Anomaly | What the user sees | Fix |
+|---|---|---|
+| reading your own writes | posts a comment, reloads, it is missing | read from the leader for a short window after the user writes, or carry the write's log position and read only from replicas that have reached it |
+| moving back in time | refreshes twice, the second shows older data | pin each user to one replica (by user id hash) |
+| out-of-order reads | sees an answer before the question | write causally related data to the same partition, or read with a consistent snapshot |
+
+Measure lag (Postgres: `pg_stat_replication` on the primary, `pg_last_xact_replay_timestamp()` on a replica) and take a replica out of the read pool when it falls too far behind.
+"""
+
+[[sections]]
+heading = "Failover"
+body = """
+Replacing a dead leader takes four steps, and each can go wrong:
+
+1. **Detect**: no heartbeat for a timeout. Too short and a busy leader is declared dead; too long and writes are down for longer.
+2. **Choose**: promote the most up-to-date replica (with synchronous replication, the one that has everything).
+3. **Reconfigure**: point clients and the other replicas at the new leader (a floating IP, DNS, a proxy, or a service-discovery key).
+4. **Fence the old leader**: if it comes back thinking it still leads, two leaders accept writes (**split brain**) and the data diverges. Fence it: revoke its lease, shut it off (STONITH: "shoot the other node in the head"), or have storage reject its writes with a fencing token.
+
+Tools such as **Patroni** (Postgres, with a consensus store like etcd holding the leader lease) and MySQL's group replication automate detection, election and fencing, which is far safer than scripts.
+
+> [!NOTE]
+> A promoted asynchronous replica that was behind can reuse auto-increment ids the old leader already handed out. Anything else keyed by those ids (a cache, another service) then points at the wrong rows. Prefer ids that do not depend on the leader (UUID v7, Snowflake).
+"""
+
+[[sections]]
+heading = "Multi-leader and leaderless"
+body = """
+**Multi-leader**: each region (or each device, for offline apps) has a leader that accepts writes and replicates to the others asynchronously. Writes are local and survive a region being cut off, but two leaders can change the same row concurrently, so **conflicts** must be resolved:
+
+- **Last write wins** by timestamp: simple, silently drops one of the writes (and clock skew decides which).
+- **Merge**: keep both and let the application or the user merge them.
+- **CRDTs**: data types whose concurrent changes always merge to the same result (counters, sets, text).
+- **Avoid them**: route all writes for one record to one "home" leader.
+
+**Leaderless** (Dynamo-style, Cassandra): the client writes to several replicas and reads from several; with W + R > N the read and write sets overlap. Background repair converges the copies. See the quorums page.
+
+| Shape | Writes | Conflicts | Fits |
+|---|---|---|---|
+| single leader | one place | none | most applications |
+| multi-leader | each region or device | must be resolved | multi-region writes, offline apps, collaborative editing |
+| leaderless | any replica | resolved by version or LWW | high write availability, simple key-value access |
+"""
+
+[[sections]]
+heading = "Failover and availability in numbers"
+body = """
+**Active-passive**: the standby gets heartbeats from the active server and takes over its address when they stop. Downtime depends on whether the standby is **hot** (running, caught up) or **cold** (must start). Only the active server serves traffic.
+
+**Active-active**: both serve traffic and split the load; clients (DNS, a load balancer or the application) must know both. Either way, failover adds hardware and complexity, and an active node that dies before replicating its newest writes can lose them.
+
+**Availability** is counted in nines:
+
+| Availability | Downtime a year | a month | a day |
+|---|---|---|---|
+| 99.9% (three nines) | 8 h 46 min | 43 min 50 s | 1 min 26 s |
+| 99.99% (four nines) | 52 min 36 s | 4 min 23 s | 8.6 s |
+
+Components **in sequence** (a request needs both) multiply, so the whole is less available than either part; components **in parallel** (either will do) multiply their *failure* chances, so the whole is more available:
+
+$$A_{\\text{sequence}} = A_1 \\cdot A_2 \\qquad A_{\\text{parallel}} = 1 - (1 - A_1)(1 - A_2)$$
+
+Two 99.9% parts in sequence give 99.8%; in parallel, 99.9999%. That is why every hop in the request path should be redundant.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say what the replicas are for (failover, reads, regions) and how many.
+2. Say **sync or async** and what a failover can lose.
+3. Name the **lag** problem for this product (a user not seeing their own post) and its fix.
+4. Say how failover is **detected and fenced**.
+5. For multi-region writes, say how **conflicts** are avoided or resolved.
+
+> [!INTERVIEW]
+> "One primary in us-east with a synchronous replica in another zone and two async read replicas. Reads after a user's own write go to the primary for five seconds. Patroni with etcd handles failover and fencing."
 """
 
 [[checks]]
@@ -38,6 +149,103 @@ answer = "The reload went to an asynchronous replica that had not caught up (rep
 [[checks]]
 prompt = "With N = 3 replicas, which W and R make a read always see the latest acknowledged write?"
 answer = "Any with W + R > N, such as W = 2 and R = 2: every read set overlaps every write set in at least one node."
+
+[[checks]]
+prompt = "The leader confirmed a payment, crashed a second later, and the promoted replica has no record of it. What replication mode was in use, and what would have prevented it?"
+answer = "Asynchronous replication: the leader acknowledged before any replica had the change. Synchronous or semi-synchronous replication (or a quorum commit such as ANY 1 of 2 replicas) makes the leader wait until a replica has it, so the promoted replica always has every acknowledged write."
+
+[[checks]]
+prompt = "After a network blip, both the old and the new primary accept writes. What is this called, and how is it prevented?"
+answer = "Split brain. Prevent it by fencing: the old leader must lose its right to write, by a lease that expires before a new leader is elected (held in a consensus store like etcd), by shutting it off (STONITH), or by storage rejecting writes with an old fencing token."
+
+[[checks]]
+prompt = "Three services in a request path each have 99.9% availability. Roughly what is the path's availability, and how do you raise it?"
+answer = "In sequence they multiply: 0.999³ ≈ 99.7%, about 26 hours of downtime a year. Run each service redundantly (in parallel, so the path survives one instance failing), remove hops from the critical path, or make some dependencies optional so their failure degrades rather than breaks the request."
+
+[[terms]]
+term = "Leader and follower"
+means = "The one copy that takes writes, and the copies that apply its log and serve reads."
+section = "Leader and followers"
+
+[[terms]]
+term = "Synchronous replication"
+means = "The leader confirms a write only after a replica has it."
+section = "Leader and followers"
+
+[[terms]]
+term = "Logical replication"
+means = "Shipping row changes instead of storage bytes; the basis of change data capture."
+section = "What gets shipped"
+
+[[terms]]
+term = "Replication lag"
+means = "How far a replica is behind the leader."
+section = "Replication lag and what users see"
+
+[[terms]]
+term = "Read-your-writes"
+means = "A user always sees their own changes, even when reading from replicas."
+section = "Replication lag and what users see"
+
+[[terms]]
+term = "Split brain"
+means = "Two nodes both act as leader and accept conflicting writes."
+section = "Failover"
+
+[[terms]]
+term = "Fencing"
+means = "Stopping an old leader from writing after a new one takes over."
+section = "Failover"
+
+[[terms]]
+term = "Last write wins"
+means = "Resolving a conflict by keeping the write with the latest timestamp; the other is lost."
+section = "Multi-leader and leaderless"
+
+[[terms]]
+term = "Active-passive"
+means = "A standby takes over only when the active server fails."
+section = "Failover and availability in numbers"
+
+[[sources]]
+title = "The System Design Primer: availability patterns"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#availability-patterns"
+note = "failover, the nines, sequence vs parallel (CC BY 4.0)"
+
+[[sources]]
+title = "PostgreSQL: log-shipping standby servers"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/warm-standby.html"
+note = "streaming replication, hot standby, synchronous replication"
+
+[[sources]]
+title = "PostgreSQL: replication settings"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-replication.html"
+note = "synchronous_standby_names (FIRST, ANY), synchronous_commit"
+
+[[sources]]
+title = "PostgreSQL: logical replication"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/logical-replication.html"
+
+[[sources]]
+title = "MySQL: semisynchronous replication"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/replication-semisync.html"
+
+[[sources]]
+title = "Patroni"
+kind = "docs"
+url = "https://patroni.readthedocs.io/en/latest/"
+note = "Postgres failover with a leader lease in etcd, ZooKeeper or Consul"
+
+[[sources]]
+title = "Designing Data-Intensive Applications, chapter 5: Replication"
+kind = "book"
+url = "https://dataintensive.net/"
+note = "lag anomalies, failover pitfalls, multi-leader and leaderless replication"
 
 [[figures]]
 name = "replication"

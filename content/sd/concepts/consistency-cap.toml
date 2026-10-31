@@ -1,15 +1,88 @@
 title = "Consistency and CAP"
 group = "core"
 order = 7
-minutes = 7
-lede = "When the network splits, a distributed system either refuses some requests to stay consistent, or answers them all and lets copies disagree for a while. Choose per feature, not per system."
+minutes = 18
+lede = "When the network splits, a distributed system either refuses some requests to stay consistent, or answers them all and lets copies disagree for a while. Partitions are rare; the everyday trade is latency against consistency, and it is made per feature, not per system."
 say = "Seat booking must be consistent, so it goes through one primary with a transaction; the event listing can be eventually consistent and served from replicas and a cache."
-related = ["replication", "contention"]
+related = ["replication", "contention", "quorums", "clocks-and-ordering", "isolation-anomalies"]
+credit = "The CAP choices and the weak, eventual and strong consistency patterns are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#availability-vs-consistency) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "CAP: during a **partition**, choose to refuse requests (consistent) or answer with possibly stale data (available).",
+  "Without a partition the real trade is **latency vs consistency** (PACELC).",
+  "**Linearizable** means one up-to-date copy as far as anyone can tell; it costs coordination and round trips.",
+  "Between strong and eventual sit **read-your-writes, monotonic reads and causal** consistency, often all a product needs.",
+  "Decide **per feature**: booking a seat is strong, a like count is eventual.",
+]
 
 [[sections]]
 heading = "CAP in one line"
 body = """
 During a network **partition**, choose **consistency** (every read sees the latest write, or gets an error) or **availability** (every request gets an answer, possibly stale). Without a partition you can have both; the real everyday trade is latency against consistency.
+
+The three properties, as the theorem means them:
+
+- **Consistency**: every read receives the most recent write or an error. (Formally, *linearizability*: the system behaves as if there were one copy.)
+- **Availability**: every request to a non-failing node receives a response, without a guarantee that it holds the latest write.
+- **Partition tolerance**: the system keeps operating when the network drops or delays messages between nodes.
+
+Networks do fail, so partition tolerance is not optional; the real choice is what to give up *while* a partition lasts.
+"""
+
+[[sections]]
+heading = "CP and AP, concretely"
+body = """
+- **CP (consistent under partition)**: a node cut off from the majority refuses or times out rather than serve something that may be stale. Choose it when correctness depends on atomic reads and writes: balances, seat holds, unique usernames, leader election. Examples: etcd, ZooKeeper, a single-primary relational database, Spanner.
+- **AP (available under partition)**: every node keeps answering with the newest version it has; writes made on both sides are reconciled after the partition heals. Choose it when the business tolerates eventual consistency, or must keep working through failures: shopping carts, likes, presence, DNS. Examples: Cassandra and DynamoDB at default settings, Dynamo-style stores.
+
+:::steps A partition forces the choice
+- before | x = 1 on replicas A and B | Both replicas agree and the network between them works.
+- partition | the link between A and B drops | Clients can still reach each replica on its own side.
+- write on A | client sets x = 2 on A | A cannot pass the change to B.
+- read on B · CP | B answers "unavailable" | B cannot confirm it has the latest value, so it refuses rather than mislead.
+- read on B · AP | B answers x = 1 | B answers with what it has; the stale value is reconciled after the link returns.
+:::
+
+> [!NOTE]
+> Labels like "MongoDB is CP" are rough at best: most systems let you choose per operation (read and write concerns, consistency levels), and their behaviour depends on configuration. Describe the guarantee an operation needs instead.
+"""
+
+[[sections]]
+heading = "PACELC: the everyday trade"
+body = """
+Partitions are rare; latency is constant. Daniel Abadi's **PACELC** extends CAP: *if there is a Partition, choose Availability or Consistency; Else, choose Latency or Consistency.*
+
+A strongly consistent read must reach the leader or a quorum, possibly in another region (a cross-continent round trip is 70-150 ms); a local replica answers in a millisecond but may be behind.
+
+| System | When partitioned | Otherwise |
+|---|---|---|
+| DynamoDB (default reads) | available | low latency (eventually consistent reads; strongly consistent reads on request, at twice the read cost) |
+| Cassandra | available | latency or consistency, chosen per query by consistency level |
+| Spanner | consistent | consistency, paying commit-wait and quorum latency |
+| single-primary Postgres with async replicas | primary side consistent | reads from replicas trade consistency for latency |
+"""
+
+[[sections]]
+heading = "The ladder of consistency models"
+body = """
+From strongest to weakest; each is cheaper and more available than the one above:
+
+| Model | Guarantee | Typical cost |
+|---|---|---|
+| strict serializable | transactions run as if one at a time, in real-time order | consensus or synchronized clocks (Spanner) |
+| linearizable | each read sees the latest completed write, as if one copy | a single leader or a quorum on every operation |
+| serializable | transactions run as if one at a time, in *some* order | locks or conflict detection in one database |
+| causal | if A could have influenced B, everyone sees A before B | track dependencies (vector or hybrid clocks) |
+| read-your-writes, monotonic reads | a session sees its own writes and never goes back in time | session routing or versions |
+| eventual | if writes stop, all copies converge | asynchronous replication |
+
+**Linearizable vs serializable**: linearizability is about single objects and real time ("I wrote x, then you read x: you see my write"); serializability is about multi-object transactions and says nothing about real time. A serializable database can still show you a stale snapshot.
+
+**The primer's three patterns** map onto the ladder:
+
+- **Weak**: after a write, reads may or may not see it; best effort (memcached; voice and video calls, live games, where lost moments are skipped).
+- **Eventual**: reads see the write eventually, usually within milliseconds; replication is asynchronous (DNS, email, most replicated stores).
+- **Strong**: reads see the write immediately; replication is synchronous (file systems, relational databases, transactional systems).
 """
 
 [[sections]]
@@ -31,6 +104,24 @@ body = """
 - **Monotonic reads**: you never see time go backwards.
 - **Causal**: a reply never appears before the message it answers.
 - **Eventual**: copies agree if writes stop.
+
+These session guarantees cover most product complaints ("I posted and it vanished") at a fraction of the cost of linearizability: route a user's reads by their last write's version, or pin a session to one replica.
+
+:::deeper Why "eventual" needs a merge rule | 1 min
+Eventual consistency only says copies *converge*; it does not say to what. If two replicas accepted different writes during a partition, something must pick or combine: last write wins (drops one), version vectors that keep both for the application to merge, or CRDTs whose merges are defined so every replica reaches the same result. Saying "eventually consistent" in an interview invites the follow-up "and how do conflicts resolve?".
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Classify each **operation**, not the system: which writes must never conflict, which reads may be stale and by how much.
+2. Put strong operations on a **single leader or a consensus store**; serve the rest from replicas and caches.
+3. Give users **read-your-writes** on their own data.
+4. For eventual data, say how **conflicts** resolve.
+
+> [!INTERVIEW]
+> "Seat holds are linearizable: a conditional write on the primary. Seat maps for browsing come from replicas and a cache, seconds behind; the purchase re-checks the seat."
 """
 
 [[checks]]
@@ -40,3 +131,94 @@ answer = "Holding and buying a seat must be strongly consistent (one owner per s
 [[checks]]
 prompt = "Why is 'we chose AP' an incomplete answer for a whole system?"
 answer = "Different features need different guarantees; the answer is per feature and per operation, and most of the time the trade is latency against consistency, not a partition."
+
+[[checks]]
+prompt = "What is the difference between linearizable and serializable?"
+answer = "Linearizability concerns single operations on single objects in real time: once a write completes, every later read sees it, as if there were one copy. Serializability concerns transactions over many objects: they behave as if run one at a time in some order, which need not match real time, so a serializable system may still return stale data. Having both is strict serializability."
+
+[[checks]]
+prompt = "A replica in Europe is cut off from the primary in the US. A European user reads their balance. What does a CP design do, and what does an AP design do?"
+answer = "CP: the replica refuses or times out, because it cannot confirm it has the latest balance; the user sees an error but never a wrong number. AP: the replica answers with the last balance it has, possibly missing recent transactions; writes made during the partition are reconciled afterwards."
+
+[[checks]]
+prompt = "What does PACELC add to CAP, and why does it matter more day to day?"
+answer = "It adds the case without a partition: even when everything works, you choose between lower latency (answer from a nearby replica, maybe stale) and consistency (coordinate with a leader or quorum, slower). Partitions are rare but that latency trade happens on every request."
+
+[[terms]]
+term = "Partition"
+means = "Nodes that are running but cannot reach each other over the network."
+section = "CAP in one line"
+
+[[terms]]
+term = "Linearizability"
+means = "The system behaves as if there were one up-to-date copy."
+section = "CAP in one line"
+
+[[terms]]
+term = "CP and AP"
+means = "Refuse requests to stay consistent during a partition, or answer them with possibly stale data."
+section = "CP and AP, concretely"
+
+[[terms]]
+term = "PACELC"
+means = "Partition: availability or consistency; else: latency or consistency."
+section = "PACELC: the everyday trade"
+
+[[terms]]
+term = "Serializable"
+means = "Transactions behave as if run one at a time, in some order."
+section = "The ladder of consistency models"
+
+[[terms]]
+term = "Causal consistency"
+means = "Effects are never seen before their causes."
+section = "The ladder of consistency models"
+
+[[terms]]
+term = "Eventual consistency"
+means = "If writes stop, all copies converge to the same value."
+section = "Levels in between"
+
+[[sources]]
+title = "The System Design Primer: availability vs consistency"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#availability-vs-consistency"
+note = "CAP, CP and AP, weak, eventual and strong consistency (CC BY 4.0)"
+
+[[sources]]
+title = "Gilbert and Lynch: Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services (2002)"
+kind = "paper"
+url = "https://users.ece.cmu.edu/~adrian/731-sp04/readings/GL-cap.pdf"
+note = "the proof of CAP"
+
+[[sources]]
+title = "Abadi: Consistency tradeoffs in modern distributed database system design (PACELC)"
+kind = "paper"
+url = "https://www.cs.umd.edu/~abadi/papers/abadi-pacelc.pdf"
+
+[[sources]]
+title = "Brewer: Spanner, TrueTime and the CAP theorem"
+kind = "paper"
+url = "https://research.google/pubs/spanner-truetime-and-the-cap-theorem/"
+note = "why a CP system can be effectively always available"
+
+[[sources]]
+title = "Jepsen: consistency models"
+kind = "article"
+url = "https://jepsen.io/consistency"
+note = "the map of models and what each guarantees"
+
+[[sources]]
+title = "Kleppmann: Please stop calling databases CP or AP"
+kind = "article"
+url = "https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html"
+
+[[sources]]
+title = "Vogels: Eventually consistent"
+kind = "article"
+url = "https://www.allthingsdistributed.com/2008/12/eventually_consistent.html"
+
+[[sources]]
+title = "DynamoDB: read consistency"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html"

@@ -1,21 +1,72 @@
 title = "Consistent hashing"
 group = "core"
 order = 6
-minutes = 7
-lede = "A way to spread keys over servers so that adding or removing one server moves only about 1/N of the keys, instead of almost all of them."
+minutes = 15
+lede = "A way to spread keys over servers so that adding or removing one server moves only about 1/N of the keys, instead of almost all of them. Caches, Dynamo-style databases, load balancers and CDNs all rely on it, in one of four variants."
 say = "The cache nodes sit on a consistent-hash ring with virtual nodes, so adding a node moves only its share of keys and the rest stay cached."
-related = ["sharding", "caching", "quorums", "load-balancing"]
+related = ["sharding", "caching", "quorums", "load-balancing", "cassandra"]
+
+summary = [
+  "With `hash mod N`, changing N moves almost every key; consistent hashing moves about **1/N**.",
+  "Keys go to the **next server clockwise** on a ring of hash values.",
+  "**Virtual nodes** even out the load and spread a leaving server's keys over many others.",
+  "Replicas are the **next distinct servers** clockwise, placed in different racks or zones.",
+  "Alternatives: **rendezvous** hashing, **jump** hashing, **Maglev** tables, and **bounded loads** for hot keys.",
+]
 
 [[sections]]
 heading = "The problem with modulo"
 body = """
 `server = hash(key) % N` spreads keys evenly, but when N changes from 4 to 5, about 80% of keys map to a different server: every cache misses at once and the database takes the full load.
+
+A key stays put only if `hash % 4 == hash % 5`, which happens for one key in five. In general, going from N to N+1 servers keeps about 1/(N+1) of keys and moves the rest: almost everything, every time the fleet changes.
 """
 
 [[sections]]
 heading = "The ring"
 body = """
 Hash servers and keys onto the same circle (0 to 2³²). A key belongs to the **first server clockwise** from it. Add a server and it takes keys only from its clockwise neighbour; remove one and its keys go to the next server.
+
+Lookup is a search in a sorted list of server positions, O(log n):
+
+```rust title=ring.rs
+use std::collections::BTreeMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+/// A real system uses a stable hash (Murmur3, xxHash): `DefaultHasher` may change between Rust releases.
+fn h(x: impl Hash) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+pub struct Ring {
+    points: BTreeMap<u64, String>, // position on the ring -> server
+    vnodes: u32,
+}
+
+impl Ring {
+    pub fn new(vnodes: u32) -> Self {
+        Self { points: BTreeMap::new(), vnodes }
+    }
+
+    pub fn add(&mut self, server: &str) {
+        for v in 0..self.vnodes {
+            self.points.insert(h((server, v)), server.to_owned());
+        }
+    }
+
+    pub fn remove(&mut self, server: &str) {
+        self.points.retain(|_, s| s != server);
+    }
+
+    /// The first server clockwise from the key, wrapping past the top of the ring.
+    pub fn server_for(&self, key: &str) -> Option<&str> {
+        let k = h(key);
+        self.points.range(k..).next().or_else(|| self.points.iter().next()).map(|(_, s)| s.as_str())
+    }
+}
+```
 """
 
 [[sections]]
@@ -24,6 +75,52 @@ body = """
 With few servers, their points on the ring are uneven and one server gets a big arc. Give each server many points (100 to 200 **virtual nodes**): the load evens out, and when a server leaves, its keys spread across many servers instead of one. Bigger machines can get more virtual nodes.
 
 Used by Dynamo-style databases (Cassandra, DynamoDB), CDNs, and distributed caches.
+
+The trade-off: more points mean a more even spread but a bigger ring to keep in memory and gossip. Cassandra now defaults to 16 tokens per node (with an allocation algorithm that places them well) instead of the random 256 it once used.
+"""
+
+[[sections]]
+heading = "Replicas on the ring"
+body = """
+To store N copies, put a key on its owner and the next **N − 1 distinct servers** clockwise, skipping extra virtual nodes of servers already chosen. Rack- or zone-aware placement also skips servers in a rack or zone already used, so one failed rack never takes all copies. This list of servers for a key is what Dynamo calls the **preference list**, and it is how Cassandra places replicas.
+
+When a server leaves, each of its ranges now belongs to the next server, which must receive that data (streamed from the remaining replicas) before it can serve it.
+"""
+
+[[sections]]
+heading = "Other schemes"
+body = """
+| Scheme | How a key finds its server | Strengths | Limits |
+|---|---|---|---|
+| ring with virtual nodes | next point clockwise | general purpose, any server can leave | memory for points; spread is only statistically even |
+| rendezvous (highest random weight) | score every server with `hash(key, server)`, take the highest | no ring, perfect balance in expectation, trivial to add weights | O(N) per lookup (fine for tens of servers) |
+| jump consistent hash | a few arithmetic steps map a key to a bucket 0..N-1 | no memory, very fast, near-perfect balance | buckets are numbered: you can only add or remove the last one (fits sharded storage, not caches whose nodes fail at random) |
+| Maglev hashing | a precomputed lookup table, filled so each backend gets an equal share | O(1) lookups at line rate, minimal disruption | table must be rebuilt on changes (built for load balancers) |
+
+**Bounded loads**: a plain ring lets a hot key or an unlucky arc overload one server. *Consistent hashing with bounded loads* caps each server at (1 + ε) times the average load and sends overflow to the next server clockwise, keeping most keys in place while preventing hot spots.
+
+```python title=jump_hash.py
+def jump_hash(key: int, buckets: int) -> int:
+    # Lamping and Veach (2014): a key moves only when a new bucket is added that it should go to.
+    b, j = -1, 0
+    while j < buckets:
+        b = j
+        key = (key * 2862933555777941757 + 1) & 0xFFFFFFFFFFFFFFFF
+        j = int((b + 1) * ((1 << 31) / ((key >> 33) + 1)))
+    return b
+```
+"""
+
+[[sections]]
+heading = "Where it is used"
+body = """
+- **Caches**: Memcached clients (ketama) and Redis Cluster-style routing keep most keys in place when nodes come and go. (Redis Cluster itself uses 16,384 fixed hash slots assigned to nodes, a related idea: a fixed key space split into movable pieces.)
+- **Dynamo-style databases**: Cassandra, Riak and the original Dynamo place data and replicas on a ring.
+- **Load balancers**: sticky routing of a user or a connection to the same backend (Maglev, Envoy's ring-hash and Maglev balancers, HAProxy with bounded loads).
+- **CDNs and object stores**: choosing which cache or storage node holds an object.
+
+> [!INTERVIEW]
+> When you say "consistent hashing", also say "with virtual nodes", what happens when a node leaves (its ranges go to the next nodes, which take over its data), and how replicas are placed.
 """
 
 [[checks]]
@@ -33,6 +130,72 @@ answer = "With modulo, most keys move (about 80%) because the divisor changed. W
 [[checks]]
 prompt = "What problem do virtual nodes solve?"
 answer = "Uneven arcs: with one point per server some servers own much more of the ring. Many points per server even out the load and spread a departing server's keys across many others."
+
+[[checks]]
+prompt = "Why is jump consistent hashing a poor fit for a cache cluster where any node can fail?"
+answer = "Jump hashing numbers its buckets 0..N-1 and only handles adding or removing the last bucket; if node 3 of 10 dies you cannot remove bucket 3 without renumbering, which moves many keys. It fits sharded storage where shards are added at the end, while a ring or rendezvous hashing handles arbitrary nodes leaving."
+
+[[checks]]
+prompt = "With replication factor 3 on a ring with virtual nodes, how do you choose a key's three replicas, and what extra rule keeps a rack failure from losing all three?"
+answer = "Walk clockwise from the key and take the first three distinct servers, skipping further virtual nodes of a server already chosen. Rack- or zone-aware placement also skips servers in a rack or zone already used, so the three copies sit in three different failure domains."
+
+[[terms]]
+term = "Hash ring"
+means = "Hash values arranged in a circle; a key belongs to the next server clockwise."
+section = "The ring"
+
+[[terms]]
+term = "Virtual nodes"
+means = "Many ring positions per server, for an even spread and gentle rebalancing."
+section = "Virtual nodes"
+
+[[terms]]
+term = "Preference list"
+means = "The servers that store a key: its owner and the next distinct servers clockwise."
+section = "Replicas on the ring"
+
+[[terms]]
+term = "Rendezvous hashing"
+means = "Score every server for the key and pick the highest; no ring needed."
+section = "Other schemes"
+
+[[terms]]
+term = "Bounded loads"
+means = "Cap each server near the average load and send overflow clockwise."
+section = "Other schemes"
+
+[[sources]]
+title = "Karger et al.: Consistent hashing and random trees (STOC 1997)"
+kind = "paper"
+url = "https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf"
+note = "the original paper"
+
+[[sources]]
+title = "DeCandia et al.: Dynamo, Amazon's highly available key-value store (SOSP 2007)"
+kind = "paper"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+note = "virtual nodes, preference lists, replication on the ring"
+
+[[sources]]
+title = "Lamping and Veach: A fast, minimal memory, consistent hash algorithm (2014)"
+kind = "paper"
+url = "https://arxiv.org/abs/1406.2294"
+note = "jump consistent hash"
+
+[[sources]]
+title = "Eisenbud et al.: Maglev, a fast and reliable software network load balancer (NSDI 2016)"
+kind = "paper"
+url = "https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/"
+
+[[sources]]
+title = "Mirrokni, Thorup and Zadimoghaddam: Consistent hashing with bounded loads"
+kind = "paper"
+url = "https://arxiv.org/abs/1608.01350"
+
+[[sources]]
+title = "Cassandra: cassandra.yaml (num_tokens)"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html"
 
 [[figures]]
 name = "hash-ring"

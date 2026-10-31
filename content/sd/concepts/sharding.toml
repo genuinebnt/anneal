@@ -1,39 +1,142 @@
 title = "Sharding"
 group = "core"
 order = 4
-minutes = 9
-lede = "Splitting one database's rows across many machines by a key, so writes and storage grow past what one machine holds."
-say = "I'll shard by short code, hashed, because every read and write knows it and the spread stays even."
-related = ["consistent-hashing", "replication", "scaling-writes"]
+minutes = 20
+lede = "Splitting one database's rows across many machines by a key, so writes, storage and indexes grow past what one machine holds. It is the most powerful way to scale a database and the hardest to undo, so it comes after replicas, caching and a bigger machine."
+say = "I'll shard by short code, hashed, because every read and write knows it and the spread stays even; I'd start with many logical shards on a few machines so growth means moving whole shards, not rehashing rows."
+related = ["consistent-hashing", "replication", "scaling-writes", "unique-ids", "data-modeling"]
+credit = "Parts of \"Federation, sharding and denormalisation\" are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#sharding) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "Shard only when **writes or data** outgrow one primary; replicas and caches fix read load first.",
+  "The **shard key** must be in every hot query, spread load evenly, and keep related rows together.",
+  "Use **many logical shards** mapped onto few machines, so growing moves whole shards.",
+  "Cross-shard **queries, joins and transactions** are the price: design them out, or pay with scatter-gather and sagas.",
+  "Plan for **hot keys** and **resharding** before they happen.",
+]
 
 [[sections]]
-heading = "When you need it"
+heading = "When you need it, and what comes first"
 body = """
-- Writes outgrow one primary (tens of thousands a second and rising).
-- The data outgrows one machine's disk, even after archiving old rows.
-- Not for reads alone: read replicas and a cache come first, and are far simpler.
+A single database machine runs out in one of three ways:
+
+| Limit | Symptom | Try first |
+|---|---|---|
+| reads | CPU busy with SELECTs, replicas lagging behind demand | indexes, a cache, read replicas |
+| writes | the primary's disk or CPU saturates on INSERT/UPDATE | batching, a queue to smooth bursts, a bigger machine |
+| size | data and indexes no longer fit the disk, or the hot set no longer fits memory | archive cold rows, compress, move blobs to object storage |
+
+Only when **writes** or **size** keep growing past the largest machine you can buy does sharding pay for its complexity. A modern server with 64 cores and NVMe disks handles tens of thousands of writes a second and terabytes of data; many companies run far longer on one primary than they expect.
+
+> [!WARNING]
+> Sharding for reads alone is almost always the wrong call. Replicas and caches are simpler, and they keep joins, transactions and ad-hoc queries.
+"""
+
+[[sections]]
+heading = "Federation, sharding and denormalisation"
+body = """
+Three ways to split a database, often used together:
+
+- **Federation** (functional partitioning) splits by *function*: a `users` database, a `products` database, a `forums` database. Each gets less traffic, fits more of its hot data in memory, and writes in parallel with the others. It stops helping when one function itself outgrows a machine, the application must know which database to use, and joins across them happen in the application.
+- **Sharding** splits *one table's rows* across databases by a key: users 1-1M on shard 0, the next million on shard 1, and so on. Each shard has smaller indexes, less traffic and less replication to do; a shard going down affects only its slice (so each shard still needs replicas). Application logic gets more complex, load can be lopsided, and joins across shards get hard.
+- **Denormalisation** stores redundant copies of data so reads avoid joins: a post row carries its author's name and avatar. Reads often outnumber writes 100:1 or more, so a join on every read costs more than an extra write. Once data is sharded, cross-shard joins become impractical and denormalisation is usually the way out. The cost: duplicated data that must be kept in sync, and heavier writes.
 """
 
 [[sections]]
 heading = "Choosing the key"
 body = """
+The shard key decides everything else. A good key:
+
+1. is **in every hot query**, so a request touches one shard;
+2. **spreads load evenly**, by data volume and by traffic;
+3. **keeps together what is read and written together**, so transactions stay on one shard.
+
 | Key | Good for | Breaks when |
 |---|---|---|
-| `user_id` | a user's data together, queries by user | one user is enormous (a celebrity) |
-| hash of an id | an even spread | you need ranges (all of last week) |
+| `user_id` | a user's data together, queries by user | one user is enormous (a celebrity), or queries span users |
+| `tenant_id` / workspace | SaaS: one customer's data on one shard, easy isolation | one tenant outgrows a shard |
+| hash of an id | an even spread | you need range scans (all of last week) |
 | time range | recent-first reads, easy archiving | every new write hits the newest shard |
 | region | data near its users, residency rules | regions grow unevenly |
+| compound (`tenant_id`, `user_id`) | tenants spread inside, users together | queries that name neither |
 
-The key should be in **every hot query**, so a request touches one shard.
+**Real choices**: Notion moved its block data to sharded Postgres keyed by **workspace id**, because a page and all its blocks live in one workspace and nearly every query knows it. Figma shards groups of related tables (which it calls colos) on the same key, so they stay together on one shard and joins between them still work; it notes that foreign keys and most queries must include the shard key.
+"""
+
+[[sections]]
+heading = "Routing: how a request finds its shard"
+body = """
+- **Hash**: `shard = hash(key) mod N` spreads evenly, but changing N moves almost every key. Consistent hashing or a fixed number of logical shards avoids that.
+- **Range**: each shard owns a key range (`a`-`f`, `g`-`m`). Range scans work and ranges can split when they grow, but sequential keys pile onto the last range.
+- **Directory**: a lookup table maps each key (or tenant) to a shard. The most flexible (move any tenant anywhere), at the cost of a lookup service that must be fast and highly available (cache it).
+
+**Logical shards**: create many more shards than machines, say 480 logical shards on 32 physical databases, as Notion did. A shard is the unit of data movement; adding machines means moving whole logical shards, not rehashing rows. 480 divides evenly by many machine counts (8, 16, 32, 48, 60…), which keeps the spread even as the fleet grows.
+
+```text title=routing
+shard   = hash(workspace_id) mod 480     # fixed forever
+machine = shard_map[shard]               # changes when shards move
+```
+
+**Where routing lives**: in the application (a library that knows the map), in a proxy (Vitess's vtgate, PgBouncer-style routers, MongoDB's mongos), or in the database itself (Citus, CockroachDB, Spanner, DynamoDB).
 """
 
 [[sections]]
 heading = "What it costs"
 body = """
-- **Queries across shards**: scatter-gather, or a second index keyed the other way.
-- **Joins and transactions across shards**: avoid them in the design, or use a saga.
-- **Resharding**: moving data while serving traffic. Start with many virtual shards mapped to few machines, or consistent hashing, so growth moves a fraction of the data.
-- **Hot shards**: one key with outsized traffic; split it (key plus a suffix) or cache in front.
+- **Queries without the key**: scatter-gather to every shard and merge, which is as slow as the slowest shard. Fix with a **global secondary index** (a second table keyed the other way, kept up to date asynchronously) or by denormalising.
+- **Joins across shards**: done in the application or avoided by co-locating related tables on the same key; small, rarely changing tables (countries, plans) can be **copied to every shard** (Citus calls these reference tables).
+- **Transactions across shards**: two-phase commit is slow and fragile; design so one business action touches one shard, or use a saga.
+- **Unique constraints and ids**: the database can no longer guarantee uniqueness or hand out sequential ids across shards; use globally unique ids (UUID v7, Snowflake) and enforce uniqueness with a dedicated table keyed by the unique value.
+- **Operations**: schema changes run on every shard, backups and restores are per shard, and monitoring must find the one hot shard among hundreds.
+"""
+
+[[sections]]
+heading = "Hot keys and hot shards"
+body = """
+An even hash spreads *keys*, not *traffic*. One celebrity, one huge tenant or one viral item can overload its shard.
+
+- **Split the key**: write to `item:9#0` … `item:9#7` (a random suffix) and read all eight and combine. Works for counters and append-only data.
+- **Give the big tenant its own shard** (easy with a directory).
+- **Cache in front** for read-hot keys.
+- **Change the access pattern**: for feeds, pull a celebrity's posts at read time instead of fanning out writes to millions of followers.
+
+:::steps A hot key overloads one shard, then gets split
+- normal day | each shard serves about 25% of traffic | Hashing spreads keys evenly, and traffic follows.
+- viral post | shard 3 serves 70% | One key gets most of the traffic; its shard saturates while others idle.
+- split the key | post:9#0 … post:9#7 | Writes pick a random suffix, so the key lives on up to eight shards.
+- read merges | read 8 keys, sum | Reads fetch the eight parts and combine them; load is spread again.
+:::
+"""
+
+[[sections]]
+heading = "Resharding without downtime"
+body = """
+Moving data while serving traffic follows the same steps in every system:
+
+1. **Copy**: bulk-copy the rows of the shards being moved to their new home.
+2. **Catch up**: stream changes made during the copy from the source's log (logical replication, binlog, change streams) until the target is seconds behind.
+3. **Verify**: compare row counts and checksums.
+4. **Switch**: briefly stop writes to the moving shards (or fence them), apply the last changes, update the shard map, resume. Seconds of write pause, or none with careful dual-writes.
+5. **Clean up**: delete the old copies after a safety period.
+
+Vitess (resharding MySQL by splitting key ranges, using VReplication), Citus (moving shards with logical replication) and MongoDB (its balancer moves chunks between shards; since version 5.0 a collection can be resharded to a new key online) automate these steps.
+
+:::deeper Why the shard count is hard to change later | 1 min
+With `hash(key) mod N`, changing N from 4 to 5 changes the result for about 80% of keys, so nearly all data moves. Consistent hashing moves only about 1/N of keys when a node is added, and a fixed number of logical shards moves exactly the shards you choose. Both turn resharding into moving known pieces rather than rehashing everything.
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say **why** you shard (writes or size, with numbers), and what you tried first.
+2. Name the **key** and show it is in the hot queries; say what it keeps together.
+3. Say how requests are **routed** and that you use **logical shards**.
+4. Name the **cost** for this design: which query needs scatter-gather or a second index, which action could span shards.
+5. Mention **hot keys** and how you would **reshard**.
+
+> [!INTERVIEW]
+> "Messages are sharded by conversation id into 1,024 logical shards on 16 Postgres primaries, each with a replica. Every message query names the conversation. 'All messages by a user' goes through a per-user index table, written asynchronously."
 """
 
 [[checks]]
@@ -43,6 +146,105 @@ answer = "Their shard takes all the writes and reads for that post and becomes a
 [[checks]]
 prompt = "Why start with, say, 256 virtual shards even when you only run 4 machines?"
 answer = "Moving to more machines then means reassigning whole virtual shards, not rehashing every row, so growth is a data move of known pieces with no change to the key."
+
+[[checks]]
+prompt = "An orders table is sharded by customer_id. Support needs to look orders up by order_id alone. What are your options?"
+answer = "Either scatter-gather the lookup to every shard (slow, as slow as the slowest shard), or keep a global index: a small table keyed by order_id that maps to customer_id (or the shard), written when the order is created. Embedding the shard or customer in the order id (as Snowflake-style ids can) also lets the router find the shard from the id alone."
+
+[[checks]]
+prompt = "Why does changing hash(key) mod 4 to hash(key) mod 5 move so much data, and what avoids it?"
+answer = "A key keeps its shard only if hash mod 4 equals hash mod 5, which holds for about one key in five, so roughly 80% of the data moves. Consistent hashing moves only about 1/N of the keys when a node joins, and a fixed number of logical shards mapped to machines moves only the shards you choose to move."
+
+[[checks]]
+prompt = "Two rows that must change together end up on different shards. What do you do?"
+answer = "Prefer changing the design so they share a shard key (co-locate related tables on the same key, as Figma's colos do). If they must stay apart, avoid a distributed transaction: make one change, then the other through a saga with a compensating action, using idempotent steps so retries are safe."
+
+[[terms]]
+term = "Shard key"
+means = "The column whose value decides which shard holds a row."
+section = "Choosing the key"
+
+[[terms]]
+term = "Federation"
+means = "Splitting a database by function (users, products) rather than by rows."
+section = "Federation, sharding and denormalisation"
+
+[[terms]]
+term = "Denormalisation"
+means = "Storing redundant copies of data so reads avoid joins."
+section = "Federation, sharding and denormalisation"
+
+[[terms]]
+term = "Logical shard"
+means = "A fixed slice of the key space, mapped onto a physical machine; many per machine."
+section = "Routing: how a request finds its shard"
+
+[[terms]]
+term = "Directory"
+means = "A lookup table from key or tenant to shard; flexible, but must be fast and available."
+section = "Routing: how a request finds its shard"
+
+[[terms]]
+term = "Scatter-gather"
+means = "Sending a query to every shard and merging the answers."
+section = "What it costs"
+
+[[terms]]
+term = "Reference table"
+means = "A small table copied to every shard so joins with it stay local."
+section = "What it costs"
+
+[[terms]]
+term = "Hot key"
+means = "One key that gets far more traffic than others, overloading its shard."
+section = "Hot keys and hot shards"
+
+[[terms]]
+term = "Resharding"
+means = "Moving data between shards while the system keeps serving."
+section = "Resharding without downtime"
+
+[[sources]]
+title = "The System Design Primer: Federation, Sharding, Denormalization"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#sharding"
+note = "the three ways to split a database (CC BY 4.0)"
+
+[[sources]]
+title = "Herding elephants: lessons learned from sharding Postgres at Notion"
+kind = "article"
+url = "https://www.notion.com/blog/sharding-postgres-at-notion"
+note = "workspace id as the key, 480 logical shards on 32 databases"
+
+[[sources]]
+title = "How Figma's databases team lived to tell the scale"
+kind = "article"
+url = "https://www.figma.com/blog/how-figmas-databases-team-lived-to-tell-the-scale/"
+note = "horizontal sharding of Postgres, colocated tables, the shard key's constraints"
+
+[[sources]]
+title = "Vitess: vindexes"
+kind = "docs"
+url = "https://vitess.io/docs/reference/features/vindexes/"
+note = "how a sharded MySQL routes rows by key"
+
+[[sources]]
+title = "Citus documentation"
+kind = "docs"
+url = "https://docs.citusdata.com/en/stable/"
+note = "distributed and reference tables in Postgres, shard moves"
+
+[[sources]]
+title = "MongoDB: sharding"
+kind = "docs"
+url = "https://www.mongodb.com/docs/manual/sharding/"
+note = "shard keys, chunks, the balancer"
+
+[[sources]]
+title = "MongoDB: reshard a collection"
+kind = "docs"
+url = "https://www.mongodb.com/docs/manual/core/sharding-reshard-a-collection/"
+note = "changing the shard key online"
 
 [[figures]]
 name = "shards"
