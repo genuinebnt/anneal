@@ -433,3 +433,15 @@ test("Intervals: bars on a line merge into one lane, and a sweep line counts the
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("3 rooms");
 });
+
+test("Math & Geometry: the matrix is transposed then flipped in place, and fast power reads the exponent's bits", async ({ page }) => {
+    await page.goto("/dsa/patterns/D17/idea");
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(9);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("rotated");
+    await expect(page.locator(".id-tb-c").first()).toHaveText("7");
+    await page.getByRole("radio", { name: /fast power/i }).click();
+    await expect(page.locator(".id-cell")).toHaveCount(4);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("1594323");
+});

@@ -111,6 +111,15 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     roomheap: { n: 10, w: [[0, 3]], w2: [[2, 5], [4, 8]], dots: [6] },
     intersectiv: { n: 10, w: [[0, 5]], w2: [[3, 9]], dots: [4], ptr: [3, 5] },
     diffarr: { n: 10, w: [], bars: [1, 1, 3, 3, 3, 2, 2, 1, 1, 1], dots: [2, 5] },
+    rotatem: { n: 10, w: [], dots: [0, 1, 2, 3, 4], ptr: [0, 4], w2: [[0, 5]] },
+    spiral: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5, 6, 7], ptr: [0, 7], w2: [[1, 7]] },
+    markersm: { n: 10, w: [[0, 10]], dots: [0, 3, 6], ptr: [0, 3, 6] },
+    fastpow: { n: 10, w: [], bars: [1, 2, 4, 6, 8, 10, 9, 7, 5, 3].map((x) => x), ptr: [0, 9] },
+    gcdm: { n: 10, w: [[0, 10]], w2: [[0, 6]], dots: [6], ptr: [6] },
+    carry: { n: 10, w: [], dots: [1, 4, 7], ptr: [8, 9], w2: [[8, 10]] },
+    numcycle: { n: 10, w: [[3, 10]], dots: [1, 2, 3, 6, 9], ptr: [3, 9] },
+    baseconv: { n: 10, w: [], bars: [2, 5, 3, 8, 1, 6, 4, 7, 2, 5], ptr: [9] },
+    points: { n: 10, w: [], dots: [1, 2, 6, 7], w2: [[1, 3], [6, 8]] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 

@@ -1,0 +1,168 @@
+pattern = "Math & Geometry"
+
+tagline = "Find the arithmetic or the symmetry hiding in the problem, and a long simulation becomes a few exact steps."
+
+what = [
+    "These problems look like puzzles about numbers, grids and points, and the data structure is rarely the point. What decides them is **noticing the property**: rotating a matrix is a transpose plus a flip; x to the power n is a product of squares; the gcd of two numbers is unchanged when you replace the larger by the remainder.",
+    "Most of the techniques fall in three groups. **Matrix tricks** move cells inside the same matrix. **Number theory** replaces a long loop by gcd, modulus or squaring. **Digit manipulation** handles numbers too big for an integer one digit at a time. Run a rotation and a fast power below.",
+]
+
+demos = ["math-rotate", "math-pow"]
+
+applies = [
+    "**Matrices**: rotate, spiral order, set rows and columns to zero, transpose, in place.",
+    "**Powers and roots** of huge exponents, and anything where doing it n times is too slow.",
+    "**gcd, lcm, divisibility, primes**: reducing fractions, counting multiples.",
+    "Numbers as **digit lists or strings**: add one, add two numbers, multiply, convert to another base.",
+    "**Points and shapes**: count squares or rectangles from stored points, the most points on a line.",
+]
+
+yes = [
+    "The statement is **about numbers or coordinates**, and the brute force repeats a very large number of times.",
+    "A **symmetry or identity** (transpose, mirror, `gcd(a, b) = gcd(b, a mod b)`, `x^n = (x²)^(n/2)`) turns many steps into a few.",
+    "The numbers are **too big** for the built-in type, or you are told not to convert them.",
+]
+
+no = [
+    "The question is about **order or membership** in a collection rather than the numbers themselves: a hash, sort or search.",
+    "You can build the answer **by choosing among options**: that is greedy or DP, even when numbers appear.",
+    "The input is small enough that **plain simulation** passes, and a cleverer idea would only add risk.",
+]
+
+apply = [
+    "**Try small cases by hand** and look for what repeats or mirrors. The pattern in 3 × 3 is the idea.",
+    "**Name the property** you are using (a symmetry, an identity, a recurrence on the digits).",
+    "**Check the edges.** Zero, one, negatives, even and odd sizes, a number that overflows.",
+    "**Keep exact arithmetic.** Work with integers, or with the digits themselves, and avoid floating point unless asked.",
+    "**State the invariant.** \"After this step the part already handled is exactly as the answer requires.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"**rotate** or flip a square matrix\", without a second matrix"
+kind = "Matrix in place"
+move = "Transpose (swap across the diagonal), then reverse each row: a 90° turn clockwise."
+glyph = "rotatem"
+technique = "Math & Geometry:matrix-inplace"
+
+[[which]]
+says = "\"visit a matrix in **spiral** order\", or fill one"
+kind = "Spiral walk"
+move = "Keep four boundaries (top, bottom, left, right); walk one side, move that boundary inwards, turn."
+glyph = "spiral"
+technique = "Math & Geometry:spiral"
+
+[[which]]
+says = "\"set a whole row and column to zero\", **no extra memory**"
+kind = "Markers in the matrix"
+move = "Use the first row and column as the marks for the others, after remembering whether they need zeroing."
+glyph = "markersm"
+technique = "Math & Geometry:markers"
+
+[[which]]
+says = "\"**x to the power n**\" for a huge n"
+kind = "Fast power"
+move = "Square x for each bit of n and multiply the result in when the bit is set: about log n multiplications."
+glyph = "fastpow"
+technique = "Math & Geometry:fast-pow"
+
+[[which]]
+says = "\"**gcd**, lcm, divisibility\", reducing a fraction"
+kind = "Number theory"
+move = "gcd(a, b) = gcd(b, a mod b) until the remainder is 0; lcm = a·b / gcd."
+glyph = "gcdm"
+technique = "Math & Geometry:number-theory"
+
+[[which]]
+says = "\"add one\", \"add two numbers\", \"multiply strings\", digits too big for an int"
+kind = "Digit arithmetic"
+move = "Work from the last digit with a carry, exactly as on paper, storing digits in a list."
+glyph = "carry"
+technique = "Math & Geometry:digits"
+
+[[which]]
+says = "\"repeat a step on a number until it reaches 1 **or loops forever**\": happy numbers"
+kind = "Number cycle"
+move = "Detect the loop with a seen set, or with slow and fast pointers on the sequence of numbers."
+glyph = "numcycle"
+technique = "Math & Geometry:number-cycle"
+
+[[which]]
+says = "\"convert to a **base** or format\": Excel column titles, roman numerals"
+kind = "Number formats"
+move = "Peel off the last digit with `%` and `//`, building the result from the right; watch the off-by-one in 1-based formats."
+glyph = "baseconv"
+technique = "Math & Geometry:number-format"
+
+[[which]]
+says = "\"count **squares / rectangles** from stored points\", \"most points on a line\""
+kind = "Point counts"
+move = "Store the points in a map; for each pair, derive the other corners (or the slope) and look them up."
+glyph = "points"
+technique = "Math & Geometry:point-counts"
+
+[[cost]]
+name = "Do it step by step"
+time = "O(n)"
+space = "O(1)"
+why = "Multiplying x by itself n times, or testing every number up to n, takes n steps, which is hopeless when n is a billion. This is the cost to beat."
+
+[[cost]]
+name = "Rotate a matrix in place"
+time = "O(n²)"
+space = "O(1)"
+why = "Every one of the n² cells moves exactly once (a swap in the transpose, a swap in the flip), so the time is the number of cells. Because both steps are swaps inside the same matrix, no second matrix is needed."
+
+[[cost]]
+name = "Spiral traversal"
+time = "O(R · C)"
+space = "O(1) extra"
+why = "Each cell is visited once, so the time is the size of the matrix. Four boundary variables are the only extra memory, apart from the output list."
+
+[[cost]]
+name = "Fast power"
+time = "O(log n)"
+space = "O(1)"
+why = "The loop runs once per bit of n, and a number n has about log₂ n bits. Each bit costs at most one squaring and one multiply, so the work follows the length of n in binary, not its size."
+
+[[cost]]
+name = "gcd by remainders"
+time = "O(log min(a, b))"
+space = "O(1)"
+why = "Each step replaces the larger number by a remainder, and two steps at least halve it, so the number of steps is logarithmic. It is far faster than trying every divisor."
+
+[[cost]]
+name = "Digit arithmetic"
+time = "O(n) or O(n · m)"
+space = "O(n)"
+why = "Adding is one pass over the digits with a carry. Multiplying every digit of one number with every digit of the other is n × m. The result needs about n + m digits."
+
+[[cost]]
+name = "Counting shapes from points"
+time = "O(n²)"
+space = "O(n)"
+why = "For each pair of points you derive the other corners and look them up in a hash map in O(1). The map holds each point once."
+
+[[with]]
+pattern = "Bit Manipulation"
+how = "Fast power reads the exponent a bit at a time, so it is a bit manipulation in disguise: `n & 1` and `n >> 1` are the whole loop."
+example = "number-of-1-bits"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "Counting squares from points, and zeroing a matrix with markers, are hashing problems: the points live in a map, and the first row and column of the matrix are used as the hash for the others."
+example = "detect-squares"
+
+[[with]]
+pattern = "Linked List"
+how = "Repeating a step on a number is a walk on a graph of numbers, so a cycle there is found with slow and fast pointers, the same as in a linked list."
+example = "happy-number"
+
+[[with]]
+pattern = "Binary Search"
+how = "Square roots and other monotone numeric functions are found by binary search on the answer, instead of a formula or a loop over every candidate."
+example = "sqrtx"
+
+[[with]]
+pattern = "2-D Dynamic Programming"
+how = "Grid and matrix problems that ask for a best or a count, rather than a transformation, are 2-D DP: the matrix is the table."
+example = "unique-paths"
