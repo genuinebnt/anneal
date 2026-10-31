@@ -165,3 +165,6 @@
 .p-wkc .top i{filter:saturate(1.3) brightness(1.08)}
 .p-wkc em{position:absolute;bottom:-16px;left:0;right:0;text-align:center;font:500 10px var(--mono);font-style:normal;color:var(--dim)}
 .p-res .p-save .nu-go{flex:1}
+/* Company: the main action outlined in the accent, as in the mockup */
+.cm-btn.pri{background:color-mix(in oklab,var(--acc) 14%,var(--panel));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--acc) 45%,transparent);color:color-mix(in oklab,var(--acc) 78%,var(--fg));border:0}
+.cm-btn.pri:hover:not(:disabled){background:color-mix(in oklab,var(--acc) 22%,var(--panel))}

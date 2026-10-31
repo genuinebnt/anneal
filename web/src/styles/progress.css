@@ -89,3 +89,9 @@
 .ly-rp .ptable{font-size:12px}.ly-rp .ptable th,.ly-rp .ptable td{padding:6px 4px}
 .ly-rp .ptable td:first-child{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ly-rp .rdy-bar{width:36px}
+/* the cards' headings as the mockup's compact labels, and icons in the left panel's tabs */
+.pr-3 .pbox>h3{margin:0;font:600 10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.pr-3 .pbox>.sub{margin:4px 0 14px;font-size:12px;color:var(--dim)}
+.pr-nav button{display:flex;align-items:center;gap:10px}
+.pr-nav button svg{width:15px;height:15px;flex:none;opacity:.8}
+.pr-nav button{justify-content:flex-start;text-align:left}.pr-nav button em{margin-left:auto}

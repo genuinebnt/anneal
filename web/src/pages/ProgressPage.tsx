@@ -9,6 +9,13 @@ import { SECTION_NAMES } from "../curriculum";
 import { DATA_STRUCTURES, counted, readinessRows, type ReadyRow } from "../dsa";
 
 type Tab = "overview" | "rust" | "reviews";
+/** A small drawing for each tab of the left panel, as in the mockup. */
+const TAB_ICON: Record<Tab, ReactNode> = {
+  overview: <path d="M2.5 13.5h11M4.5 11V7M8 11V4M11.5 11V8.5" />,
+  rust: <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />,
+  reviews: <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v2.4h2.4" />,
+};
+
 const TABS: [Tab, string][] = [
   ["overview", "Overview"],
   ["rust", "Rust stats"],
@@ -595,6 +602,7 @@ export function ProgressPage() {
         <nav className="pr-nav" role="tablist" aria-label="Progress">
           {TABS.map(([k, label]) => (
             <button key={k} role="tab" className={tab === k ? "on" : ""} aria-selected={tab === k} onClick={() => setTab(k)}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{TAB_ICON[k]}</svg>
               {label}
               {k === "reviews" && reviews.data?.due_today ? <em>{reviews.data.due_today}</em> : null}
             </button>

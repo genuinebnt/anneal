@@ -91,3 +91,6 @@
 .mk-pill[aria-pressed=true]{color:var(--fg)}
 @media (max-width:900px){.mk-3 .m-dock{display:flex}}
 .mi-wrap.mk-3{max-width:none;margin:0;padding:0}
+/* the draw button outlined in the accent, as in the mockup */
+.mk-3 .mi-go{background:color-mix(in oklab,var(--acc) 14%,var(--panel));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--acc) 45%,transparent);color:color-mix(in oklab,var(--acc) 78%,var(--fg));border:0}
+.mk-3 .mi-go:hover:not(:disabled){background:color-mix(in oklab,var(--acc) 22%,var(--panel));filter:none}
