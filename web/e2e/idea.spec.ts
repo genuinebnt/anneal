@@ -295,3 +295,19 @@ test("Trees: the tree is drawn, a depth-first walk keeps a call stack, and a bre
     await box.blur();
     await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(3);
 });
+
+test("Graphs: a breadth-first search labels distances and keeps a queue, and flood fill counts islands on a grid", async ({ page }) => {
+    await page.goto("/dsa/patterns/D11/idea");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(6);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("4 steps");
+    await expect(page.locator(".id-nv-sub").filter({ hasText: "d=4" })).toHaveCount(1);
+    await page.getByRole("radio", { name: /flood fill/i }).click();
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(20);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-tb-c.id-tb-cur")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3");
+    await expect(page.locator(".id-tb-c.id-tb-done")).toHaveCount(7);
+});

@@ -1,0 +1,181 @@
+pattern = "Graphs"
+
+tagline = "Mark each node the first time you reach it, and you can walk any tangle of links without going round in circles."
+
+what = [
+    "A graph is things and the links between them. Whatever the story is (islands, courses, friends, words one letter apart), the work is the same: **start somewhere, visit each neighbour, and remember what you have already seen** so you never go back round a cycle.",
+    "There are two ways to walk. **Breadth-first** uses a queue and finds things by the *fewest links*. **Depth-first** uses a stack (or recursion) and follows one path all the way to its end. Most of the skill is **seeing the graph** in a problem that never says the word. Run a BFS and a flood fill below.",
+]
+
+demos = ["graph-bfs", "grid-islands"]
+
+applies = [
+    "A **grid** of cells where you move up, down, left and right: islands, regions, flooding, shortest path in a maze.",
+    "\"The **fewest steps** to get from here to there\", including puzzles where each *state* is a node (word ladder, lock combinations).",
+    "**Dependencies**: prerequisites, build order, \"can all courses be finished?\"",
+    "\"Are these two things **connected**?\", \"how many groups?\", \"merge these groups\".",
+    "**Copying** a structure whose nodes point at each other, or checking a property such as \"can it be split into two sides?\"",
+]
+
+yes = [
+    "Items have **relationships** (adjacent, depends on, friends with), and the answer depends on following them.",
+    "You can say what the **neighbours** of a node are, even if no list of them is given (the four cells around a cell).",
+    "The same node can be **reached in more than one way**, so you need to remember what you have visited.",
+]
+
+no = [
+    "Every item has exactly **one parent** and there are no cycles: it is a tree, and you need no visited set.",
+    "Edges have **different costs** and you want the cheapest route: that is Dijkstra (Advanced Graphs), not plain BFS.",
+    "The question is about a **contiguous stretch** of a list: use a window or two pointers, not a graph.",
+]
+
+apply = [
+    "**Say what a node is and what its neighbours are.** A cell and the four around it; a course and the courses that need it; a word and the words one letter away.",
+    "**Choose BFS or DFS.** The fewest steps or the nearest of several sources is BFS. Counting groups, marking regions or exploring everything is either, and DFS is shorter to write.",
+    "**Decide what \"seen\" means and when to mark it.** Mark a node when you *add* it to the queue (BFS), or when you *enter* it (DFS), so it is never added twice.",
+    "**Decide the start.** One node, every node in turn (for components), or all the sources at once (multi-source BFS).",
+    "**State the invariant.** \"A node is in the seen set exactly when it has been reached.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "a **grid** of land and water: \"number of islands\", \"max area\", fill a region"
+kind = "Flood fill"
+move = "Scan every cell. On unseen land, count one and flood its whole region by DFS or BFS."
+glyph = "floodg"
+technique = "Graphs:flood"
+
+[[which]]
+says = "\"distance from the **nearest** of many\": rotting oranges, walls and gates"
+kind = "Multi-source BFS"
+move = "Put every source in the queue at distance 0 before starting, so the waves spread together."
+glyph = "sources"
+technique = "Graphs:multi-bfs"
+
+[[which]]
+says = "\"which cells can reach the **ocean** / the border\", \"surrounded regions\""
+kind = "Search from the border"
+move = "Flip the question: start at the border and see what *it* reaches, instead of asking from every cell."
+glyph = "borderg"
+technique = "Graphs:border"
+
+[[which]]
+says = "\"the **fewest moves** to change one state into another\": word ladder, a lock"
+kind = "Implicit graph BFS"
+move = "Nodes are states and edges are legal moves. Generate the neighbours on the fly; BFS finds the shortest."
+glyph = "implicit"
+technique = "Graphs:bfs-implicit"
+
+[[which]]
+says = "\"**copy** this graph\", nodes that point at each other"
+kind = "Clone with a map"
+move = "A map from original to copy is also the seen set: if a node is in it, link to its copy."
+glyph = "clone"
+technique = "Graphs:clone"
+
+[[which]]
+says = "\"**prerequisites**\", \"build order\", \"can all courses be taken\""
+kind = "Topological sort"
+move = "Repeatedly take a node with no unmet dependencies (in-degree 0). If some are left over, there is a cycle."
+glyph = "topo"
+technique = "Graphs:topo"
+
+[[which]]
+says = "\"are these **connected**\", \"how many **groups**\", \"merge accounts\""
+kind = "Union-find"
+move = "Give every item a group leader; union joins two groups, find asks for the leader."
+glyph = "dsu"
+technique = "Graphs:dsu"
+
+[[which]]
+says = "\"split into **two sides** so no edge joins the same side\""
+kind = "Two-colouring"
+move = "BFS and give each neighbour the opposite colour. An edge between equal colours means it cannot be done."
+glyph = "twocolor"
+technique = "Graphs:bipartite"
+
+[[which]]
+says = "\"a / b = 2.0\": **ratios** or conversions between pairs"
+kind = "Weighted edges"
+move = "Each ratio is an edge with a multiplier. A query multiplies along any path from one to the other."
+glyph = "ratio"
+technique = "Graphs:weighted"
+
+[[which]]
+says = "\"n nodes and n − 1 edges\": a **tree** given as an edge list"
+kind = "Tree from edges"
+move = "Build an adjacency list and walk it with a parent so you never step back."
+glyph = "edgelist"
+technique = "Graphs:tree-walk"
+
+[[cost]]
+name = "Search again from every start"
+time = "O(V · (V + E))"
+space = "O(V)"
+why = "Walking the whole graph once for each node as a start repeats almost all the work every time. This is the cost to beat; a single walk with a shared seen set does it once."
+
+[[cost]]
+name = "BFS or DFS"
+time = "O(V + E)"
+space = "O(V)"
+why = "A node is added once, because it is marked seen when added, and each edge is looked at once from each end. The queue or stack, and the seen set, can hold every node."
+
+[[cost]]
+name = "Flood fill on a grid"
+time = "O(R · C)"
+space = "O(R · C)"
+why = "Every cell is entered at most once, and each looks at four neighbours, a constant. The seen set is as big as the grid, and recursion can go as deep as the biggest island, so a huge island can overflow the call stack: use an explicit stack."
+
+[[cost]]
+name = "Multi-source BFS"
+time = "O(R · C)"
+space = "O(R · C)"
+why = "Starting from every source at once is still one BFS: each cell is reached by the first wave to arrive and never again. It costs the same as a search from one source."
+
+[[cost]]
+name = "Topological sort"
+time = "O(V + E)"
+space = "O(V + E)"
+why = "Each node leaves the ready list once and each edge lowers one count once. The adjacency list and the in-degree counts take space for every node and edge."
+
+[[cost]]
+name = "Union-find"
+time = "O(E · α(V))"
+space = "O(V)"
+why = "With path compression and union by size, a find takes close to constant time: α, the inverse Ackermann function, is below 5 for any input that fits in a computer. One find per endpoint of each edge gives about O(E)."
+
+[[cost]]
+name = "Two-colouring"
+time = "O(V + E)"
+space = "O(V)"
+why = "It is one BFS where every node is given a colour on arrival. Checking each edge costs O(1), so the whole thing is a plain traversal."
+
+[[cost]]
+name = "Clone a graph"
+time = "O(V + E)"
+space = "O(V)"
+why = "Each node is copied once (the map stops a second copy) and each edge is re-linked once. The map holds one entry per node."
+
+[[with]]
+pattern = "Trees"
+how = "A tree is a graph with no cycles, so the same walks work and the visited set is only needed when the tree is given as an edge list and you must not step back to the parent."
+example = "minimum-height-trees"
+
+[[with]]
+pattern = "Advanced Graphs"
+how = "When edges have costs, BFS no longer gives the cheapest route. Dijkstra replaces the queue with a heap that always takes the closest node next."
+example = "network-delay-time"
+
+[[with]]
+pattern = "Backtracking"
+how = "Exploring every path through a grid and undoing the mark on the way back is backtracking: the visited set is *un-set* so another path may use the cell."
+example = "word-search"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "After a topological sort, DP over the order is safe: every node's inputs are final before it is read. A DFS with a memo is the same thing written recursively."
+example = "longest-increasing-path-in-a-matrix"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "Cloning needs a map from original to copy, and word ladder needs a set of valid words: hashing is what makes \"have I seen this node\" a single step."
+example = "clone-graph"

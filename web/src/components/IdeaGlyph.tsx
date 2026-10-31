@@ -47,6 +47,14 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     levels: { n: 10, w: [[0, 1]], w2: [[1, 3]], dots: [3, 4, 5, 6] },
     edgelist: { n: 10, w: [], dots: [1, 3, 5, 7, 9], ptr: [0, 8] },
     rebuild: { n: 10, w: [[0, 4]], w2: [[5, 10]], dots: [4] },
+    floodg: { n: 10, w: [[2, 7]], dots: [2, 3, 4, 5, 6] },
+    sources: { n: 10, w: [], w2: [[0, 10]], dots: [1, 8], ptr: [1, 8] },
+    borderg: { n: 10, w: [[0, 2], [8, 10]], dots: [0, 9], ptr: [1, 8] },
+    implicit: { n: 10, w: [], dots: [0, 2, 4, 6, 9], ptr: [0, 9] },
+    topo: { n: 10, w: [], bars: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dots: [0, 1, 2], ptr: [3] },
+    dsu: { n: 10, w: [[0, 3]], w2: [[4, 7]], dots: [0, 4, 8], ptr: [0, 4] },
+    twocolor: { n: 10, w: [], dots: [0, 2, 4, 6, 8], w2: [[1, 2], [3, 4], [5, 6], [7, 8]] },
+    ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 
 export function IdeaGlyph({ kind }: { kind: string }) {
