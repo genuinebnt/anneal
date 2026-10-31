@@ -1,0 +1,154 @@
+pattern = "Advanced Graphs"
+
+tagline = "When links have costs, always settle the cheapest unsettled node next, or keep the lightest edge that closes no cycle."
+
+what = [
+    "Plain BFS counts edges. Once edges have **costs**, fewest edges is no longer cheapest, and you need a different order of exploring. Two ideas cover most of this pattern, and both are **greedy**: take the best option available *now*, and prove it can never be wrong.",
+    "**Dijkstra** settles the closest unsettled node next, with a heap, so a node's distance is final the moment it comes off. **Kruskal** sorts the edges and keeps each one unless it joins two nodes already connected, which **union-find** answers in almost constant time. Run both below on the same graph and compare what each one is for.",
+]
+
+demos = ["graph-dijkstra", "graph-kruskal"]
+
+applies = [
+    "\"The **cheapest route** from A to everywhere\" with non-negative costs: network delay, minimum effort, swimming in rising water.",
+    "\"Connect everything as **cheaply** as possible\": a minimum spanning tree.",
+    "\"The cheapest route with **at most k stops**\", or with negative costs (Bellman-Ford).",
+    "\"Shortest distance between **every pair**\" of a small graph (Floyd-Warshall).",
+    "Use **every edge once** (an itinerary), or find the edge whose removal **disconnects** the graph.",
+]
+
+yes = [
+    "Edges carry a **cost**, and \"best\" means the lowest total, not the fewest steps.",
+    "You can say what a **safe greedy choice** is: the closest unsettled node, or the lightest safe edge.",
+    "The graph is a **network**: cities and roads, servers and links, points and wires.",
+]
+
+no = [
+    "All edges cost the **same**: plain BFS is simpler and as good.",
+    "Some costs are **negative**: Dijkstra is wrong, because a settled node can still improve. Use Bellman-Ford.",
+    "You only need to know whether things are **connected**, not how cheaply: union-find or a plain traversal.",
+]
+
+apply = [
+    "**Say what the nodes, edges and costs are.** Including implicit ones: a cell is a node and the effort between neighbours is the cost.",
+    "**Choose the algorithm from the question.** One source to all: Dijkstra. Connect all cheaply: Kruskal or Prim. At most k edges: Bellman-Ford with k rounds. Every pair: Floyd-Warshall.",
+    "**Choose what the heap orders by.** The distance so far, or, for effort problems, the biggest single step so far.",
+    "**Skip stale entries.** A node can be pushed several times with different distances; when popped with a worse one, ignore it.",
+    "**State the invariant.** \"Once a node is settled, its distance is final.\" It holds only while every cost is non-negative.",
+]
+
+[[which]]
+says = "\"the **cheapest** route\", \"the fastest\", \"how long until everyone gets the signal\""
+kind = "Dijkstra"
+move = "A heap of (distance, node). Pop the closest, relax its edges, skip stale entries."
+glyph = "dijk"
+technique = "Advanced Graphs:dijkstra"
+
+[[which]]
+says = "\"connect **all** points / nodes as **cheaply** as possible\""
+kind = "Minimum spanning tree"
+move = "Kruskal: sort edges, keep each one that joins two groups. Or Prim: grow from one node with a heap."
+glyph = "mst"
+technique = "Advanced Graphs:mst"
+
+[[which]]
+says = "\"cheapest with **at most k** stops\", or edges with **negative** cost"
+kind = "Bellman-Ford"
+move = "Relax every edge, k times. After round r, every best path of at most r edges is correct."
+glyph = "bellman"
+technique = "Advanced Graphs:bellman"
+
+[[which]]
+says = "\"the shortest distance between **every pair**\", a small graph"
+kind = "Floyd-Warshall"
+move = "Three loops: for each middle node k, see if i to k to j beats i to j."
+glyph = "floyd"
+technique = "Advanced Graphs:floyd"
+
+[[which]]
+says = "\"use **every ticket / edge exactly once**\": reconstruct an itinerary"
+kind = "Eulerian path"
+move = "Hierholzer's walk: follow edges until stuck, and add nodes to the route on the way back."
+glyph = "euler"
+technique = "Advanced Graphs:euler"
+
+[[which]]
+says = "\"every node has **one** outgoing edge\": find cycles, eventual safe states"
+kind = "Functional graph"
+move = "Follow the single edge from each node with a state per node (unseen, in progress, done)."
+glyph = "cyclesg"
+technique = "Advanced Graphs:cycles"
+
+[[which]]
+says = "\"which edge or node, if removed, **disconnects** the graph\""
+kind = "Bridges and articulation points"
+move = "DFS with discovery times and the lowest time reachable from each subtree."
+glyph = "bridge"
+technique = "Advanced Graphs:articulation"
+
+[[cost]]
+name = "Try every path"
+time = "exponential"
+space = "O(V)"
+why = "The number of simple paths in a graph grows faster than any polynomial. Listing them to find the cheapest is hopeless, which is why a greedy order that never needs to look back matters."
+
+[[cost]]
+name = "Dijkstra with a heap"
+time = "O((V + E) log V)"
+space = "O(V + E)"
+why = "Each edge can push at most one entry, so the heap handles O(E) pushes and pops, each log V. Settling nodes in order of distance means every node is expanded once. With a plain array instead of a heap it is O(V²), better only for dense graphs."
+
+[[cost]]
+name = "Kruskal"
+time = "O(E log E)"
+space = "O(V + E)"
+why = "Sorting the edges dominates. After that, each edge does two union-find lookups that are close to constant time with path compression, so the scan is about O(E). log E is at most 2 log V, so it is also O(E log V)."
+
+[[cost]]
+name = "Union-find"
+time = "O(α(V)) per operation"
+space = "O(V)"
+why = "With path compression and union by size, the tree of a group stays almost flat. α, the inverse Ackermann function, is below 5 for any input a computer can hold, so a find is effectively constant time."
+
+[[cost]]
+name = "Bellman-Ford"
+time = "O(V · E)"
+space = "O(V)"
+why = "Each round relaxes all E edges, and a shortest path has at most V − 1 edges, so V − 1 rounds are enough. For \"at most k stops\" stop after k + 1 rounds. It is slower than Dijkstra but handles negative edges."
+
+[[cost]]
+name = "Floyd-Warshall"
+time = "O(V³)"
+space = "O(V²)"
+why = "Three nested loops over every node, with a table of every pair's best distance. It is only practical for a few hundred nodes, but it answers every query at once."
+
+[[cost]]
+name = "Bridges and articulation points"
+time = "O(V + E)"
+space = "O(V)"
+why = "One DFS: each node gets a discovery time and the lowest time reachable from its subtree. An edge is a bridge when the subtree below it cannot reach back above it. Every edge is looked at a constant number of times."
+
+[[with]]
+pattern = "Graphs"
+how = "Dijkstra is BFS with the queue swapped for a heap. When every edge costs 1 the heap order is the queue order, so the two agree."
+example = "network-delay-time"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "The heap is what makes Dijkstra fast: popping the closest unsettled node is O(log V) instead of a scan of every node."
+example = "swim-in-rising-water"
+
+[[with]]
+pattern = "Greedy"
+how = "Both algorithms are greedy with a proof: Dijkstra takes the closest node because every other route is at least as long, Kruskal takes the lightest edge because the cut property says some minimum tree contains it."
+example = "min-cost-to-connect-all-points"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Bellman-Ford is DP on the number of edges used: the best cost with at most r edges is built from the best with r − 1. It is how \"at most k stops\" is solved."
+example = "cheapest-flights-within-k-stops"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "Union-find is an array of parents, and a hash map plays the same role when nodes are not 0..n−1. Redundant connection is union-find answering \"already connected?\"."
+example = "redundant-connection"

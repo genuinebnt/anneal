@@ -356,3 +356,17 @@ test("Backtracking: the decision tree grows, a choice is undone on the way back,
     await expect(page.locator(".id-res")).toContainText("columns 2 4 1 3");
     await expect(page.locator(".id-tb-c.id-tb-done")).toHaveCount(4);
 });
+
+test("Advanced Graphs: Dijkstra settles nodes closest first with a heap, and Kruskal keeps only edges that join two groups", async ({ page }) => {
+    await page.goto("/dsa/patterns/D12/idea");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(5);
+    await expect(page.locator(".id-nv-e text").first()).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("max 7");
+    await expect(page.locator(".id-nv-n.id-nv-done")).toHaveCount(5);
+    await page.getByRole("radio", { name: /Kruskal/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("weight 7");
+    await expect(page.locator(".id-nv-e.id-nv-hit")).toHaveCount(4);
+    await expect(page.locator(".id-nv-e.id-nv-cut")).toHaveCount(2);
+});
