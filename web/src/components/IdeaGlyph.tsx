@@ -120,6 +120,15 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     numcycle: { n: 10, w: [[3, 10]], dots: [1, 2, 3, 6, 9], ptr: [3, 9] },
     baseconv: { n: 10, w: [], bars: [2, 5, 3, 8, 1, 6, 4, 7, 2, 5], ptr: [9] },
     points: { n: 10, w: [], dots: [1, 2, 6, 7], w2: [[1, 3], [6, 8]] },
+    xorc: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5, 6, 7, 8], w2: [[0, 2], [3, 5], [6, 8]] },
+    bitcount: { n: 10, w: [], dots: [1, 4, 6, 9], ptr: [9] },
+    shiftb: { n: 10, w: [[0, 10]], dots: [0, 2, 3, 6], ptr: [9, 0] },
+    addbits: { n: 10, w: [], dots: [2, 5, 6], w2: [[5, 7]], ptr: [4] },
+    prefxor: { n: 10, w: [], bars: [2, 3, 5, 4, 6, 7, 9, 8, 10, 10], w2: [[2, 7]] },
+    perbit: { n: 10, w: [], bars: [3, 3, 3, 6, 6, 6, 9, 9, 9, 4], ptr: [9] },
+    columns: { n: 10, w: [[0, 3]], w2: [[3, 10]], dots: [1, 4, 6, 8] },
+    mask: { n: 10, w: [], dots: [0, 2, 3, 6, 8], ptr: [0, 2, 3, 6, 8] },
+    shape: { n: 10, w: [], dots: [4], ptr: [4], w2: [[4, 5]] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 

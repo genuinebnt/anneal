@@ -1,0 +1,162 @@
+pattern = "Bit Manipulation"
+
+tagline = "A number is a row of on/off switches, and a few operators on the whole row do in one step what a loop over digits would do in many."
+
+what = [
+    "Every integer is a row of bits, and the processor works on **all of them at once**: `&` keeps bits both numbers have, `|` keeps bits either has, `^` keeps bits that differ, and `<<`, `>>` slide the whole row. Many problems that look like they need a loop or a set collapse to one operator.",
+    "Two facts carry most of the pattern. **XOR undoes itself**: `x ^ x = 0` and `x ^ 0 = x`, and order does not matter, so everything that comes in pairs cancels. And **`n & (n − 1)` clears the lowest set bit**, so counting set bits costs one step per bit that is set. Run both below.",
+]
+
+demos = ["bits-xor", "bits-count"]
+
+applies = [
+    "\"Every value appears **twice except one**\", or one is missing: XOR everything.",
+    "\"**Count** the 1 bits\", \"is it a power of two\", \"how many bits differ\".",
+    "\"**Reverse** or rotate the bits\" of a number, or pack and unpack **fields** (an IP address, a UTF-8 byte).",
+    "\"**Add** two numbers without `+`\", or work with sets of up to ~30 items stored in one integer (a bitmask).",
+    "\"The XOR of a **range**\", answered many times: prefix XORs, like prefix sums.",
+]
+
+yes = [
+    "The values are **integers** and the question is about their **bits** or about pairs cancelling.",
+    "You want **O(1) extra space** where a hash set would use O(n).",
+    "A **small set** of items (up to about 30) can be one number, so set operations are single instructions.",
+]
+
+no = [
+    "The values are **not integers** (strings, objects, floats): bit tricks do not apply.",
+    "A hash set would be **clearer** and the space does not matter: do not trade readability for a trick.",
+    "The set is **large**, more bits than the integer holds: use a real set or bitset type.",
+]
+
+apply = [
+    "**Write the numbers in binary** for a small example. The pattern is nearly always visible bit by bit.",
+    "**Pick the operator** that matches the question: `&` to test or clear, `|` to set, `^` to flip or cancel, shifts to move.",
+    "**Use masks.** `1 << k` is the k-th bit; `n >> k & 1` reads it; `n & (n - 1)` drops the lowest 1; `n & -n` isolates it.",
+    "**Mind the width.** Python integers have no fixed width and negative numbers behave as infinite sign bits; mask with `& 0xFFFFFFFF` when a 32-bit result is expected.",
+    "**State the invariant.** \"After i items, the result holds the combined bits of the first i.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"every value appears **twice except one**\", \"find the missing number\""
+kind = "XOR cancel"
+move = "XOR everything (and the indexes, for a missing number). Equal values cancel, the odd one out is left."
+glyph = "xorc"
+technique = "Bit Manipulation:xor"
+
+[[which]]
+says = "\"**count** the 1 bits\", \"bits of every number up to n\", \"power of two\""
+kind = "Clear the lowest bit"
+move = "`n &= n - 1` removes one set bit per step. A power of two has exactly one."
+glyph = "bitcount"
+technique = "Bit Manipulation:bit-count"
+
+[[which]]
+says = "\"**reverse** or rotate the bits\""
+kind = "Shift and mask"
+move = "Take the last bit with `n & 1`, shift the result left and `n` right, 32 times."
+glyph = "shiftb"
+technique = "Bit Manipulation:shift"
+
+[[which]]
+says = "\"**add** two numbers without + or −\""
+kind = "XOR and carry"
+move = "XOR is the sum without carries; `(a & b) << 1` is the carries. Repeat until there is no carry."
+glyph = "addbits"
+technique = "Bit Manipulation:add-bits"
+
+[[which]]
+says = "\"the XOR of a **range**\", many queries"
+kind = "Prefix XOR"
+move = "Store the XOR of every prefix; the XOR of a range is two prefixes XOR-ed, because the shared part cancels."
+glyph = "prefxor"
+technique = "Bit Manipulation:prefix-xor"
+
+[[which]]
+says = "\"every value appears **three times** except one\""
+kind = "Count per bit"
+move = "For each bit position, count the 1s modulo 3; the remaining bits spell the single number."
+glyph = "perbit"
+technique = "Bit Manipulation:single-number-ii"
+
+[[which]]
+says = "\"**Hamming distance**\", \"total distance between all pairs\""
+kind = "Per-bit columns"
+move = "For each bit, with k numbers having a 1 and n − k a 0, that bit contributes k · (n − k) pairs."
+glyph = "columns"
+technique = "Bit Manipulation:hamming"
+
+[[which]]
+says = "\"a **set of items** as one integer\", subsets, visited states"
+kind = "Bitmask"
+move = "Bit i set means item i is in the set. Test, add and remove with `&`, `|` and `^` on `1 << i`."
+glyph = "mask"
+technique = "Bit Manipulation:parity-mask"
+
+[[which]]
+says = "\"is it a **power of two**\", \"is the pattern all ones\""
+kind = "Shape of a binary number"
+move = "`n & (n - 1) == 0` for a power of two; `n & (n + 1) == 0` for all ones."
+glyph = "shape"
+technique = "Bit Manipulation:binary-shape"
+
+[[cost]]
+name = "Use a hash set"
+time = "O(n)"
+space = "O(n)"
+why = "A set remembers every value seen so far to spot the repeat. It is correct and clear, but it holds up to n values. This is the cost to beat on space."
+
+[[cost]]
+name = "XOR of everything"
+time = "O(n)"
+space = "O(1)"
+why = "One pass and one variable: each value is XOR-ed in once, and pairs cancel in whatever order they arrive. Nothing about earlier numbers is stored."
+
+[[cost]]
+name = "Count set bits, clearing the lowest"
+time = "O(k)"
+space = "O(1)"
+why = "Each step removes exactly one set bit, so the loop runs once for each 1, k of them, rather than once for each of the w bits of the word. For counting the bits of every number up to n, reuse the answer for n >> 1 and the last bit, which is O(n) in total."
+
+[[cost]]
+name = "Per-bit counting"
+time = "O(n · w)"
+space = "O(w)"
+why = "For each of the w bits (32 or 64) one pass counts how many numbers have it set. That is linear in n for a fixed word size, with a small array of counters."
+
+[[cost]]
+name = "Prefix XOR queries"
+time = "O(n + q)"
+space = "O(n)"
+why = "Building the prefixes costs n; each of the q queries is then two lookups and one XOR. Without them each query would XOR the whole range."
+
+[[cost]]
+name = "Bitmask over a set of n items"
+time = "O(2ⁿ · n)"
+space = "O(2ⁿ)"
+why = "There are 2ⁿ subsets, so any search over all of them is exponential, but each subset is one integer and each set operation is O(1). That is why bitmask DP is only used when n is about 20 or less."
+
+[[with]]
+pattern = "Tries"
+how = "A number is a string over the alphabet {0, 1}. A trie of the bits of the numbers, high bit first, finds the partner with the largest XOR by always taking the opposite bit."
+example = "implement-trie-prefix-tree"
+
+[[with]]
+pattern = "Backtracking"
+how = "A bitmask is a compact set of which items are used: the visited check becomes `mask & (1 << i)` and the state can be memoised on the mask."
+example = "subsets"
+
+[[with]]
+pattern = "Math & Geometry"
+how = "Fast exponentiation reads the exponent a bit at a time, so powers, gcd by binary tricks and bit counting share the same loop of `n & 1` and `n >>= 1`."
+example = "powx-n"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "XOR replaces a hash set for \"find the one without a pair\" and uses O(1) space instead of O(n). When values are not integers, the hash set is the tool."
+example = "contains-duplicate"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Counting the bits of every number up to n is a tiny DP: the count for n is the count for n >> 1 plus its last bit."
+example = "counting-bits"

@@ -445,3 +445,18 @@ test("Math & Geometry: the matrix is transposed then flipped in place, and fast 
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("1594323");
 });
+
+test("Bit Manipulation: XOR flips bits in a small table and pairs cancel, and clearing the lowest bit counts set bits", async ({ page }) => {
+    await page.goto("/dsa/patterns/D18/idea");
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(8);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-tb-c.id-tb-cur").first()).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("4");
+    await page.getByRole("radio", { name: /count set bits/i }).click();
+    await expect(page.locator(".id-cell")).toHaveCount(8);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-cell.id-hit")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3");
+});
