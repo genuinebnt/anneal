@@ -239,7 +239,7 @@ function Workpage({ o }: { o: DsaOverview }) {
                     {node && sim === "meaning" && meaning.data?.phase === "ready" && (
                         <HowFound
                             text={`Problems whose title, key idea and technique mean the most nearly the same as ${node.kind === "pro" ? "this one's" : `"${node.label}"`}, by a small language model running on this server (${meaning.data.model}). Nothing leaves it. Exact: every problem is compared.`}
-                            rows={[["Compared", `${meaning.data.compared.toLocaleString()} problems`], ["Ranked by", "cosine of the vectors"], ["Vectors", `${meaning.data.dims} dims`]]}
+                            rows={[["Compared", `${meaning.data.compared.toLocaleString()} problems`], ["Ranked by", node.kind === "pro" ? "meaning, plus rare shared topics" : "meaning"], ["Vectors", `${meaning.data.dims} dims`]]}
                         />
                     )}
                     {alike.length > 0 && (

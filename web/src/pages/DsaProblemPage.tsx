@@ -439,7 +439,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                           </Link>
                                       ))
                                     : alike.slice(0, more ? ALIKE_MORE : SAME_IDEA_SHOWN).map(({ x, score, shared }) => (
-                                          <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} title={`Similarity ${score.toFixed(2)} (1 is the same meaning)${shared ? `, ${shared} shared topic${shared === 1 ? "" : "s"}` : ""}`}>
+                                          <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} title={`Similarity ${score.toFixed(2)}: meaning, lifted a little by rare shared topics${shared ? ` (${shared} shared)` : ""}`}>
                                               <i className={dotOf(x)} />
                                               <span>{x.title}</span>
                                               <small>{score.toFixed(2)} · {x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>

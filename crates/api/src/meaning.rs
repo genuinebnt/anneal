@@ -36,6 +36,10 @@ const MAGIC: &[u8] = b"anneal-meaning 1\n";
 const BATCH: usize = 32;
 /// The most neighbours one request can ask for.
 const MAX_K: usize = 50;
+/// How much each shared LeetCode topic adds to a problem-to-problem score, times how rare the topic is. Small on purpose: meaning
+/// ranks, rare shared topics (Union-Find) only lift what is about the same thing, and common ones (Array) add almost nothing. Chosen
+/// by scoring rankings against the hand-written techniques and reading the neighbours of a few problems.
+const TOPIC_WEIGHT: f32 = 0.02;
 
 /// The text each problem is embedded from: what it is called, the move that solves it, and the technique it drills.
 /// Topic tags are left out on purpose: they are the other similarity, compared exactly.
@@ -151,7 +155,12 @@ impl Index {
     /// The `k` rows closest to `v` by cosine (a dot product: every row has unit length), best first, leaving out `skip`.
     /// Exact: every row is compared.
     fn nearest(&self, v: &[f32], k: usize, skip: Option<usize>) -> Vec<(usize, f32)> {
-        let mut all: Vec<(usize, f32)> = (0..self.len()).filter(|&i| Some(i) != skip).map(|i| (i, dot(v, self.row(i)))).collect();
+        self.nearest_with(v, k, skip, |_| 0.0)
+    }
+
+    /// As [`Index::nearest`], each row's score raised by `bonus(row)`.
+    fn nearest_with(&self, v: &[f32], k: usize, skip: Option<usize>, bonus: impl Fn(usize) -> f32) -> Vec<(usize, f32)> {
+        let mut all: Vec<(usize, f32)> = (0..self.len()).filter(|&i| Some(i) != skip).map(|i| (i, dot(v, self.row(i)) + bonus(i))).collect();
         all.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         all.truncate(k);
         all
@@ -199,6 +208,46 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
+/// Each problem's LeetCode topics and how rare each topic is (the log of all problems over the problems that have it).
+#[derive(Default)]
+pub struct Topics {
+    of: HashMap<String, Vec<usize>>,
+    rarity: Vec<f32>,
+}
+
+impl Topics {
+    pub fn new(catalog: &Catalog) -> Self {
+        let problems: Vec<_> = dsa_tracks(catalog).flat_map(|t| &t.problems).chain(catalog.practice_tracks.iter().flat_map(|t| &t.problems)).collect();
+        let mut names: HashMap<&str, usize> = HashMap::new();
+        let mut count: Vec<usize> = Vec::new();
+        let mut of = HashMap::new();
+        for p in &problems {
+            let mut mine: Vec<usize> = p.meta.tags.iter().map(|t| {
+                let next = names.len();
+                let at = *names.entry(t.as_str()).or_insert(next);
+                if at == count.len() {
+                    count.push(0);
+                }
+                count[at] += 1;
+                at
+            }).collect();
+            mine.sort_unstable();
+            mine.dedup();
+            of.insert(p.id.clone(), mine);
+        }
+        let n = problems.len().max(1) as f32;
+        Self { of, rarity: count.iter().map(|&c| (n / c as f32).ln()).collect() }
+    }
+
+    /// The summed rarity of the topics two problems share; 0 when either is unknown.
+    fn shared(&self, a: &str, b: &str) -> f32 {
+        let (Some(x), Some(y)) = (self.of.get(a), self.of.get(b)) else {
+            return 0.0;
+        };
+        x.iter().filter(|t| y.binary_search(t).is_ok()).map(|&t| self.rarity[t]).sum()
+    }
+}
+
 /// Where the API stands with meaning vectors.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -226,6 +275,7 @@ struct Inner {
 #[derive(Default)]
 pub struct Meaning {
     inner: RwLock<Inner>,
+    topics: Topics,
 }
 
 impl Meaning {
@@ -238,7 +288,7 @@ impl Meaning {
     /// one, in the background. A missing or stale file is rebuilt from the model (a minute or two of CPU) and kept in
     /// memory only: the content directory is read-only in production.
     pub fn start(catalog: &Catalog, content: &Path, model_dir: Option<PathBuf>) -> Arc<Self> {
-        let me = Self::off();
+        let me = Arc::new(Self { topics: Topics::new(catalog), ..Self::default() });
         let texts = texts(catalog);
         let print = fingerprint(&texts);
         match Index::read(&content.join("dsa").join("meaning.bin")) {
@@ -339,7 +389,7 @@ pub struct Answer {
 }
 
 /// `GET /api/dsa/meaning?like=<id>` or `?q=<text>`, with `k` neighbours (12 by default). Without either it reports the
-/// phase only.
+/// phase only. A problem's neighbours are ranked by meaning plus a small lift for each rare topic they share; text by meaning alone.
 pub async fn get(State(s): State<AppState>, Query(ask): Query<Ask>) -> ApiResult<Json<Answer>> {
     let (index, embedder, phase, built_ms, error) = {
         let i = s.meaning.read();
@@ -350,7 +400,8 @@ pub async fn get(State(s): State<AppState>, Query(ask): Query<Ask>) -> ApiResult
     if let Some(index) = &index {
         let found = if let Some(id) = ask.like.as_deref() {
             let at = index.position(id).ok_or_else(|| ApiError::NotFound(format!("problem {id}")))?;
-            index.nearest(index.row(at), k, Some(at))
+            // a problem's neighbours: meaning, lifted a little by the rare topics they share
+            index.nearest_with(index.row(at), k, Some(at), |j| TOPIC_WEIGHT * s.meaning.topics.shared(id, &index.ids[j]))
         } else if let Some(q) = ask.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
             if q.len() > 500 {
                 return Err(ApiError::BadRequest("a meaning search is at most 500 characters".into()));
@@ -388,6 +439,20 @@ mod tests {
         let near = index.nearest(index.row(0), 5, Some(0));
         assert_eq!(near.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 2]);
         assert!(near[0].1 > 0.99 && near[1].1.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_shared_rare_topic_lifts_a_neighbour_more_than_a_common_one() {
+        let topics = Topics {
+            of: [("a", vec![0, 1]), ("common", vec![0]), ("rare", vec![1])].into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            rarity: vec![0.1, 3.0],
+        };
+        assert!(topics.shared("a", "rare") > topics.shared("a", "common"));
+        assert_eq!(topics.shared("a", "missing"), 0.0);
+        let index = Index::new(vec!["a".into(), "common".into(), "rare".into()], vec![unit(&[1.0, 0.0]), unit(&[0.9, 0.1]), unit(&[0.85, 0.15])]).unwrap();
+        // by meaning alone "common" is closer; the rare shared topic puts "rare" first
+        assert_eq!(index.nearest(index.row(0), 1, Some(0))[0].0, 1);
+        assert_eq!(index.nearest_with(index.row(0), 1, Some(0), |j| TOPIC_WEIGHT * topics.shared("a", &index.ids[j]))[0].0, 2);
     }
 
     #[test]
