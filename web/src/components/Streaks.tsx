@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { api, type StreakDay, type StreakMarkKind, type StreakRepair, type Streaks } from "../api";
 import { toast } from "./toasts";
@@ -142,49 +142,3 @@ export function DayStrip({ s, count = 28, onPick }: { s: Streaks; count?: number
 export const STREAK_LEGEND: [string, string][] = [["perfect", "plan met in full"], ["kept", "a solve"], ["frozen", "freeze used"], ["holiday", "holiday"], ["sick", "sick"], ["missed", "missed"]];
 export const GLYPH_OF = GLYPH;
 
-/** The Streaks box on Progress: the four numbers, the freeze bar, the last four weeks, and the rules in one place. */
-export function StreaksBox() {
-    const q = useStreaks();
-    const [repairing, setRepairing] = useState(false);
-    const s = q.data;
-    if (!s) return null;
-    const open = offered(s)[0];
-    const toNext = s.freezes % 1;
-    return (
-        <div className="pbox sk-box" style={{ marginTop: 20 }}>
-            <h3>Streaks and freezes</h3>
-            <p className="sub">A perfect day is the day's plan met in full. A freeze mends a missed day, but never makes it perfect.</p>
-            <div className="sk-stats">
-                <div className="sk-stat sk-streak"><span>STREAK</span><b>{s.streak}</b><small>planned days kept</small></div>
-                <div className="sk-stat sk-perfect"><span>PERFECT STREAK</span><b>{s.perfect}</b><small>plan met in full</small></div>
-                <div className="sk-stat sk-freeze">
-                    <span>FREEZES</span><b>{fmt(s.freezes)}</b><small>earned {fmt(s.earned)}, spent {s.spent}</small>
-                    <div className="sk-bar" aria-hidden="true"><i style={{ width: `${(toNext || (s.freezes > 0 ? 1 : 0)) * 100}%` }} /></div>
-                </div>
-                <div className="sk-stat"><span>LONGEST</span><b>{s.longest}</b><small>days kept in a row</small></div>
-            </div>
-            <DayStrip s={s} />
-            <div className="sk-legend">
-                {STREAK_LEGEND.map(([k, label]) => (
-                    <span key={k}><i className={`sk-day ${k}`}>{GLYPH[k]}</i>{label}</span>
-                ))}
-            </div>
-            {open && (
-                <div className="sk-row">
-                    <span><b>{niceDay(open.date)} was missed</b><small>Joins {open.before} before and {open.after} after into {open.before + 1 + open.after} days.</small></span>
-                    <button className="sk-btn pri" onClick={() => setRepairing(true)}>Repair</button>
-                </div>
-            )}
-            {repairing && open && <RepairDialog s={s} repair={open} onClose={() => setRepairing(false)} />}
-            <details className="sk-rules">
-                <summary>How streaks work</summary>
-                <ul>
-                    <li><b>Streak</b>: every planned problem day with a solve adds one; a planned day with none breaks it. Rest, practice and break days neither add nor break.</li>
-                    <li><b>Perfect streak</b>: a day counts only when that day's planned problems and planned reviews were all done. A freeze or a miss ends it.</li>
-                    <li><b>Freezes</b> have no limit. An extra new problem beyond the plan earns 1. A review done ahead of its due date earns half, but only once in a row per problem, so repeating a review earns nothing.</li>
-                    <li>A freeze goes on a missed planned day, on any later day. A holiday or a sick day can be marked for today or yesterday; both are free and neutral.</li>
-                </ul>
-            </details>
-        </div>
-    );
-}

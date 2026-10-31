@@ -66,7 +66,7 @@ test("a written solution has line numbers", async ({ page }) => {
 
 test("the interface has no What's new list and no bulk 'already solved' section", async ({ page }) => {
     await page.goto("/settings");
-    await expect(page.getByText("COUNTING")).toBeVisible();
+    await expect(page.getByText("COUNTING", { exact: true })).toBeVisible();
     await expect(page.getByText(/what's new/i)).toHaveCount(0);
     await expect(page.getByText(/already solved before anneal/i)).toHaveCount(0);
     await page.goto("/dsa");

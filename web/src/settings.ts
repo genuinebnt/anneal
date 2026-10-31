@@ -1,6 +1,6 @@
 // Settings stored on the server: editor fonts (applied as CSS variables the editor theme reads) and the
 // app's accent colour (applied as data-accent on <html>; the palettes live in app.css).
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Accent, type EditorSettings, type Settings } from "./api";
 
@@ -134,46 +134,13 @@ export function useAppearance() {
   };
 }
 
-export type PageWidth = "narrow" | "wide";
-const WIDTH_KEY = "anneal-width";
-
-const readWidth = (): PageWidth => {
+// Pages are full width (the 2026 redesign removed the centred option). An older choice kept in this browser is cleared once.
+if (typeof document !== "undefined") {
+  delete document.documentElement.dataset.width;
   try {
-    return localStorage.getItem(WIDTH_KEY) === "wide" ? "wide" : "narrow";
+    localStorage.removeItem("anneal-width");
   } catch {
-    return "narrow";
+    // nothing kept, nothing to clear
   }
-};
-
-/** Sets how wide the main screens are (data-width on <html>) and remembers it in this browser. Reading screens ignore it. */
-export function applyWidth(width: PageWidth) {
-  if (width === "wide") document.documentElement.dataset.width = "wide";
-  else delete document.documentElement.dataset.width;
-  try {
-    localStorage.setItem(WIDTH_KEY, width);
-  } catch {
-    // the choice then lasts for this visit only
-  }
-  window.dispatchEvent(new Event("anneal-width"));
 }
 
-// Applied as soon as the module loads, so the first paint already has the chosen width.
-if (typeof document !== "undefined" && readWidth() === "wide") document.documentElement.dataset.width = "wide";
-
-/** The page width choice and a setter. */
-export function usePageWidth() {
-  const [width, setWidth] = useState<PageWidth>(readWidth);
-  // the header toggle and the account menu both set it: follow the one that did
-  useEffect(() => {
-    const sync = () => setWidth(document.documentElement.dataset.width === "wide" ? "wide" : "narrow");
-    window.addEventListener("anneal-width", sync);
-    return () => window.removeEventListener("anneal-width", sync);
-  }, []);
-  return {
-    width,
-    set: (next: PageWidth) => {
-      applyWidth(next);
-      setWidth(next);
-    },
-  };
-}

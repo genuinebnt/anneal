@@ -1026,6 +1026,7 @@ export const api = {
   markDay: (day: string, kind: StreakMarkKind) => request<Streaks>("POST", "/streaks/marks", { day, kind }),
   unmarkDay: (id: number) => request<Streaks>("DELETE", `/streaks/marks/${id}`),
   stats: () => request<ProgressStats>("GET", "/stats"),
+  system: () => request<SystemView>("GET", "/system"),
   reviews: () => request<ReviewsView>("GET", "/reviews"),
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),
   dsa: () => request<DsaOverview>("GET", "/dsa"),
@@ -1079,3 +1080,23 @@ export const api = {
 
 /** The stages that count towards a module's or the course's progress: challenges are extra practice with a tally of their own. */
 export const coreStages = <T extends { kind: string }>(stages: T[]): T[] => stages.filter((x) => x.kind !== "challenge");
+
+/** `GET /api/system`: the server's own numbers for the Analytics page. Host fields are null where they can't be read. */
+export interface SystemSample { t: number; cpu: number | null; load1: number | null; mem_used: number | null; swap_used: number | null }
+export interface SystemContainer { name: string; image: string; state: string; status: string; cpu: string | null; mem: string | null; mem_pct: string | null; net: string | null; block: string | null }
+export interface SystemHit { t: number; method: string; path: string; status: number; ms: number }
+export interface SystemMinute { t: number; n: number; errors: number; ms_sum: number; ms_max: number }
+export interface SystemView {
+  host: { hostname: string | null; os: string | null; kernel: string | null; cpus: number | null; uptime: number | null };
+  now: {
+    cpu: number | null;
+    load: [number, number, number] | null;
+    mem: { total: number; available: number; used: number } | null;
+    swap: { total: number; used: number } | null;
+    disk: { path: string; total: number; used: number; free: number } | null;
+  };
+  samples: SystemSample[];
+  containers: SystemContainer[] | null;
+  db: { size: number; connections: number; tables: [string, number][] };
+  app: { version: string; image: string | null; status: string | null; up: number; requests: number; errors: number; minutes: SystemMinute[]; recent: SystemHit[] };
+}

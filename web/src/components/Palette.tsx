@@ -5,14 +5,16 @@ import { api } from "../api";
 import { counted, newOn, niceDate, statusOf, WEEKDAYS } from "../dsa";
 import { getPref, setPref } from "../prefs";
 import { THEMES, applyTheme, storedTheme } from "../theme";
+import { ACCENTS, useAppearance } from "../settings";
+import { toggleTimer } from "../focusStore";
 import { toast } from "./toasts";
 import { useDialog } from "./useDialog";
 
 type Hit = { key: string; label: string; kind: string; color: string; go: () => void; meta?: string; rows?: [string, string][] };
 
 /** The order the groups are shown in. */
-const GROUPS = ["Now", "Recent", "Log", "Action", "Page", "Problem", "Stage", "Challenge", "Track"];
-const HEADINGS: Record<string, string> = { Now: "DO NEXT", Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
+const GROUPS = ["Now", "Recent", "Alike", "Log", "Action", "Page", "Problem", "Technique", "Company", "Stage", "Challenge", "Track"];
+const HEADINGS: Record<string, string> = { Alike: "LOOKS LIKE IT (SHARED TAGS)", Technique: "TECHNIQUES", Company: "COMPANIES", Now: "DO NEXT", Recent: "RECENT", Log: "LOG A PROBLEM", Action: "ACTIONS", Page: "PAGES", Problem: "PROBLEMS", Stage: "COURSE STAGES", Challenge: "COURSE CHALLENGES", Track: "RUST TRACKS" };
 
 /** 0 for no match. Every word must be found: at the start of the text or of a word scores most, anywhere inside less, and as scattered
  *  letters (a typo or an abbreviation, "twsm" for "two sum") least. */
@@ -42,8 +44,9 @@ function marked(label: string, words: string[]): ReactNode {
     return label.split(new RegExp(`(${found.join("|")})`, "ig")).map((part, i) => (i % 2 ? <mark key={i}>{part}</mark> : part));
 }
 
-/** ⌘K: pages, actions, problems, course stages and tracks. Fuzzy matching, grouped results, what you chose last on top, and a few shortcuts:
- *  `>` for pages and actions only, a number for a LeetCode problem, `log two sum` to log one. It reads what the app already loads. */
+/** ⌘K: pages, actions, problems, techniques, companies, course stages and tracks. Fuzzy matching, grouped results, what you chose last on
+ *  top, and a few shortcuts: `>` for pages and actions only, a number for a LeetCode problem, `log two sum` to log one, `~ two sum` for the
+ *  problems that look like it (shared tags). It reads what the app already loads. */
 export function Palette({ onClose }: { onClose: () => void }) {
     const nav = useNavigate();
     const qc = useQueryClient();
@@ -57,6 +60,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
     const dialog = useRef<HTMLDivElement>(null);
     useDialog(dialog, true, onClose);
     const [recent] = useState<string[]>(() => getPref<string[]>("palette.recent", []));
+    const appearance = useAppearance();
     useEffect(() => input.current?.focus(), []);
 
     const all = useMemo<Hit[]>(() => {
@@ -75,6 +79,10 @@ export function Palette({ onClose }: { onClose: () => void }) {
             { key: "p-rust", label: "Rust tracks", kind: "Page", color: "var(--vio)", go: go("p-rust", () => nav({ to: "/rust" })) },
             { key: "p-courses", label: "BusTub course", kind: "Page", color: "var(--grn)", go: go("p-courses", () => nav({ to: "/courses" })) },
             { key: "p-progress", label: "Progress", kind: "Page", color: "var(--fg)", go: go("p-progress", () => nav({ to: "/progress" })) },
+            { key: "p-graph", label: "Graph: where to start, looks like, path", kind: "Page", color: "var(--acc)", go: go("p-graph", () => nav({ to: "/dsa/graph" })) },
+            { key: "p-analytics", label: "Analytics: the VPS and the app", kind: "Page", color: "var(--fg)", go: go("p-analytics", () => nav({ to: "/analytics" })) },
+            { key: "a-timer", label: "Start or pause the focus timer", kind: "Action", color: "var(--fg)", meta: "the same timer as the header", go: go("a-timer", () => toggleTimer()) },
+            ...ACCENTS.filter((a) => a.id !== "custom").map((a): Hit => ({ key: `a-accent-${a.id}`, label: `Accent: ${a.label}`, kind: "Action", color: "var(--fg)", go: go(`a-accent-${a.id}`, () => appearance.set(a.id)) })),
             { key: "p-log", label: "Quick log (phone)", kind: "Page", color: "var(--acc)", go: go("p-log", () => nav({ to: "/log" })) },
             { key: "a-settings", label: "Settings", kind: "Action", color: "var(--fg)", go: go("a-settings", () => nav({ to: "/settings" })) },
             { key: "a-help", label: "Keyboard shortcuts", kind: "Action", color: "var(--fg)", go: go("a-help", () => window.dispatchEvent(new Event("anneal:help"))) },
@@ -97,6 +105,20 @@ export function Palette({ onClose }: { onClose: () => void }) {
             for (const m of p.modules)
                 for (const s of m.stages)
                     hits.push({ key: `s-${s.id}`, label: `${s.id} · ${s.title}`, kind: s.kind === "challenge" ? "Challenge" : "Stage", color: "var(--grn)", go: go(`s-${s.id}`, () => nav({ to: "/courses/$course/$stage", params: { course: "bustub", stage: s.id } })) });
+        // techniques open their card on the Learn tab; companies open Interview mode
+        const od = dsa.data;
+        if (od) {
+            for (const t of od.techniques) {
+                const pat = od.patterns.find((x) => x.name === t.pattern);
+                if (!pat) continue;
+                const ps = od.problems.filter((x) => x.technique === t.id && x.list_tag);
+                hits.push({ key: `te-${t.id}`, label: t.name, kind: "Technique", color: "var(--vio)", meta: `${t.pattern} · ${ps.filter((x) => x.state.solved).length}/${ps.length}`, go: go(`te-${t.id}`, () => nav({ to: "/dsa/patterns/$code", params: { code: pat.code }, hash: `t-${t.id.split(":")[1] ?? t.id}` })) });
+            }
+            const asked = new Map<string, number>();
+            for (const x of od.problems) for (const c of x.companies) asked.set(c.name, (asked.get(c.name) ?? 0) + 1);
+            for (const [name, n] of [...asked.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60))
+                hits.push({ key: `co-${name}`, label: name, kind: "Company", color: "var(--fg)", meta: `${n} asked`, go: go(`co-${name}`, () => nav({ to: "/dsa/company" })) });
+        }
         const today = dsa.data?.today ?? "";
         for (const p of dsa.data?.problems ?? []) {
             const st = today ? statusOf(p, today) : "new";
@@ -104,7 +126,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
                 rows: [["Difficulty", p.difficulty], ["Status", { new: "not attempted", retry: "attempted", due: "review due", solved: "solved" }[st]], ["Last tried", p.state.last_review ? niceDate(p.state.last_review.slice(0, 10), today) : "never"], ["Next review", p.state.due ? niceDate(p.state.due, today) : "none"], ...(p.companies.length ? [["Asked by", p.companies.slice(0, 3).map((c) => c.name).join(", ")] as [string, string]] : []), ...(p.premium ? [["Premium", "needs a subscription"] as [string, string]] : [])], go: go(`d-${p.id}`, () => nav({ to: "/d/$slug", params: { slug: p.slug } })) });
         }
         return hits;
-    }, [tracks.data, dsa.data, course.data, nav, onClose, recent]);
+    }, [tracks.data, dsa.data, course.data, nav, onClose, recent, appearance]);
 
     const shown = useMemo<Hit[]>(() => {
         const raw = q.trim().toLowerCase();
@@ -140,6 +162,21 @@ export function Palette({ onClose }: { onClose: () => void }) {
                     });
             if (hits.length) return hits;
         }
+        // "~ two sum": the problems that share the most LeetCode tags with the best match
+        if (raw.startsWith("~")) {
+            const rest = raw.slice(1).trim().split(/\s+/).filter(Boolean);
+            const ps = dsa.data?.problems ?? [];
+            const base = rest.length ? ps.map((p) => ({ p, s: score(`${p.title} ${p.number}`, rest) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s)[0]?.p : undefined;
+            if (base) {
+                return ps
+                    .filter((p) => p.id !== base.id)
+                    .map((p) => ({ p, k: p.tags.filter((t) => base.tags.includes(t)) }))
+                    .filter((x) => x.k.length > 0)
+                    .sort((a, b) => b.k.length - a.k.length || a.p.order - b.p.order)
+                    .slice(0, 12)
+                    .map(({ p, k }): Hit => ({ key: `al-${p.id}`, label: `${p.number} · ${p.title}`, kind: "Alike", color: "var(--acc)", meta: `${k.length} shared with ${base.title}`, rows: [["Shared tags", k.join(", ")], ["Difficulty", p.difficulty]], go: () => { onClose(); void nav({ to: "/d/$slug", params: { slug: p.slug } }); } }));
+            }
+        }
         const actionsOnly = raw.startsWith(">");
         const text = actionsOnly ? raw.slice(1).trim() : raw.replace(/^#/, "");
         const words = text.split(/\s+/).filter(Boolean);
@@ -168,7 +205,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
                     ref={input}
                     value={q}
                     onChange={(e) => setQ(e.target.value)}
-                    placeholder="Search, or type  > for actions, a number, log two sum…"
+                    placeholder="Search, or type  > for actions, a number, log two sum, ~ two sum…"
                     aria-label="Search"
                     autoComplete="off"
                     spellCheck={false}

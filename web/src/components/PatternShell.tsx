@@ -2,16 +2,18 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api } from "../api";
-import { counted } from "../dsa";
+import { counted, statusOf } from "../dsa";
 import { Header } from "./Header";
+import { Page3, RingTile, Tile } from "./layout";
 import { ResetTrack } from "./ResetTrack";
 
 export type PatternTab = "idea" | "learn" | "problems" | "practice";
 const KEYS: PatternTab[] = ["learn", "problems", "practice"];
 
-/** The frame every pattern page shares (docs/DSA.md, decision 31): the strip of all patterns, then Learn, Problems and
- *  Practice as tabs. Changing pattern keeps the tab; 1 2 3 switch tabs, [ and ] step through the patterns, Esc goes home. */
-export function PatternShell({ code, tab, children }: { code: string; tab: PatternTab; children: ReactNode }) {
+/** The frame every pattern page shares (docs/DSA.md, decision 31): the title with the pattern at a glance, then the three panels. The centre
+ *  starts with the strip of all patterns and the tabs (Idea, Learn, Problems, Practice) with Next, Reset and the pattern pager beside them.
+ *  Changing pattern keeps the tab; I and 1 2 3 switch tabs, [ and ] step through the patterns, Esc goes home. A tab passes its own side panels. */
+export function PatternShell({ code, tab, left, right, mini, children }: { code: string; tab: PatternTab; left?: ReactNode; right?: ReactNode; mini?: boolean; children: ReactNode }) {
     const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
     const navigate = useNavigate();
     const o = overview.data;
@@ -58,6 +60,7 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
         return [ps.filter((p) => p.state.solved).length, ps.length];
     };
     const [done, total] = pattern ? prog(pattern.code) : [0, 0];
+    const dueHere = pattern && o ? o.problems.filter((p) => p.pattern === pattern.code && statusOf(p, o.today) === "due").length : 0;
     const techniques = pattern && o ? o.techniques.filter((t) => t.pattern === pattern.name).length + (o.lesson_extras?.[pattern.name] ?? 0) : 0;
     const tabs: [PatternTab, string, string, boolean][] = [
         ...(pattern?.has_idea ? ([["idea", "Idea", "", true]] as [PatternTab, string, string, boolean][]) : []),
@@ -71,63 +74,86 @@ export function PatternShell({ code, tab, children }: { code: string; tab: Patte
     const prev = patterns.length ? patterns[(at + patterns.length - 1) % patterns.length] : undefined;
     const next = patterns.length ? patterns[(at + 1) % patterns.length] : undefined;
 
+    const tiles = pattern && (
+        <>
+            <RingTile p={total ? (done / total) * 100 : 0} center={`${done}/${total}`} em="In the lists" strong={total > 0 && done === total ? "Pattern done" : `${total - done} to go`} small="NeetCode 150" title="Solved of the NeetCode 150 problems in this pattern" />
+            <Tile em="Techniques" strong={techniques} small="on the Learn page" />
+            <Tile em="Practice" strong={<>{pattern.practice_solved}<span>/{pattern.practice_total}</span></>} small={pattern.practice_solved === 0 ? "not started" : "extra problems"} />
+            <Tile em="Reviews due" strong={dueHere} hot={dueHere > 0} color="var(--vio)" to={{ to: "/dsa/review" }} small={dueHere > 0 ? <><span className="ly-dotp" aria-hidden="true" />Review now →</> : "nothing due here"} />
+        </>
+    );
+
+    const center = (
+        <>
+            {patterns.length > 0 && (
+                <div className="ps-strip" ref={strip} role="navigation" aria-label="Patterns">
+                    {prev && <Link className="arr" {...linkTo(prev.code, tab)} title="Previous pattern" aria-label="Previous pattern">‹</Link>}
+                    {patterns.map((p, i) => (
+                        <Link key={p.code} className={`pchip${i === at ? " on" : ""}`} {...linkTo(p.code, tab)} aria-current={i === at ? "page" : undefined}>
+                            <span className="ringm" style={{ "--p": `${(() => { const [d, t] = prog(p.code); return t ? Math.round((d / t) * 100) : 0; })()}%` } as CSSProperties}><span>{i + 1}</span></span>
+                            {p.name}
+                        </Link>
+                    ))}
+                    {next && <Link className="arr" {...linkTo(next.code, tab)} title="Next pattern" aria-label="Next pattern">›</Link>}
+                </div>
+            )}
+            <div className="ps-bar">
+                <div className="ps-tabs" role="tablist">
+                    {tabs.map(([k, label, n, enabled]) =>
+                        !enabled ? (
+                            <span key={k} role="tab" aria-disabled="true" className="off">{label}<small>{n}</small></span>
+                        ) : (
+                            <Link key={k} role="tab" aria-selected={k === tab} className={k === tab ? "on" : ""} {...linkTo(pattern?.code ?? code, k)}>
+                                {label}{n && <small>{n}</small>}<kbd>{k === "idea" ? "I" : KEYS.indexOf(k) + 1}</kbd>
+                            </Link>
+                        ),
+                    )}
+                </div>
+                <div className="ps-acts">
+                    {nextProblem && (
+                        <Link className="ps-next" to="/d/$slug" params={{ slug: nextProblem.slug }} title={`Next unsolved problem in ${pattern?.name}`}>
+                            <em>Next</em> {nextProblem.title}
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" /></svg>
+                        </Link>
+                    )}
+                    {pattern && (
+                        <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this pattern">
+                            Reset progress
+                        </button>
+                    )}
+                    <span className="hintkeys">
+                        {prev && <Link to={linkTo(prev.code, tab).to} params={linkTo(prev.code, tab).params} aria-label="Previous pattern" title="Previous pattern ([)">‹</Link>}
+                        <em><kbd>[</kbd> <kbd>]</kbd></em>
+                        {next && <Link to={linkTo(next.code, tab).to} params={linkTo(next.code, tab).params} aria-label="Next pattern" title="Next pattern (])">›</Link>}
+                    </span>
+                </div>
+            </div>
+            {pattern && resetOpen && <ResetTrack slug={pattern.slug} name={pattern.name} onDone={() => setResetOpen(false)} />}
+            {o && !pattern ? (
+                <p className="notice bad">
+                    There is no pattern called "{code}". <Link to="/dsa">Back to the problems</Link>
+                </p>
+            ) : (
+                children
+            )}
+        </>
+    );
+
+    const name = pattern?.name ?? code;
     return (
         <>
             <Header area="dsa" />
-            <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <div className="wrap ps-wrap">
-                    <div className="eyebrow">
-                        <Link to="/dsa" style={{ color: "var(--ca)" }}>DSA</Link>
-                        <span>/</span>
-                        <Link to="/dsa" style={{ color: "var(--ca)" }}>PATTERNS</Link>
-                        <span>/</span>
-                        <span style={{ color: "var(--ca)" }}>{(pattern?.name ?? code).toUpperCase()}</span>
-                    </div>
-                    <h1 className="h1 md">{pattern?.name ?? "Patterns"}</h1>
-                    {patterns.length > 0 && (
-                        <div className="ps-strip" ref={strip} role="navigation" aria-label="Patterns">
-                            {prev && <Link className="arr" {...linkTo(prev.code, tab)} title="Previous pattern" aria-label="Previous pattern">‹</Link>}
-                            {patterns.map((p, i) => (
-                                <Link key={p.code} className={`pchip${i === at ? " on" : ""}`} {...linkTo(p.code, tab)} aria-current={i === at ? "page" : undefined}>
-                                    <span className="ringm" style={{ "--p": `${(() => { const [d, t] = prog(p.code); return t ? Math.round((d / t) * 100) : 0; })()}%` } as CSSProperties}><span>{i + 1}</span></span>
-                                    {p.name}
-                                </Link>
-                            ))}
-                            {next && <Link className="arr" {...linkTo(next.code, tab)} title="Next pattern" aria-label="Next pattern">›</Link>}
-                        </div>
-                    )}
-                    <div className="ps-tabs" role="tablist">
-                        {tabs.map(([k, label, n, enabled]) =>
-                            !enabled ? (
-                                <span key={k} role="tab" aria-disabled="true" className="off">{label}<small>{n}</small></span>
-                            ) : (
-                                <Link key={k} role="tab" aria-selected={k === tab} className={k === tab ? "on" : ""} {...linkTo(pattern?.code ?? code, k)}>
-                                    {label}<small>{n}</small><kbd>{k === "idea" ? "I" : KEYS.indexOf(k) + 1}</kbd>
-                                </Link>
-                            ),
-                        )}
-                        {pattern && (
-                            <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this pattern">
-                                Reset progress
-                            </button>
-                        )}
-                        {nextProblem && (
-                            <Link className="ps-next" to="/d/$slug" params={{ slug: nextProblem.slug }} title={`Next unsolved problem in ${pattern?.name}`}>
-                                Next: {nextProblem.title} ›
-                            </Link>
-                        )}
-                        <span className="hintkeys"><kbd>[</kbd> <kbd>]</kbd> change pattern</span>
-                    </div>
-                    {pattern && resetOpen && <ResetTrack slug={pattern.slug} name={pattern.name} onDone={() => setResetOpen(false)} />}
-                    {o && !pattern ? (
-                        <p className="notice bad">
-                            There is no pattern called "{code}". <Link to="/dsa">Back to the problems</Link>
-                        </p>
-                    ) : (
-                        children
-                    )}
-                </div>
-            </main>
+            <div className={mini ? "ps-mini" : undefined} style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+                <Page3
+                    crumb={[<Link to="/dsa">DSA</Link>, <Link to="/dsa">Patterns</Link>, name]}
+                    title={pattern?.name ?? "Patterns"}
+                    tiles={tiles}
+                    left={left}
+                    right={right}
+                    center={center}
+                    label={name}
+                />
+            </div>
         </>
     );
 }

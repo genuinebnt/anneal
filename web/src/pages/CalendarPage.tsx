@@ -5,7 +5,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type StreakDay, type Streaks, type DayKind, type PlanDay, type PlanDiff, type PlanPreview, type PlanRules, type PlanTopic, type PlanView } from "../api";
 import { Header } from "../components/Header";
-import { MarkChoices, useStreaks } from "../components/Streaks";
+import { DayStrip, GLYPH_OF, MarkChoices, STREAK_LEGEND, fmt as fmtN, niceDay, offered, useStreaks } from "../components/Streaks";
+import { Page3, Panel, Tile } from "../components/layout";
 
 /* ---------- dates ---------- */
 const DAY = 86400000;
@@ -29,7 +30,7 @@ interface Snapshot {
     rules: PlanRules;
     overrides: Overrides;
 }
-type Tab = "rules" | "day" | "history";
+type Tab = "rules" | "day" | "history" | "streak";
 type View = "calendar" | "timeline";
 
 /** The calendar edits that turn `from` into `to`, for a preview: a date to its kind, or null where it was cleared. */
@@ -231,134 +232,184 @@ export function CalendarPage() {
     const s = p.summary;
     const spare = s.finish && s.finish_by ? days(s.finish, s.finish_by) : null;
     const dd = s.finish && s.baseline_finish ? days(s.baseline_finish, s.finish) : 0;
-    const explicitTargets = p.topics.filter((t) => p.rules.targets[t.id] && t.status);
     const topicName = (code: string) => p.topics.find((t) => t.id === code)?.name ?? code;
     const planWord = p.plans.find((x) => x.id === p.active);
+
+    const sk = streaks.data;
+    const repairable = sk ? sk.repairs.filter((r) => r.before > 0 && r.date >= add(today, -7)).length : 0;
+    const tiles = (
+        <>
+            <Tile em="You finish" strong={<span className="c-tfin">{s.finish ? full(s.finish) : "beyond the horizon"}</span>} small={<>
+                {dd ? <em className={dd > 0 ? "c-up" : "c-dn"}>{dd > 0 ? "+" : ""}{dd} days vs the default plan</em> : null}
+                {dd && spare !== null ? " · " : ""}
+                {spare === null ? "" : spare >= 0 ? `${spare >= 14 ? `${Math.round(spare / 7)} weeks` : `${spare} days`} before ${short(s.finish_by!)}` : `${-spare} days after ${short(s.finish_by!)}`}
+            </>} />
+            <Tile em="Still to do" strong={s.left} small={`${s.main} main${s.practice ? ` · ${s.practice} practice` : ""} · Premium ${s.premium ? "in" : "out"}`} />
+            <Tile em="Pace" strong={<>{s.per_week.toFixed(1)}<span> a week</span></>} small={`${s.solve_days_28} problem days in the next four weeks`} />
+            {sk && (
+                <button type="button" className="ly-tl c-stk" onClick={() => setTab("streak")} title="Open the streak tab">
+                    <em>Streak</em>
+                    <span className="c-stk3">
+                        <span className="k1" title="Planned days kept in a row"><FlameIcon /><b>{sk.streak}</b><small>days</small></span>
+                        <span className="k2" title="Days the plan was met in full, in a row"><StarIcon /><b>{sk.perfect}</b><small>perfect</small></span>
+                        <span className="k3" title="Freezes to mend a missed day"><SnowIcon /><b>{fmtN(sk.freezes)}</b><small>freezes</small></span>
+                    </span>
+                    <small>longest {sk.longest}{repairable ? ` · ${repairable} day${repairable > 1 ? "s" : ""} can be repaired` : ""}</small>
+                </button>
+            )}
+        </>
+    );
+
+    const left = (
+        <>
+            <Panel title="Plans" aside={<Link to="/dsa/plan">Routine and pace →</Link>}>
+                <div className="c-plans">
+                    {p.plans.map((x) => (
+                        <button key={x.id} className={`c-pl${x.id === p.active ? " on" : ""}`} aria-pressed={x.id === p.active} onClick={() => x.id !== p.active && api.setActivePlan(x.id).then(refresh).then(() => setSel([]))}>
+                            <b>{x.name}</b>
+                            <small>{x.problems} problems · {x.finish ? short(x.finish) : "—"}{x.late ? <em> · ⚠ {x.late} late</em> : null}</small>
+                        </button>
+                    ))}
+                    {naming === null ? (
+                        <button className="c-pl add" onClick={() => setNaming("")}><b>+ Save as new plan</b><small>keeps these rules and days</small></button>
+                    ) : (
+                        <form className="c-pl add on" onSubmit={(e) => { e.preventDefault(); if (naming.trim()) void api.createPlan(naming.trim()).then(refresh).then(() => setNaming(null)).catch((er) => setError((er as Error).message)); }}>
+                            <input autoFocus placeholder="Name, e.g. Amazon loop" value={naming} maxLength={60} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setNaming(null)} />
+                            <small>Enter to save · Esc to cancel</small>
+                        </form>
+                    )}
+                </div>
+            </Panel>
+            <Panel title="Quick changes">
+                <div className="c-quick">
+                    <button disabled={busy} onClick={() => quick("wp")}>Next week: practice</button>
+                    <button disabled={busy} onClick={() => quick("wb")}>Next week: break</button>
+                    <button disabled={busy} onClick={() => quick("we")}>This weekend off</button>
+                </div>
+            </Panel>
+            <Panel title="Legend">
+                <div className="c-key">
+                    <i className="sw solo" /><span>Solved on my own</span><i className="sw help" /><span>Solved with help</span><i className="sw fail" /><span>Attempted</span>
+                    <i className="sw miss" /><span>Planned, not done</span><i className="sw pr" /><span>Practice day (upcoming)</span><i className="sw br" /><span>Break</span><i className="sw td" /><span>Today</span>
+                    <span className="c-kg st"><StarIcon /></span><span>Perfect: the whole plan done</span><span className="c-kg fz"><SnowIcon /></span><span>Repaired with a freeze</span>
+                </div>
+            </Panel>
+        </>
+    );
+
+    const center = (
+        <>
+            <div className="c-top">
+                <h2>{view === "calendar" ? fmt(`${m}-01`, { month: "long", year: "numeric" }) : "Topics"}</h2>
+                {view === "calendar" && (() => {
+                    let n = 0, r = 0, off = 0;
+                    for (let i = 0; i < new Date(Date.UTC(+m.slice(0, 4), +m.slice(5), 0)).getUTCDate(); i++) {
+                        const d = byDate.get(add(`${m}-01`, i));
+                        if (!d) continue;
+                        n += d.new?.length ?? d.past?.problems?.length ?? 0;
+                        r += d.reviews?.length ?? d.past?.reviews ?? 0;
+                        if (d.kind === "break") off++;
+                    }
+                    return <span className="c-msum" title="Problems and reviews planned or done this month">{n} problem{n === 1 ? "" : "s"} · {r} review{r === 1 ? "" : "s"}{off ? ` · ${off} day${off === 1 ? "" : "s"} off` : ""}</span>;
+                })()}
+                {view === "calendar" && (
+                    <span className="c-nav">
+                        <button className="c-nb" aria-label="Previous month" onClick={() => setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5) - 2, 1)).slice(0, 7))}>‹</button>
+                        <button className="c-nb" aria-label="Next month" onClick={() => setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5), 1)).slice(0, 7))}>›</button>
+                        <button className="c-tb" onClick={() => { setMonth(today.slice(0, 7)); setSel([today]); setTab("day"); }}>Today</button>
+                    </span>
+                )}
+                <div className="c-views">
+                    <button className={view === "calendar" ? "on" : ""} onClick={() => setView("calendar")}>Calendar</button>
+                    <button className={view === "timeline" ? "on" : ""} onClick={() => setView("timeline")}>Timeline</button>
+                </div>
+                <span className="sp" />
+                <span className="c-hint"><kbd>←</kbd><kbd>→</kbd> month <kbd>T</kbd> today <kbd>Z</kbd> undo</span>
+                <button className="c-tb" disabled={!undo.length || busy} onClick={() => void doUndo()}>↶ Undo</button>
+                <button className="c-tb" disabled={!Object.keys(p.overrides).length || busy} onClick={() => void commit(p.rules, {}, "Calendar")}>Clear day edits</button>
+            </div>
+            {error && <p className="notice bad">{error}</p>}
+            {view === "calendar" ? (
+                <>
+                    <Bar p={p} sel={selDays} note={tab === "rules" ? null : note} hover={hover} busy={busy} onKind={setKind} onHover={(k) => (k ? void showImpact(k) : setHover(null))} kindOfRoutine={kindOfRoutine} />
+                    <Grid p={p} byDate={byDate} st={stByDate} month={m} gridStart={gridStart} today={today} sel={sel} onPick={pickDay} onDown={(d) => { if (d >= today) drag.current = { a: d, last: d, moved: false }; }} onOver={overDay} onWeek={(ws) => { const ds = range(ws, add(ws, 6)); setSel(ds); setAnchor(ds[0] ?? null); }} />
+                    <Load p={p} byDate={byDate} month={m} today={today} />
+                </>
+            ) : (
+                <Timeline p={p} today={today} />
+            )}
+        </>
+    );
+
+    const right = (
+        <section className="ly-pn c-card">
+            <div className="c-tabs" role="tablist">
+                {(["rules", "day", "history", "streak"] as Tab[]).map((t) => (
+                    <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t === "rules" ? "Rules" : t === "day" ? (sel.length ? "Day" : "Today") : t === "history" ? "History" : "Streak"}</button>
+                ))}
+            </div>
+            {tab === "rules" && <Rules p={p} note={note} open={open} setOpen={setOpen} setRules={setRules} topicName={topicName} commit={commit} busy={busy} onDelete={planWord && planWord.id !== "default" ? () => api.deletePlan(planWord.id).then(refresh) : undefined} />}
+            {tab === "day" && <DayDetail p={p} date={selDays[0] ?? today} today={today} byDate={byDate} streaks={streaks.data} />}
+            {tab === "history" && <History p={p} />}
+            {tab === "streak" && <StreakTab onPick={(d) => { setMonth(d.slice(0, 7)); setSel([d]); setTab("day"); }} />}
+        </section>
+    );
 
     return (
         <>
             <Header area="dsa" />
-            <main className="page c-page">
-                <div className="c-wrap" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                    <div className="c-title">
-                        <div>
-                            <div className="eyebrow"><Link to="/dsa" style={{ color: "var(--ca)" }}>DSA</Link><span>/</span><span>CALENDAR</span></div>
-                            <h1 className="c-h1">Plan</h1>
-                        </div>
-                        <Link className="c-link" to="/dsa/plan">Routine and pace ›</Link>
-                    </div>
-
-                    <div className="c-plans">
-                        {p.plans.map((x) => (
-                            <button key={x.id} className={`c-pl${x.id === p.active ? " on" : ""}`} onClick={() => x.id !== p.active && api.setActivePlan(x.id).then(refresh).then(() => setSel([]))}>
-                                <b>{x.name}</b>
-                                <small>{x.problems} problems · {x.finish ? short(x.finish) : "—"}{x.late ? <em> · ⚠ {x.late} late</em> : null}</small>
-                            </button>
-                        ))}
-                        {naming === null ? (
-                            <button className="c-pl add" onClick={() => setNaming("")}><b>+ Save as new plan</b><small>keeps these rules and days</small></button>
-                        ) : (
-                            <form className="c-pl add on" onSubmit={(e) => { e.preventDefault(); if (naming.trim()) void api.createPlan(naming.trim()).then(refresh).then(() => setNaming(null)).catch((er) => setError((er as Error).message)); }}>
-                                <input autoFocus placeholder="Name, e.g. Amazon loop" value={naming} maxLength={60} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setNaming(null)} />
-                                <small>Enter to save · Esc to cancel</small>
-                            </form>
-                        )}
-                    </div>
-
-                    <div className="c-sum">
-                        <div className="c-tile big">
-                            <small>YOU FINISH</small>
-                            <b>{s.finish ? full(s.finish) : "beyond the horizon"}</b>
-                            <span>
-                                {dd ? <em className={dd > 0 ? "up" : "dn"}>{dd > 0 ? "+" : ""}{dd} days vs the default plan</em> : null}
-                                {dd && spare !== null ? " · " : ""}
-                                {spare === null ? "" : spare >= 0 ? `${spare >= 14 ? `${Math.round(spare / 7)} weeks` : `${spare} days`} before ${short(s.finish_by!)}` : `${-spare} days after ${short(s.finish_by!)}`}
-                            </span>
-                        </div>
-                        <div className="c-tile">
-                            <small>STILL TO DO</small>
-                            <b>{s.left}<i> problems</i></b>
-                            <span>{s.main} main{s.practice ? ` · ${s.practice} practice` : ""} · Premium {s.premium ? "in" : "out"}</span>
-                        </div>
-                        <div className="c-tile">
-                            <small>PACE</small>
-                            <b>{s.per_week.toFixed(1)}<i> a week</i></b>
-                            <span>{s.solve_days_28} problem days in the next four weeks</span>
-                        </div>
-                        <div className="c-tile wide">
-                            <small>TARGETS</small>
-                            {explicitTargets.length || p.rules.finish_by || s.finish_by ? (
-                                <div className="c-tcs">
-                                    {explicitTargets.map((t) => (
-                                        <span key={t.id} className={`c-tc ${t.status!.late ? "bad" : "ok"}`} title={`${t.name} by ${short(p.rules.targets[t.id] ?? "")}`}>
-                                            <i style={{ background: hue(t.id) }} />{t.name}<b>{t.status!.late ? (t.status!.late >= 9999 ? "never" : `${t.status!.late}d late`) : `${t.status!.slack}d spare`}</b>
-                                        </span>
-                                    ))}
-                                    <span className={`c-tc ${spare !== null && spare < 0 ? "bad" : "ok"}`}><i style={{ background: "var(--dim)" }} />Everything<b>{spare === null ? "—" : spare >= 0 ? `${spare}d spare` : `${-spare}d late`}</b></span>
-                                </div>
-                            ) : <span>No targets yet. Add one in Rules.</span>}
-                        </div>
-                    </div>
-
-                    <div className="c-top">
-                        <h2>{view === "calendar" ? fmt(`${m}-01`, { month: "long", year: "numeric" }) : "Topics"}</h2>
-                        {view === "calendar" && (() => {
-                            let n = 0, r = 0, off = 0;
-                            for (let i = 0; i < new Date(Date.UTC(+m.slice(0, 4), +m.slice(5), 0)).getUTCDate(); i++) {
-                                const d = byDate.get(add(`${m}-01`, i));
-                                if (!d) continue;
-                                n += d.new?.length ?? d.past?.problems?.length ?? 0;
-                                r += d.reviews?.length ?? d.past?.reviews ?? 0;
-                                if (d.kind === "break") off++;
-                            }
-                            return <span className="c-msum" title="Problems and reviews planned or done this month">{n} problem{n === 1 ? "" : "s"} · {r} review{r === 1 ? "" : "s"}{off ? ` · ${off} day${off === 1 ? "" : "s"} off` : ""}</span>;
-                        })()}
-                        {view === "calendar" && (
-                            <span className="c-nav">
-                                <button className="c-nb" aria-label="Previous month" onClick={() => setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5) - 2, 1)).slice(0, 7))}>‹</button>
-                                <button className="c-nb" aria-label="Next month" onClick={() => setMonth(iso(Date.UTC(+m.slice(0, 4), +m.slice(5), 1)).slice(0, 7))}>›</button>
-                                <button className="c-tb" onClick={() => { setMonth(today.slice(0, 7)); setSel([today]); setTab("day"); }}>Today</button>
-                            </span>
-                        )}
-                        <div className="c-views">
-                            <button className={view === "calendar" ? "on" : ""} onClick={() => setView("calendar")}>Calendar</button>
-                            <button className={view === "timeline" ? "on" : ""} onClick={() => setView("timeline")}>Timeline</button>
-                        </div>
-                        <span className="sp" />
-                        <span className="c-hint"><kbd>←</kbd><kbd>→</kbd> month <kbd>T</kbd> today <kbd>Z</kbd> undo</span>
-                        <button className="c-tb" disabled={!undo.length || busy} onClick={() => void doUndo()}>↶ Undo</button>
-                        <button className="c-tb" disabled={!Object.keys(p.overrides).length || busy} onClick={() => void commit(p.rules, {}, "Calendar")}>Clear day edits</button>
-                    </div>
-                    {error && <p className="notice bad">{error}</p>}
-
-                    <div className="c-layout">
-                        <div className="c-main">
-                            {view === "calendar" ? (
-                                <>
-                                    <Bar p={p} sel={selDays} note={tab === "rules" ? null : note} hover={hover} busy={busy} onKind={setKind} onHover={(k) => (k ? void showImpact(k) : setHover(null))} onQuick={quick} kindOfRoutine={kindOfRoutine} />
-                                    <Grid p={p} byDate={byDate} st={stByDate} month={m} gridStart={gridStart} today={today} sel={sel} onPick={pickDay} onDown={(d) => { if (d >= today) drag.current = { a: d, last: d, moved: false }; }} onOver={overDay} onWeek={(ws) => { const ds = range(ws, add(ws, 6)); setSel(ds); setAnchor(ds[0] ?? null); }} />
-                                    <Load p={p} byDate={byDate} month={m} today={today} />
-                                </>
-                            ) : (
-                                <Timeline p={p} today={today} />
-                            )}
-                        </div>
-                        <aside className="c-rail">
-                            <div className="c-card">
-                                <div className="c-tabs" role="tablist">
-                                    {(["rules", "day", "history"] as Tab[]).map((t) => (
-                                        <button key={t} role="tab" className={tab === t ? "on" : ""} onClick={() => setTab(t)}>{t === "rules" ? "Rules" : t === "day" ? (sel.length ? "Day" : "Today") : "History"}</button>
-                                    ))}
-                                </div>
-                                {tab === "rules" && <Rules p={p} note={note} open={open} setOpen={setOpen} setRules={setRules} topicName={topicName} commit={commit} busy={busy} onDelete={planWord && planWord.id !== "default" ? () => api.deletePlan(planWord.id).then(refresh) : undefined} />}
-                                {tab === "day" && <DayDetail p={p} date={selDays[0] ?? today} today={today} byDate={byDate} streaks={streaks.data} />}
-                                {tab === "history" && <History p={p} />}
-                            </div>
-                        </aside>
-                    </div>
-                </div>
-            </main>
+            <div className="c-wrap c-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+                <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Calendar"]} title="Plan" sub="Your days, reviews and streak. Click a day to see it, change it or repair it." tiles={tiles} left={left} center={center} right={right} label="Calendar" />
+            </div>
         </>
+    );
+}
+
+const FlameIcon = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 1.8c.4 2.2 3.7 3.6 3.7 7.1A3.7 3.7 0 0 1 8 12.7a3.7 3.7 0 0 1-3.7-3.8c0-1.6.8-2.6 1.6-3.4.2 1 .7 1.7 1.4 2.1C7.2 5.6 7.4 3.6 8 1.8z" /></svg>;
+const StarIcon = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="m8 1.8 1.9 3.9 4.2.6-3 3 .7 4.2L8 11.5l-3.8 2 .7-4.2-3-3 4.2-.6z" /></svg>;
+const SnowIcon = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M8 1.5v13M2.4 4.8l11.2 6.4M2.4 11.2l11.2-6.4M6.3 2.6 8 4l1.7-1.4M6.3 13.4 8 12l1.7 1.4" /></svg>;
+
+/** The Streak tab: the four numbers, the freeze bar, the last four weeks (a day opens on the calendar) and how streaks work. */
+function StreakTab({ onPick }: { onPick: (date: string) => void }) {
+    const q = useStreaks();
+    const s = q.data;
+    if (!s) return <Skeleton lines={4} />;
+    const toNext = s.freezes % 1;
+    const open = offered(s)[0];
+    return (
+        <div className="sk-box c-sk">
+            <div className="sk-stats">
+                <div className="sk-stat sk-streak"><span>STREAK</span><b>{s.streak}</b><small>planned days kept</small></div>
+                <div className="sk-stat sk-perfect"><span>PERFECT</span><b>{s.perfect}</b><small>plan met in full</small></div>
+                <div className="sk-stat sk-freeze">
+                    <span>FREEZES</span><b>{fmtN(s.freezes)}</b><small>earned {fmtN(s.earned)}, spent {s.spent}</small>
+                    <div className="sk-bar" aria-hidden="true"><i style={{ width: `${(toNext || (s.freezes > 0 ? 1 : 0)) * 100}%` }} /></div>
+                </div>
+                <div className="sk-stat"><span>LONGEST</span><b>{s.longest}</b><small>days kept in a row</small></div>
+            </div>
+            <span className="ly-lab">The last four weeks</span>
+            <DayStrip s={s} onPick={onPick} />
+            <div className="sk-legend">
+                {STREAK_LEGEND.map(([k, label]) => (
+                    <span key={k}><i className={`sk-day ${k}`}>{GLYPH_OF[k]}</i>{label}</span>
+                ))}
+            </div>
+            {open && (
+                <div className="sk-row">
+                    <span><b>{niceDay(open.date)} was missed</b><small>Joins {open.before} before and {open.after} after into {open.before + 1 + open.after} days.</small></span>
+                    <button className="sk-btn pri" onClick={() => onPick(open.date)}>Repair</button>
+                </div>
+            )}
+            <details className="sk-rules">
+                <summary>How streaks work</summary>
+                <ul>
+                    <li><b>Streak</b>: every planned problem day with a solve adds one; a planned day with none breaks it. Rest, practice and break days neither add nor break.</li>
+                    <li><b>Perfect streak</b>: a day counts only when that day's planned problems and planned reviews were all done. A freeze or a miss ends it.</li>
+                    <li><b>Freezes</b> have no limit. An extra new problem beyond the plan earns 1. A review done ahead of its due date earns half, but only once in a row per problem, so repeating a review earns nothing.</li>
+                    <li>A freeze goes on a missed planned day, on any later day. A holiday or a sick day can be marked for today or yesterday; both are free and neutral.</li>
+                </ul>
+            </details>
+        </div>
     );
 }
 
@@ -431,7 +482,7 @@ function Cell({ d, p, out, today, st, selected, onPick, onDown, onOver }: { st?:
     }
     return (
         <button className={cls.filter(Boolean).join(" ")} style={topic ? ({ "--th": hue(topic) } as CSSProperties) : undefined} onClick={(e) => onPick(d.date, e)} onMouseDown={(e) => e.button === 0 && !e.shiftKey && onDown(d.date)} onMouseOver={() => onOver(d.date)}>
-            <div className="n"><span>{Number(d.date.slice(8))}</span><span className="k">{d.edited && <i className="pin" title="Your change">✎</i>} {d.date === today ? "TODAY" : kind}</span></div>
+            <div className="n"><span>{Number(d.date.slice(8))}</span><span className="k">{d.edited && <i className="pin" title="Your change">✎</i>} {d.date === today ? "TODAY" : kind}</span>{st?.state === "perfect" && <span className="c-pf" title="Perfect: the whole plan done"><StarIcon /></span>}{st?.state === "frozen" && <span className="c-pf fz" title="Repaired with a freeze"><SnowIcon /></span>}</div>
             {title && <div className="t">{title}</div>}
             {tag && <div className="tg"><i />{tag}</div>}
             {d.flags?.length ? <div className="flag">⚑ {d.flags[0]} due</div> : null}
@@ -464,23 +515,10 @@ function Load({ p, byDate, month, today }: { p: PlanView; byDate: Map<string, Pl
     );
 }
 
-function Bar({ p, sel, note, hover, busy, onKind, onHover, onQuick, kindOfRoutine }: { p: PlanView; sel: string[]; note: string | null; hover: string | null; busy: boolean; onKind: (k: DayKind | "routine") => void; onHover: (k: DayKind | "routine" | null) => void; onQuick: (w: "wp" | "wb" | "we") => void; kindOfRoutine: (d: string) => DayKind }) {
+function Bar({ p, sel, note, hover, busy, onKind, onHover, kindOfRoutine }: { p: PlanView; sel: string[]; note: string | null; hover: string | null; busy: boolean; onKind: (k: DayKind | "routine") => void; onHover: (k: DayKind | "routine" | null) => void; kindOfRoutine: (d: string) => DayKind }) {
     void kindOfRoutine;
     const noteEl = note ? <div className="c-note">{note}</div> : null;
-    if (!sel.length) {
-        return (
-            <div className="c-bar">
-                {noteEl}
-                <div className="ln">
-                    <div className="c-seg q">
-                        <button disabled={busy} onClick={() => onQuick("wp")}>Next week: practice</button>
-                        <button disabled={busy} onClick={() => onQuick("wb")}>Next week: break</button>
-                        <button disabled={busy} onClick={() => onQuick("we")}>This weekend off</button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
+    if (!sel.length) return noteEl ? <div className="c-bar">{noteEl}</div> : <p className="c-tip">Click a day to select it; drag or Shift-click for more. Then make them problem, practice or break days.</p>;
     const kinds = new Set(sel.map((d) => p.days.find((x) => x.date === d)?.kind));
     const cur = kinds.size === 1 ? [...kinds][0] : null;
     const label = sel.length === 1 ? long(sel[0]!) : `${long(sel[0]!)} – ${long(sel[sel.length - 1]!)}`;

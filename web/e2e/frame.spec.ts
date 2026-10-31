@@ -37,9 +37,12 @@ test("the accent picker sets a deep colour or any colour, the page follows, and 
     await expect(page.locator("html")).toHaveAttribute("data-accent", "red");
     await expect.poll(async () => (await (await request.get("/api/settings")).json()).appearance.accent).toBe("red");
     // any colour: its hue is kept, its lightness held readable
-    await page.getByLabel("Pick any colour").fill("#2266ff");
+    // a colour other than the one kept from before, so the picker really changes
+    const picker = page.getByLabel("Pick any colour");
+    const colour = (await picker.inputValue()) === "#2266ff" ? "#22aa66" : "#2266ff";
+    await picker.fill(colour);
     await expect(page.locator("html")).toHaveAttribute("data-accent", "custom");
-    await expect.poll(async () => (await (await request.get("/api/settings")).json()).appearance).toEqual({ accent: "custom", custom: "#2266ff" });
+    await expect.poll(async () => (await (await request.get("/api/settings")).json()).appearance).toEqual({ accent: "custom", custom: colour });
     const acc = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--acc"));
     expect(acc.length).toBeGreaterThan(3);
     // back to the default

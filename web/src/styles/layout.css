@@ -1,0 +1,121 @@
+/* The page frame of the 2026 redesign: a title row with summary tiles, then three panels (left, centre, right).
+   Under 1320px the right panel moves below the centre; under 900px it is one column, the left panel is a drawer
+   opened from a bar under the header. Every class is ly- prefixed (short names collide with older stylesheets). */
+:root{--pw:100%;--pw-lg:100%;--ly-lw:clamp(244px,17vw,300px);--ly-rw:clamp(270px,20vw,350px)}
+
+.ly-page{padding:18px max(20px,env(safe-area-inset-right,0px)) 96px max(20px,env(safe-area-inset-left,0px))}
+.ly-head{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px}
+.ly-ttl{display:grid;gap:6px;min-width:0}
+.ly-crumb{font:600 11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--acc);display:flex;gap:8px;flex-wrap:wrap}
+.ly-crumb a{color:inherit}.ly-crumb a:hover{text-decoration:underline;text-underline-offset:3px}
+.ly-crumb i{font-style:normal;color:var(--dim)}
+.ly-h1{margin:0;font-size:30px;line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
+.ly-sub{margin:0;color:var(--mut);max-width:70ch;font-size:14px}
+.ly-tiles{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+
+/* summary tiles */
+.ly-tl{display:grid;gap:2px;align-content:start;min-width:128px;padding:11px 15px;border:1px solid var(--line2);border-radius:14px;background:var(--panel);text-align:left;transition:translate .3s var(--ease),border-color .2s,box-shadow .3s}
+a.ly-tl:hover,button.ly-tl:hover{translate:0 -2px;border-color:var(--line);box-shadow:0 16px 26px -20px var(--shadow)}
+.ly-tl em,.ly-lab{font:600 10px var(--mono);font-style:normal;letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
+.ly-tl strong{font:700 23px/1.1 var(--mono);letter-spacing:-.02em;color:var(--fg)}
+.ly-tl strong span{font-size:14px;color:var(--dim);font-weight:600}
+.ly-tiles>:last-child .hinted::after,.ly-tiles>:nth-last-child(2) .hinted::after{left:auto;right:0}
+.ly-tl em.hinted{text-transform:uppercase}
+.ly-tl small{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut)}
+.ly-tl.ring{grid-template-columns:auto 1fr;align-items:center;gap:0 13px}
+.ly-tl.ring>span:last-child{display:grid;gap:2px}
+.ly-tl.ring strong{font:700 16px var(--sans)}
+.ly-tl.hot{border-color:color-mix(in oklab,var(--c,var(--vio)) 38%,var(--line2))}
+.ly-tl.hot strong{color:var(--c,var(--vio))}
+.ly-dotp{width:7px;height:7px;border-radius:50%;background:var(--c,var(--vio));animation:ly-pulse 2s infinite}
+.ly-bigring{--p:0;width:54px;height:54px;border-radius:50%;flex:none;display:grid;place-items:center;background:conic-gradient(var(--c,var(--acc)) calc(var(--p)*1%),var(--line2) 0)}
+.ly-bigring b{width:43px;height:43px;border-radius:50%;background:var(--panel);display:grid;place-items:center;font:700 11.5px var(--mono)}
+.ly-bigring.sm{width:44px;height:44px}.ly-bigring.sm b{width:36px;height:36px;font-size:10.5px}
+.ly-ring{--p:0;width:22px;height:22px;border-radius:50%;flex:none;background:conic-gradient(var(--c,var(--acc)) calc(var(--p)*1%),var(--line2) 0);display:grid;place-items:center}
+.ly-ring::after{content:"";width:15px;height:15px;border-radius:50%;background:var(--panel)}
+
+/* the three panels */
+.ly-lay{display:grid;grid-template-columns:var(--ly-lw) minmax(0,1fr) var(--ly-rw);gap:20px;align-items:start}
+.ly-lay.two{grid-template-columns:var(--ly-lw) minmax(0,1fr)}
+.ly-lay.tworight{grid-template-columns:minmax(0,1fr) var(--ly-rw)}
+.ly-lay.one{grid-template-columns:minmax(0,1fr)}
+.ly-lp,.ly-rp{position:sticky;top:calc(var(--hdr-h) + 14px);max-height:calc(100vh - var(--hdr-h) - 64px);overflow:auto;scrollbar-width:none;display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-content:start}
+.ly-lp::-webkit-scrollbar,.ly-rp::-webkit-scrollbar{display:none}
+.ly-cp{min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-content:start}
+.ly-pbar,.ly-scrim{display:none}
+
+/* panels and cards */
+.ly-pn{border:1px solid var(--line2);border-radius:16px;background:var(--panel);padding:14px 16px;display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-content:start;min-width:0}
+.ly-pnh{margin:0;display:flex;align-items:center;justify-content:space-between;gap:10px;font:600 10.5px var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
+.ly-pnh a,.ly-pnh button{font:600 11px var(--mono);letter-spacing:0;text-transform:none;color:var(--acc)}
+.ly-pn p{margin:0;color:var(--mut);font-size:13px;line-height:1.5}
+.ly-how h5{margin:0 0 2px;font:600 14px var(--sans);color:var(--fg)}
+.ly-dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--line2);border-radius:11px;overflow:hidden;margin:0}
+.ly-dl div{padding:9px 12px;border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);min-width:0}
+.ly-dl div:nth-child(2n){border-right:0}.ly-dl div:nth-last-child(-n+2){border-bottom:0}
+.ly-dl dt{font-size:11px;color:var(--dim)}.ly-dl dd{margin:2px 0 0;font:500 12.5px var(--mono);overflow-wrap:anywhere}
+.ly-kv{display:grid}.ly-kv div{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line2);font-size:13px;color:var(--mut)}
+.ly-kv div:first-child{border-top:0}.ly-kv b{font:600 13px var(--mono);color:var(--fg)}
+.ly-lk{font:600 11px var(--mono);color:var(--acc)}
+.ly-rh{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:0 4px}
+
+/* list cards (the Discover cards): title, a short bar, a line, chips */
+.ly-cards{display:grid;gap:8px}
+.ly-it{position:relative;display:grid;gap:6px;padding:13px 15px;border:1px solid var(--line2);border-radius:14px;background:var(--bg);text-align:left;width:100%;transition:translate .25s var(--ease),border-color .2s,box-shadow .25s,background .2s;animation:ly-rise .45s var(--ease) both;animation-delay:calc(var(--i,0)*45ms)}
+.ly-it:hover{translate:0 -2px;border-color:var(--line);box-shadow:0 14px 24px -20px var(--shadow)}
+.ly-it.on{border-color:color-mix(in oklab,var(--acc) 40%,var(--line));background:color-mix(in oklab,var(--acc) 7%,var(--bg))}
+.ly-it.on .ly-itt h5{color:var(--acc)}
+.ly-itt{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.ly-itt h5{margin:0;font-size:14.5px;line-height:1.3;min-width:0}
+.ly-itt span{flex:none;font:500 11px var(--mono);color:var(--dim)}
+.ly-itb{display:block;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--c,var(--acc)) var(--w,30%),var(--line2) 0)}
+.ly-it p{margin:0;font-size:12.5px;color:var(--mut)}
+.ly-itm{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.ly-pat{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:7px;font:600 11px var(--sans);color:color-mix(in oklab,var(--c,var(--acc)) 72%,var(--fg));background:color-mix(in oklab,var(--c,var(--acc)) 16%,transparent)}
+
+/* a reading path: steps joined by a line, the current one lit */
+.ly-path{list-style:none;margin:0;padding:0;display:grid}
+.ly-ps{position:relative;display:flex;align-items:center;gap:14px;padding:9px 10px 9px 4px;border-radius:12px;text-align:left;width:100%}
+a.ly-ps:hover{background:color-mix(in oklab,var(--acc) 5%,transparent)}
+.ly-ps>i{position:relative;flex:none;width:14px;height:14px;border-radius:50%;border:2px dashed var(--line);background:var(--panel);margin-left:6px;z-index:1}
+.ly-path>li:not(:last-child) .ly-ps>i::after{content:"";position:absolute;left:50%;top:12px;width:2px;height:34px;translate:-50% 0;background:var(--line2)}
+.ly-ps.done>i{border:0;background:var(--grn)}
+.ly-ps.half>i{border:2px solid var(--grn);background:linear-gradient(90deg,var(--grn) 50%,var(--panel) 0)}
+.ly-ps.cur>i{border:2px solid var(--acc);background:var(--acc);box-shadow:0 0 0 5px color-mix(in oklab,var(--acc) 15%,transparent)}
+.ly-ps.cur{background:color-mix(in oklab,var(--acc) 7%,transparent)}
+.ly-ps div{display:grid;min-width:0}
+.ly-ps b{font-size:13.5px}
+.ly-ps span{font-size:12px;color:var(--dim)}
+.ly-ps em{margin-left:auto;font:600 10px var(--mono);font-style:normal;letter-spacing:.12em;text-transform:uppercase;color:var(--acc)}
+
+@keyframes ly-rise{from{opacity:0;translate:0 10px}}
+@keyframes ly-pulse{50%{box-shadow:0 0 0 5px color-mix(in oklab,var(--c,var(--vio)) 18%,transparent)}}
+@keyframes ly-fade{from{opacity:0}}
+
+@media (max-width:1320px){
+    .ly-lay{grid-template-columns:var(--ly-lw) minmax(0,1fr)}
+    .ly-lay>.ly-rp{grid-column:2;position:static;max-height:none;grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
+    .ly-lay.tworight{grid-template-columns:minmax(0,1fr)}
+    .ly-lay.tworight>.ly-rp{grid-column:1}
+}
+@media (max-width:1100px){
+    .ly-tiles{margin-left:0;width:100%}
+    .ly-tl{flex:1 1 30%;min-width:0}
+}
+@media (max-width:900px){
+    .ly-page{padding:14px max(16px,env(safe-area-inset-right,0px)) 120px max(16px,env(safe-area-inset-left,0px))}
+    .ly-h1{font-size:25px}
+    .ly-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .ly-tl{min-width:0;padding:10px 12px}
+    .ly-tl.ring{grid-column:1/-1}
+    .ly-tl strong{font-size:20px}
+    .ly-lay,.ly-lay.two{grid-template-columns:minmax(0,1fr)}
+    .ly-lay>.ly-rp{grid-column:1}
+    .ly-lay>.ly-lp{position:fixed;left:0;top:0;bottom:0;z-index:100;width:min(88vw,360px);max-height:none;padding:16px 14px calc(16px + env(safe-area-inset-bottom,0px));background:var(--bg);border-right:1px solid var(--line);transform:translateX(-104%);transition:transform .35s var(--ease);box-shadow:30px 0 60px -30px var(--shadow)}
+    .ly-lay.open>.ly-lp{transform:none}
+    .ly-lay.open>.ly-scrim{display:block;position:fixed;inset:0;z-index:99;background:color-mix(in oklab,#000 45%,transparent);animation:ly-fade .2s}
+    .ly-pbar{display:flex;align-items:center;gap:10px;position:sticky;top:var(--hdr-h);z-index:20;margin:-6px -16px 12px;padding:8px 16px;background:color-mix(in oklab,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2)}
+    .ly-pbar button{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);font-weight:600;font-size:13px}
+    .ly-pbar button svg{width:15px;height:15px}
+    .ly-pbar span{font:600 11px var(--mono);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}

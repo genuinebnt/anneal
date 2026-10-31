@@ -44,13 +44,66 @@ export function ConfirmButton({ label, confirm, onConfirm, note, variant = "dang
     );
 }
 
-/** A number with minus and plus: one fixed width, the value centred, held between `min` and `max`. */
+/** A number with minus and plus in one pill, held between `min` and `max`. Holding a button repeats it; the number bumps when it changes. */
 export function Stepper({ value, onChange, min, max, step = 1, label, compact = false, disabled = false }: { value: number; onChange: (n: number) => void; min: number; max: number; step?: number; label: string; compact?: boolean; disabled?: boolean }) {
+    const latest = useRef(value);
+    latest.current = value;
+    const hold = useRef(0);
+    const out = useRef<HTMLOutputElement>(null);
+    const first = useRef(true);
+    useEffect(() => {
+        if (first.current) {
+            first.current = false;
+            return;
+        }
+        const el = out.current;
+        if (!el) return;
+        el.classList.remove("bump");
+        void el.offsetWidth; // restart the animation
+        el.classList.add("bump");
+    }, [value]);
+    const stop = () => window.clearTimeout(hold.current);
+    useEffect(() => stop, []);
+    const nudge = (dir: 1 | -1) => {
+        const next = Math.max(min, Math.min(max, latest.current + dir * step));
+        if (next !== latest.current) onChange(next);
+        return next !== latest.current && next !== min && next !== max;
+    };
+    const press = (dir: 1 | -1) => {
+        stop();
+        let wait = 420;
+        const again = () => {
+            if (!nudge(dir)) return;
+            wait = Math.max(60, wait * 0.8);
+            hold.current = window.setTimeout(again, wait);
+        };
+        hold.current = window.setTimeout(again, wait);
+    };
+    const btn = (dir: 1 | -1) => (
+        <button
+            type="button"
+            aria-label={`${dir < 0 ? "Less" : "More"} ${label}`}
+            disabled={disabled || (dir < 0 ? value <= min : value >= max)}
+            onClick={(e) => e.detail === 0 && nudge(dir)}
+            onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                nudge(dir);
+                press(dir);
+            }}
+            onPointerUp={stop}
+            onPointerLeave={stop}
+            onPointerCancel={stop}
+        >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d={dir < 0 ? "M3.5 8h9" : "M3.5 8h9M8 3.5v9"} />
+            </svg>
+        </button>
+    );
     return (
         <span className={`ui-step${compact ? " compact" : ""}${disabled ? " off" : ""}`} role="group" aria-label={label}>
-            <button type="button" aria-label={`Less ${label}`} disabled={disabled || value <= min} onClick={() => onChange(Math.max(min, value - step))}>−</button>
-            <output aria-live="polite">{value}</output>
-            <button type="button" aria-label={`More ${label}`} disabled={disabled || value >= max} onClick={() => onChange(Math.min(max, value + step))}>+</button>
+            {btn(-1)}
+            <output ref={out} aria-live="polite">{value}</output>
+            {btn(1)}
         </span>
     );
 }

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("the four log tiles are above the fold with Solve on LeetCode in the same card", async ({ page }) => {
     await page.goto("/d/contains-duplicate");
-    await expect(page.locator(".pp-card").first().locator(".pp-act.pri")).toBeVisible();
+    await expect(page.locator(".pp-rail .pp-card").first().locator(".pp-act.pri")).toBeVisible();
     for (const name of [/On my own/, /With help/, /Attempted/, /Instant/]) await expect(page.locator(".pp-log").getByRole("button", { name })).toBeInViewport();
 });
 

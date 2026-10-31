@@ -115,3 +115,21 @@ kbd{font:500 11px var(--mono);color:var(--dim);border:1px solid var(--line);bord
 .rv-stage.rv-empty{grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;align-items:start}
 @media (max-width:900px){.rv-stage.rv-empty{grid-template-columns:1fr}}
 .rv-empty .rv-coming{border-top:0;padding-top:0}
+
+/* Review in the 2026 redesign (three panels, styles/layout.css): the queue on the left, the review in the centre, memory, the session and
+   the week on the right. The old stage grid no longer applies inside the frame. */
+.ly-lp .rv-side{position:static;min-height:0;gap:12px}
+.ly-lp .rv-side .rv-sort{display:grid;grid-auto-flow:column;grid-auto-columns:1fr}
+.ly-lp .rv-q{max-height:none}
+.ly-cp .rv-bar{position:static;margin:0;border:1px solid var(--line2);border-radius:14px;background:var(--panel);padding:10px 14px}
+.ly-cp .rv-main{padding:20px 22px}
+.ly-rp .rv-ctx{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.ly-rp .rv-ctx>.rv-card{border-radius:16px}
+.ly-rp .rv-sg{display:grid;gap:10px;font:inherit;color:var(--mut)}
+.rv-sgn{display:flex;align-items:baseline;gap:8px;font-size:12.5px}.rv-sgn b{font:700 26px var(--mono)}
+.rv-stack{display:flex;gap:3px;height:8px}.rv-stack i{border-radius:3px}.rv-stack .again{background:var(--bad)}.rv-stack .hard{background:var(--warn)}.rv-stack .good{background:var(--grn)}.rv-stack .easy{background:var(--vio)}
+.rv-sgl{display:flex;gap:6px;flex-wrap:wrap}
+.ly-rp .rv-coming{border:0;padding:0;background:none}
+.ly-rp .rv-keys{margin:0}
+@media (max-width:1320px){.ly-rp .rv-ctx{grid-template-columns:repeat(auto-fit,minmax(270px,1fr));grid-column:1/-1}}
+.ly-cp .rv-stage{padding:0;min-height:0}.ly-cp .rv-wide{padding-inline:0}

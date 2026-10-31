@@ -103,3 +103,55 @@
 .cm-d{font:600 11px var(--mono);border-radius:4px;padding:2px 8px;background:var(--raise);color:var(--mut)}
 .cm-d.easy{color:var(--grn);background:var(--grn-bg)}.cm-d.medium{color:var(--warn);background:var(--warn-bg)}.cm-d.hard{color:var(--bad);background:color-mix(in oklab,var(--bad) 14%,transparent)}
 .cm-co{position:relative}
+
+/* Interview mode in the 2026 redesign (three panels): companies on the left, the company's plan in the centre, your plan and how it was found on the right */
+.cm-3 .ly-sp,.ly-sp{flex:1}
+.cm-find{display:flex;align-items:center;gap:9px;height:38px;padding:0 12px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);color:var(--dim)}
+.cm-find svg{width:15px;height:15px;flex:none}.cm-find input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--fg);font:500 13px var(--sans)}
+.cm-find:focus-within{border-color:color-mix(in oklab,var(--acc) 45%,var(--line2))}
+.cm-tp{font:500 11.5px var(--mono);color:var(--dim)}
+.cm-pan{gap:14px}
+.cm-3 .cm-top{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.cm-3 .cm-h{margin:0;font-size:26px;letter-spacing:-.02em}
+.cm-row{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
+.cm-3 .cm-opt{display:inline-flex;align-items:center;gap:10px;font-size:13px}.cm-3 .cm-opt small{font:500 11.5px var(--mono);color:var(--dim);margin-left:4px}
+.cm-day{display:inline-flex;align-items:center;gap:10px;font-size:13px;color:var(--mut)}
+.cm-3 .cm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.cm-3 .cm-stats div{display:grid;gap:3px;padding:12px 14px;border:1px solid var(--line2);border-radius:12px;background:var(--bg)}
+.cm-3 .cm-stats b{font:700 22px var(--mono)}.cm-3 .cm-stats span{font-size:12px;color:var(--dim)}
+.cm-3 .cm-stats i{display:block;height:3px;margin-top:6px;border-radius:2px;background:linear-gradient(90deg,var(--c) var(--w),var(--line2) 0)}
+.cm-fus{list-style:none;margin:0;padding:0;border:1px solid var(--line2);border-radius:12px;overflow:hidden;background:var(--bg)}
+.cm-fus li{display:grid;grid-template-columns:24px minmax(0,1fr) 64px 70px 54px;gap:12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line2);transition:background .2s;animation:ly-rise .4s var(--ease) both;animation-delay:calc(var(--i)*30ms)}
+.cm-fus li:first-child{border-top:0}.cm-fus li:hover{background:color-mix(in oklab,var(--acc) 6%,transparent)}
+.cm-fus .rk{font:600 11px var(--mono);color:var(--dim)}
+.cm-fus a{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cm-fus a:hover{color:var(--acc)}
+.cm-fus .fq{height:4px;border-radius:2px;background:var(--line2);overflow:hidden}.cm-fus .fq i{display:block;height:100%;background:color-mix(in oklab,var(--acc) 70%,var(--line2))}
+.cm-fus small{font:500 11px var(--mono);color:var(--warn)}
+.cm-fus .cm-d{justify-self:start}
+.cm-alike{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}
+.cm-3 .cm-acts{display:flex;gap:8px;flex-wrap:wrap}
+@media (max-width:900px){.cm-3 .cm-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.cm-fus li{grid-template-columns:22px minmax(0,1fr) 60px}.cm-fus .fq,.cm-fus small{display:none}}
+
+/* Plan in the 2026 redesign: the target, the week and the rules in the centre; the pace on the right */
+.p-3 .p-card{border:1px solid var(--line2);border-radius:16px;background:var(--panel)}
+.p-3 .ly-rp .p-card{position:static}
+.p-tfin{font:700 18px var(--sans)!important;color:inherit!important}
+
+/* Settings in the 2026 redesign: the sections in the centre, a live preview and where settings live on the right */
+.st-3 .st-card{margin:0;border:1px solid var(--line2);border-radius:16px;background:var(--panel)}
+.st-3 .ly-cp{gap:14px}
+.st-sws{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.st-prev{display:grid;gap:8px;padding:14px;border:1px solid var(--line2);border-radius:12px;background:var(--bg)}
+.st-prev b{font-size:16px}.st-prevt{display:flex;gap:6px}
+
+/* Quick log in the 2026 redesign */
+.lg-3 .lg-wrap{max-width:none;margin:0;padding:16px 18px;gap:12px}
+.lg-tip{font-size:12px!important;color:var(--dim)!important}
+.lg-today{display:grid;gap:4px}
+.lg-today a{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:9px;align-items:center;padding:7px 4px;font-size:13px}
+.lg-today a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lg-today small{font:500 11px var(--mono);color:var(--dim)}
+.lg-today i{width:8px;height:8px;border-radius:50%;background:var(--line)}.lg-today i.good,.lg-today i.easy{background:var(--grn)}.lg-today i.hard{background:var(--warn)}.lg-today i.again{background:var(--bad)}
+.lg-3 .lg-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:10px 16px;align-items:center}
+.lg-3 .lg-btns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.lg-3 .lg-b{justify-content:center;text-align:center;height:38px}
+@media (max-width:900px){.lg-3 .lg-row{grid-template-columns:minmax(0,1fr)}.lg-3 .lg-btns{grid-template-columns:repeat(2,minmax(0,1fr))}.lg-3 .lg-b{height:46px}}

@@ -15,7 +15,7 @@ const anchor = (id: string) => `t-${id.split(":")[1] ?? id}`;
 
 function Section({ title, i, children, wide }: { title: ReactNode; i: number; children: ReactNode; wide?: boolean }) {
     return (
-        <section className={`id-card${wide ? " wide" : ""}`} style={{ "--i": i } as CSSProperties}>
+        <section className={`id-card${wide ? " wide" : ""}`} id={`id-s${i}`} data-s={i} style={{ "--i": i } as CSSProperties}>
             <h2>{title}</h2>
             {children}
         </section>

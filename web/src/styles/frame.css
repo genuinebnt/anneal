@@ -52,3 +52,8 @@
 @media (max-width:760px){.hd-timer{display:none}.hd-accp{position:fixed;left:12px;right:12px;top:64px;flex-wrap:wrap;justify-content:center}}
 @media (prefers-reduced-motion:reduce){.hd-accp{animation:none}}
 html[data-motion="reduce"] .hd-accp{animation:none}
+
+/* Progress sits beside the areas, after a divider: it covers all three */
+.hd-areas .hd-asep{width:1px;margin:7px 4px;background:var(--line2);flex:none}
+.hd-areas .hd-tro,.hd-dock .hd-tro{width:15px;height:15px;flex:none}
+@media (max-width:900px){.hd-dock a{min-width:0;flex:1}}

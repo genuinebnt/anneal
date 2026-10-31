@@ -2,10 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { GradeGlyph } from "../components/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, type DsaProblem, type PracticeTechnique } from "../api";
+import { api, type Band, type DsaProblem, type PracticeTechnique } from "../api";
 import { Companies, Insight, Mark, ProblemTags, useLogger } from "../components/dsaBits";
 import { PatternShell } from "../components/PatternShell";
-import { GRADES, MINUTES, leetcode } from "../dsa";
+import { DIFF, GRADES, MINUTES, leetcode } from "../dsa";
+import { Panel } from "../components/layout";
+import { Segmented } from "../components/ui";
 
 /** A pattern's practice: for each technique, LeetCode problems beyond the NeetCode lists that drill it. */
 export function PracticePage({ code }: { code: string }) {
@@ -18,38 +20,37 @@ export function PracticePage({ code }: { code: string }) {
   const all = techniques.flatMap((t) => t.problems);
   const solved = all.filter((p) => p.state.solved).length;
   const today = overview.data?.today ?? "";
+  const [diff, setDiff] = useState<Band[]>([]);
+  const left = techniques.length > 0 && (
+    <Panel title="Show">
+      <div className="ps-fsum"><b>{solved}</b> of {all.length} solved<span className="ps-fbar"><i style={{ width: `${all.length ? (solved / all.length) * 100 : 0}%` }} /></span></div>
+      <p>Not in a NeetCode list: tracked, but not counted in your goal, reviews or calendar.</p>
+      <span className="ly-lab">Status</span>
+      <Segmented className="ps-fseg" label="Status" value={hidden} options={[["none", "All"], ["done", "Not solved"]] as const} onChange={setHidden} />
+      <span className="ly-lab">Difficulty</span>
+      <div className="ps-fchips">
+        {(["easy", "medium", "hard"] as Band[]).map((b) => (
+          <button key={b} className={`fchip${diff.includes(b) ? " on" : ""}`} aria-pressed={diff.includes(b)} onClick={() => setDiff((d) => (d.includes(b) ? d.filter((x) => x !== b) : [...d, b]))}>{DIFF[b][0]}</button>
+        ))}
+      </div>
+    </Panel>
+  );
   return (
-    <PatternShell code={code} tab="practice">
+    <PatternShell code={code} tab="practice" left={left || undefined}>
           {practice.isError && <p className="notice bad">Couldn't load the practice list: {(practice.error as Error).message}</p>}
           {practice.isSuccess && techniques.length === 0 && (
             <div className="d-note">No practice list for {pattern?.name ?? "this pattern"} yet.</div>
           )}
-          {techniques.length > 0 && (
-            <>
-              <div className="d-note">Not in a NeetCode list: tracked, but not counted in your goal, reviews or calendar.</div>
-              <div className="d-sum2">
-                <span>
-                  <b>{solved}</b> of {all.length} solved
-                </span>
-                <span className="bar">
-                  <i style={{ width: `${all.length ? (solved / all.length) * 100 : 0}%` }} />
-                </span>
-                <button className={`d-clear${hidden === "done" ? " on" : ""}`} onClick={() => setHidden(hidden === "done" ? "none" : "done")} aria-pressed={hidden === "done"}>
-                  {hidden === "done" ? "show solved" : "hide solved"}
-                </button>
-              </div>
-            </>
-          )}
           {techniques.map((t) => (
-            <Technique key={t.id} t={t} today={today} hideSolved={hidden === "done"} log={log} />
+            <Technique key={t.id} t={t} today={today} hideSolved={hidden === "done"} diff={diff} log={log} />
           ))}
       {toast}
     </PatternShell>
   );
 }
 
-function Technique({ t, today, hideSolved, log }: { t: PracticeTechnique; today: string; hideSolved: boolean; log: ReturnType<typeof useLogger>["log"] }) {
-  const rows = hideSolved ? t.problems.filter((p) => !p.state.solved) : t.problems;
+function Technique({ t, today, hideSolved, diff, log }: { t: PracticeTechnique; today: string; hideSolved: boolean; diff: Band[]; log: ReturnType<typeof useLogger>["log"] }) {
+  const rows = t.problems.filter((p) => (!hideSolved || !p.state.solved) && (diff.length === 0 || diff.includes(p.difficulty)));
   return (
     <section className="d-tech">
       <div className="d-th">

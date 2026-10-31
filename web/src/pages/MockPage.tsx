@@ -1,12 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
-import { Segmented } from "../components/ui";
-import { PageHero } from "../components/PageHero";
-import { MockRoot } from "../components/mock";
+import { Segmented, Stepper } from "../components/ui";
+import { HowFound, Page3, Panel, Tile } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { DIFF, leetcode, niceDate, statusOf } from "../dsa";
 import {
@@ -63,15 +62,17 @@ export function MockPage() {
     return (
         <>
             <Header area="dsa" />
-            <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+            <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
                 {q.data ? (
                     <MockApp data={q.data} />
                 ) : (
-                    <div className="wrap" style={{ paddingBlock: 28 }}>
-                        {q.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={5} />}
-                    </div>
+                    <main className="page">
+                        <div className="wrap" style={{ paddingBlock: 28 }}>
+                            {q.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={5} />}
+                        </div>
+                    </main>
                 )}
-            </main>
+            </div>
         </>
     );
 }
@@ -135,17 +136,17 @@ function MockApp({ data }: { data: MockData }) {
         finishing.current = false;
     };
 
-    if (round && round.ended == null) return <Live data={data} round={round} update={update} onFinish={finish} />;
+    if (round && round.ended == null) return <main className="page"><Live data={data} round={round} update={update} onFinish={finish} /></main>;
     if (round) {
         return (
-            <Result
+            <main className="page"><Result
                 data={data}
                 round={round}
                 onAgain={() => {
                     if (!begin(round.config)) leave(true);
                 }}
                 onChange={() => leave(true)}
-            />
+            /></main>
         );
     }
     return <Setup data={data} initial={config} onStart={begin} error={drawError} />;
@@ -165,16 +166,6 @@ function Switch({ on, onClick, title, hint, disabled }: { on: boolean; onClick: 
                 {hint && <small>{hint}</small>}
             </span>
         </button>
-    );
-}
-
-function Num({ value, onChange, min, max, step = 1, label, unit }: { value: number; onChange: (n: number) => void; min: number; max: number; step?: number; label: string; unit?: string }) {
-    return (
-        <span className="mi-num" role="group" aria-label={label}>
-            <button aria-label={`less ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - step))}>−</button>
-            <span aria-live="polite">{value}{unit && <small>{unit}</small>}</span>
-            <button aria-label={`more ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + step))}>+</button>
-        </span>
     );
 }
 
@@ -292,266 +283,391 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
         ["clock", "Clock", c.format === "up" ? "∞" : c.format === "per" ? "each" : `${c.total}m`],
     ];
 
-    return (
-        <div className="mi-wrap m-setup">
-            <MockRoot prefix="s-" className="s-dsa s-sub" style={{ "--s-ac": "var(--acc)", "--s-acb": "var(--acc-bg)" } as CSSProperties}>
-                <PageHero
-                    eyebrow={<><b>DSA</b> / MOCK INTERVIEW</>}
-                    title="Build your"
-                    accent="interview."
-                    stats={[
-                        { value: data.rounds.length, label: data.rounds.length === 1 ? "ROUND TAKEN" : "ROUNDS TAKEN" },
-                        { value: pool.length, label: "IN THE POOL", hint: "Problems a round can draw, after the filters below." },
-                        { value: need, label: need === 1 ? "PROBLEM A ROUND" : "PROBLEMS A ROUND" },
-                    ]}
-                />
-            </MockRoot>
+    // counts beside each choice: what the other settings leave
+    const reachN = (reach: NonNullable<MockConfig["reach"]>) => poolOf(data.problems, { ...c, reach }, data.today).length;
+    const statusN = (status: MockConfig["status"]) => poolOf(data.problems, { ...c, status }, data.today).length;
+    const listMax = Math.max(1, ...MOCK_LISTS.map(([k]) => listCount(k)));
+    const histN = (k: "new" | "retry" | "solved" | "due") => pool.filter((p) => statusOf(p, data.today) === k).length;
+    const dots = pool.map((p) => p.difficulty);
+    const weights: Record<MockConfig["favour"], number[]> = { random: [50, 50, 50, 50, 50, 50, 50], weak: [90, 72, 55, 40, 30, 22, 16], asked: [30, 85, 45, 95, 25, 60, 40] };
+    const favourIcon: Record<MockConfig["favour"], ReactNode> = {
+        random: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" /><rect x="9" y="2.5" width="4.5" height="4.5" rx="1" /><rect x="2.5" y="9" width="4.5" height="4.5" rx="1" /><rect x="9" y="9" width="4.5" height="4.5" rx="1" /></svg>,
+        weak: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2.5" /></svg>,
+        asked: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 2.5h6v3a3 3 0 0 1-6 0zM8 8.5v3M5.5 13.5h5" /></svg>,
+    };
+    const reachIcon: Record<NonNullable<MockConfig["reach"]>, ReactNode> = {
+        all: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01" /></svg>,
+        done: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7" /></svg>,
+        similar: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="4" cy="4" r="2" /><circle cx="12" cy="5" r="2" /><circle cx="7" cy="12" r="2" /><path d="M5.8 4.4 10 4.8M5 5.8l1.4 4.4M10.8 6.6 8.3 10.6" /></svg>,
+    };
+    const reachText: Record<NonNullable<MockConfig["reach"]>, string> = { all: "every problem in the sources below", done: "only what you have attempted or solved", similar: "what you have done and its close neighbours" };
+    const Sh = ({ n, t, sub, extra }: { n: ReactNode; t: string; sub?: string; extra?: ReactNode }) => (
+        <div className="mk-sh"><span className="mk-n">{n}</span><b>{t}</b>{sub && <small>{sub}</small>}<span className="ly-sp" />{extra}</div>
+    );
+    const C = 2 * Math.PI * 84;
+    const arcs = c.format === "up" ? [] : slots.map((band) => c.per[c.anyDiff ? 1 : band] ?? 0);
+    const arcTotal = Math.max(1, arcs.reduce((x, y) => x + y, 0));
+    const dial = (
+        <svg viewBox="0 0 200 200" className="mk-dial" aria-hidden="true">
+            <circle cx="100" cy="100" r="84" className="tr" />
+            {(() => {
+                let at = -90;
+                return arcs.map((m, i) => {
+                    const len = (m / arcTotal) * C - (arcs.length > 1 ? 10 : 0);
+                    const el = <circle key={i} cx="100" cy="100" r="84" className={`s${(i % 2) + 1} b${c.anyDiff ? 1 : slots[i]}`} strokeDasharray={`${Math.max(2, len).toFixed(1)} ${C.toFixed(1)}`} transform={`rotate(${at + (arcs.length > 1 ? 1.7 : 0)} 100 100)`} />;
+                    at += (m / arcTotal) * 360;
+                    return el;
+                });
+            })()}
+            {Array.from({ length: 12 }, (_, k) => <line key={k} x1="100" y1={k % 3 ? 30 : 28} x2="100" y2="34" className="tk" transform={`rotate(${k * 30} 100 100)`} />)}
+        </svg>
+    );
 
-            <div className="mi-presets" role="group" aria-label="Presets">
-                {PRESETS.map((p) => (
-                    <button key={p.key} className={`mi-pc${preset === p.key ? " on" : ""}`} aria-pressed={preset === p.key} onClick={() => { setC(p.apply(c)); setPreset(p.key); }}>
-                        <b>{p.name}</b>
-                        <Shape c={p.apply(c)} />
-                        <small>{p.detail}</small>
-                    </button>
-                ))}
-                {presets.map((p) => (
-                    <span key={p.name} className={`mi-pc${preset === `saved:${p.name}` ? " on" : ""}`}>
-                        <button className="body" aria-pressed={preset === `saved:${p.name}`} onClick={() => { setC(p.config); setPreset(`saved:${p.name}`); }}>
+    const tiles = (
+        <>
+            <Tile em={data.rounds.length === 1 ? "Round taken" : "Rounds taken"} strong={data.rounds.length} small={data.rounds.length ? `last ${new Date(data.rounds[0]!.finished_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}` : "none yet"} />
+            <Tile em="In the pool" hint="Problems a round can draw, after the filters." strong={pool.length} small="after the filters" />
+            <Tile em={need === 1 ? "Problem a round" : "Problems a round"} strong={need} small={c.format === "total" ? `${c.total} min` : c.format === "per" ? "a clock each" : "no limit"} />
+        </>
+    );
+
+    const left = (
+        <>
+            <Panel title="Presets">
+                <div className="mi-presets" role="group" aria-label="Presets">
+                    {PRESETS.map((p) => (
+                        <button key={p.key} className={`mi-pc${preset === p.key ? " on" : ""}`} aria-pressed={preset === p.key} onClick={() => { setC(p.apply(c)); setPreset(p.key); }}>
                             <b>{p.name}</b>
-                            <Shape c={p.config} />
-                            <small>{describe(p.config, data)}</small>
+                            <Shape c={p.apply(c)} />
+                            <small>{p.detail}</small>
                         </button>
-                        <button className="x" aria-label={`Delete preset ${p.name}`} onClick={() => savePresets.mutate(presets.filter((x) => x.name !== p.name))}>×</button>
-                    </span>
-                ))}
-            </div>
-
-            <div className="mi-cols">
-                <div className="mi-stack">
-                    <div className="mi-sum">
-                        <span className="lab">DRAWING FROM</span>
-                        {filters.map((f) => (
-                            <span key={f.key} className={`mi-fc${f.exc ? " exc" : ""}`}>
-                                {f.exc ? "not " : ""}{f.label}
-                                <button aria-label={`Remove ${f.label}`} onClick={f.remove}>✕</button>
-                            </span>
-                        ))}
-                        <span className="meter"><b>{pool.length}</b> can be drawn</span>
-                    </div>
-
-                    <section className="mi-card">
-                        <div className="mi-tabs" role="tablist">
-                            {tabs.map(([k, label, n]) => (
-                                <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{label}<small>{n}</small></button>
+                    ))}
+                    {presets.map((p) => (
+                        <span key={p.name} className={`mi-pc${preset === `saved:${p.name}` ? " on" : ""}`}>
+                            <button className="body" aria-pressed={preset === `saved:${p.name}`} onClick={() => { setC(p.config); setPreset(`saved:${p.name}`); }}>
+                                <b>{p.name}</b>
+                                <Shape c={p.config} />
+                                <small>{describe(p.config, data)}</small>
+                            </button>
+                            <button className="x" aria-label={`Delete preset ${p.name}`} onClick={() => savePresets.mutate(presets.filter((x) => x.name !== p.name))}>×</button>
+                        </span>
+                    ))}
+                </div>
+            </Panel>
+            <Panel title="Drawing from" aside={<span className="mk-cnt">{pool.length} can be drawn</span>}>
+                <div className="mi-sum">
+                    {filters.map((f) => (
+                        <span key={f.key} className={`mi-fc${f.exc ? " exc" : ""}`}>
+                            {f.exc ? "not " : ""}{f.label}
+                            <button aria-label={`Remove ${f.label}`} onClick={f.remove}>✕</button>
+                        </span>
+                    ))}
+                </div>
+            </Panel>
+            <Panel title="Your rounds" aside={<span className="mk-cnt">{data.rounds.length} taken</span>}>
+                {data.rounds.length === 0 ? (
+                    <p>No rounds yet. Your rounds show here with a trend: time used, solved, and a Repeat for each.</p>
+                ) : (
+                    <>
+                        {(() => {
+                            const last = [...data.rounds].slice(0, 10).reverse();
+                            const share = last.map((r) => (r.items.length ? r.items.filter((i) => i.grade === "good" || i.grade === "easy").length / r.items.length : 0));
+                            if (last.length < 2) return null;
+                            const avg = Math.round((100 * share.reduce((x, y) => x + y, 0)) / share.length);
+                            const mins = Math.round(last.reduce((n, r) => n + r.seconds, 0) / last.length / 60);
+                            return (
+                                <div className="mi-trend" aria-label="Trend over your last rounds">
+                                    <span className="bars" aria-hidden="true">{share.map((v, k) => <i key={k} style={{ height: `${8 + v * 28}px` }} />)}</span>
+                                    <span>Last {last.length}: <b>{avg}%</b> on your own, <b>{mins} min</b> on average.</span>
+                                </div>
+                            );
+                        })()}
+                        <div className="mk-rounds">
+                            {data.rounds.slice(0, 12).map((r) => (
+                                <div key={r.id} className="mk-rd">
+                                    <span className="d">{new Date(r.finished_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
+                                    <span className="res">{r.items.map((i, k) => <i key={k} className={`dot ${i.grade === "good" || i.grade === "easy" ? "g" : i.grade === "hard" ? "h" : i.grade === "again" ? "f" : "s"}`}>{glyphOf(i.grade)}</i>)}</span>
+                                    <span className="t">{mmss(r.seconds)}</span>
+                                    <button className="mi-ghost" title={describe(r.config, data)} onClick={() => { setC(r.config); setPreset("custom"); }}>Repeat</button>
+                                </div>
                             ))}
                         </div>
+                    </>
+                )}
+            </Panel>
+        </>
+    );
 
-                        {tab === "pool" && (
-                            <>
-                                <div className="mi-sec">
-                                    <span className="t">WHICH PROBLEMS</span>
-                                    <Seg label="Which problems" value={c.reach ?? "all"} options={MOCK_REACH} onPick={(reach) => edit((cur) => ({ ...cur, reach }))} />
-                                </div>
-                                <div className="mi-sec">
-                                    <span className="t">WHERE PROBLEMS COME FROM <em>{c.lists.length} selected</em></span>
-                                    <div className="mi-chips">
-                                        {MOCK_LISTS.map(([key, label]) => (
-                                            <button key={key} className={`mi-chip${c.lists.includes(key) ? " on" : ""}`} aria-pressed={c.lists.includes(key)} onClick={() => edit((cur) => ({ ...cur, lists: cur.lists.includes(key) ? (cur.lists.length > 1 ? toggle(cur.lists, key) : cur.lists) : [...cur.lists, key] }))}>
-                                                {label}<small>{listCount(key)}</small>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="mi-sec">
-                                    <span className="t">YOUR HISTORY</span>
-                                    <Seg label="History" value={c.status} options={MOCK_STATUS.map(([k, l]) => [k, l])} onPick={(status) => edit((cur) => ({ ...cur, status }))} />
-                                </div>
-                                <div className="mi-sec">
-                                    <span className="t">HOW TO DRAW</span>
-                                    <Seg label="How to draw" value={c.favour} options={FAVOUR.map(([k, l]) => [k, l])} onPick={(favour) => edit((cur) => ({ ...cur, favour }))} />
-                                </div>
-                                <div className="mi-sec">
-                                    <span className="t">IN THE POOL <em>{pool.length}</em></span>
-                                    <div className="mi-mix" role="img" aria-label={`${have[0]} easy, ${have[1]} medium, ${have[2]} hard`}>
-                                        <div className="split">{have.map((n, i) => (n ? <i key={i} className={"ewh"[i]} style={{ flex: n }} /> : null))}</div>
-                                        {(["Easy", "Medium", "Hard"] as const).map((l, i) => <span key={l}><i className={"ewh"[i]} />{l} <b>{have[i]}</b></span>)}
-                                    </div>
-                                    <div className="mi-mix hist">
-                                        {(["new", "retry", "solved", "due"] as const).map((k) => <span key={k}><b>{pool.filter((p) => statusOf(p, data.today) === k).length}</b>{{ new: "not attempted", retry: "attempted", solved: "solved", due: "due for review" }[k]}</span>)}
-                                    </div>
-                                </div>
-                            </>
-                        )}
+    const center = (
+        <>
+            <div className="mi-tabs mk-tabs" role="tablist">
+                {tabs.map(([k, label, n]) => (
+                    <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{label}<small>{n}</small></button>
+                ))}
+            </div>
 
-                        {tab === "topics" && (
-                            <div className="mi-sec">
-                                <span className="t">TOPICS <em>{included || excluded ? `${included} included · ${excluded} excluded` : "click: include · exclude · clear"}</em></span>
-                                <div className="mi-chips">
-                                    {data.patterns.map((pt) => {
-                                        const v = c.topics[pt.code];
-                                        return (
-                                            <button key={pt.code} className={`mi-chip${v === 1 ? " on" : v === -1 ? " exc" : ""}`} onClick={() => cycleTopic(pt.code)} aria-label={`${pt.name}: ${v === 1 ? "included" : v === -1 ? "excluded" : "allowed"}`}>
-                                                {pt.name}<small>{byTopic.get(pt.code) ?? 0}</small>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
-
-                        {tab === "companies" && (
-                            <>
-                                <div className="mi-sec">
-                                    <span className="t">GROUPS</span>
-                                    <div className="mi-chips">
-                                        {data.company_groups.map((g) => (
-                                            <button key={g.name} className={`mi-chip${c.groups.includes(g.name) ? " on" : ""}`} aria-pressed={c.groups.includes(g.name)} onClick={() => edit((cur) => ({ ...cur, groups: toggle(cur.groups, g.name) }))}>
-                                                {g.name}<small>{byCompany.groups.get(g.name) ?? 0}</small>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="mi-sec">
-                                    <span className="t">COMPANIES <em>{c.groups.length + c.companies.length ? [...c.groups, ...c.companies].slice(0, 3).join(", ") + (c.groups.length + c.companies.length > 3 ? ` +${c.groups.length + c.companies.length - 3}` : "") : "any company"}</em></span>
-                                    <div className="mi-chips">
-                                        {shownCo.map((x) => (
-                                            <button key={x.name} className={`mi-chip${c.companies.includes(x.name) ? " on" : ""}`} aria-pressed={c.companies.includes(x.name)} onClick={() => edit((cur) => ({ ...cur, companies: toggle(cur.companies, x.name) }))}>
-                                                {x.name}<small>{x.n}</small>
-                                            </button>
-                                        ))}
-                                        {!q && matching.length > 8 && <button className="mi-chip more" onClick={() => setAllCo(!allCo)}>{allCo ? "show fewer" : `+${matching.length - 8} more`}</button>}
-                                    </div>
-                                    <input className="mi-search" value={coQuery} onChange={(e) => setCoQuery(e.target.value)} placeholder="Find a company" aria-label="Find a company" />
-                                </div>
-                                <Switch on={c.recent} onClick={() => edit((cur) => ({ ...cur, recent: !cur.recent }))} title="Asked in the last 6 months" />
-                            </>
-                        )}
-
-                        {tab === "clock" && (
-                            <>
-                                <div className="mi-sec">
-                                    <span className="t">FORMAT</span>
-                                    <Seg label="Timer format" value={c.format} options={[["total", "Countdown for the round"], ["per", "Countdown per problem"], ["up", "Stopwatch only"]]} onPick={(format) => edit((cur) => ({ ...cur, format }))} />
-                                </div>
-                                {c.format === "up" ? (
-                                    <p className="mi-hint">No limit. The clock counts up ({c.per.join(" / ")} min suggested).</p>
-                                ) : (
-                                    <div className="mi-fields">
-                                        {c.format === "total" && (
-                                            <div><label>ROUND LENGTH</label><Num label="minutes" unit="min" value={c.total} min={10} max={180} step={5} onChange={(total) => edit((cur) => ({ ...cur, total }))} /></div>
-                                        )}
-                                        {BANDS.map((band, i) => (
-                                            <div key={band}><label>{c.format === "total" ? "SUGGESTED, " : ""}{band.toUpperCase()}</label><Num label={`${band} minutes`} unit="min" value={c.per[i] ?? 0} min={3} max={90} onChange={(n) => edit((cur) => ({ ...cur, per: cur.per.map((x, j) => (j === i ? n : x)) as MockConfig["per"] }))} /></div>
-                                        ))}
-                                    </div>
-                                )}
-                                <div className="mi-togs">
-                                    <Switch on={c.strict} onClick={() => edit((cur) => ({ ...cur, strict: !cur.strict }))} title="Strict: no pause" hint="The clock keeps running, like a real call. Turn off to allow Pause." />
-                                    <Switch on={c.blind} onClick={() => edit((cur) => ({ ...cur, blind: !cur.blind }))} title="Blind mode" hint="Hide topic, tags and companies until you log the problem." />
-                                    <Switch on={c.auto} disabled={c.format === "up"} onClick={() => edit((cur) => ({ ...cur, auto: !cur.auto }))} title={c.format === "per" ? "Move on at 0:00" : "End the round at 0:00"} hint={c.format === "per" ? "Off: the problem's clock turns red and counts overtime." : "Off: the clock turns red and counts overtime, and you decide when to stop."} />
-                                    <Switch on={c.warns} disabled={c.format === "up"} onClick={() => edit((cur) => ({ ...cur, warns: !cur.warns }))} title="Time warnings" hint="A banner at 10, 5 and 1 minute left." />
-                                </div>
-                            </>
-                        )}
-                    </section>
-
-                    {data.rounds.length > 0 && (
-                        <section className="mi-card">
-                            <h3 className="mi-h3"><span>PAST ROUNDS</span></h3>
-                            {(() => {
-                                // the share of each round's problems solved on your own, oldest to newest, over the last ten rounds
-                                const last = [...data.rounds].slice(0, 10).reverse();
-                                const share = last.map((r) => (r.items.length ? r.items.filter((i) => i.grade === "good" || i.grade === "easy").length / r.items.length : 0));
-                                if (last.length < 2) return null;
-                                const avg = Math.round((100 * share.reduce((a, b) => a + b, 0)) / share.length);
-                                const mins = Math.round(last.reduce((n, r) => n + r.seconds, 0) / last.length / 60);
-                                return (
-                                    <div className="mi-trend" aria-label="Trend over your last rounds">
-                                        <span className="bars" aria-hidden="true">{share.map((v, k) => <i key={k} style={{ height: `${8 + v * 28}px` }} />)}</span>
-                                        <span>Over your last {last.length} rounds: <b>{avg}%</b> solved on your own, <b>{mins} min</b> on average. First {Math.round(share[0]! * 100)}%, latest {Math.round(share[share.length - 1]! * 100)}%.</span>
-                                    </div>
-                                );
-                            })()}
-                            <div className="mi-tbl">
-                                <div className="mi-tr th"><span>DATE</span><span>ROUND</span><span>RESULT</span><span>TIME</span><span /></div>
-                                {data.rounds.map((r) => (
-                                    <div key={r.id} className="mi-tr">
-                                        <span>{new Date(r.finished_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
-                                        <span>{describe(r.config, data)}</span>
-                                        <span className="res">{r.items.map((i, k) => <i key={k} className={`dot ${i.grade === "good" || i.grade === "easy" ? "g" : i.grade === "hard" ? "h" : i.grade === "again" ? "f" : "s"}`}>{glyphOf(i.grade)}</i>)}</span>
-                                        <span>{mmss(r.seconds)}{r.config.format === "total" ? ` / ${mmss(r.config.total * 60)}` : ""}</span>
-                                        <button className="mi-ghost" onClick={() => { setC(r.config); setPreset("custom"); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Repeat</button>
-                                    </div>
-                                ))}
-                            </div>
-                        </section>
-                    )}
-                </div>
-
-                <aside className="mi-ticket">
-                    <div className="top">
-                        <div className="big"><b>{need}</b><span>{need === 1 ? "problem" : "problems"} · {c.format === "total" ? `${c.total} min` : c.format === "per" ? "per problem" : "no limit"}</span></div>
-                        <div className="bands">
-                            {BANDS.map((band, i) => <span key={band} className={`band ${band[0]}`}>{DIFF[band][0]} {have[i]}</span>)}
-                            <span className="note">can be drawn</span>
+            {tab === "pool" && (
+                <div className="mk-pool">
+                    <section className="mk-sec">
+                        <Sh n="1" t="Which problems" sub="the starting set" />
+                        <div className="mk-opts three" role="radiogroup" aria-label="Which problems">
+                            {MOCK_REACH.map(([k, label]) => (
+                                <button key={k} role="radio" aria-checked={(c.reach ?? "all") === k} aria-pressed={(c.reach ?? "all") === k} className="mk-opt" onClick={() => edit((cur) => ({ ...cur, reach: k }))}>
+                                    <span className="mk-oi">{reachIcon[k]}</span>
+                                    <span className="mk-ot"><b>{label}</b><small>{reachText[k]}</small></span>
+                                    <em>{reachN(k)}</em>
+                                </button>
+                            ))}
                         </div>
-                    </div>
-                    <div className="slots">
-                        {slots.length === 0 && <p className="mi-hint" style={{ textAlign: "center", padding: "10px 0" }}>Add at least one problem.</p>}
-                        {slots.map((band, j) => (
-                            <div key={j} className="slot">
-                                <i>{j + 1}</i>
-                                <span className="ti">{c.anyDiff ? <b className="a">Any</b> : <b className={BANDS[band]![0]}>{DIFF[BANDS[band]!][0]}</b>}</span>
-                                <span className="tm">~{c.per[c.anyDiff ? 1 : band]}m</span>
-                                <button aria-label={`Remove problem ${j + 1}`} disabled={c.anyDiff && c.anyCount <= 1} onClick={() => removeSlot(band)}>✕</button>
+                    </section>
+                    <section className="mk-sec">
+                        <Sh n="2" t="Where problems come from" sub="pick one or more" extra={<span className="mk-cnt">{c.lists.length} selected</span>} />
+                        <div className="mk-srcs">
+                            {MOCK_LISTS.map(([key, label]) => {
+                                const on = c.lists.includes(key);
+                                return (
+                                    <button key={key} className="mk-src" aria-pressed={on} onClick={() => edit((cur) => ({ ...cur, lists: cur.lists.includes(key) ? (cur.lists.length > 1 ? toggle(cur.lists, key) : cur.lists) : [...cur.lists, key] }))}>
+                                        <span className="mk-cb"><Check /></span>
+                                        <span className="mk-ot"><b>{label}</b></span>
+                                        <span className="mk-sb"><i style={{ "--w": `${(listCount(key) / listMax) * 100}%` } as CSSProperties} /></span>
+                                        <em>{listCount(key)}</em>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </section>
+                    <section className="mk-sec">
+                        <Sh n="3" t="Your history" sub="which of them you have touched" />
+                        <div className="mk-pills" role="radiogroup" aria-label="History">
+                            {MOCK_STATUS.map(([k, label, hint]) => {
+                                const n = statusN(k);
+                                return (
+                                    <button key={k} role="radio" aria-checked={c.status === k} aria-pressed={c.status === k} className="mk-pill" data-empty={n === 0 ? "" : undefined} title={hint} onClick={() => edit((cur) => ({ ...cur, status: k }))}>{label}<em>{n}</em></button>
+                                );
+                            })}
+                        </div>
+                    </section>
+                    <section className="mk-sec">
+                        <Sh n="4" t="How to draw" sub="the odds of each problem" />
+                        <div className="mk-opts three" role="radiogroup" aria-label="How to draw">
+                            {FAVOUR.map(([k, label, hint]) => (
+                                <button key={k} role="radio" aria-checked={c.favour === k} aria-pressed={c.favour === k} className="mk-opt" onClick={() => edit((cur) => ({ ...cur, favour: k }))}>
+                                    <span className="mk-oi">{favourIcon[k]}</span>
+                                    <span className="mk-ot"><b>{label}</b><small>{hint}</small></span>
+                                    <span className="mk-wb">{weights[k].map((h, i) => <i key={i} style={{ "--h": `${h}%` } as CSSProperties} />)}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+                    <section className="mk-sec mk-prev">
+                        <div className="mk-sh"><span className="mk-n"><Eye /></span><b>The pool</b><small>each dot is a problem that can be drawn</small><span className="ly-sp" /><b className="mk-big">{pool.length}</b></div>
+                        <PoolDots kinds={dots} />
+                        <div className="mk-foot">
+                            <div className="mi-mix" role="img" aria-label={`${have[0]} easy, ${have[1]} medium, ${have[2]} hard`}>
+                                {(["Easy", "Medium", "Hard"] as const).map((l, i) => <span key={l}><i className={"ewh"[i]} />{l} <b>{have[i]}</b></span>)}
                             </div>
+                            <span className="ly-sp" />
+                            {(["new", "retry", "solved", "due"] as const).map((k) => <span key={k} className="mk-st"><b>{histN(k)}</b>{{ new: "not attempted", retry: "attempted", solved: "solved", due: "due" }[k]}</span>)}
+                        </div>
+                    </section>
+                </div>
+            )}
+
+            {tab === "topics" && (
+                <section className="mk-sec">
+                    <Sh n={<Layers />} t="Topics" sub={included || excluded ? `${included} included · ${excluded} left out` : "a click includes, a second leaves out, a third clears"} extra={(included || excluded) ? <button className="mi-ghost" onClick={() => edit((cur) => ({ ...cur, topics: {} }))}>Clear</button> : undefined} />
+                    <div className="mk-pats">
+                        {data.patterns.map((pt, i) => {
+                            const v = c.topics[pt.code];
+                            const n = byTopic.get(pt.code) ?? 0;
+                            const total = data.problems.filter((p) => p.pattern === pt.code && !p.premium && p.lists.includes("neetcode150")).length;
+                            const solved = data.problems.filter((p) => p.pattern === pt.code && !p.premium && p.lists.includes("neetcode150") && p.state.solved).length;
+                            const state = v === 1 ? "in" : v === -1 ? "out" : included ? "off" : "any";
+                            return (
+                                <button key={pt.code} className={`mk-pat ${state}`} style={{ "--c": PCOL[i % PCOL.length], "--i": i } as CSSProperties} onClick={() => cycleTopic(pt.code)} aria-label={`${pt.name}: ${v === 1 ? "included" : v === -1 ? "excluded" : "allowed"}`}>
+                                    <span className="mk-cb">{v === -1 ? <Cross /> : <Check />}</span>
+                                    <span className="mk-pn"><b>{pt.name}</b><small>{n} in the pool · {solved}/{total} solved</small></span>
+                                    <span className="mk-pb" style={{ "--p": `${total ? (solved / total) * 100 : 0}%` } as CSSProperties} />
+                                </button>
+                            );
+                        })}
+                    </div>
+                </section>
+            )}
+
+            {tab === "companies" && (
+                <section className="mk-sec">
+                    <Sh n={<Target />} t="Only problems these companies ask" sub={c.groups.length + c.companies.length ? [...c.groups, ...c.companies].slice(0, 3).join(", ") + (c.groups.length + c.companies.length > 3 ? ` +${c.groups.length + c.companies.length - 3}` : "") : "none picked: any company"} />
+                    <div className="mk-row">
+                        <label className="cm-find mk-find">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+                            <input value={coQuery} onChange={(e) => setCoQuery(e.target.value)} placeholder="Find a company" aria-label="Find a company" />
+                        </label>
+                        <Seg label="When asked" value={c.recent ? "recent" : "any"} options={[["any", "Asked any time"], ["recent", "Asked in the last 6 months"]]} onPick={(v) => edit((cur) => ({ ...cur, recent: v === "recent" }))} />
+                    </div>
+                    <span className="ly-lab">Groups</span>
+                    <div className="mk-pills">
+                        {data.company_groups.map((g) => (
+                            <button key={g.name} className="mk-pill" aria-pressed={c.groups.includes(g.name)} onClick={() => edit((cur) => ({ ...cur, groups: toggle(cur.groups, g.name) }))}>{g.name}<em>{byCompany.groups.get(g.name) ?? 0}</em></button>
                         ))}
                     </div>
-                    <div className="adds">
-                        {c.anyDiff ? (
-                            <button style={{ gridColumn: "1 / -1" }} disabled={c.anyCount >= 6} onClick={() => edit((cur) => ({ ...cur, anyCount: cur.anyCount + 1 }))}>+ Any difficulty<small>{pool.length} available</small></button>
-                        ) : (
-                            BANDS.map((band, i) => (
-                                <button key={band} disabled={(c.mix[i] ?? 0) >= have[i]! || (c.mix[i] ?? 0) >= 4} onClick={() => addSlot(i)}>+ {DIFF[band][0]}<small>{have[i]} available</small></button>
-                            ))
-                        )}
+                    {c.groups.length + c.companies.length === 0 && <div className="mk-empty"><Target /><span>No company picked, so the round can draw from any of them. Pick a group or companies to narrow the pool.</span></div>}
+                    <div className="mk-cos">
+                        {shownCo.map((x, i) => {
+                            const on = c.companies.includes(x.name);
+                            const group = data.company_groups.find((g) => g.companies.includes(x.name))?.name ?? "";
+                            return (
+                                <button key={x.name} className="mk-co" aria-pressed={on} style={{ "--i": Math.min(i, 12) } as CSSProperties} onClick={() => edit((cur) => ({ ...cur, companies: toggle(cur.companies, x.name) }))}>
+                                    <span className="mk-av">{x.name[0]}</span>
+                                    <span className="mk-ot"><b>{x.name}</b><small>{group}</small></span>
+                                    <span className="mk-cn"><b>{x.n}</b><small>in the pool</small></span>
+                                    <span className="mk-add"><Plus /></span>
+                                </button>
+                            );
+                        })}
                     </div>
-                    <div className="anyrow"><Switch on={c.anyDiff} onClick={() => edit((cur) => ({ ...cur, anyDiff: !cur.anyDiff }))} title="Any difficulty" /></div>
-                    <dl className="kv">
-                        <div><dt>Time at suggested pace</dt><dd>{perTotal} min</dd></div>
-                        <div><dt>Timer</dt><dd>{timerName}</dd></div>
-                        <div><dt>Pause</dt><dd>{c.strict ? "not allowed" : "allowed"}</dd></div>
-                        <div><dt>Topic and tags</dt><dd>{c.blind ? "hidden" : "shown"}</dd></div>
-                    </dl>
-                    {warnings.map((w) => <div key={w.text} className={w.cls}>{w.text}</div>)}
-                    <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Draw and start the clock →</button>
-                    <div className="foot">
-                        {naming ? (
-                            <form
-                                onSubmit={(e) => {
-                                    e.preventDefault();
-                                    const n = name.trim();
-                                    if (!n) return;
-                                    savePresets.mutate([...presets.filter((p) => p.name !== n), { name: n, config: c }]);
-                                    setPreset(`saved:${n}`);
-                                    setNaming(false);
-                                    setName("");
-                                }}
-                            >
-                                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this preset" aria-label="Preset name" maxLength={40} autoFocus />
-                                <div className="row"><button className="mi-ghost" type="submit" disabled={!name.trim()}>Save</button><button className="mi-ghost" type="button" onClick={() => setNaming(false)}>Cancel</button></div>
-                            </form>
-                        ) : (
-                            <button className="mi-ghost" onClick={() => setNaming(true)}>Save as a preset</button>
-                        )}
+                    {!q && matching.length > 8 && <button className="mi-ghost" style={{ justifySelf: "start" }} onClick={() => setAllCo(!allCo)}>{allCo ? "Show fewer" : `Show ${matching.length - 8} more`}</button>}
+                </section>
+            )}
+
+            {tab === "clock" && (
+                <section className="mk-sec mk-clock">
+                    <div className="mk-dialw">
+                        {dial}
+                        <div className="mk-dc"><b>{c.format === "up" ? "∞" : c.format === "total" ? `${c.total}:00` : `${arcTotal}:00`}</b><small>{need} problem{need === 1 ? "" : "s"} · {c.format === "total" ? `${perTotal} min at the suggested pace` : c.format === "per" ? "a clock for each" : "the clock counts up"}</small></div>
                     </div>
-                </aside>
-            </div>
+                    <div className="mk-cset">
+                        <Sh n={<Clock />} t="Format" />
+                        <div className="mk-opts three" role="radiogroup" aria-label="Timer format">
+                            {([["total", "Countdown for the round", "one clock for every problem"], ["per", "Countdown per problem", "a clock each, at the minutes below"], ["up", "Stopwatch only", "no limit; you end the round"]] as const).map(([k, label, hint]) => (
+                                <button key={k} role="radio" aria-checked={c.format === k} aria-pressed={c.format === k} className="mk-opt" onClick={() => edit((cur) => ({ ...cur, format: k }))}>
+                                    <span className="mk-ot"><b>{label}</b><small>{hint}</small></span>
+                                </button>
+                            ))}
+                        </div>
+                        {c.format === "up" ? (
+                            <p className="mi-hint">No limit. The clock counts up ({c.per.join(" / ")} min suggested).</p>
+                        ) : (
+                            <div className="mk-mins">
+                                {c.format === "total" && <div><span className="ly-lab">Round length</span><Stepper label="minutes" value={c.total} min={10} max={180} step={5} onChange={(total) => edit((cur) => ({ ...cur, total }))} /></div>}
+                                {BANDS.map((band, i) => (
+                                    <div key={band}><span className="ly-lab">{c.format === "total" ? "Suggested, " : ""}{band}</span><Stepper label={`${band} minutes`} value={c.per[i] ?? 0} min={3} max={90} onChange={(n) => edit((cur) => ({ ...cur, per: cur.per.map((x, j) => (j === i ? n : x)) as MockConfig["per"] }))} /></div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="mk-sws">
+                            <Switch on={c.strict} onClick={() => edit((cur) => ({ ...cur, strict: !cur.strict }))} title="Strict: no pause" hint="The clock keeps running, like a real call. Turn off to allow Pause." />
+                            <Switch on={c.blind} onClick={() => edit((cur) => ({ ...cur, blind: !cur.blind }))} title="Blind mode" hint="Hide topic, tags and companies until you log the problem." />
+                            <Switch on={c.auto} disabled={c.format === "up"} onClick={() => edit((cur) => ({ ...cur, auto: !cur.auto }))} title={c.format === "per" ? "Move on at 0:00" : "End the round at 0:00"} hint={c.format === "per" ? "Off: the problem's clock turns red and counts overtime." : "Off: the clock turns red and counts overtime, and you decide when to stop."} />
+                            <Switch on={c.warns} disabled={c.format === "up"} onClick={() => edit((cur) => ({ ...cur, warns: !cur.warns }))} title="Time warnings" hint="A banner at 10, 5 and 1 minute left." />
+                        </div>
+                    </div>
+                </section>
+            )}
+        </>
+    );
+
+    const right = (
+        <>
+            <aside className="mi-ticket">
+                <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Draw and start the clock →</button>
+                <div className="top">
+                    <div className="big"><b>{need}</b><span>{need === 1 ? "problem" : "problems"} · {c.format === "total" ? `${c.total} min` : c.format === "per" ? "per problem" : "no limit"}</span></div>
+                    <div className="bands">
+                        {BANDS.map((band, i) => <span key={band} className={`band ${band[0]}`}>{DIFF[band][0]} {have[i]}</span>)}
+                        <span className="note">can be drawn</span>
+                    </div>
+                </div>
+                <div className="slots">
+                    {slots.length === 0 && <p className="mi-hint" style={{ textAlign: "center", padding: "10px 0" }}>Add at least one problem.</p>}
+                    {slots.map((band, j) => (
+                        <div key={j} className="slot">
+                            <i>{j + 1}</i>
+                            <span className="ti">{c.anyDiff ? <b className="a">Any</b> : <b className={BANDS[band]![0]}>{DIFF[BANDS[band]!][0]}</b>}</span>
+                            <span className="tm">~{c.per[c.anyDiff ? 1 : band]}m</span>
+                            <button aria-label={`Remove problem ${j + 1}`} disabled={c.anyDiff && c.anyCount <= 1} onClick={() => removeSlot(band)}>✕</button>
+                        </div>
+                    ))}
+                </div>
+                <div className="adds">
+                    {c.anyDiff ? (
+                        <button style={{ gridColumn: "1 / -1" }} disabled={c.anyCount >= 6} onClick={() => edit((cur) => ({ ...cur, anyCount: cur.anyCount + 1 }))}>+ Any difficulty<small>{pool.length} available</small></button>
+                    ) : (
+                        BANDS.map((band, i) => (
+                            <button key={band} disabled={(c.mix[i] ?? 0) >= have[i]! || (c.mix[i] ?? 0) >= 4} onClick={() => addSlot(i)}>+ {DIFF[band][0]}<small>{have[i]} available</small></button>
+                        ))
+                    )}
+                </div>
+                <div className="anyrow"><Switch on={c.anyDiff} onClick={() => edit((cur) => ({ ...cur, anyDiff: !cur.anyDiff }))} title="Any difficulty" /></div>
+                <dl className="kv">
+                    <div><dt>Time at suggested pace</dt><dd>{perTotal} min</dd></div>
+                    <div><dt>Timer</dt><dd>{timerName}</dd></div>
+                    <div><dt>Pause</dt><dd>{c.strict ? "not allowed" : "allowed"}</dd></div>
+                    <div><dt>Topic and tags</dt><dd>{c.blind ? "hidden" : "shown"}</dd></div>
+                </dl>
+                {warnings.map((w) => <div key={w.text} className={w.cls}>{w.text}</div>)}
+                <div className="foot">
+                    {naming ? (
+                        <form
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                const n = name.trim();
+                                if (!n) return;
+                                savePresets.mutate([...presets.filter((p) => p.name !== n), { name: n, config: c }]);
+                                setPreset(`saved:${n}`);
+                                setNaming(false);
+                                setName("");
+                            }}
+                        >
+                            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name this preset" aria-label="Preset name" maxLength={40} autoFocus />
+                            <div className="row"><button className="mi-ghost" type="submit" disabled={!name.trim()}>Save</button><button className="mi-ghost" type="button" onClick={() => setNaming(false)}>Cancel</button></div>
+                        </form>
+                    ) : (
+                        <button className="mi-ghost" onClick={() => setNaming(true)}>Save as a preset</button>
+                    )}
+                </div>
+            </aside>
+            <HowFound
+                title="How a round is drawn"
+                text={`From the pool, ${c.favour === "random" ? "at random" : c.favour === "weak" ? "weighted towards your weak spots" : "weighted by how often the chosen companies ask"}. The same problem never comes twice in a round.`}
+                rows={[["Pool", pool.length], ["Weighting", c.favour === "random" ? "uniform" : c.favour === "weak" ? "weak ×3" : "often asked"], ["Repeats", "never in a round"], ["Timer", c.format === "total" ? `${c.total}:00` : c.format === "per" ? "per problem" : "stopwatch"]]}
+            />
+        </>
+    );
+
+    return (
+        <div className="mi-wrap m-setup mk-3">
+            <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Mock interview"]} title={<>Build your <span style={{ color: "var(--acc)" }}>interview.</span></>} sub="Pick the pool, the problems and the clock, then draw a round." tiles={tiles} left={left} center={center} right={right} label="Presets and rounds" />
             <div className="m-dock">
                 <span><b>{pool.length}</b> can be drawn · {need} problem{need === 1 ? "" : "s"}</span>
                 <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Start →</button>
             </div>
+        </div>
+    );
+}
+
+const PCOL = ["var(--grn)", "var(--fn)", "var(--acc)", "var(--vio)", "var(--bad)", "var(--warn)"];
+const Check = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7" /></svg>;
+const Cross = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>;
+const Plus = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" /></svg>;
+const Eye = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" /></svg>;
+const Layers = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true"><path d="M8 2 1.5 5.5 8 9l6.5-3.5zM1.5 9 8 12.5 14.5 9" /></svg>;
+const Target = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5" /><circle cx="8" cy="8" r="2.5" /></svg>;
+const Clock = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" /></svg>;
+
+/** The pool as dots, one per problem, coloured by difficulty; two light up in turn, the way a draw might pick them. */
+function PoolDots({ kinds }: { kinds: string[] }) {
+    const [pick, setPick] = useState<number[]>([]);
+    useEffect(() => {
+        if (kinds.length < 2) return;
+        const t = window.setInterval(() => setPick([Math.floor(Math.random() * kinds.length), Math.floor(Math.random() * kinds.length)]), 1600);
+        return () => window.clearInterval(t);
+    }, [kinds.length]);
+    const order = { easy: 0, medium: 1, hard: 2 } as Record<string, number>;
+    const sorted = [...kinds].sort((a, b) => (order[a] ?? 0) - (order[b] ?? 0));
+    return (
+        <div className="mk-dots" aria-hidden="true">
+            {sorted.slice(0, 900).map((k, i) => <i key={i} className={`${k[0]}${pick.includes(i) ? " pick" : ""}`} />)}
         </div>
     );
 }

@@ -139,3 +139,19 @@
 .pp-log .lg{position:relative}.pp-log .lg kbd{position:absolute;top:6px;right:8px;font:500 11px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
 .pp-log .lg.sug{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-bg)}
 .pp-nrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pp-nrow input{flex:1;min-width:140px;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--inset);color:var(--fg);padding:0 10px;font:500 12px var(--mono)}.pp-nrow .pp-act{margin:0;flex:1}
+
+/* The problem page in the 2026 redesign (three panels): the same idea, free instead and previous / next on the left; the statement and
+   the lessons in the centre; logging, notes, recall, the timer and companies on the right. Reading mode drops both side panels. */
+.ly-page.pp .pp-crumbs{display:inline-flex;gap:8px;color:var(--acc);font:inherit;letter-spacing:inherit}
+.ly-page.pp .pp-crumbs i{font-style:normal;color:var(--dim)}
+.ly-page.pp .pp-titlerow{margin:0;gap:14px}
+.ly-page.pp .pp-titlerow .d-st{width:36px;height:36px}
+.pp-sub{display:grid;gap:10px;margin-top:4px}
+.ly-page.pp .pp-badges,.ly-page.pp .pp-tags{margin:0}
+.ly-page.pp .pp-ins{display:block;margin:0;font-size:13.5px}
+.ly-page.pp .pp-subnav{position:sticky;top:var(--hdr-h);z-index:5;margin:0;border-bottom:1px solid var(--line2);background:color-mix(in oklab,var(--bg) 94%,transparent);backdrop-filter:blur(8px)}
+.ly-page.pp .pp-subnav .pp-read{margin-left:auto}
+.ly-rp .pp-rail{position:static;top:auto;order:0}
+.ly-lp .pp-pn{grid-template-columns:minmax(0,1fr);gap:8px}
+.ly-lp .pp-pn a:last-child{text-align:left}
+.ly-page.pp.reading .ly-cp{max-width:860px;margin:0 auto;width:100%}

@@ -163,3 +163,39 @@ a.tcard:hover,.tcard:not(.planned):hover{transform:translateY(-3px);box-shadow:0
 .nextup .go,.nextup .btn.go{position:relative;overflow:hidden;transition:transform .2s var(--kease,ease),box-shadow .25s,filter .2s}
 .nextup .go:hover{transform:translateY(-1px);box-shadow:0 10px 26px -12px var(--ca);filter:brightness(1.05)}.nextup .go:active{transform:scale(.99)}
 .fchip{transition:color .2s,border-color .2s,background .2s,transform .15s var(--kease,ease)}.fchip:hover{border-color:var(--line)}.fchip:active{transform:scale(.96)}
+
+/* The pattern pages in the 2026 redesign (components/PatternShell.tsx): the strip of patterns, then one bar with the tabs on the left and
+   Next, Reset progress and the pattern pager on the right. The title and tiles come from the shared frame (styles/layout.css). */
+.ps-strip{border:0;background:none;padding:2px 0}
+.ps-strip .arr{border-radius:50%;width:34px;height:34px;background:var(--panel);border-color:var(--line2)}
+.ps-strip .pchip{height:34px;border-radius:999px;border-color:var(--line2);background:var(--panel);font-weight:500;font-size:13px;padding:0 13px 0 6px}
+.ps-strip .pchip:hover{background:color-mix(in oklab,var(--acc) 6%,var(--panel))}
+.ps-strip .pchip.on{border-color:color-mix(in oklab,var(--acc) 45%,var(--line));background:color-mix(in oklab,var(--acc) 9%,transparent)}
+.ringm{width:22px;height:22px;background:conic-gradient(var(--acc) var(--p,0%),var(--line2) 0);font-size:9px}.ringm span{width:16px;height:16px;background:var(--bg)}
+.ps-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line2)}
+.ps-bar .ps-tabs{border-bottom:0;flex:1 1 auto;min-width:0;gap:4px}
+.ps-tabs a,.ps-tabs .off{padding:13px 14px 14px;font-size:14px;border-bottom-width:2px}
+.ps-tabs a.on small{background:color-mix(in oklab,var(--acc) 14%,transparent);color:color-mix(in oklab,var(--acc) 78%,var(--fg))}
+.ps-acts{display:flex;align-items:center;gap:8px;padding-bottom:8px;margin-left:auto;flex-wrap:wrap}
+.ps-next{height:34px;display:inline-flex;align-items:center;gap:8px;padding:0 14px;border-radius:10px;border:1px solid color-mix(in oklab,var(--acc) 34%,var(--line2));background:color-mix(in oklab,var(--acc) 9%,var(--panel));color:var(--fg);font:600 12.5px var(--sans);text-decoration:none;max-width:340px;min-width:0;transition:translate .25s var(--ease),border-color .2s,background .2s}
+.ps-next em{font:600 10px var(--mono);font-style:normal;letter-spacing:.14em;text-transform:uppercase;color:var(--acc);flex:none}
+.ps-next svg{width:13px;height:13px;flex:none;color:var(--acc)}
+.ps-next{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.ps-next:hover{translate:0 -1px;border-color:var(--acc);background:color-mix(in oklab,var(--acc) 13%,var(--panel))}
+.ps-reset{height:34px;padding:0 12px;border:1px solid transparent;border-radius:10px;color:var(--dim);font:500 12.5px var(--sans);transition:color .2s,border-color .2s}
+.ps-reset:hover,.ps-reset[aria-expanded=true]{color:var(--bad);border-color:color-mix(in oklab,var(--bad) 40%,var(--line2))}
+.ps-acts .hintkeys{display:inline-flex;align-items:center;gap:2px;height:34px;padding:0 4px;border:1px solid var(--line2);border-radius:10px;font:500 11px var(--mono);color:var(--dim)}
+.ps-acts .hintkeys a{width:26px;height:26px;display:grid;place-items:center;border-radius:7px;color:var(--mut);font:500 15px var(--mono)}
+.ps-acts .hintkeys a:hover{background:color-mix(in oklab,var(--acc) 9%,transparent);color:var(--fg)}
+.ps-acts .hintkeys em{font-style:normal;padding:0 6px}
+.ps-acts .hintkeys kbd{font:600 11px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:8px;padding:1px 5px;color:var(--dim);background:var(--inset)}
+@media (min-width:901px){.ps-mini .ly-lay{--ly-lw:64px}}
+@media (max-width:900px){.ps-acts{margin-left:0;width:100%}.ps-next{flex:1}.ps-acts .hintkeys em{display:none}.ps-bar .ps-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.ps-bar .ps-tabs::-webkit-scrollbar{display:none}.ps-tabs a,.ps-tabs .off{flex:none;padding-inline:11px}.ps-tabs kbd{display:none}}
+/* what is shown: the bar above the Problems list, and the left panel of Practice */
+.ps-filt{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
+.ps-filt .ps-fsum{min-width:170px}
+.ps-fshown{font-size:12.5px;color:var(--dim)}
+.ps-fsum{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:4px 10px;font-size:13px;color:var(--mut)}.ps-fsum b{font:700 18px var(--mono);color:var(--fg)}
+.ps-fbar{grid-column:1/-1;height:4px;border-radius:3px;background:var(--line2);overflow:hidden}.ps-fbar i{display:block;height:100%;background:var(--acc);border-radius:3px}
+.ps-fseg{display:grid!important;grid-auto-flow:column;grid-auto-columns:1fr;width:100%}
+.ps-fchips{display:flex;gap:6px;flex-wrap:wrap}

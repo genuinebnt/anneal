@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("a metric explains itself on hover and keyboard focus", async ({ page }) => {
     await page.goto("/dsa/plan");
-    const label = page.locator(".s-stats .hinted", { hasText: "NEW A WEEK" });
+    const label = page.locator(".ly-tiles .hinted", { hasText: "New a week" });
     await label.focus();
     await expect.poll(() => label.evaluate((el) => getComputedStyle(el, "::after").opacity)).toBe("1");
     await expect(label).toHaveAttribute("data-tip", /New problems you will start/);

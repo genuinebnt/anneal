@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Counted, type ProgressOverview, type ProgressStats, type ReviewsView } from "../api";
 import { Header } from "../components/Header";
-import { StreaksBox } from "../components/Streaks";
+import { HowFound, Page3, Panel, Tile } from "../components/layout";
 import { LEVEL_COLOR, pctColor } from "../components/bits";
 import { SECTION_NAMES } from "../curriculum";
 import { DATA_STRUCTURES, counted, readinessRows, type ReadyRow } from "../dsa";
@@ -195,20 +195,10 @@ function ReadinessLines({ trend }: { trend: ProgressOverview["readiness_trend"] 
 }
 
 function Overview({ o }: { o: ProgressOverview }) {
-  const delta = o.unassisted_30d !== null && o.unassisted_prev_30d !== null ? Math.round(o.unassisted_30d - o.unassisted_prev_30d) : null;
   const lastWeek = o.weekly[o.weekly.length - 1];
   return (
     <>
-      <Kpis
-        items={[
-          ["CURRENT STREAK", `${o.streak} ${o.streak === 1 ? "day" : "days"}`, `longest: ${o.longest_streak} ${o.longest_streak === 1 ? "day" : "days"}`, "var(--acc)"],
-          ["SOLVED THIS YEAR", o.solved_year, `on ${o.active_days_year} ${o.active_days_year === 1 ? "day" : "days"}`],
-          ["UNASSISTED", pct(o.unassisted_30d), delta === null ? "last 30 days" : `${delta >= 0 ? "+" : ""}${delta} points vs the 30 days before`, "var(--grn)"],
-          ["FOCUS TIME", dur(o.focus_week_seconds), `this week · ${dur(o.focus_quarter_seconds)} in 90 days`],
-        ]}
-      />
-      <StreaksBox />
-      <div className="pbox" style={{ marginTop: 20 }}>
+      <div className="pbox">
         <h3>Every day you solved something</h3>
         <p className="sub">Darker means more problems solved that day. Hover a day for the count.</p>
         <Heatmap start={o.heat_start} counts={o.heat} />
@@ -304,34 +294,7 @@ function Overview({ o }: { o: ProgressOverview }) {
             </div>
           </div>
         </Box>
-        <Box title="By section" sub="Solved of written problems, and readiness.">
-          <table className="ptable">
-            <thead>
-              <tr>
-                <th>SECTION</th>
-                <th className="num">SOLVED</th>
-                <th className="num">READY</th>
-              </tr>
-            </thead>
-            <tbody>
-              {o.by_section.map((s) => (
-                <tr key={s.section}>
-                  <td>
-                    <span style={{ color: SECTION_COLOR[s.section] }}>■</span> {SECTION_NAMES[s.section]}
-                  </td>
-                  <td className="num">
-                    {s.solved} / {s.written}
-                  </td>
-                  <td className="num" style={{ color: s.readiness === null ? "var(--dim)" : pctColor(s.readiness) }}>
-                    {pct(s.readiness)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Box>
       </div>
-      <DsaReadiness />
     </>
   );
 }
@@ -374,10 +337,11 @@ function DsaReadiness() {
     </table>
   );
   return (
-    <div className="pgrid even">
+    <>
       <Box title="Readiness by pattern" sub={sub}>{table(patterns, "PATTERN")}</Box>
-      <Box title="Readiness by data structure" sub="The same measure, by the data structure a problem is tagged with. A problem counts under each one it uses.">{table(structures, "DATA STRUCTURE")}</Box>
-    </div>
+      <Box title="Readiness by data structure" sub="By the data structure a problem is tagged with; a problem counts under each one it uses.">{table(structures, "DATA STRUCTURE")}</Box>
+      <HowFound title="How readiness is measured" text="Solved problems of each kind, weighted by difficulty; a solve with help counts half, and recall fades between reviews." rows={[["Easy", "×1"], ["Medium", "×2"], ["Hard", "×3"], ["With help", "×½"]]} />
+    </>
   );
 }
 
@@ -613,45 +577,60 @@ export function ProgressPage() {
   const stats = useQuery({ queryKey: ["stats"], queryFn: api.stats, enabled: tab === "rust" });
   const reviews = useQuery({ queryKey: ["reviews"], queryFn: api.reviews });
   const failed = overview.isError || stats.isError || reviews.isError;
-  const streak = overview.data?.streak;
+  const o = overview.data;
+  const ov = useQuery({ queryKey: ["progress"], queryFn: api.progress });
+  const p = ov.data;
+  const delta = p && p.unassisted_30d !== null && p.unassisted_prev_30d !== null ? Math.round(p.unassisted_30d - p.unassisted_prev_30d) : null;
+  const tiles = p && (
+    <>
+      <Tile em="Solved this year" strong={p.solved_year} small={`on ${p.active_days_year} ${p.active_days_year === 1 ? "day" : "days"}`} />
+      <Tile em="Unassisted" strong={p.unassisted_30d === null ? "—" : <>{Math.round(p.unassisted_30d)}<span>%</span></>} small={delta === null ? "last 30 days" : `${delta >= 0 ? "+" : ""}${delta} points vs the 30 days before`} />
+      <Tile em="Focus time" strong={dur(p.focus_week_seconds)} small={`this week · ${dur(p.focus_quarter_seconds)} in 90 days`} />
+      {reviews.data && <Tile em="Reviews due" strong={reviews.data.due_today} hot={reviews.data.due_today > 0} color="var(--vio)" small="today" />}
+    </>
+  );
+  const left = (
+    <>
+      <Panel title="Progress">
+        <nav className="pr-nav" role="tablist" aria-label="Progress">
+          {TABS.map(([k, label]) => (
+            <button key={k} role="tab" className={tab === k ? "on" : ""} aria-selected={tab === k} onClick={() => setTab(k)}>
+              {label}
+              {k === "reviews" && reviews.data?.due_today ? <em>{reviews.data.due_today}</em> : null}
+            </button>
+          ))}
+        </nav>
+      </Panel>
+      {p && (
+        <Panel title="By section">
+          <div className="pr-secs">
+            {p.by_section.map((x) => (
+              <div key={x.section} title={`${SECTION_NAMES[x.section]}: ${x.solved} of ${x.written} solved, readiness ${pct(x.readiness)}`}>
+                <span><i style={{ background: SECTION_COLOR[x.section] }} />{SECTION_NAMES[x.section]}</span>
+                <b>{x.solved} / {x.written}</b>
+                <em style={{ color: x.readiness === null ? "var(--dim)" : pctColor(x.readiness) }}>{pct(x.readiness)}</em>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </>
+  );
+  const center = (
+    <>
+      {failed && <p className="notice bad">Couldn't load your progress. Is the API running?</p>}
+      {tab === "overview" && o && <Overview o={o} />}
+      {tab === "rust" && stats.data && <RustStats s={stats.data} />}
+      {tab === "reviews" && reviews.data && <Reviews r={reviews.data} />}
+    </>
+  );
 
   return (
     <>
       <Header />
-      <main className="page">
-        <div className="wrap" style={{ paddingBlock: "48px 16px" }}>
-          <div className="eyebrow">
-            <span style={{ color: "var(--acc)" }}>PROGRESS</span>
-            {streak !== undefined && (
-              <>
-                <span>/</span>
-                <span>{streak}-DAY STREAK</span>
-              </>
-            )}
-            {reviews.data && (
-              <>
-                <span>/</span>
-                <span>{reviews.data.due_today} DUE TODAY</span>
-              </>
-            )}
-          </div>
-          <h1 className="h1 md" style={{ marginTop: 16 }}>
-            Steady practice, <span style={{ color: "var(--acc)" }}>measured.</span>
-          </h1>
-          <div className="ptabs" role="tablist">
-            {TABS.map(([k, label]) => (
-              <button key={k} role="tab" className={tab === k ? "on" : ""} aria-selected={tab === k} onClick={() => setTab(k)}>
-                {label}
-                {k === "reviews" && reviews.data?.due_today ? ` · ${reviews.data.due_today}` : ""}
-              </button>
-            ))}
-          </div>
-          {failed && <p className="notice bad">Couldn't load your progress. Is the API running?</p>}
-          {tab === "overview" && overview.data && <Overview o={overview.data} />}
-          {tab === "rust" && stats.data && <RustStats s={stats.data} />}
-          {tab === "reviews" && reviews.data && <Reviews r={reviews.data} />}
-        </div>
-      </main>
+      <div className="pr-3">
+        <Page3 crumb={["Progress", "DSA · Rust · Courses"]} title={<>Steady practice, <span style={{ color: "var(--acc)" }}>measured.</span></>} tiles={tiles} left={left} center={center} right={tab === "overview" ? <DsaReadiness /> : undefined} label="Progress" />
+      </div>
     </>
   );
 }

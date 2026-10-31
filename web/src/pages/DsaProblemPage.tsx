@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { Page3 } from "../components/layout";
 import { Skeleton } from "../components/Skeleton";
 import { GradeGlyph } from "../components/icons";
 import { RecallCurve } from "../components/RecallCurve";
@@ -270,40 +271,41 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         : ["Not started", p.list_tag ? "Solve it on LeetCode, then log how it went. The next review is scheduled for you." : "Solve it on LeetCode, then log how it went. It is tracked, but not part of your goal, the reviews or the calendar."];
     const lists = p.lists.filter((l) => l !== "practice" || p.lists.length === 1).map((l) => LIST_NAME[l]);
 
-    return frame(
-        <>
-            <div className="pp-band">
-                <div className="pp-in">
-                    <div className="pp-crumbs">
-                        <Link to="/dsa">DSA</Link>
-                        <span>/</span>
-                        {pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{ideaShown ? pattern.name.toUpperCase() : "PATTERN"}</Link> : <span>?</span>}
-                        <span>/</span>
-                        <span>#{p.number}</span>
-                    </div>
-                    <div className="pp-titlerow">
-                        <Mark p={p} today={today} />
-                        <h1>{p.title}</h1>
-                    </div>
-                    <div className="pp-badges">
-                        <ProblemTags p={p} />
-                        <span className="pp-b">~{MINUTES[p.difficulty]} min</span>
-                        {lists.map((l) => <span key={l} className="pp-b">{l}</span>)}
-                        {technique && ideaShown && <span className="pp-b tech">{technique.name}</span>}
-                    </div>
-                    {p.tags.length > 0 && <div className="pp-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</div>}
-                    {p.insight && (ideaShown ? <p className="pp-ins"><b>Key insight</b>{p.insight}</p> : <p className="pp-ins"><b>Key insight</b><button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></p>)}
-                    <nav className="pp-subnav" aria-label="Sections">
-                        {sections.map((x) => (
-                            <button key={x.id} className={section === x.id ? "on" : ""} aria-current={section === x.id} onClick={() => go(x.id)}>{x.label}</button>
-                        ))}
-                        <button className="pp-read" aria-pressed={reading} title="Hide the side column and read at a comfortable width" onClick={() => { setReading(!reading); setPref("pp.reading", !reading); }}>Reading mode</button>
-                    </nav>
-                </div>
-            </div>
-
-            <div className="pp-cols">
-                <div className="pp-main">
+    const crumb = (
+        <span className="pp-crumbs">
+            <Link to="/dsa">DSA</Link>
+            <i>/</i>
+            {pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{ideaShown ? pattern.name.toUpperCase() : "PATTERN"}</Link> : <span>?</span>}
+            <i>/</i>
+            <span>#{p.number}</span>
+        </span>
+    );
+    const title = (
+        <span className="pp-titlerow">
+            <Mark p={p} today={today} />
+            <span>{p.title}</span>
+        </span>
+    );
+    const sub = (
+        <span className="pp-sub">
+            <span className="pp-badges">
+                <ProblemTags p={p} />
+                <span className="pp-b">~{MINUTES[p.difficulty]} min</span>
+                {lists.map((l) => <span key={l} className="pp-b">{l}</span>)}
+                {technique && ideaShown && <span className="pp-b tech">{technique.name}</span>}
+            </span>
+            {p.tags.length > 0 && <span className="pp-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</span>}
+            {p.insight && (ideaShown ? <span className="pp-ins"><b>Key insight</b>{p.insight}</span> : <span className="pp-ins"><b>Key insight</b><button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></span>)}
+        </span>
+    );
+    const center = (
+        <div className="pp-main">
+            <nav className="pp-subnav" aria-label="Sections">
+                {sections.map((x) => (
+                    <button key={x.id} className={section === x.id ? "on" : ""} aria-current={section === x.id} onClick={() => go(x.id)}>{x.label}</button>
+                ))}
+                <button className="pp-read" aria-pressed={reading} title="Hide the side panels and read at a comfortable width" onClick={() => { setReading(!reading); setPref("pp.reading", !reading); }}>Reading mode</button>
+            </nav>
                     <section className="pp-sec" id="pp-problem">
                         <h3><span>PROBLEM</span><em>from LeetCode{statement.data?.stale ? ", an older copy" : ""}</em></h3>
                         {statement.isLoading && <p className="rempty">Fetching the statement from LeetCode…</p>}
@@ -402,15 +404,56 @@ export function DsaProblemPage({ slug }: { slug: string }) {
 
                     {!lesson.data && <MySolutions p={p} template={template} />}
 
-                    {(prev || next) && (
-                        <div className="pp-pn">
-                            {prev ? <Link to="/d/$slug" params={{ slug: prev.slug }}><small>← PREVIOUS IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"}</small><b>{prev.title}</b></Link> : <span />}
-                            {next ? <Link to="/d/$slug" params={{ slug: next.slug }}><small>NEXT IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"} →</small><b>{next.title}</b></Link> : <span />}
+        </div>
+    );
+    const left = (
+        <>
+                    {sameIdea.length > 1 && (
+                        <div className="pp-card">
+                            <h3><span>SAME IDEA</span><span>{sameIdea.length} problems</span></h3>
+                            <div className="pp-rel">
+                                {(more ? sameIdea : sameIdea.slice(0, SAME_IDEA_SHOWN)).map((x) => (
+                                    <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} className={x.id === p.id ? "now" : ""}>
+                                        <i className={dotOf(x)} />
+                                        <span>{x.title}</span>
+                                        <small>{x.id === p.id ? "THIS" : x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>
+                                    </Link>
+                                ))}
+                            </div>
+                            {sameIdea.length > SAME_IDEA_SHOWN && (
+                                <button className="pp-more" onClick={() => setMore(!more)}>{more ? "show fewer" : `+${sameIdea.length - SAME_IDEA_SHOWN} more`}</button>
+                            )}
                         </div>
                     )}
-                </div>
 
-                <aside className="pp-rail">
+                    {p.premium && (() => {
+                        const free = (technique ? o.problems.filter((x) => x.technique === technique.id && !x.premium && x.id !== p.id) : o.problems.filter((x) => x.pattern === p.pattern && !x.premium && x.id !== p.id)).sort((a, b) => Math.abs(DIFFS.indexOf(a.difficulty) - DIFFS.indexOf(p.difficulty)) - Math.abs(DIFFS.indexOf(b.difficulty) - DIFFS.indexOf(p.difficulty)) || a.order - b.order).slice(0, 3);
+                        return free.length ? (
+                            <div className="pp-card">
+                                <h3><span>FREE INSTEAD</span><span>same idea, no Premium</span></h3>
+                                <div className="pp-rel">
+                                    {free.map((x) => (
+                                        <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }}>
+                                            <i className={dotOf(x)} />
+                                            <span>{x.title}</span>
+                                            <small>{DIFF[x.difficulty][0][0]}</small>
+                                        </Link>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null;
+                    })()}
+
+            {(prev || next) && (
+                <div className="pp-pn">
+                    {prev ? <Link to="/d/$slug" params={{ slug: prev.slug }}><small>← PREVIOUS IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"}</small><b>{prev.title}</b></Link> : <span />}
+                    {next ? <Link to="/d/$slug" params={{ slug: next.slug }}><small>NEXT IN {ideaShown ? pattern?.name.toUpperCase() : "THIS PATTERN"} →</small><b>{next.title}</b></Link> : <span />}
+                </div>
+            )}
+        </>
+    );
+    const right = (
+        <aside className="pp-rail">
                     <div className="pp-card">
                         <div className="pp-solve">
                             <a className="pp-act pri" href={leetcode(p.slug)} target="_blank" rel="noreferrer">Solve on LeetCode ↗</a>
@@ -455,42 +498,6 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                         )}
                     </div>
 
-                    {sameIdea.length > 1 && (
-                        <div className="pp-card">
-                            <h3><span>SAME IDEA</span><span>{sameIdea.length} problems</span></h3>
-                            <div className="pp-rel">
-                                {(more ? sameIdea : sameIdea.slice(0, SAME_IDEA_SHOWN)).map((x) => (
-                                    <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} className={x.id === p.id ? "now" : ""}>
-                                        <i className={dotOf(x)} />
-                                        <span>{x.title}</span>
-                                        <small>{x.id === p.id ? "THIS" : x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>
-                                    </Link>
-                                ))}
-                            </div>
-                            {sameIdea.length > SAME_IDEA_SHOWN && (
-                                <button className="pp-more" onClick={() => setMore(!more)}>{more ? "show fewer" : `+${sameIdea.length - SAME_IDEA_SHOWN} more`}</button>
-                            )}
-                        </div>
-                    )}
-
-                    {p.premium && (() => {
-                        const free = (technique ? o.problems.filter((x) => x.technique === technique.id && !x.premium && x.id !== p.id) : o.problems.filter((x) => x.pattern === p.pattern && !x.premium && x.id !== p.id)).sort((a, b) => Math.abs(DIFFS.indexOf(a.difficulty) - DIFFS.indexOf(p.difficulty)) - Math.abs(DIFFS.indexOf(b.difficulty) - DIFFS.indexOf(p.difficulty)) || a.order - b.order).slice(0, 3);
-                        return free.length ? (
-                            <div className="pp-card">
-                                <h3><span>FREE INSTEAD</span><span>same idea, no Premium</span></h3>
-                                <div className="pp-rel">
-                                    {free.map((x) => (
-                                        <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }}>
-                                            <i className={dotOf(x)} />
-                                            <span>{x.title}</span>
-                                            <small>{DIFF[x.difficulty][0][0]}</small>
-                                        </Link>
-                                    ))}
-                                </div>
-                            </div>
-                        ) : null;
-                    })()}
-
                     <NotesLink id={p.id} />
 
                     {s.last_grade && previews !== null && <RecallCurve id={p.id} version={s.reps} />}
@@ -503,8 +510,16 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                             <Companies companies={p.companies} limit={10} />
                         </div>
                     )}
-                </aside>
+        </aside>
+    );
+
+    return (
+        <>
+            <Header area="dsa" />
+            <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+                <Page3 className={`pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
             </div>
-        </>,
+            {toast}
+        </>
     );
 }

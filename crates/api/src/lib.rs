@@ -26,6 +26,7 @@ pub mod solutions;
 pub mod streaks;
 pub mod statement;
 mod store;
+pub mod system;
 mod views;
 
 use std::path::Path;
@@ -130,6 +131,7 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/courses/{course}/solutions", put(course::put_solutions))
         .route("/courses/{course}/repo", get(course::get_repo).put(course::put_repo))
         .route("/settings", get(settings::get))
+        .route("/system", get(system::get))
         .route("/format", post(format::format))
         .route("/settings/editor", put(settings::put_editor))
         .route("/settings/appearance", put(settings::put_appearance))
@@ -144,7 +146,9 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         // the calendar feed: public, but only with its long random token
         .route("/feed/{file}", get(feed::ics))
         .merge(protected)
-        .with_state(state);
+        .with_state(state)
+        .layer(middleware::from_fn(system::record));
+    system::start();
     let mut router = Router::new().nest("/api", api);
     // The CLI for other computers: public, because it is fetched before there is anything to sign in with (docs/CLI_INSTALL.md).
     router = router.route("/install.sh", get(install_script));

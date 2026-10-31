@@ -58,18 +58,28 @@ test("a long list of problems scrolls inside a box as tall as the implementation
     await expect(card.locator(".lr-ins").first()).toBeVisible();
 });
 
-test("on a phone the rail is a Jump to sheet, and nothing scrolls sideways", async ({ page }) => {
+test("on a phone the rail is a drawer opened from the Panel bar, and nothing scrolls sideways", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto("/dsa/patterns/D1");
     await expect(page.locator(".lr-card").first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
-    await page.getByRole("button", { name: /Jump to/ }).click();
-    const sheet = page.getByRole("dialog", { name: "Jump to a technique" });
-    await expect(sheet).toBeVisible();
-    await sheet.getByLabel("Find a technique").fill("simulation");
-    await sheet.locator(".lr-tl button", { hasText: "Direct simulation" }).click();
-    await expect(sheet).toHaveCount(0);
+    const rail = page.locator(".lr-rail");
+    await expect(rail).not.toBeInViewport();
+    await page.locator(".ly-pbar").getByRole("button", { name: "Panel" }).click();
+    await expect(rail).toBeInViewport();
+    await rail.getByLabel("Find a technique").fill("simulation");
+    await rail.locator(".lr-tl button", { hasText: "Direct simulation" }).click();
     await expect(page.locator(".lr-card.open", { hasText: "Direct simulation" })).toBeVisible();
+});
+
+test("the right panel names the techniques nearest the open one and says how they were found", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto("/dsa/patterns/D1#t-seen-set");
+    const about = page.locator(".lr-about");
+    await expect(about.locator(".lr-about-t")).toHaveText("Hash set for membership");
+    await expect(about.locator(".ly-it").first()).toBeVisible();
+    await expect(about.locator(".ly-it").first()).toContainText("shared");
+    await expect(page.getByText("How these were found")).toBeVisible();
 });
 
 test("a technique an Idea tab describes has a moving thumbnail in its card header, and one that is not described has none", async ({ page }) => {

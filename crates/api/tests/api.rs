@@ -597,6 +597,26 @@ async fn appearance_accent_round_trips_and_validates(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn system_reports_the_database_and_counts_requests(db: PgPool) {
+    let app = test_app(db);
+    // any request is counted, the system call itself included
+    assert_eq!(call(&app, Method::GET, "/api/settings", None).await.0, StatusCode::OK);
+    let (status, s) = call(&app, Method::GET, "/api/system", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(s["db"]["size"].as_i64().unwrap() > 0);
+    assert!(s["db"]["connections"].as_i64().unwrap() >= 1);
+    // the request log is one per process, shared with the tests running beside this one, so only its shape is checked
+    assert!(s["app"]["requests"].as_u64().unwrap() >= 1);
+    let recent = s["app"]["recent"].as_array().unwrap();
+    assert!(!recent.is_empty() && recent.len() <= 60);
+    assert!(recent.iter().all(|h| h["status"].as_u64().is_some() && h["path"].as_str().is_some()));
+    // the host fields are there even where /proc or Docker is missing (a laptop); they are then null
+    for key in ["cpu", "load", "mem", "swap", "disk"] {
+        assert!(s["now"].get(key).is_some(), "{key}");
+    }
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn solving_schedules_reviews_and_feeds_the_dashboards(db: PgPool) {
     let app = test_app(db.clone());
     let submit = |app: &Router| {

@@ -13,7 +13,7 @@ test("the mock pool can be only what is done, or that plus the same patterns", a
         expect(similar.length).toBeGreaterThan(solved.length);
 
         await page.goto("/dsa/mock");
-        const stat = page.locator(".s-stats", { hasText: "IN THE POOL" }).locator("div", { hasText: "IN THE POOL" }).first().locator("b");
+        const stat = page.locator(".ly-tl", { hasText: "In the pool" }).locator("strong");
         const which = page.getByRole("radiogroup", { name: "Which problems" }).or(page.getByRole("group", { name: "Which problems" }));
         await which.getByRole("radio", { name: "Problems I've done" }).or(which.getByRole("button", { name: "Problems I've done" })).first().click();
         await expect(stat).toHaveText(String(solved.length));

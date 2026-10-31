@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type CSSProperties } from "react";
 import { api } from "../api";
 import { Header } from "../components/Header";
+import { HowFound, Page3, Panel } from "../components/layout";
 import { Segmented, Switch } from "../components/ui";
 import { Skeleton } from "../components/Skeleton";
 import { getPref, setPref } from "../prefs";
-import { ACCENTS, useAppearance, usePageWidth } from "../settings";
+import { ACCENTS, useAppearance } from "../settings";
 import { THEMES, applyTheme, storedTheme, type Theme } from "../theme";
 import { readUi, setUi } from "../uiprefs";
 import { COUNT_KEYS, usePremiumSwitch } from "../premium";
@@ -43,8 +44,7 @@ export function SettingsPage() {
     const qc = useQueryClient();
     const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
     const dsa = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
-    const { accent, set: setAccent } = useAppearance();
-    const { width, set: setWidth } = usePageWidth();
+    const { accent, custom, set: setAccent, setCustom } = useAppearance();
     const [theme, setTheme] = useState<Theme>(storedTheme);
     const [barHidden, setBarHidden] = useState(() => getPref("statusbar.hidden", false));
     const [chime, setChime] = useState(() => getPref<{ chime?: boolean }>("focus.cfg", {}).chime === true);
@@ -76,13 +76,27 @@ export function SettingsPage() {
         return { total: inList.length, premium: premium.length, solvedPremium, free: inList.length - premium.length };
     })();
 
+    const right = (
+        <>
+            <Panel title="Preview">
+                <div className="st-prev">
+                    <span className="ly-crumb">DSA</span>
+                    <b>Insert Interval</b>
+                    <div className="st-prevt"><span className="lr-pill lv" style={{ color: "var(--warn)" }}>MEDIUM</span><span className="lr-pill pri-must">MUST</span></div>
+                    <span className="ps-fbar"><i style={{ width: "40%" }} /></span>
+                    <span className="ps-next" style={{ maxWidth: "none" }}><em>Next</em> Solve on LeetCode</span>
+                </div>
+                <p>The theme, accent and text size apply as you change them.</p>
+            </Panel>
+            <HowFound title="Where settings live" text="Counting, the accent and the editor are saved on the server; the theme is cached in this browser so the first paint is right. Text size, motion, contrast and the numbers bar stay in this browser." rows={[["On the server", "counting, accent, editor"], ["In this browser", "theme, size, motion"], ["Backups", "before every deploy"], ["Deleted rows", "archived, never lost"]]} />
+        </>
+    );
+
     return (
         <>
             <Header />
-            <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <div className="st-wrap">
-                    <h1>Settings</h1>
-                    {!srs ? (
+            <div className="st-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+                <Page3 crumb={["Settings"]} title="Settings" sub="What anneal counts and shows, how it looks, and your data." right={right} center={!srs ? (
                         <Skeleton lines={6} />
                     ) : (
                         <>
@@ -115,12 +129,15 @@ export function SettingsPage() {
                                 <div className="st-row">
                                     <b>Accent colour</b>
                                     
-                                    <Segmented className="st-ctl" label="Accent colour" value={accent} options={ACCENTS.map((x) => [x.id, x.label] as const)} onChange={setAccent} />
-                                </div>
-                                <div className="st-row">
-                                    <b>Page width</b>
-                                    
-                                    <Segmented className="st-ctl" label="Page width" value={width} options={[["narrow", "Centred"], ["wide", "Wide"]] as const} onChange={setWidth} />
+                                    <div className="st-ctl st-sws" role="radiogroup" aria-label="Accent colour">
+                                        {ACCENTS.filter((x) => x.id !== "custom").map((x) => (
+                                            <button key={x.id} role="radio" aria-checked={accent === x.id} aria-label={x.label} title={x.label} className={`hd-sw${accent === x.id ? " on" : ""}`} data-swatch={x.id} onClick={() => setAccent(x.id)} />
+                                        ))}
+                                        <label className={`hd-cpick${accent === "custom" ? " on" : ""}`} title="Any colour">
+                                            <input type="color" value={custom ?? "#c8875b"} onChange={(e) => setCustom(e.target.value)} aria-label="Any accent colour" />
+                                            <span />
+                                        </label>
+                                    </div>
                                 </div>
                                 <div className="st-row">
                                     <b>Text size</b>
@@ -174,9 +191,8 @@ export function SettingsPage() {
                                 <p className="rempty" style={{ margin: 0 }}>A reset or a deleted solution is archived first and kept forever, and the production database is backed up before every deploy.</p>
                             </section>
                         </>
-                    )}
-                </div>
-            </main>
+                    )} />
+            </div>
         </>
     );
 }

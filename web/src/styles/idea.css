@@ -194,3 +194,4 @@
 .id-link text{font:600 11px var(--mono);fill:var(--dim)}
 .id-link.hot path,path.id-link.hot{stroke:var(--acc);stroke-width:2.2}.id-link.hot text{fill:var(--acc)}
 path.id-link.far{stroke:var(--vio);stroke-dasharray:4 3;stroke-width:1.8}
+

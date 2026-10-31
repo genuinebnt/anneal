@@ -29,9 +29,8 @@ code,pre,kbd,textarea{font-variant-ligatures:normal;font-feature-settings:"calt"
 
 /* ---------- header: two tiers (docs/mockups/navbar-v2.html) ---------- */
 :root{--hdr-h:102px;--ease:cubic-bezier(.22,1,.36,1)}
-/* page width: main screens read --pw (--pw-lg for the wide boards); the account menu sets data-width. Reading screens keep their own measure. */
+/* page width: main screens read --pw (--pw-lg for the wide boards); styles/layout.css makes both full width. Reading screens keep their own measure. */
 :root{--pw:1180px;--pw-lg:1360px}
-html[data-width="wide"]{--pw:1560px;--pw-lg:1760px}
 .hdr{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:color-mix(in oklab,var(--bg) 88%,transparent);-webkit-backdrop-filter:saturate(1.4) blur(10px);backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--line2)}
 .hdr .hd-t1{height:58px;display:flex;align-items:center;gap:20px;padding:0 20px}
 .logo{display:flex;align-items:center;gap:10px;flex:none;padding:4px 6px;margin-left:-6px;border-radius:8px}

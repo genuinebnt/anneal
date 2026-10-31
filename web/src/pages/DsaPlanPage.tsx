@@ -1,8 +1,10 @@
 import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, type DsaOverview, type SrsSettings, type Weekday } from "../api";
-import { PageFrame, PageHero } from "../components/PageHero";
+import { Link } from "@tanstack/react-router";
+import { Header } from "../components/Header";
+import { HowFound, Page3, Tile } from "../components/layout";
 import { DateField, Segmented, Select, Stepper } from "../components/ui";
 import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
@@ -15,16 +17,18 @@ export function DsaPlanPage() {
   const overview = useQuery({ queryKey: ["dsa"], queryFn: api.dsa });
   const o = overview.data;
   return (
-    <PageFrame>
-      {o ? <Editor key={o.today} o={o} /> : (
-        <>
-          <PageHero eyebrow={<><b>DSA</b> / PLAN</>} title="Your plan," accent="on pace." />
-          <div className="s-body">{overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}</div>
-        </>
-      )}
-    </PageFrame>
+    <>
+      <Header area="dsa" />
+      <div className="p-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+        {o ? <Editor key={o.today} o={o} /> : (
+          <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} center={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />} />
+        )}
+      </div>
+    </>
   );
 }
+
+const TITLE = <>Your plan, <span style={{ color: "var(--acc)" }}>on pace.</span></>;
 
 function Editor({ o }: { o: DsaOverview }) {
   const qc = useQueryClient();
@@ -72,20 +76,15 @@ function Editor({ o }: { o: DsaOverview }) {
   const coreOptions: (readonly [string, string])[] = [["", `The same as the rest (${Math.round(s.retention * 100)}%)`], ...[0.9, 0.92, 0.95].filter((r) => r > s.retention).map((r) => [String(r), `${Math.round(r * 100)}%`] as const)];
   const firstOptions: (readonly [string, string])[] = [["", "Any day with room"], ...WEEKDAYS.filter((d) => s.capacity[d] > 0).map((d) => [d, d.charAt(0).toUpperCase() + d.slice(1)] as const)];
 
-  return (
+  const tiles = (
     <>
-    <PageHero
-      eyebrow={<><b>DSA</b> / PLAN</>}
-      title="Your plan,"
-      accent="on pace."
-      stats={[
-        { value: goal.remaining, label: "LEFT TO SOLVE", hint: "Problems in your goal you have not solved yet." },
-        { value: newPerWeek, label: "NEW A WEEK", hint: "New problems you will start in a week, counting every solve day." },
-        { value: pace.finish ? niceDate(pace.finish, o.today) : "never", label: "FINISH AT THIS PACE", hint: "The day the last problem is solved if you keep to the week below." },
-      ]}
-    />
-    <div className="p-grid s-body">
-      <div className="p-col">
+      <Tile em="Left to solve" hint="Problems in your goal you have not solved yet." strong={goal.remaining} small={goalKind === "150" ? "NeetCode 150" : goalKind === "plus" ? `NeetCode 150 + ${s.goal.extra}` : "your own number"} />
+      <Tile em="New a week" hint="New problems you will start in a week, counting every solve day." strong={newPerWeek} small={`on ${solveDays} solve day${solveDays === 1 ? "" : "s"}`} />
+      <Tile em="Finish at this pace" hint="The day the last problem is solved if you keep to the week below." strong={<span className="p-tfin">{pace.finish ? niceDate(pace.finish, o.today) : "never"}</span>} hot={pace.daysVsTarget != null && pace.daysVsTarget > 0} color="var(--warn)" small={pace.daysVsTarget == null ? "set a target date" : pace.daysVsTarget <= 0 ? `${Math.abs(pace.daysVsTarget)} days before the target` : `${pace.daysVsTarget} days after the target`} />
+    </>
+  );
+  const center = (
+    <>
         <section className="p-card">
           <h2>TARGET</h2>
           <div className="f-grid">
@@ -146,9 +145,10 @@ function Editor({ o }: { o: DsaOverview }) {
             <div className="f-fld"><span>Remember core problems to</span><Select label="Remember core problems to" value={s.core_retention == null ? "" : String(s.core_retention)} options={coreOptions} onChange={(v) => setS({ ...s, core_retention: v ? Number(v) : null })} /></div>
           </div>
         </section>
-      </div>
-
-      <aside className="p-col p-side">
+    </>
+  );
+  const right = (
+    <>
         <section className="p-card p-res">
           <h2>YOUR PACE</h2>
           <div className="p-big">{pace.perSolveDay ?? "—"}<small>{pace.perSolveDay == null ? "no solve days" : "a solve day"}</small></div>
@@ -172,8 +172,13 @@ function Editor({ o }: { o: DsaOverview }) {
             {save.isError && <span className="p-hint" style={{ color: "var(--bad)" }}>{(save.error as Error).message}</span>}
           </div>
         </section>
-      </aside>
-    </div>
+        <HowFound
+          title="How the pace is worked out"
+          text="The problems left, divided by the solve days before your target. Rest days are skipped; practice days add practice, not new problems."
+          rows={[["Left", goal.remaining], ["Solve days", pace.solveDaysLeft], ["Per solve day", pace.perSolveDay ?? "—"], [pace.daysVsTarget != null && pace.daysVsTarget > 0 ? "Late by" : "Spare", pace.daysVsTarget == null ? "—" : `${Math.abs(pace.daysVsTarget)} days`]]}
+        />
     </>
   );
+
+  return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} sub="Your routine: which days bring new problems, how many, and the pace that follows." tiles={tiles} center={center} right={right} />;
 }

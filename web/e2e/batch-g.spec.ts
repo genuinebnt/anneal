@@ -71,7 +71,7 @@ test("⌘K groups results, highlights the match, and a number finds a LeetCode p
 
 test("interview mode: pick a company, make it the plan, and go back to the main plan", async ({ page }) => {
     await page.goto("/dsa/company");
-    await page.getByLabel("COMPANY").fill("Amazon");
+    await page.getByLabel("Find a company").fill("Amazon");
     await page.getByRole("option", { name: /Amazon/ }).first().click();
     await expect(page.locator(".cm-stats")).toContainText("in the plan");
     await page.getByRole("button", { name: "Interview day" }).click();
@@ -84,14 +84,17 @@ test("interview mode: pick a company, make it the plan, and go back to the main 
     await expect(page.locator(".cm-now")).toHaveCount(0);
 });
 
-test("the calendar's rules panel and the month end together, and so do the review queue and the review", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
+test("the calendar is three panels: plans on the left, the month in the centre, the rules and the day on the right", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 900 });
     await page.goto("/dsa/calendar");
-    await expect(page.locator(".c-rail")).toBeVisible();
-    await page.waitForTimeout(900);
+    await expect(page.locator(".c-grid")).toBeVisible();
     const box = async (sel: string) => (await page.locator(sel).first().boundingBox())!;
-    const [main, rail] = [await box(".c-main"), await box(".c-rail")];
-    expect(Math.abs(main.y + main.height - (rail.y + rail.height))).toBeLessThanOrEqual(2);
+    const [left, grid, right] = [await box(".ly-lp"), await box(".c-grid"), await box(".ly-rp")];
+    expect(left.x + left.width).toBeLessThanOrEqual(grid.x);
+    expect(grid.x + grid.width).toBeLessThanOrEqual(right.x);
+    await expect(page.locator(".ly-lp")).toContainText("Plans");
+    await expect(page.locator(".ly-rp").getByRole("tab", { name: "Rules" })).toBeVisible();
+    await expect(page.locator(".ly-rp").getByRole("tab", { name: "Streak" })).toBeVisible();
 });
 
 test("the theme button shows an icon for system, with no word beside it", async ({ page }) => {

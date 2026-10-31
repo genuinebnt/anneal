@@ -31,6 +31,8 @@ import { WelcomeBack } from "./components/WelcomeBack";
 import { ConnectionBanner } from "./components/ConnectionBanner";
 import { ErrorScreen } from "./components/ErrorScreen";
 import { SettingsPage } from "./pages/SettingsPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { GraphPage } from "./pages/GraphPage";
 import { LogPage } from "./pages/LogPage";
 import { CompanyPage } from "./pages/CompanyPage";
 import "./styles/design.css";
@@ -59,6 +61,10 @@ import "./styles/coursemap.css";
 import "./styles/streaks.css";
 import "./styles/patterncards.css";
 import "./styles/frame.css";
+import "./styles/layout.css";
+import "./styles/mockint.css";
+import "./styles/analytics.css";
+import "./styles/graph.css";
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -169,6 +175,8 @@ const routes = [
       return <PatternIdea code={code} />;
     },
   }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/analytics", component: AnalyticsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/dsa/graph", component: GraphPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { ACCENTS, useAppearance, usePageWidth } from "../settings";
+import { ACCENTS, useAppearance } from "../settings";
 import { fresh, mmss, setTimer, toggleTimer, useFocus } from "../focusStore";
 import { isRustSection } from "../curriculum";
 import { StatsBar } from "./StatsBar";
@@ -24,7 +24,16 @@ const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses"; col
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
 ];
 
-type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/progress" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
+type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
+
+/** Pages about everything, not one area: Progress covers DSA, Rust and Courses; it has its own place beside the areas. */
+const GLOBAL: Tab[] = [
+    { to: "/progress", label: "Progress", match: (p) => p.startsWith("/progress") },
+    { to: "/analytics", label: "Analytics", match: (p) => p.startsWith("/analytics") },
+    { to: "/settings", label: "Settings", match: (p) => p.startsWith("/settings") },
+    { to: "/log", label: "Quick log", match: (p) => p.startsWith("/log") },
+];
+const isGlobal = (path: string) => GLOBAL.some((t) => t.match(path));
 
 const TABS: Record<AreaId, Tab[]> = {
     dsa: [
@@ -34,15 +43,13 @@ const TABS: Record<AreaId, Tab[]> = {
         { to: "/dsa/calendar", label: "Calendar", match: (p) => p.startsWith("/dsa/calendar") },
         { to: "/dsa/company", label: "Company", match: (p) => p.startsWith("/dsa/company") },
         { to: "/dsa/mock", label: "Mock interview", match: (p) => p.startsWith("/dsa/mock") },
-        { to: "/progress", label: "Progress", match: (p) => p.startsWith("/progress") },
+        { to: "/dsa/graph", label: "Graph", match: (p) => p.startsWith("/dsa/graph") },
     ],
     rust: [
         { to: "/rust", label: "Tracks", match: (p) => p.startsWith("/rust") || p.startsWith("/t/") || p.startsWith("/p/") },
-        { to: "/progress", label: "Progress", match: (p) => p.startsWith("/progress") },
     ],
     courses: [
         { to: "/courses", label: "BusTub", match: (p) => p.startsWith("/courses") },
-        { to: "/progress", label: "Progress", match: (p) => p.startsWith("/progress") },
     ],
 };
 
@@ -56,20 +63,6 @@ const areaFromPath = (path: string): AreaId | null => {
     if (path.startsWith("/dsa") || path.startsWith("/d/")) return "dsa";
     return null;
 };
-
-/** Centred or wide pages: a two-state switch beside the theme button. The same setting is in the account menu. */
-function WidthToggle() {
-    const { width, set } = usePageWidth();
-    const wide = width === "wide";
-    return (
-        <button className={`hd-ib wdt${wide ? " wide" : ""}`} onClick={() => set(wide ? "narrow" : "wide")} aria-pressed={wide} title={wide ? "Wide pages: click for centred" : "Centred pages: click for wide"} aria-label="Page width">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="1.5" y="3" width="13" height="10" rx="2" />
-                <rect className="pane" x="5" y="5.5" width="6" height="5" rx="1" fill="currentColor" stroke="none" />
-            </svg>
-        </button>
-    );
-}
 
 /** A small ring: how far along an area is. */
 function Ring({ p, color }: { p: number; color: string }) {
@@ -153,6 +146,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     }, []);
 
     const meta = AREAS.find((a) => a.id === current)!;
+    const global = isGlobal(path);
     return (
         <>
             <header className={`hdr${compact ? " compact" : ""}`} ref={box} data-area={current}>
@@ -166,11 +160,9 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                             <span style={{ background: "var(--grn)" }} />
                             <span style={{ boxShadow: "inset 0 0 0 1px var(--line)" }} />
                         </span>
-                        <b>
-                            anneal<i>.genuinebasil.dev</i>
-                        </b>
+                        <b>anneal</b>
                     </Link>
-                    <AreaSwitcher current={current} counts={counts} />
+                    <AreaSwitcher current={global ? null : current} counts={counts} progress={path.startsWith("/progress")} />
                     </div>
                     <button className="hd-srch" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K Meta+K">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
@@ -185,8 +177,10 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                         <MiniTimer />
                         <span className="hd-vsep" aria-hidden="true" />
                         <AccentPicker />
-                        <WidthToggle />
                         <NotificationBell />
+                        <Link className="hd-ib" to="/analytics" title="Analytics: the VPS and the app" aria-label="Analytics">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M2.5 13.5h11M4.5 11V7M8 11V3.5M11.5 11V8.5" /></svg>
+                        </Link>
                         <Link className="hd-ib set" to="/settings" title="Settings" aria-label="Settings">
                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                                 <path d="M6.9 1.5h2.2l.4 1.8 1.2.5 1.6-1 1.5 1.5-1 1.6.5 1.2 1.8.4v2.2l-1.8.4-.5 1.2 1 1.6-1.5 1.5-1.6-1-1.2.5-.4 1.8H6.9l-.4-1.8-1.2-.5-1.6 1-1.5-1.5 1-1.6-.5-1.2-1.8-.4V6.9l1.8-.4.5-1.2-1-1.6 1.5-1.5 1.6 1 1.2-.5z" />
@@ -219,7 +213,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                 {!compact && (
                     <div className="hd-t2">
                         <Crumb area={meta.label} path={path} tabs={TABS[current]} />
-                        <SubTabs area={current} path={path} due={due} />
+                        <SubTabs tabs={global ? GLOBAL : TABS[current]} later={global ? [] : LATER[current]} color={global ? "var(--acc)" : meta.color} path={path} due={due} />
                         <span className="hd-sp" />
                         <div className="hd-chips">
                             {current === "dsa" && (
@@ -231,7 +225,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                                         streak <b>{progress.data?.streak ?? "–"}</b> {progress.data?.streak === 1 ? "day" : "days"}
                                     </span>
                                     {streaks.data && (
-                                        <Link to="/progress" className="hd-chip" title={`Perfect streak ${streaks.data.perfect}: days you met the whole plan. Freezes: ${fmt(streaks.data.freezes)}, earned by doing more than planned (an extra new problem is 1, an extra review half).`}>
+                                        <Link to="/dsa/calendar" className="hd-chip" title={`Perfect streak ${streaks.data.perfect}: days you met the whole plan. Freezes: ${fmt(streaks.data.freezes)}, earned by doing more than planned (an extra new problem is 1, an extra review half).`}>
                                             {streaks.data.perfect > 0 && <>perfect <b>{streaks.data.perfect}</b> · </>}freezes <b className="sk-fz">{fmt(streaks.data.freezes)}</b>
                                         </Link>
                                     )}
@@ -270,11 +264,15 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
             {stats && !compact && <StatsBar area={current} />}
             <nav className="hd-dock" aria-label="Areas">
                 {AREAS.map((a) => (
-                    <Link key={a.id} to={a.to} className={a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={a.id === current ? "page" : undefined}>
+                    <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined}>
                         <Ring p={ratio(counts[a.id])} color={a.color} />
                         {a.label}
                     </Link>
                 ))}
+                <Link to="/progress" className={path.startsWith("/progress") ? "on" : ""} style={{ "--c": "var(--acc)" } as React.CSSProperties}>
+                    <TrophyIcon />
+                    Progress
+                </Link>
             </nav>
             {paletteOpen && <Palette onClose={() => setPaletteOpen(false)} />}
         </>
@@ -283,20 +281,28 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
 
 const ratio = (c: { done: number | undefined; total: number }) => (c.total > 0 && c.done !== undefined ? c.done / c.total : 0);
 
-/** The three areas as one control: a solid thumb slides to the current one. */
-function AreaSwitcher({ current, counts }: { current: AreaId; counts: Record<AreaId, { done: number | undefined; total: number }> }) {
+function TrophyIcon() {
+    return (
+        <svg className="hd-tro" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 2.5h6v3.5a3 3 0 0 1-6 0zM5 4H2.5v1a2.5 2.5 0 0 0 2.6 2.5M11 4h2.5v1a2.5 2.5 0 0 1-2.6 2.5M8 9v2.5M5.5 13.5h5M6.5 11.5h3v2h-3z" />
+        </svg>
+    );
+}
+
+/** The three areas as one control, and Progress (about all three) after a divider: a solid thumb slides to the current one. */
+function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; counts: Record<AreaId, { done: number | undefined; total: number }>; progress: boolean }) {
     const box = useRef<HTMLElement>(null);
     const [thumb, setThumb] = useState<{ x: number; w: number } | null>(null);
     useLayoutEffect(() => {
         const place = () => {
             const on = box.current?.querySelector<HTMLElement>("a.on");
-            if (on) setThumb({ x: on.offsetLeft, w: on.offsetWidth });
+            setThumb(on ? { x: on.offsetLeft, w: on.offsetWidth } : null);
         };
         place();
         addEventListener("resize", place);
         return () => removeEventListener("resize", place);
-    }, [current, counts.dsa.done, counts.rust.done, counts.courses.done]);
-    const color = AREAS.find((a) => a.id === current)!.color;
+    }, [current, progress, counts.dsa.done, counts.rust.done, counts.courses.done]);
+    const color = current ? AREAS.find((a) => a.id === current)!.color : "var(--acc)";
     return (
         <nav className="hd-areas" ref={box} aria-label="Areas">
             {thumb && <span className="hd-thumb" style={{ transform: `translateX(${thumb.x}px)`, width: thumb.w, "--tc": color } as React.CSSProperties} />}
@@ -307,6 +313,11 @@ function AreaSwitcher({ current, counts }: { current: AreaId; counts: Record<Are
                     <small>{counts[a.id].done ?? "–"}</small>
                 </Link>
             ))}
+            <span className="hd-asep" aria-hidden="true" />
+            <Link to="/progress" className={progress ? "on" : ""} aria-current={progress ? "page" : undefined} title="Progress across DSA, Rust and Courses">
+                <TrophyIcon />
+                Progress
+            </Link>
         </nav>
     );
 }
@@ -332,11 +343,10 @@ function Crumb({ area, path }: { area: string; path: string; tabs: Tab[] }) {
     );
 }
 
-/** The pages of the current area: an ink line glides under the current one. */
-function SubTabs({ area, path, due }: { area: AreaId; path: string; due: number }) {
+/** The pages of the current area (or the global pages): an ink line glides under the current one. */
+function SubTabs({ tabs, later, color, path, due }: { tabs: Tab[]; later: string[]; color: string; path: string; due: number }) {
     const box = useRef<HTMLDivElement>(null);
     const [ink, setInk] = useState<{ x: number; w: number } | null>(null);
-    const color = AREAS.find((a) => a.id === area)!.color;
     useLayoutEffect(() => {
         const place = () => {
             const on = box.current?.querySelector<HTMLElement>("a.on");
@@ -345,11 +355,11 @@ function SubTabs({ area, path, due }: { area: AreaId; path: string; due: number 
         place();
         addEventListener("resize", place);
         return () => removeEventListener("resize", place);
-    }, [area, path, due]);
+    }, [tabs, path, due]);
     return (
         <div className="hd-tabs" ref={box}>
             {ink && <span className="hd-ink" style={{ transform: `translateX(${ink.x}px)`, width: ink.w, background: color }} />}
-            {TABS[area].map((t) => {
+            {tabs.map((t) => {
                 const on = t.match(path);
                 return (
                     <Link key={t.label} to={t.to} className={on ? "on" : ""} aria-current={on ? "page" : undefined}>
@@ -358,7 +368,7 @@ function SubTabs({ area, path, due }: { area: AreaId; path: string; due: number 
                     </Link>
                 );
             })}
-            {LATER[area].map((l) => (
+            {later.map((l) => (
                 <span key={l} className="hd-later" title="Designed; not built yet">
                     {l}
                 </span>
@@ -367,10 +377,9 @@ function SubTabs({ area, path, due }: { area: AreaId; path: string; due: number 
     );
 }
 
-/** The avatar menu: page width, links, and Sign out when login is on. The accent has its own picker in the header. */
+/** The avatar menu: links, and Sign out when login is on. The accent has its own picker in the header. */
 function Account() {
     const session = useQuery({ queryKey: ["session"], queryFn: api.session, staleTime: Infinity });
-    const { width, set: setWidth } = usePageWidth();
     const [open, setOpen] = useState(false);
     const box = useRef<HTMLDivElement>(null);
     const menu = useRef<HTMLDivElement>(null);
@@ -393,14 +402,6 @@ function Account() {
             </button>
             {open && (
                 <div className="acct-menu" ref={menu} role="menu">
-                    <span className="acct-lab">PAGE WIDTH</span>
-                    <div className="acct-seg" role="radiogroup" aria-label="Page width">
-                        {(["narrow", "wide"] as const).map((w) => (
-                            <button key={w} role="radio" aria-checked={width === w} className={width === w ? "on" : ""} onClick={() => setWidth(w)} title={w === "narrow" ? "Main screens at a comfortable reading width" : "Main screens use more of the window"}>
-                                {w === "narrow" ? "Narrow" : "Wide"}
-                            </button>
-                        ))}
-                    </div>
                     <Link role="menuitem" className="acct-link acct-first" to="/settings" onClick={() => setOpen(false)}>
                         All settings
                     </Link>

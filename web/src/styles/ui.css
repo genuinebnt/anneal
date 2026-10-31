@@ -65,14 +65,20 @@ html[data-hide-topics] .d-topics{display:none}
 @media (max-width:700px){.k-root .k-tstack{bottom:92px}}
 
 /* Stepper, Select and DateField: one control height, one font, the same border and focus ring as the other fields */
-.ui-step{display:inline-grid;grid-template-columns:38px 52px 38px;align-items:stretch;height:38px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--inset);overflow:hidden;flex:none}
-.ui-step button{display:grid;place-items:center;padding:0;color:var(--mut);font:500 17px var(--mono);line-height:1;transition:background .15s,color .15s}
-.ui-step button:hover:not(:disabled){background:var(--raise);color:var(--fg)}
-.ui-step button:disabled{opacity:.35;cursor:default}
-.ui-step output{display:grid;place-items:center;font:600 13px var(--mono);color:var(--fg);border-inline:1px solid var(--line2)}
-.ui-step.off{opacity:.4}
-.ui-step.compact{height:32px;grid-template-columns:30px 40px 30px}
-.ui-step.compact button{font-size:15px}.ui-step.compact output{font-size:12px}
+/* the stepper: one pill, round minus and plus, the number bumps when it changes */
+.ui-step{display:inline-grid;grid-template-columns:30px minmax(40px,auto) 30px;align-items:center;height:36px;padding:2px;border:1px solid var(--line2);border-radius:999px;background:var(--bg);flex:none;transition:border-color .2s}
+.ui-step:hover,.ui-step:focus-within{border-color:color-mix(in oklab,var(--acc) 40%,var(--line))}
+.ui-step button{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;padding:0;color:var(--mut);touch-action:manipulation;transition:background .2s,color .2s,transform .15s}
+.ui-step button:hover:not(:disabled){background:color-mix(in oklab,var(--acc) 14%,transparent);color:var(--acc)}
+.ui-step button:active:not(:disabled){transform:scale(.88)}
+.ui-step button:disabled{opacity:.3;cursor:default}
+.ui-step button svg{width:12px;height:12px}
+.ui-step output{font:700 14px var(--mono);color:var(--fg);text-align:center;padding:0 4px;font-variant-numeric:tabular-nums}
+.ui-step output.bump{animation:ui-bump .3s var(--ease)}
+@keyframes ui-bump{40%{transform:scale(1.22);color:var(--acc)}}
+.ui-step.off{opacity:.4;pointer-events:none}
+.ui-step.compact{height:30px;grid-template-columns:24px minmax(30px,auto) 24px}
+.ui-step.compact button{width:24px;height:24px}.ui-step.compact output{font-size:12.5px}
 .ui-pop{position:relative;display:inline-block;min-width:0}
 .ui-trigger{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:176px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:var(--r-2,8px);background:var(--inset);color:var(--fg);font:500 12px var(--mono);text-align:left;transition:border-color .15s,box-shadow .15s}
 .ui-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

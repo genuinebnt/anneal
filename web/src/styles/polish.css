@@ -1,7 +1,6 @@
 /* Consistency and detail pass. Loaded last: one gutter and width for every screen, one radius per kind of thing, one tag grammar,
    controls with room to breathe. Change a token here and every screen follows. */
 :root{--gut:32px;--r-card:12px;--r-ctl:7px;--r-tag:4px;--pw:1240px;--pw-lg:1240px}
-html[data-width="wide"]{--pw:1680px;--pw-lg:1680px}
 
 /* one content width and one left edge on every main screen */
 .wrap,.pp-pad,.pp-in,.pp-cols,.c-wrap,.mi-wrap,.s-root .s-wrap,.k-root .k-wrap{max-width:var(--pw);margin-inline:auto;padding-inline:var(--gut)}

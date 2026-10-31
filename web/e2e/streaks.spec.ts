@@ -50,7 +50,7 @@ test("the morning after a miss the repair dialog opens once, and a freeze repair
     await expect(page.getByRole("dialog", { name: /was missed/ })).toHaveCount(0);
 });
 
-test("Not now keeps the chance in the bell, and Progress shows the numbers and the days", async ({ page }) => {
+test("Not now keeps the chance in the bell, and the Calendar's Streak tab shows the numbers and the days", async ({ page }) => {
     const t = new Date();
     const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
     await stub(page, iso, { on: false });
@@ -64,8 +64,10 @@ test("Not now keeps the chance in the bell, and Progress shows the numbers and t
     await page.keyboard.press("Escape");
 
     await page.goto("/progress");
-    const box = page.locator(".sk-box");
-    await expect(box).toContainText("Streaks and freezes");
+    await expect(page.locator(".sk-box")).toHaveCount(0);
+    await page.goto("/dsa/calendar");
+    await page.getByRole("tab", { name: "Streak" }).click();
+    const box = page.locator(".c-sk");
     await expect(box.locator(".sk-stat.sk-freeze b")).toHaveText("2.5");
     await expect(box.locator(".sk-strip .sk-day")).toHaveCount(14);
     await expect(box.locator(".sk-strip .sk-day.missed")).toHaveCount(1);

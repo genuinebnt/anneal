@@ -1,0 +1,41 @@
+/* The Graph tab (pages/GraphPage.tsx): a live canvas with the legend as filters, modes on the left, the selected node on the right. gr- prefixed. */
+.gr-modes{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:3px;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+.gr-modes button{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 0;border-radius:9px;color:var(--dim);font:600 12.5px var(--sans);transition:background .2s,color .2s}
+.gr-modes button.on{background:color-mix(in oklab,var(--acc) 10%,var(--bg));color:var(--fg);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--acc) 24%,transparent)}
+.gr-modes kbd{font:600 9.5px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
+.gr-h{margin:0;font-size:16px;line-height:1.3}
+.gr-why{display:grid;gap:2px}.gr-why span::before{content:"· ";color:var(--dim)}
+.gr-sim{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:3px;border:1px solid var(--line2);border-radius:10px;background:var(--bg)}
+.gr-sim button{padding:6px 0;border-radius:7px;color:var(--dim);font:600 11.5px var(--sans)}.gr-sim button.on{background:color-mix(in oklab,var(--acc) 10%,var(--bg));color:var(--fg)}
+.gr-soon{padding:10px 12px;border:1px dashed var(--line);border-radius:10px}
+.gr-tlead{font:700 15px var(--sans)!important;color:inherit!important}
+.gr-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gr-find{flex:1;min-width:220px;max-width:420px}.gr-find kbd{font:600 10px var(--mono);color:var(--dim);border:1px solid var(--line2);border-radius:5px;padding:1px 6px}
+.gr-wrap{position:relative;height:calc(100vh - var(--hdr-h) - 220px);min-height:560px;border:1px solid var(--line2);border-radius:16px;background:radial-gradient(circle at 50% 40%,color-mix(in oklab,var(--panel) 80%,transparent),var(--bg));overflow:hidden}
+.gr-wrap canvas{position:absolute;inset:0;touch-action:none;cursor:grab}
+.gr-legend{position:absolute;top:12px;left:12px;display:grid;gap:2px;max-height:calc(100% - 24px);overflow:auto;scrollbar-width:none;padding:10px;border:1px solid var(--line2);border-radius:12px;background:color-mix(in oklab,var(--bg) 88%,transparent);backdrop-filter:blur(6px);width:200px}
+.gr-legend::-webkit-scrollbar{display:none}
+.gr-lh{font:600 9.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:6px 2px 2px}
+.gr-li{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:7px;align-items:center;padding:3px 4px;border-radius:6px;font-size:11.5px;color:var(--mut);text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr-li[aria-pressed=false]{opacity:.4;text-decoration:line-through}
+.gr-li em{font:500 10px var(--mono);font-style:normal;color:var(--dim)}
+.gr-sw{width:9px;height:9px;border-radius:50%}
+.gr-esw{width:12px;height:0;border-top:2px solid var(--mut)}.gr-esw.is-tag{border-top-style:dashed}.gr-esw.is-asks{border-color:var(--fg);opacity:.6}
+.gr-hint{margin:6px 2px 0;font-size:11.5px;color:var(--acc)}
+.gr-stat{position:absolute;top:12px;right:12px;font:500 11px var(--mono);color:var(--dim);padding:4px 9px;border:1px solid var(--line2);border-radius:8px;background:color-mix(in oklab,var(--bg) 88%,transparent)}
+.gr-stat b{color:var(--fg)}
+.gr-ctl{position:absolute;bottom:12px;left:50%;translate:-50% 0;display:flex;align-items:center;gap:2px;padding:4px;border:1px solid var(--line2);border-radius:12px;background:color-mix(in oklab,var(--bg) 88%,transparent);backdrop-filter:blur(6px)}
+.gr-ctl button{height:30px;min-width:30px;padding:0 10px;border-radius:8px;font:600 12px var(--sans);color:var(--mut)}.gr-ctl button:hover{background:color-mix(in oklab,var(--acc) 10%,transparent);color:var(--fg)}
+.gr-ctl i{width:1px;height:18px;background:var(--line2);margin:0 4px}
+.gr-keys{margin:0;font-size:11.5px;color:var(--dim)}.gr-keys kbd{font:600 10px var(--mono);border:1px solid var(--line2);border-radius:4px;padding:0 4px}
+.gr-insp{display:grid;gap:8px}
+.gr-ird{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.gr-ird div{display:grid;padding:8px 10px;border-right:1px solid var(--line2)}.gr-ird div:last-child{border-right:0}
+.gr-ird span{font-size:11px;color:var(--dim)}.gr-ird b{font:600 13px var(--mono)}
+.gr-mix{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px}
+.gr-nb{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.gr-nb button{width:100%;display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 4px;border-radius:7px;font-size:12.5px;text-align:left}
+.gr-nb button:hover{background:color-mix(in oklab,var(--acc) 7%,transparent)}
+.gr-nb i{width:7px;height:7px;border-radius:50%}.gr-nb em{font:500 10.5px var(--mono);font-style:normal;color:var(--dim)}
+.gr-acts{display:flex;gap:6px;flex-wrap:wrap}
+@media (max-width:900px){.gr-wrap{height:520px;min-height:0}.gr-legend{display:none}.gr-keys{display:none}}
