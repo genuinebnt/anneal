@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
@@ -11,6 +11,7 @@ import { ConfirmButton } from "../components/ui";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
+import { NotFound } from "../components/ErrorScreen";
 import { AskPanel } from "../components/AskPanel";
 import { getPref, setPref } from "../prefs";
 import { useShowIdeas } from "../spoilers";
@@ -225,15 +226,6 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         return () => window.removeEventListener("scroll", onScroll);
     }, [ids]);
 
-    const frame = (body: ReactNode) => (
-        <>
-            <Header area="dsa" />
-            <main className={`page pp${reading ? " reading" : ""}`} style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                {body}
-            </main>
-            {toast}
-        </>
-    );
     if (!o || (!p && outside.isLoading))
         return (
             <>
@@ -241,7 +233,8 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                 <PageLoading crumb={["DSA", "Problem"]} title="…" error={overview.isError ? <LoadFailed what="this problem" error={overview.error} retry={() => void overview.refetch()} /> : undefined} />
             </>
         );
-    if (!p) return frame(<p className="notice bad pp-pad">No problem called {slug}. <Link to="/dsa">Back to the list</Link></p>);
+    // an unknown problem is an unknown address: the 404, with the problems it most likely meant
+    if (!p) return <NotFound />;
 
     const pattern = o.patterns.find((x) => x.code === p.pattern);
     const technique = o.techniques.find((t) => t.id === p.technique);
