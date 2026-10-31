@@ -4,6 +4,7 @@ import { api, type DsaOverview, type SrsSettings, type Weekday } from "../api";
 import { Link } from "@tanstack/react-router";
 import { Header } from "../components/Header";
 import { HowFound, Page3, Tile, PageLoading } from "../components/layout";
+import { PlanSwitcher } from "../components/PlanSwitcher";
 import { DateField, Segmented, Select, Stepper } from "../components/ui";
 import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
@@ -20,7 +21,7 @@ export function DsaPlanPage() {
       <Header area="dsa" />
       <div className="p-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
         {o ? <Editor key={o.today} o={o} /> : (
-          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} left={false} error={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
+          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} error={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
         )}
       </div>
     </>
@@ -190,5 +191,5 @@ function Editor({ o }: { o: DsaOverview }) {
     </>
   );
 
-  return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} sub="Your routine: which days bring new problems, how many, and the pace that follows." tiles={tiles} center={center} right={right} />;
+  return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} sub="Your routine: which days bring new problems, how many, and the pace that follows." tiles={tiles} left={<PlanSwitcher link />} center={center} right={right} label="Plans" />;
 }
