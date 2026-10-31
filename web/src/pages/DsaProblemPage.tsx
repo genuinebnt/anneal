@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
-import { Page3, PageLoading } from "../components/layout";
+import { Page3, PageLoading, Tile } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { RecallCurve } from "../components/RecallCurve";
 import { ConfirmButton } from "../components/ui";
@@ -13,7 +13,7 @@ import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
 import { getPref, setPref } from "../prefs";
 import { useShowIdeas } from "../spoilers";
-import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
+import { DIFF, MINUTES, boxExamples, inDays, leetcode, niceDate, statusOf, videoUrl } from "../dsa";
 
 const DIFFS = ["easy", "medium", "hard"];
 const LIST_NAME = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "NeetCode All", practice: "Practice" };
@@ -305,17 +305,23 @@ export function DsaProblemPage({ slug }: { slug: string }) {
             <span>{p.title}</span>
         </span>
     );
+    // one row under the title: the badges, the topics as plain text, and the key insight (the lists and the time are tiles)
     const sub = (
-        <span className="pp-sub">
+        <span className="pp-sub pp-sub1">
             <span className="pp-badges">
                 <ProblemTags p={p} />
-                <span className="pp-b">~{MINUTES[p.difficulty]} min</span>
-                {lists.map((l) => <span key={l} className="pp-b">{l}</span>)}
                 {technique && ideaShown && <span className="pp-b tech">{technique.name}</span>}
             </span>
-            {p.tags.length > 0 && <span className="pp-tags">{p.tags.map((t) => <span key={t}>{t}</span>)}</span>}
+            {p.tags.length > 0 && <span className="pp-tagline">{p.tags.join(" · ")}</span>}
             {p.insight && (ideaShown ? <span className="pp-ins"><b>Key insight</b>{p.insight}</span> : <span className="pp-ins"><b>Key insight</b><button className="d-reveal" onClick={() => setRevealIdea(true)}>Show</button></span>)}
         </span>
+    );
+    const tiles = (
+        <>
+            <Tile em="Difficulty" strong={DIFF[p.difficulty][0]} small={`~${MINUTES[p.difficulty]} min`} color={DIFF[p.difficulty][1]} />
+            <Tile em="Lists" strong={lists.length} small={lists.length ? `${lists[0]}${lists.length > 1 ? ` → ${lists[lists.length - 1]}` : ""}` : "outside the lists"} />
+            <Tile em="Your tries" strong={history.length} small={(standing[0] ?? "").toLowerCase()} />
+        </>
     );
     const center = (
         <div className="pp-main">
@@ -338,7 +344,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                 This is a LeetCode Premium problem, so LeetCode doesn't share its statement. <a href={leetcode(p.slug)} target="_blank" rel="noreferrer" style={{ color: "var(--ca)" }}>Open it on LeetCode ↗</a>
                             </p>
                         )}
-                        {statement.data?.html && <div className="d-statement" dangerouslySetInnerHTML={{ __html: statement.data.html }} />}
+                        {statement.data?.html && <div className="d-statement" dangerouslySetInnerHTML={{ __html: boxExamples(statement.data.html) }} />}
                     </section>
 
                     {hasHints && statement.data && (
@@ -548,7 +554,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         <>
             <Header area="dsa" />
             <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <Page3 className={`pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
+                <Page3 className={`pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} tiles={tiles} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
             </div>
             {toast}
         </>

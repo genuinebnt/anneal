@@ -206,3 +206,22 @@ export function readinessRows(problems: DsaProblem[], groups: [name: string, has
   }
   return rows.sort((a, b) => a.ready - b.ready || a.name.localeCompare(b.name));
 }
+
+/** LeetCode's statement with each "Example n:" and the paragraphs under it wrapped in a box (`.pp-ex`), the way the examples read
+ *  as separate cases; statements whose examples are already `<pre>` blocks are left as they are. */
+export function boxExamples(html: string): string {
+    const parts = html.split(/(?=<p><strong[^>]*>Example \d+:?<\/strong>:?<\/p>)/);
+    if (parts.length < 2) return html;
+    const [head, ...examples] = parts;
+    return (
+        head +
+        examples
+            .map((part) => {
+                const end = part.search(/<p><strong[^>]*>(Constraints|Follow[- ]up|Note)/);
+                const body = end >= 0 ? part.slice(0, end) : part;
+                const rest = end >= 0 ? part.slice(end) : "";
+                return `<div class="pp-ex">${body}</div>${rest}`;
+            })
+            .join("")
+    );
+}

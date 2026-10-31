@@ -7,7 +7,7 @@ import { HowFound, ListCard, Page3, Tile, PageLoading } from "../components/layo
 import { Skeleton } from "../components/Skeleton";
 import { Companies, Md, PyCode } from "../components/dsaBits";
 import { RecallCurve } from "../components/RecallCurve";
-import { DIFF, inDays, leetcode, niceDate, videoUrl } from "../dsa";
+import { DIFF, boxExamples, inDays, leetcode, niceDate, videoUrl } from "../dsa";
 import { mmss } from "../mock";
 import { getPref, setPref } from "../prefs";
 
@@ -105,19 +105,10 @@ function Coming({ today, items, next }: { today: string; items: ReviewItem[]; ne
 }
 
 /** How well this one is remembered: the numbers behind it, and the forecast. */
-function MemoryCard({ item, today }: { item: ReviewItem; today: string }) {
+function MemoryCard({ item }: { item: ReviewItem }) {
   const s = item.problem.state;
   return (
     <div className="rv-card" style={{ gap: 12 }}>
-      <span className="rv-lab">MEMORY</span>
-      <div className="rv-facts">
-        <div><b>{Math.round(item.recall * 100)}%</b><span>recall now</span></div>
-        <div><b>{item.stability >= 10 ? Math.round(item.stability) : item.stability.toFixed(1)} d</b><span>memory holds</span></div>
-        <div><b>{s.reps}</b><span>review{s.reps === 1 ? "" : "s"}</span></div>
-        <div><b>{s.lapses}</b><span>lapse{s.lapses === 1 ? "" : "s"}</span></div>
-        <div><b>{ago(s.last_review, today) || "–"}</b><span>last reviewed</span></div>
-        <div><b>{dueLabel(item.due, today)}</b><span>next</span></div>
-      </div>
       <RecallCurve id={item.problem.id} version={s.reps} />
     </div>
   );
@@ -135,7 +126,7 @@ function StatementCard({ id, slug }: { id: string; slug: string }) {
       {q.data?.html && (
         <>
           <div className={`rv-stmt${all ? " all" : ""}`}>
-            <div className="d-statement" dangerouslySetInnerHTML={{ __html: q.data.html }} />
+            <div className="d-statement" dangerouslySetInnerHTML={{ __html: boxExamples(q.data.html) }} />
           </div>
           <button className="rv-ghost" style={{ alignSelf: "flex-start" }} onClick={() => setAll(!all)}>{all ? "Show less" : "Show all"}</button>
         </>
@@ -447,19 +438,30 @@ function Session({ queue }: { queue: ReviewQueue }) {
 
   const center = (
     <>
-      <div className="rv-bar">
-        <div className="rv-t">
-          <span className="l">REVIEW · {done} OF {total} DONE</span>
-          <span className="c">{mmss(spent)}</span>
+      <section className="rv-head" aria-label="This review">
+        <div className="rv-hl">
+          <span className="rv-lab">REVIEWING · {Math.min(done + 1, total)} OF {total}</span>
+          <h2 className="rv-title">{item.problem.title}</h2>
+          <p className="rv-hmeta">
+            #{item.problem.number} · <span style={{ color: DIFF[item.problem.difficulty][1] }}>{DIFF[item.problem.difficulty][0]}</span> · {item.pattern}
+            {item.problem.state.last_grade ? <> · last {LAST[item.problem.state.last_grade]?.replace(/^\S+ /, "")}, {ago(item.problem.state.last_review, queue.today)}</> : null}
+            {" "}· memory holds {item.stability >= 10 ? Math.round(item.stability) : item.stability.toFixed(1)} days · {item.problem.state.reps} review{item.problem.state.reps === 1 ? "" : "s"}{item.problem.state.lapses ? `, ${item.problem.state.lapses} lapsed` : ""}
+          </p>
+          <div className="rv-hfoot">
+            <div className="rv-dots" aria-hidden="true">
+              {Array.from({ length: total }, (_, i) => (
+                <i key={i} className={i < done ? "done" : i === done ? "cur" : ""} />
+              ))}
+            </div>
+            <span className="rv-t"><span className="l">time</span> <span className="c">{mmss(spent)}</span></span>
+            <span className="rv-cap">{queue.due} due · room for {queue.capacity} today</span>
+            <Link className="rv-ghost" to="/dsa">Exit</Link>
+          </div>
         </div>
-        <div className="rv-dots" aria-hidden="true">
-          {Array.from({ length: total }, (_, i) => (
-            <i key={i} className={i < done ? "done" : i === done ? "cur" : ""} />
-          ))}
-        </div>
-        <span className="rv-cap">{queue.due} due · room for {queue.capacity} today</span>
-        <Link className="rv-ghost" to="/dsa">Exit</Link>
-      </div>
+        <span className="ly-bigring rv-ring" style={{ "--p": Math.round(item.recall * 100), "--c": item.recall < 0.7 ? "var(--bad)" : item.recall < 0.85 ? "var(--warn)" : "var(--grn)" } as CSSProperties} title="the chance you'd recall it today">
+          <b>{Math.round(item.recall * 100)}%</b>
+        </span>
+      </section>
       <div className="rv-tabs" role="tablist" aria-label="This review">
         <button role="tab" aria-selected={view === "recall"} className={view === "recall" ? "on" : ""} onClick={() => setView("recall")}>{step === "recall" ? "Recall" : "Check"}</button>
         <button role="tab" aria-selected={view === "with"} className={view === "with" ? "on" : ""} onClick={() => setView("with")}>Review with this<em>{withThis.length}</em></button>
@@ -500,7 +502,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
       )}
       {view === "recall" && <div className="rv-card rv-main" key={item.problem.id}>
         {step === "recall" ? (
-          <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} today={queue.today} />
+          <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} />
         ) : (
           <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
         )}
@@ -511,15 +513,12 @@ function Session({ queue }: { queue: ReviewQueue }) {
 
   const right = (
     <div className="rv-ctx" aria-label="About this review">
-      <MemoryCard item={item} today={queue.today} />
       <section className="ly-pn rv-sg" aria-label="This session">
         <span className="rv-lab">THIS SESSION</span>
         <div className="rv-sgn"><b>{done}</b> <span>done · {pending.length} left · {average != null ? <>average {mmss(average)}</> : "start the timer to see your average"}</span></div>
-        {done > 0 && (
-          <div className="rv-stack" aria-hidden="true">
-            {GRADES.map((g) => (gradeN(g.grade) ? <i key={g.grade} className={g.grade} style={{ flex: gradeN(g.grade) }} /> : null))}
-          </div>
-        )}
+        <div className={`rv-stack${done ? "" : " rv-none-yet"}`} aria-hidden="true">
+          {done ? GRADES.map((g) => (gradeN(g.grade) ? <i key={g.grade} className={g.grade} style={{ flex: gradeN(g.grade) }} /> : null)) : <i />}
+        </div>
         <div className="rv-sgl">
           {GRADES.map((g) => <span key={g.grade} className={`rv-pill ${g.grade}`}>{g.name} {gradeN(g.grade)}</span>)}
         </div>
@@ -536,6 +535,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
         text={sort === "forgotten" ? "By recall: the problem you are most likely to have forgotten is first. Reviewing early still counts." : sort === "overdue" ? "By how long it has been due, then by recall." : "By pattern, then by recall within a pattern."}
         rows={[["Due", `${queue.due}${overdue ? ` (${overdue} overdue)` : ""}`], ["Ranked by", sort === "forgotten" ? "lowest recall" : sort === "overdue" ? "days overdue" : "pattern"], ["Memory model", "FSRS, your grades"], ["Ahead", `${waitingAll.length} more`]]}
       />
+      <MemoryCard item={item} />
       <dl className="ly-pn rv-kv rv-keys">
         <div><dt>Show the approach</dt><dd><kbd>Space</kbd></dd></div>
         <div><dt>Again · Hard · Good · Easy</dt><dd><kbd>1 2 3 4</kbd></dd></div>
@@ -569,21 +569,11 @@ const TRY_NAME = { good: "on my own", hard: "with help", again: "attempted" } as
 const ORD = (n: number) => (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th");
 const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instantly", hard: "½ with help", again: "! attempted" };
 
-function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
+function Recall({ item, spent, running, setRunning, reveal, skip, canSkip }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean }) {
   const p = item.problem;
-  const s = p.state;
   return (
     <>
       <span className="rv-lab">RECALL · SUGGESTED 6 MIN</span>
-      <h2 className="rv-title">{p.title}</h2>
-      <div className="rv-meta">
-        <span className="rv-pill" style={{ color: DIFF[p.difficulty][1] }}>{DIFF[p.difficulty][0]}</span>
-      </div>
-      <div className="rv-prior">
-        <div><b>{s.last_grade ? LAST[s.last_grade] : "—"}</b><span>{ago(s.last_review, today)}</span></div>
-        <div><b>{Math.round(item.recall * 100)}%</b><span>chance you'd recall it today</span></div>
-        <div><b>{item.stability >= 10 ? Math.round(item.stability) : item.stability.toFixed(1)} days</b><span>how long the memory holds</span></div>
-      </div>
       <div className="rv-timer">
         <div className="tk"><i style={{ width: `${Math.min(100, (spent / 360) * 100)}%` }} /></div>
         <div className="lb">

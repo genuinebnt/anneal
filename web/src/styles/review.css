@@ -149,3 +149,22 @@ kbd{font:500 11px var(--mono);color:var(--dim);border:1px solid var(--line);bord
 .rv-find{margin-bottom:10px}
 @media (max-width:900px){.rv-tkeys{display:none}}
 .rv-tabs button{border:0;background:none}.rv-tabs button.on{background:color-mix(in oklab,var(--acc) 13%,transparent)}
+/* the header card (the approved mockup): what is being reviewed, how it stands, and the session's place, with the recall ring */
+.rv-head{display:flex;align-items:center;gap:18px;padding:18px 20px;border-radius:var(--r-3,14px);background:var(--panel);border:1px solid var(--line2);margin-bottom:12px}
+.rv-hl{flex:1;min-width:0;display:grid;gap:6px}
+.rv-head .rv-title{margin:0;font-size:26px;letter-spacing:-.015em}
+.rv-hmeta{margin:0;color:var(--mut);font-size:13px;line-height:1.5}
+.rv-hfoot{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:4px}
+.rv-hfoot .rv-dots{flex:1;min-width:120px}
+.rv-hfoot .rv-t{display:inline-flex;gap:6px;align-items:baseline;font:500 12px var(--mono);color:var(--dim)}
+.rv-hfoot .rv-t .c{font:600 15px var(--mono);color:var(--fg)}
+.rv-ring{flex:none;width:76px;height:76px}
+.rv-ring b{font-size:15px}
+.rv-stack.rv-none-yet i{flex:1;background:var(--inset)}
+@media (max-width:640px){.rv-head{flex-direction:column-reverse;align-items:flex-start}}
+.rv-sg{display:grid;gap:12px;align-content:start}
+.rv-sg .rv-stack{height:8px;margin:2px 0}
+.rv-hfoot .rv-t{white-space:nowrap}
+.ly-rp .rv-sg .rv-stack{height:8px;min-height:0;max-height:8px}
+.rv-stack.rv-none-yet i{background:var(--line2)}
+.rv-hfoot .rv-t{display:inline-flex!important;flex-direction:row!important;align-items:baseline;gap:6px}
