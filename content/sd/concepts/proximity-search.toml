@@ -1,0 +1,47 @@
+title = "Proximity search"
+group = "advanced"
+order = 1
+minutes = 9
+lede = "Finding what is near a point, fast: drivers within 2 km, restaurants in view. An ordinary index on latitude and longitude cannot do it, so space is cut into cells that an index can."
+say = "Drivers report their location every few seconds into Redis GEO keyed by city; a rider's request queries the nearby cells, and the matcher ranks the few hundred candidates."
+related = ["redis", "sharding", "indexes"]
+
+[[sections]]
+heading = "Why a normal index fails"
+body = """
+An index on `(lat, lng)` sorts by latitude first, so "within 2 km" becomes a range on latitude that still scans every longitude in that band. Two ranges cannot use one B-tree well. The fix is to turn two dimensions into one key that keeps nearby points near each other.
+"""
+
+[[sections]]
+heading = "Geohash"
+body = """
+Split the world into a grid, then each cell into 32, again and again; each level adds a base-32 character. `9q8yy` is a few km across; points that share a prefix are close. Store the geohash as a string and a **prefix range scan** finds a cell.
+
+> [!WARNING]
+> Two points can be a metre apart on either side of a cell edge and share no prefix. Always search the cell **and its 8 neighbours**.
+"""
+
+[[sections]]
+heading = "Quadtree, S2 and H3"
+body = """
+| Structure | Idea | Good for |
+|---|---|---|
+| Quadtree | split a square into 4 until each holds ≤ N points | uneven density (cities vs ocean), in memory |
+| S2 (Google) | cells on a cube projected onto the sphere, as 64-bit ids | precise coverings of any shape |
+| H3 (Uber) | hexagons at many resolutions | equal-distance neighbours, ride-hailing |
+| Geohash | base-32 string per grid cell | simple, works in any database or Redis |
+"""
+
+[[sections]]
+heading = "Moving objects"
+body = """
+Drivers update every few seconds: millions of writes a second. Keep current locations in memory (Redis GEO, sharded by region), not in a durable database; write the trip history asynchronously. Query the candidate cells, then compute exact distances and filter.
+"""
+
+[[checks]]
+prompt = "Why search the 8 neighbouring geohash cells as well as the user's own?"
+answer = "A nearby point can sit just across a cell boundary and share no prefix with the user's cell; searching the neighbours covers every point within the cell's width."
+
+[[checks]]
+prompt = "Five million drivers report their location every four seconds. Where do those writes go?"
+answer = "About 1.25M writes a second: into an in-memory geospatial index (Redis GEO or a custom grid) sharded by region, overwriting each driver's last position; durable history is written asynchronously in batches."

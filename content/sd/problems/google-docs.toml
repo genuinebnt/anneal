@@ -1,0 +1,112 @@
+title = "Google Docs (collaborative editing)"
+kind = "hld"
+order = 9
+minutes = 45
+prompt = "Design a collaborative document editor like Google Docs: several people edit the same document at the same time, see each other's changes and cursors live, and everyone ends with the same text."
+uses = ["delivery-framework", "crdts", "realtime-updates", "data-modeling"]
+companies = ["Google", "Microsoft", "Figma", "Notion"]
+hints = [
+  "Two people type at the same spot at the same moment. What makes both screens end up identical?",
+  "Where do all the edits of one document meet?",
+  "What do you store so a document with a million edits opens quickly?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones."
+reference = """
+**Functional**: create and edit documents; many concurrent editors; see others' cursors; version history.
+
+**Non-functional**: edits appear for others within ~100-300 ms; all editors **converge** to the same text; no edit lost; a document opens fast even after years of edits.
+
+**Shape**: up to ~100 concurrent editors per document; millions of documents, most idle.
+"""
+[[steps.points]]
+id = "req-converge"
+text = "Convergence (everyone ends with the same text) stated as the core requirement"
+level = "mid"
+[[steps.points]]
+id = "req-latency"
+text = "Low-latency collaboration and fast open of long-lived documents"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Document` (metadata, current snapshot), `Operation` (edit with a revision number), `Session` (who is editing, cursors), `Version` snapshots."
+[[steps.points]]
+id = "ent-oplog"
+text = "An operation log with revisions, plus snapshots"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Opening a document and exchanging edits."
+reference = """
+```
+GET /docs/{id} -> {snapshot, revision}
+WebSocket /docs/{id}:  → op {base_revision, op}   ← ack {revision}   ← op {revision, op, author}
+                       → cursor {pos}              ← cursor {user, pos}
+```
+"""
+[[steps.points]]
+id = "api-ws"
+text = "A WebSocket per open document carrying operations with revisions and cursors"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Where edits meet, how they merge, how they are stored."
+reference = """
+- **Document servers**: all sessions of one document connect to the same server (route by document id: consistent hashing), which holds the document in memory.
+- **OT on the server**: an op arrives with the revision it was based on; the server transforms it against ops applied since, applies it, gives it the next revision, appends it to the **op log**, and broadcasts. Clients transform their pending ops likewise.
+- **Storage**: op log in a database partitioned by document; **snapshots** every N ops so opening = latest snapshot + the ops after it.
+- **Cursors** are broadcast but not stored.
+"""
+[[steps.points]]
+id = "hld-owner"
+text = "One server owns each active document; all its editors connect there"
+level = "mid"
+[[steps.points]]
+id = "hld-ot"
+text = "Concurrent ops transformed against each other (OT), or a CRDT, so replicas converge"
+level = "senior"
+[[steps.points]]
+id = "hld-snap"
+text = "Op log plus periodic snapshots for fast opening"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Failures, offline, and scale."
+reference = """
+- **Server dies**: the op log is durable; another server loads the snapshot plus ops and clients reconnect, resending unacknowledged ops (idempotent by client op id).
+- **Offline editing**: OT struggles; a CRDT (Yjs/Automerge) merges offline edits naturally.
+- **Hot document** (a whole company in one doc): one owner still orders ops; viewers get a read-only stream.
+- **History**: versions are snapshots at intervals; restoring is a new op.
+"""
+[[steps.points]]
+id = "dd-failover"
+text = "Failover: reload snapshot plus ops; clients resend unacknowledged ops idempotently"
+level = "senior"
+[[steps.points]]
+id = "dd-offline"
+text = "Offline edits named as the case where a CRDT beats OT"
+level = "staff"
+
+[[probes]]
+question = "Alice and Bob both type at position 10 at the same instant. Walk through what the server does."
+answer = "Both ops say base revision r. The server applies Alice's first (revision r+1), then transforms Bob's against hers (his position shifts past her insert, tie broken by user id), applies it as r+2 and broadcasts both; each client transforms the other's op against its own pending one, so both screens show the same text."
+
+[[probes]]
+question = "Why route every editor of a document to the same server?"
+answer = "OT needs one place that orders the operations; with the document in one server's memory, ordering, transforming and broadcasting are local and fast. The cost is a failover step when that server dies."
+
+[[probes]]
+question = "A document has had 5 million edits. How does it still open in under a second?"
+answer = "From the latest snapshot plus only the few ops after it, not by replaying 5 million operations; snapshots are written every N ops or minutes, and old ops can be archived."

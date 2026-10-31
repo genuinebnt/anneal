@@ -1,0 +1,50 @@
+title = "SOLID and design patterns"
+group = "lld"
+order = 1
+minutes = 10
+lede = "The vocabulary of a low-level design round: the five SOLID principles as tests a design should pass, and the handful of patterns that come up again and again (strategy, observer, factory, state, decorator)."
+say = "Pricing is a strategy behind a trait, so adding surge pricing is a new type, not an edit to the parking lot; the lot only depends on the trait."
+related = ["concurrency-primitives", "rust-design-patterns"]
+
+[[sections]]
+heading = "SOLID, as questions"
+body = """
+| Principle | Ask of your design |
+|---|---|
+| Single responsibility | does each type have one reason to change? |
+| Open/closed | can I add a vehicle type without editing `ParkingLot`? |
+| Liskov substitution | can every implementation stand in for the interface without surprises? |
+| Interface segregation | does any client depend on methods it never calls? |
+| Dependency inversion | do high-level types depend on traits, not concrete classes? |
+"""
+
+[[sections]]
+heading = "The patterns that recur"
+body = """
+| Pattern | Use it when | Example |
+|---|---|---|
+| Strategy | behaviour varies and is chosen per case | pricing, eviction policy (LRU vs LFU) |
+| Observer | others must react to changes | elevator floor changes, stock price alerts |
+| Factory | creation logic is non-trivial or varies | creating vehicles or notification channels |
+| State | behaviour depends on a state machine | vending machine, order lifecycle |
+| Decorator | add responsibilities by wrapping | logging or retry around a client |
+| Singleton | one shared instance | **avoid**: pass dependencies explicitly instead |
+"""
+
+[[sections]]
+heading = "How to run the round"
+body = """
+1. Clarify requirements and the scope (what is out).
+2. Name the entities and their relationships; sketch the classes and the main methods.
+3. Walk through the key use cases against the sketch.
+4. Code the core paths; handle edge cases and concurrency if asked.
+5. Extend: show the design absorbs a new requirement with little change.
+"""
+
+[[checks]]
+prompt = "A parking lot class has an if-else chain on vehicle type for pricing. Which principle does it break and how do you fix it?"
+answer = "Open/closed: every new vehicle type means editing the chain. Put pricing behind a trait (strategy) with one implementation per vehicle or pricing rule, and have the lot call the trait."
+
+[[checks]]
+prompt = "Why do interviewers frown on singletons?"
+answer = "They are hidden global state: they couple everything to one instance, make tests hard to isolate, and hide dependencies; passing the dependency in (dependency injection) keeps it explicit and swappable."

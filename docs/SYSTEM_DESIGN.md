@@ -107,8 +107,8 @@ Groups (`group` in a concept file) and what each holds; written pages are marked
   checker, `Deref` polymorphism), Rust system design questions (a thread pool, a concurrent map, a rate limiter, a
   blocking queue, an async cache with TTL, a log-structured store, zero-copy parsing).
 
-Problems (`kind`): **hld**: URL shortener ✓, rate limiter ✓, news feed ✓, Uber, Dropbox / Google Drive, YouTube / Netflix,
-Google Docs, WhatsApp / chat, Ticketmaster, typeahead, web crawler, notification system, payment system, digital wallet,
+Problems (`kind`): **hld**: URL shortener ✓, rate limiter ✓, news feed ✓, Uber ✓, Dropbox / Google Drive ✓, YouTube / Netflix ✓,
+Google Docs ✓, WhatsApp / chat ✓, Ticketmaster ✓, typeahead ✓, web crawler, notification system, payment system, digital wallet,
 Yelp / proximity, nearby friends, Google Maps, Instagram, top-k / leaderboard, ad click aggregator, distributed cache,
 key-value store, distributed message queue, job scheduler, metrics and monitoring, stock exchange / Robinhood, online
 auction, LeetCode (code judge), Strava, Tinder, Google News, flash sale, hotel reservation, email service, S3-like object

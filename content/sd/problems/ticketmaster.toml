@@ -1,0 +1,123 @@
+title = "Ticketmaster (booking)"
+kind = "hld"
+order = 5
+minutes = 45
+prompt = "Design a ticket booking site like Ticketmaster: users browse and search events, see a seat map, hold seats while they pay, and buy them, including when a popular concert goes on sale and millions arrive at once."
+uses = ["delivery-framework", "contention", "postgres", "redis", "consistency-cap", "caching", "scaling-reads"]
+companies = ["Amazon", "Uber", "Meta", "Booking.com"]
+hints = [
+  "Two people click the same seat. What makes exactly one of them win?",
+  "Payment takes minutes. How is the seat kept for one person without locking the database that long?",
+  "Ten million people arrive at 10:00. What stands between them and the booking database?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and what makes it hard."
+reference = """
+**Functional**: browse and search events; view the seat map with availability; hold seats for a few minutes; pay and get tickets.
+
+**Non-functional**: **no seat sold twice** (strong consistency on booking); browsing and search highly available and fast (can be slightly stale); survive on-sale spikes of millions of users in minutes.
+
+**Shape**: reads (browse, seat maps) dwarf writes, except at on-sale moments when writes on a few events spike.
+"""
+[[steps.points]]
+id = "req-double"
+text = "No double booking named as the strongly consistent requirement"
+level = "mid"
+[[steps.points]]
+id = "req-split"
+text = "Browsing allowed to be eventually consistent and highly available"
+level = "senior"
+[[steps.points]]
+id = "req-spike"
+text = "The on-sale spike identified as the hardest load"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Event`, `Venue`, `Seat` (or ticket: event, section, row, number, status, held_until, held_by), `Booking` (user, seats, payment status), `User`."
+[[steps.points]]
+id = "ent-ticket"
+text = "A ticket/seat row with a status and a hold expiry"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Endpoints for browsing, holding and buying."
+reference = """
+```
+GET  /events?q=&city=&date=           GET /events/{id}/seats
+POST /holds   { event_id, seat_ids }  -> 201 { hold_id, expires_at }   (409 if taken)
+POST /bookings { hold_id, payment }   Idempotency-Key  -> 201 { booking_id, tickets }
+```
+"""
+[[steps.points]]
+id = "api-hold"
+text = "Holding seats is its own step, returning an expiry, with 409 when taken"
+level = "mid"
+[[steps.points]]
+id = "api-idem"
+text = "Booking is idempotent (a retry after a timeout does not charge twice)"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Browsing, holding and booking."
+reference = """
+- **Event service + search**: events in Postgres, indexed into Elasticsearch for search; seat maps cached (CDN/Redis) for browsing.
+- **Booking service** on Postgres: a hold is a **conditional update**: `UPDATE tickets SET status='held', held_by=u, held_until=now()+10min WHERE id IN (…) AND (status='free' OR held_until < now())`, checked by row count, in one transaction. All seats or none.
+- **Payment** through a provider with an idempotency key; on success the booking service marks the tickets sold; on expiry the hold lapses by the condition itself (no cleanup needed for correctness).
+"""
+[[steps.points]]
+id = "hld-atomic"
+text = "Holding is atomic: a conditional update (or row locks) in one transaction"
+level = "mid"
+[[steps.points]]
+id = "hld-expiry"
+text = "Holds expire by time, without keeping database locks open"
+level = "senior"
+[[steps.points]]
+id = "hld-read"
+text = "Browsing and search served from caches and a search index, apart from booking"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "The on-sale rush, real-time seat maps, and failures."
+reference = """
+- **Virtual waiting room**: users join a queue (Redis sorted set by arrival), and are admitted at the rate the booking path can serve, with a token that the booking API checks. The database never sees the stampede.
+- **Hot event**: the event's tickets on one Postgres; shard tickets by event if needed, but one event's seats stay together so holds stay transactional.
+- **Seat map freshness**: push changes over SSE to people looking at the map, or poll every few seconds; the hold is the real check.
+- **Payment failures**: idempotency keys; a booking stuck in 'paying' is reconciled with the provider.
+"""
+[[steps.points]]
+id = "dd-queue"
+text = "A virtual waiting room admits users at a sustainable rate"
+level = "senior"
+[[steps.points]]
+id = "dd-shard"
+text = "One event's seats kept together so holds stay in one transaction"
+level = "staff"
+[[steps.points]]
+id = "dd-reconcile"
+text = "Payment failures and stuck bookings reconciled with the provider"
+level = "staff"
+
+[[probes]]
+question = "A user holds two seats and their browser crashes. What happens to the seats?"
+answer = "Nothing needs to run: the hold has held_until, and the conditional update treats an expired hold as free, so after ten minutes anyone can take them. A background job can tidy the status later, but correctness does not depend on it."
+
+[[probes]]
+question = "Why not use a Redis lock per seat instead of the database?"
+answer = "You can (SET seat NX EX 600) as a fast first gate, but the booking still has to be recorded durably and atomically for several seats; keeping the truth in one database transaction avoids two systems disagreeing, and Redis can front it to absorb reads."
+
+[[probes]]
+question = "Ten million users arrive at 10:00 for 50,000 seats. Walk through the first minute."
+answer = "They land in the waiting room (a static page plus a queue), get a position, and are admitted a few thousand a minute with a signed token; admitted users see the cached seat map and hold seats with conditional updates; the rest keep their place or are told it sold out, and the booking database only sees the admitted rate."

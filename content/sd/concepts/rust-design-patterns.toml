@@ -1,0 +1,84 @@
+title = "Design patterns in Rust"
+group = "rust"
+order = 1
+minutes = 12
+lede = "The patterns interviewers expect from a Rust engineer, and how ownership changes them: newtypes and typestate push rules into the compiler, builders replace long constructors, RAII guards replace try/finally, and traits or closures replace class hierarchies."
+say = "I'd model the connection with typestate, so `send` only exists on `Connection<Open>`; misuse is a compile error, not a runtime check."
+related = ["rust-async"]
+
+[[sections]]
+heading = "Newtype"
+body = """
+Wrap a primitive in a one-field struct to give it meaning and rules: `struct UserId(u64)` cannot be passed where an `OrderId(u64)` is expected, and the constructor can validate.
+
+```rust
+pub struct Email(String);
+impl Email {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        if s.contains('@') { Ok(Self(s.to_owned())) } else { Err(format!("not an email: {s}")) }
+    }
+}
+```
+A function taking `Email` never has to re-check it.
+"""
+
+[[sections]]
+heading = "Builder"
+body = """
+Rust has no default or named arguments, so a type with many optional settings takes a builder: methods that set one field and return `self`, and a `build()` that validates.
+
+```rust
+let client = Client::builder().timeout(Duration::from_secs(5)).retries(3).build()?;
+```
+"""
+
+[[sections]]
+heading = "Typestate"
+body = """
+Encode the state in the type, so invalid transitions do not compile.
+
+```rust
+struct Open; struct Closed;
+struct Connection<S> { sock: TcpStream, _s: PhantomData<S> }
+impl Connection<Closed> { fn open(self) -> io::Result<Connection<Open>> { /* … */ } }
+impl Connection<Open>   { fn send(&mut self, b: &[u8]) -> io::Result<()> { /* … */ } }
+```
+`send` simply does not exist on a closed connection.
+"""
+
+[[sections]]
+heading = "RAII guards"
+body = """
+Acquire in a constructor, release in `Drop`: `MutexGuard` unlocks when it goes out of scope, a `File` closes, a transaction rolls back unless committed. Cleanup runs on every path, including early returns and panics.
+
+> [!TIP]
+> Interviewers like hearing that a guard must not be held across an `.await` (a `std::sync::MutexGuard` is not `Send`), so scope it in a block.
+"""
+
+[[sections]]
+heading = "Strategy and command: traits or closures"
+body = """
+| Need | Rust |
+|---|---|
+| choose behaviour at compile time | generic over a trait: `fn run<S: Scheduler>(s: S)` (static dispatch, inlined) |
+| choose at runtime, mix types in a list | trait objects: `Vec<Box<dyn Handler>>` (dynamic dispatch) |
+| one-off behaviour | a closure: `impl Fn(&Event) -> bool` |
+
+Prefer generics for hot paths, `dyn` for plugin-like collections.
+"""
+
+[[sections]]
+heading = "Anti-patterns to name"
+body = """
+- **Cloning to please the borrow checker**: restructure ownership (borrow shorter, split structs, `mem::take`) instead.
+- **`Deref` to fake inheritance**: implement the trait or delegate explicitly.
+- **`Rc<RefCell<…>>` everywhere**: usually a sign the ownership tree is unclear; an arena with indices often fits better.
+"""
+
+[[checks]]
+prompt = "How does a newtype make an API safer than taking a raw u64 or String?"
+answer = "It gives each meaning its own type, so ids of different things cannot be swapped by accident, and a validating constructor means every value of the type is already valid; functions taking it never re-check."
+
+[[checks]]
+prompt = "When would you use `Box<dyn Trait>` instead of a generic `T: Trait`?"
+answer = "When the concrete type is only known at runtime or a collection must hold different types (a list of handlers or plugins); generics are better when the type is known at compile time, since they are statically dispatched and can be inlined."

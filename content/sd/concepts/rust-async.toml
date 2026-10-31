@@ -1,0 +1,57 @@
+title = "Async Rust architecture"
+group = "rust"
+order = 2
+minutes = 12
+lede = "How a Tokio service is built and what interviewers probe: tasks and the runtime, never blocking the executor, which lock to use, channels for ownership, backpressure, and shutting down cleanly."
+say = "Each connection is a task; CPU-heavy parsing goes to spawn_blocking; shared state is an Arc<Mutex> held only between awaits, or an actor owning the state behind an mpsc channel; bounded channels give backpressure."
+related = ["rust-design-patterns", "queues-and-streams"]
+
+[[sections]]
+heading = "Tasks and the runtime"
+body = """
+A future does nothing until polled. `tokio::spawn` hands it to the runtime, whose worker threads poll ready tasks and park them at each `.await` that cannot proceed. Thousands of tasks share a few threads, so **every task must reach an `.await` quickly**.
+"""
+
+[[sections]]
+heading = "Never block the executor"
+body = """
+A blocking call (a file read with std, a long computation, `std::thread::sleep`, a sync database driver) holds a worker thread, and every task scheduled there stalls.
+
+- CPU-bound or blocking work: `tokio::task::spawn_blocking`, or a dedicated thread pool (rayon).
+- Use async I/O (`tokio::fs`, `tokio::net`, async drivers).
+"""
+
+[[sections]]
+heading = "Which lock"
+body = """
+| Situation | Use |
+|---|---|
+| short critical section, no `.await` inside | `std::sync::Mutex` (faster), scoped so the guard drops before any await |
+| must hold across an `.await` | `tokio::sync::Mutex` |
+| many readers, few writers | `RwLock` (std or tokio by the same rule) |
+| a counter or flag | atomics |
+| complex state many tasks change | an **actor**: one task owns the state, others send it messages over `mpsc` |
+
+`Rc` is not `Send`, so it cannot cross into spawned tasks; `Arc` can.
+"""
+
+[[sections]]
+heading = "Channels and backpressure"
+body = """
+- `mpsc` (many producers, one consumer), `oneshot` (one reply), `broadcast` (fan-out), `watch` (latest value).
+- **Bounded** channels make a fast producer wait when the consumer falls behind: that is backpressure. Unbounded channels hide it until memory runs out.
+"""
+
+[[sections]]
+heading = "Graceful shutdown"
+body = """
+Listen for the signal, stop accepting work, tell tasks to finish (a `CancellationToken` or a `watch` channel they `select!` on), wait for them with a `JoinSet` and a deadline, then exit. In-flight requests complete; queued work is drained or handed back.
+"""
+
+[[checks]]
+prompt = "Why is calling a synchronous database driver inside an async handler a problem, and what do you do instead?"
+answer = "It blocks the runtime worker thread for the whole query, so every other task on that thread stalls; use an async driver, or run the blocking call in spawn_blocking (or a dedicated pool) and await its result."
+
+[[checks]]
+prompt = "When must you use tokio::sync::Mutex instead of std::sync::Mutex?"
+answer = "When the guard has to be held across an .await; a std MutexGuard held over an await is not Send and can block the thread. If the critical section has no await, std::sync::Mutex is faster and fine."

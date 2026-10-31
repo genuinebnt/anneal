@@ -1,0 +1,112 @@
+title = "YouTube (video)"
+kind = "hld"
+order = 8
+minutes = 45
+prompt = "Design a video platform like YouTube: creators upload videos, which are processed and then streamed smoothly to viewers on any device and network around the world."
+uses = ["delivery-framework", "large-blobs", "queues-and-streams", "caching", "scaling-reads"]
+companies = ["Google", "Netflix", "Meta", "TikTok"]
+hints = [
+  "One upload has to play on a phone on 3G and a TV on fibre. What do you make from the original?",
+  "Where should the video bytes come from when a million people watch?",
+  "Processing a 2-hour 4K video takes a long time. How do you make it faster?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and an estimate."
+reference = """
+**Functional**: upload videos; watch with playback that adapts to the network; video metadata, search and view counts.
+
+**Non-functional**: playback starts fast (under 2 s) and rarely stalls; uploads are durable and resumable; processing finishes within minutes; global audience.
+
+**Estimate**: 500 hours uploaded a minute; billions of views a day; egress, not storage, is the big cost.
+"""
+[[steps.points]]
+id = "req-adaptive"
+text = "Smooth playback on any network (adaptive quality) as a requirement"
+level = "mid"
+[[steps.points]]
+id = "req-egress"
+text = "Bandwidth (egress) identified as the dominant cost and scale problem"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Video` (metadata, status, owner), the original file, `Rendition`s (resolution × codec), segments and manifests, `User`, view counts."
+[[steps.points]]
+id = "ent-rendition"
+text = "Renditions and segments, apart from the original upload"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Uploading and watching."
+reference = """
+```
+POST /videos {title, size} -> {video_id, upload_urls[]}     (multipart, presigned, straight to storage)
+GET  /videos/{id} -> {title, status, manifest_url}
+GET  <manifest_url>  (HLS/DASH from the CDN)  -> segment list per quality
+```
+"""
+[[steps.points]]
+id = "api-manifest"
+text = "Playback through a manifest (HLS/DASH) served from a CDN"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Upload, processing, playback."
+reference = """
+- **Upload** straight to object storage (multipart, presigned); a completion event puts a job on a **queue**.
+- **Processing pipeline**: split the original into chunks, **transcode in parallel** into several resolutions and codecs, cut into 2-6 s **segments**, write a **manifest** per video; mark the video ready.
+- **Playback**: the player fetches the manifest and segments from a **CDN**, switching quality per segment based on measured bandwidth (adaptive bitrate).
+- Metadata in a database; view counts aggregated asynchronously.
+"""
+[[steps.points]]
+id = "hld-pipeline"
+text = "An async processing pipeline: queue, parallel transcoding, segments and manifests"
+level = "mid"
+[[steps.points]]
+id = "hld-cdn"
+text = "Segments served from a CDN, with adaptive bitrate in the player"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Speed, cost, and the long tail."
+reference = """
+- **Parallel transcoding**: chunk the source (by GOP) so hundreds of workers transcode at once; stitch the results. A DAG of tasks (Temporal or a workflow engine) handles retries.
+- **CDN strategy**: popular videos pushed/pre-warmed at the edge; the long tail served from regional caches or origin.
+- **Cost**: cheaper storage for old, rarely watched renditions; generate rare renditions on demand.
+- **View counts**: increments through a stream, batched; approximate in real time, exact later.
+"""
+[[steps.points]]
+id = "dd-parallel"
+text = "Source split into chunks transcoded in parallel, with retries per task"
+level = "senior"
+[[steps.points]]
+id = "dd-tail"
+text = "Popular videos at the edge; the long tail from regional caches or origin"
+level = "senior"
+[[steps.points]]
+id = "dd-counts"
+text = "View counts batched through a stream, not a row update per view"
+level = "staff"
+
+[[probes]]
+question = "Why cut videos into 2 to 6 second segments?"
+answer = "So the player can change quality at every segment boundary as bandwidth changes, start playback after the first segment instead of the whole file, seek quickly, and so CDNs cache small, reusable pieces."
+
+[[probes]]
+question = "A creator uploads a 3-hour 4K stream. How do you have it watchable in minutes, not hours?"
+answer = "Split the source into chunks at keyframes and transcode them in parallel across many workers, starting with the lower resolutions so playback can begin while higher ones finish; stitch the segments and publish the manifest as renditions complete."
+
+[[probes]]
+question = "A video goes viral in one country. What keeps the origin from melting?"
+answer = "The CDN: segments are cached at edges near viewers, so after the first requests the origin is barely touched; pre-warm or push the video's segments to edges in that region once its views spike."

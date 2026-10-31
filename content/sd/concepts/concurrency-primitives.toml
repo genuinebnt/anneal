@@ -1,0 +1,46 @@
+title = "Concurrency primitives"
+group = "lld"
+order = 2
+minutes = 11
+lede = "The tools for correct shared state in a low-level design: mutexes, read-write locks, condition variables, semaphores, atomics and compare-and-swap, plus the classic patterns built from them and the bugs they prevent."
+say = "The seat map is guarded per show by a Mutex; booking checks and marks seats under one lock so two threads cannot take the same seat, and locks are always taken in seat-id order to avoid deadlock."
+related = ["solid-and-patterns", "contention", "rust-async"]
+
+[[sections]]
+heading = "The primitives"
+body = """
+| Primitive | Gives you | Rust |
+|---|---|---|
+| Mutex | one thread at a time in a critical section | `Mutex<T>` (the data is inside it) |
+| Read-write lock | many readers or one writer | `RwLock<T>` |
+| Condition variable | wait until a condition holds, without spinning | `Condvar` with a `Mutex` |
+| Semaphore | at most N at once (a pool) | `tokio::sync::Semaphore` |
+| Atomics / CAS | lock-free counters and flags; compare-and-swap loops | `AtomicU64`, `compare_exchange` |
+"""
+
+[[sections]]
+heading = "Classic patterns"
+body = """
+- **Producer-consumer**: a bounded queue; producers wait when it is full, consumers when it is empty (Mutex + two Condvars, or a channel).
+- **Thread pool**: N workers take jobs from a shared queue; submit returns a handle to the result.
+- **Reader-writer**: a cache read by many, refreshed by one.
+"""
+
+[[sections]]
+heading = "The bugs"
+body = """
+- **Race condition**: check-then-act across two steps (`if !map.contains(k) { map.insert(k, v) }` with another thread in between). Do both under one lock, or use an atomic entry API.
+- **Deadlock**: two threads take two locks in opposite orders. Always lock in one global order, or hold one lock at a time.
+- **Livelock / starvation**: threads keep yielding or a writer never gets the lock; use fair locks or backoff.
+
+> [!INTERVIEW]
+> Say where each lock is and what it protects, and why the critical section is as small as possible.
+"""
+
+[[checks]]
+prompt = "Two threads book seats: one locks seat 5 then 7, the other locks 7 then 5. What can happen, and how do you prevent it?"
+answer = "A deadlock: each holds one lock and waits forever for the other. Always acquire locks in one global order (by seat id, smallest first), or take a single lock for the show."
+
+[[checks]]
+prompt = "Why is `if !map.contains_key(k) { map.insert(k, v) }` wrong with several threads even if each call is thread-safe?"
+answer = "It is check-then-act: another thread can insert between the check and the insert. Do both inside one critical section, or use an atomic operation such as the entry API under one lock."

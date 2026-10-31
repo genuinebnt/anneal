@@ -1,0 +1,101 @@
+title = "Typeahead (search autocomplete)"
+kind = "hld"
+order = 10
+minutes = 35
+prompt = "Design search autocomplete: as a user types in the search box, show the ten most likely completions within a few milliseconds, for billions of searches a day."
+uses = ["delivery-framework", "typeahead-tries", "caching", "estimation"]
+companies = ["Google", "Amazon", "Meta", "LinkedIn"]
+hints = [
+  "Every keystroke is a request. How much time does each one have?",
+  "What data structure answers 'top completions for this prefix' fastest?",
+  "Is the ranking computed live, or ahead of time?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and an estimate."
+reference = """
+**Functional**: return the top 10 completions for a prefix, ranked by popularity; reflect new trends within hours (minutes is better).
+
+**Non-functional**: under ~50 ms end to end (the user is typing); highly available; suggestions may be slightly stale.
+
+**Estimate**: 5B searches a day × ~6 keystrokes ≈ 350k requests a second: read-only, latency-bound.
+"""
+[[steps.points]]
+id = "req-latency"
+text = "A tight latency budget per keystroke stated"
+level = "mid"
+[[steps.points]]
+id = "req-qps"
+text = "Request rate estimated from searches × keystrokes"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Query` counts (from search logs), the `Trie` snapshot with top-K per node, optional per-user history."
+[[steps.points]]
+id = "ent-snapshot"
+text = "A precomputed trie snapshot built from query counts"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "The suggestion endpoint."
+reference = """
+```
+GET /suggest?q=ca&limit=10 -> ["camera", "car insurance", ...]
+```
+Cacheable by prefix; the client debounces and cancels in-flight requests.
+"""
+[[steps.points]]
+id = "api-cache"
+text = "A GET keyed by prefix, cacheable, with client-side debouncing"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Building and serving suggestions."
+reference = """
+- **Data pipeline** (offline): search logs → aggregation job (counts per query with time decay) → **trie builder** (top 10 per node) → snapshot in object storage.
+- **Suggestion servers** load the snapshot into memory and answer by walking the prefix; sharded by prefix range if large; replicated for load.
+- **Caches**: CDN/edge for popular prefixes; client cache.
+"""
+[[steps.points]]
+id = "hld-offline"
+text = "Offline pipeline from logs to a trie snapshot; serving is read-only"
+level = "mid"
+[[steps.points]]
+id = "hld-memory"
+text = "Served from memory, top-K per node, sharded and replicated"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 8
+prompt = "Freshness, size, quality."
+reference = """
+- **Trends**: a real-time layer (streaming counts over the last hour) blended at serving time.
+- **Size**: keep only queries above a count threshold; compress; shard by prefix.
+- **Quality**: filter unsafe terms in the pipeline; personalise by re-ranking with the user's recent searches.
+"""
+[[steps.points]]
+id = "dd-trend"
+text = "A real-time layer blended with the offline trie for trends"
+level = "senior"
+[[steps.points]]
+id = "dd-filter"
+text = "Unsafe suggestions filtered before publishing"
+level = "senior"
+
+[[probes]]
+question = "Why not run a database query like WHERE query LIKE 'ca%' ORDER BY count DESC LIMIT 10 per keystroke?"
+answer = "At 350k requests a second with a 50 ms budget, scanning and sorting a large range per request is far too slow and costly; a trie with top-K precomputed per node answers in microseconds from memory."
+
+[[probes]]
+question = "A news event makes a new query explode. How long until it is suggested, and how do you shorten that?"
+answer = "With only the hourly rebuild, up to an hour; a streaming counter of recent queries feeds a small real-time trie or list that is merged with the offline results at serving time, so it appears within minutes."

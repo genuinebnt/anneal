@@ -1,0 +1,47 @@
+title = "Consensus and Raft"
+group = "distributed"
+order = 1
+minutes = 11
+lede = "How a few machines agree on one sequence of decisions even when some crash: elect a leader, replicate a log, and commit an entry once a majority has it. Raft is the version built to be understood; etcd, Consul and Kafka's KRaft run it."
+say = "The lock service is three etcd nodes running Raft, so it survives one failure; a write commits once two of three have it in their log, and clients use the lease's revision as a fencing token."
+related = ["replication", "consistency-cap", "kafka"]
+
+[[sections]]
+heading = "Why it is needed"
+body = """
+Leader election, distributed locks, configuration, "which broker leads partition 7": all need several machines to **agree on one answer** despite crashes and lost messages. Majority **quorums** make that possible: any two majorities of 5 overlap, so two different answers can never both be accepted.
+"""
+
+[[sections]]
+heading = "Raft in four moves"
+body = """
+1. **Terms and election**: time is split into terms. A follower that hears no leader for a random timeout (150-300 ms) becomes a candidate, votes for itself and asks the others; a majority of votes makes it leader for that term.
+2. **Log replication**: clients send commands to the leader, which appends them to its log and sends them to followers.
+3. **Commit**: once a **majority** has an entry, the leader marks it committed and applies it; followers apply it when told.
+4. **Safety**: a candidate only wins if its log is at least as up to date as a majority's, so a new leader always has every committed entry.
+
+> [!NOTE]
+> A cluster of 2f+1 nodes tolerates f failures: 3 nodes survive 1, 5 survive 2. An even number adds cost without tolerance.
+"""
+
+[[sections]]
+heading = "Where it shows up in designs"
+body = """
+- **Coordination services** (etcd, ZooKeeper, Consul): locks, leader election, config, service discovery.
+- **Metadata of data systems**: Kafka's KRaft controller, CockroachDB and TiKV (Raft per range), Spanner (Paxos per split).
+- You rarely implement it; you **choose a system that uses it** for the small, critical state, and keep bulk data elsewhere.
+"""
+
+[[sections]]
+heading = "Leases and fencing tokens"
+body = """
+A lock holder can pause (GC, network) past its lease while another node takes the lock. Give each grant an increasing **fencing token** (etcd's revision, ZooKeeper's zxid) and make the protected resource reject writes with an older token.
+"""
+
+[[checks]]
+prompt = "Why does a 5-node Raft cluster keep working with 2 nodes down but not 3?"
+answer = "Committing and electing need a majority (3 of 5). With 2 down, 3 remain and can still form a majority; with 3 down only 2 remain, so no entry can commit and no leader can be elected."
+
+[[checks]]
+prompt = "A client holds a lock, pauses for 30 seconds in garbage collection, then writes to storage after its lease expired and another client got the lock. How do you stop the stale write?"
+answer = "Fencing: each lock grant comes with an increasing token, every write carries it, and the storage rejects a write whose token is lower than the highest it has seen."

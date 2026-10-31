@@ -1,0 +1,114 @@
+title = "Uber (ride matching)"
+kind = "hld"
+order = 6
+minutes = 45
+prompt = "Design the core of a ride-hailing app like Uber: riders request a ride, nearby drivers are matched and notified, a driver accepts, and both see each other's location until the trip ends."
+uses = ["delivery-framework", "proximity-search", "realtime-updates", "contention", "redis", "sharding"]
+companies = ["Uber", "Lyft", "Google", "Amazon"]
+hints = [
+  "Drivers send their location every few seconds. How many writes is that, and does it belong in a durable database?",
+  "How do you find drivers within 2 km of the rider quickly?",
+  "Two riders' requests reach the same driver at once. What keeps the driver from getting both?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and the estimate."
+reference = """
+**Functional**: riders see an estimate and request a ride; the system matches a nearby available driver who accepts or declines; both see live location; the trip starts and ends.
+
+**Non-functional**: a match within seconds; a driver is never matched to two riders at once; location updates near real time; highly available in each city.
+
+**Estimate**: 5M active drivers updating every 4 s ≈ 1.25M location writes a second; ride requests far fewer (thousands a second).
+"""
+[[steps.points]]
+id = "req-one-ride"
+text = "A driver is never given two rides at once (consistency on assignment)"
+level = "mid"
+[[steps.points]]
+id = "req-loc-rate"
+text = "Location update rate estimated and called out as the write-heavy part"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Rider`, `Driver` (status, current location), `Ride` (rider, driver, pickup, dropoff, status, fare), `Location` updates."
+[[steps.points]]
+id = "ent-ride"
+text = "A Ride with a status that moves through requested, matched, started, ended"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Rider, driver and location endpoints."
+reference = """
+```
+POST /fare-estimates {pickup, dropoff} -> {estimate_id, price, eta}
+POST /rides {estimate_id}             -> 201 {ride_id, status: "matching"}
+POST /drivers/location {lat, lng}      (every few seconds)
+PATCH /rides/{id} {action: accept|decline|start|end}
+```
+Live updates to the apps over WebSocket or push notifications.
+"""
+[[steps.points]]
+id = "api-flow"
+text = "Estimate, request, driver location and ride status endpoints"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Locations, matching, and notifying."
+reference = """
+- **Location service**: driver updates go to an in-memory **geospatial index** (Redis GEO or a geohash/H3 grid) sharded by city/region; only the latest position is kept.
+- **Matching service**: on a request, query cells around the pickup for available drivers, rank by ETA, offer to the best one with a timeout (say 10 s), then the next.
+- **Ride service** keeps rides in a database (Postgres, sharded by city).
+- **Notifications** to drivers and riders over a persistent connection or push.
+"""
+[[steps.points]]
+id = "hld-geo"
+text = "Driver locations in an in-memory geospatial index, sharded by region"
+level = "mid"
+[[steps.points]]
+id = "hld-offer"
+text = "Matching offers one driver at a time with a timeout, then moves on"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Double-assignment, scale and failure."
+reference = """
+- **One driver, one ride**: lock the driver while an offer is out: `SET driver:{id}:offer ride NX EX 10` in Redis, or a conditional update of the driver's status; a second matcher skips locked drivers.
+- **Hot cities**: shard the location index by city and by cell; a big city spans several shards.
+- **Surge**: requests and available drivers per cell feed a pricing service.
+- **Failures**: matching state is short-lived and can be rebuilt; the ride record is durable; a driver offline mid-offer just times out.
+"""
+[[steps.points]]
+id = "dd-lock"
+text = "A driver locked during an offer (NX lock with expiry or a conditional update)"
+level = "senior"
+[[steps.points]]
+id = "dd-shard"
+text = "Location index sharded by city/cell for write throughput"
+level = "senior"
+[[steps.points]]
+id = "dd-timeout"
+text = "Offers time out so a silent driver does not stall the match"
+level = "staff"
+
+[[probes]]
+question = "Why not store every location update in Postgres?"
+answer = "1.25M writes a second of data that is stale in four seconds; a durable database would be the bottleneck and gains nothing. Keep only the latest position in memory and write trip traces asynchronously in batches."
+
+[[probes]]
+question = "Two matchers pick the same driver for two riders in the same second. What happens?"
+answer = "Both try to take the driver's offer lock (SET NX with a 10-second expiry, or UPDATE drivers SET status='offered' WHERE id=… AND status='available'); exactly one succeeds, the other moves to its next candidate."
+
+[[probes]]
+question = "A rider is near the edge of two location shards. How do you still find drivers across the line?"
+answer = "Query by cells, not by shard: compute the cells covering the search radius (the cell and its neighbours) and send each cell's query to whichever shard owns it, then merge and rank the results."

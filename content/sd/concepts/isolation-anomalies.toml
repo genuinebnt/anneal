@@ -1,0 +1,41 @@
+title = "Transactions and isolation anomalies"
+group = "distributed"
+order = 2
+minutes = 10
+lede = "What can go wrong when transactions run at the same time, and which isolation level stops each problem: dirty reads, lost updates, write skew and phantoms."
+say = "Two doctors going off call at once is write skew; read committed allows it, so that check runs under serializable, or with SELECT … FOR UPDATE on the rows it depends on."
+related = ["postgres", "contention", "consistency-cap"]
+
+[[sections]]
+heading = "The anomalies"
+body = """
+| Anomaly | What happens | Stopped by |
+|---|---|---|
+| Dirty read | you see another transaction's uncommitted write | read committed |
+| Non-repeatable read | the same row reads differently twice in one transaction | repeatable read / snapshot |
+| Lost update | two read-modify-writes, one overwrites the other | atomic updates, `FOR UPDATE`, or a version check |
+| Write skew | two transactions read the same rows, each writes a different row; together they break a rule | serializable, or locking the rows read |
+| Phantom | a query's result set changes because another transaction inserted rows | serializable, predicate locks |
+"""
+
+[[sections]]
+heading = "Write skew, in one example"
+body = """
+Rule: at least one doctor on call. Alice and Bob are both on call; each checks "is someone else on call?" (yes), and each goes off call. Neither overwrote the other's row, yet now nobody is on call. Snapshot isolation allows this; **serializable** detects it and aborts one.
+"""
+
+[[sections]]
+heading = "What databases give you"
+body = """
+- Postgres default: **read committed**; `REPEATABLE READ` is snapshot isolation; `SERIALIZABLE` is serializable snapshot isolation (aborts conflicts, the app retries).
+- MySQL InnoDB default: repeatable read (with gap locks against phantoms).
+- Across services there is no isolation at all: use sagas, idempotency and compensations.
+"""
+
+[[checks]]
+prompt = "Two requests each read a counter of 10, add 1, and write 11. Name the anomaly and two fixes."
+answer = "A lost update. Fix with an atomic UPDATE counter = counter + 1, with SELECT … FOR UPDATE before modifying, or with optimistic concurrency (write only where version = the one read, retry otherwise)."
+
+[[checks]]
+prompt = "Why doesn't snapshot isolation prevent write skew?"
+answer = "Each transaction reads a consistent snapshot and writes different rows, so no write-write conflict is detected; the rule spans rows both read but neither locked, and only serializable checks catch that read-write dependency."

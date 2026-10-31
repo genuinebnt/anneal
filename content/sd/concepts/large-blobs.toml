@@ -1,0 +1,36 @@
+title = "Large blobs"
+group = "pattern"
+order = 6
+minutes = 7
+lede = "Files, photos and videos do not belong in your database or flowing through your app servers. Clients upload straight to object storage with a presigned URL, in chunks, and you keep only metadata."
+say = "The client asks the API for a presigned S3 URL, uploads the file in 5 MB parts directly, and an event on completion marks the file ready and starts processing."
+related = ["data-modeling", "queues-and-streams"]
+
+[[sections]]
+heading = "Presigned URLs"
+body = """
+The API checks the user may upload, then signs a URL that lets the client `PUT` one object to S3 (or GCS) for a few minutes. The bytes go client → storage; your servers never carry them. Downloads work the same way, or through a CDN in front of the bucket.
+"""
+
+[[sections]]
+heading = "Chunks and resume"
+body = """
+Big files upload in **parts** (multipart upload: 5 MB to 5 GB each, in parallel, retried one by one). A dropped connection resumes from the last part instead of starting over. For sync products (Dropbox), files are split into chunks by **content hash**, so an edited file uploads only the chunks that changed, and identical chunks are stored once.
+"""
+
+[[sections]]
+heading = "Metadata and status"
+body = """
+The database holds what the product needs: owner, name, size, content hash, chunk list, status (`uploading`, `ready`). Mark a file ready from the storage's completion event, not from the client's word.
+
+> [!TIP]
+> Processing (thumbnails, transcoding, virus scans) starts from the upload-complete event through a queue, never inside the upload request.
+"""
+
+[[checks]]
+prompt = "Why upload through a presigned URL instead of posting the file to your API?"
+answer = "The bytes go straight to object storage, so app servers are not tied up streaming gigabytes, bandwidth costs and timeouts move off your fleet, and storage scales by itself; the API only authorises and records metadata."
+
+[[checks]]
+prompt = "How does content-hashed chunking make syncing an edited 1 GB file cheap?"
+answer = "The file is split into chunks named by their hash; after an edit only the chunks whose hash changed are new, so only they are uploaded, and unchanged chunks (and identical ones across users) are stored once."

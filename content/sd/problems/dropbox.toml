@@ -1,0 +1,112 @@
+title = "Dropbox (file sync)"
+kind = "hld"
+order = 7
+minutes = 45
+prompt = "Design a file storage and sync service like Dropbox: users upload files from any device, see them on all their devices, share them, and edits sync quickly even for large files."
+uses = ["delivery-framework", "large-blobs", "data-modeling", "realtime-updates", "consistency-cap"]
+companies = ["Dropbox", "Google", "Microsoft", "Box"]
+hints = [
+  "Should a 2 GB file flow through your API servers?",
+  "A user changes one paragraph in a 1 GB file. What has to be uploaded?",
+  "How does a laptop learn that a file changed on the phone?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and an estimate."
+reference = """
+**Functional**: upload and download files; sync across a user's devices; share with others; files up to tens of GB.
+
+**Non-functional**: never lose a file; changes appear on other devices within seconds; uploads resume after a dropped connection; storage and bandwidth used efficiently.
+
+**Estimate**: 500M users, 2 GB each on average ≈ 1 EB stored: object storage, not a database.
+"""
+[[steps.points]]
+id = "req-durable"
+text = "Durability (never lose a file) and resumable uploads stated"
+level = "mid"
+[[steps.points]]
+id = "req-size"
+text = "Large files and total size estimated: object storage, not a database"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`File` (metadata: owner, path, size, version, chunk list), `Chunk` (content hash, location), `Device`, `Share` (file, user, permission)."
+[[steps.points]]
+id = "ent-chunk"
+text = "Files described by metadata plus a list of content-addressed chunks"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "Uploading, downloading, syncing."
+reference = """
+```
+POST /files {path, size, chunk_hashes[]} -> {file_id, missing_chunks[], upload_urls[]}
+PUT  <presigned url>                     (each missing chunk, straight to storage)
+POST /files/{id}/commit                  -> {version}
+GET  /files/{id} -> {download_urls[]}    GET /changes?cursor=  -> {changes[], cursor}
+```
+"""
+[[steps.points]]
+id = "api-presigned"
+text = "Uploads and downloads go straight to object storage via presigned URLs"
+level = "mid"
+[[steps.points]]
+id = "api-changes"
+text = "A change feed with a cursor for devices to sync from"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Upload, sync, download."
+reference = """
+- **Client** splits a file into chunks (~4 MB) and hashes each; asks the **metadata service** which chunks are missing; uploads only those to **S3** with presigned URLs; commits the new version.
+- **Metadata DB** (Postgres, sharded by user) holds files, versions and chunk lists; chunks are stored once by hash (deduplication).
+- **Sync**: each commit appends to a per-user **change log**; devices hold a long-poll or WebSocket to a **notification service** that says "something changed", then fetch `/changes?cursor`.
+"""
+[[steps.points]]
+id = "hld-delta"
+text = "Only missing chunks are uploaded (content-hash dedupe)"
+level = "mid"
+[[steps.points]]
+id = "hld-notify"
+text = "Devices are notified of changes and pull a change feed by cursor"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Conflicts, large files, and sharing."
+reference = """
+- **Conflicts**: two devices edit offline; the second commit is based on an older version, so the server keeps both ("file (conflicted copy)") rather than silently overwriting.
+- **Resumable uploads**: multipart uploads retry per chunk; the commit only happens when all chunks exist.
+- **Hot shared folders**: shares are metadata entries; change logs fan out to every member's feed.
+- **Cost**: cold files move to cheaper storage tiers; downloads go through a CDN.
+"""
+[[steps.points]]
+id = "dd-conflict"
+text = "Conflicting offline edits detected by base version and kept as a conflicted copy"
+level = "senior"
+[[steps.points]]
+id = "dd-resume"
+text = "Uploads resume per chunk; commit only after all chunks exist"
+level = "senior"
+
+[[probes]]
+question = "Two of my laptops edit the same file offline and both come online. What does the server do?"
+answer = "Each commit names the version it was based on; the first one wins and becomes the new version, the second is based on a stale version, so it is saved as a conflicted copy for the user to merge rather than overwriting."
+
+[[probes]]
+question = "How does the phone find out a file changed on the laptop within seconds without polling constantly?"
+answer = "It keeps a long-poll or WebSocket open to a notification service; a commit publishes a 'changed' signal for the user, and the phone then calls the change feed with its cursor to get exactly what changed."
+
+[[probes]]
+question = "Ten users upload the same 1 GB video. How much do you store?"
+answer = "One copy: chunks are named by content hash, so the second to tenth uploads find every chunk already present and only add metadata pointing at them."

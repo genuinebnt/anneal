@@ -1,0 +1,51 @@
+title = "CRDTs and OT"
+group = "advanced"
+order = 2
+minutes = 10
+lede = "How several people edit the same document at once and end up with the same text: operational transformation rewrites concurrent edits against each other on a server; CRDTs make edits that commute, so any order gives the same result, even offline."
+say = "Edits go to a document server that orders them and transforms concurrent ones (OT), so every client converges; for offline-first I'd use a CRDT like Yjs instead."
+related = ["realtime-updates", "consistency-cap"]
+
+[[sections]]
+heading = "The problem"
+body = """
+Alice inserts "x" at position 3 while Bob deletes position 1. If each applies the other's edit as sent, Alice's insert lands one place off on Bob's screen. Positions shift under concurrent edits, so naive replay diverges.
+"""
+
+[[sections]]
+heading = "Operational transformation (OT)"
+body = """
+A server receives edits in some order and **transforms** each against the concurrent edits already applied (Bob's delete shifts Alice's insert from 3 to 2), then broadcasts. Clients do the same with their pending edits. Google Docs works this way.
+
+- Needs a central server to order operations.
+- The transform functions are subtle to get right for every pair of operation types.
+"""
+
+[[sections]]
+heading = "CRDTs"
+body = """
+A **conflict-free replicated data type** designs the data so concurrent changes **merge** the same way in any order. For text, each character gets a unique, ordered id (not an index); inserts go between ids, deletes leave a tombstone. Any two replicas that saw the same edits hold the same text.
+
+| | OT | CRDT |
+|---|---|---|
+| Server | required to order edits | optional; peers can sync directly |
+| Offline | hard | natural: merge when back |
+| Cost | small operations | ids and tombstones grow the document |
+| Examples | Google Docs | Figma (custom), Yjs, Automerge |
+"""
+
+[[sections]]
+heading = "Around the algorithm"
+body = """
+- **Transport**: a WebSocket per open document; a document server (or shard) owns each document's session.
+- **Presence**: cursors and selections are ephemeral; send them separately and do not persist them.
+- **Storage**: periodic snapshots plus the operation log since; compact old tombstones.
+"""
+
+[[checks]]
+prompt = "Why do concurrent text edits go wrong if each client simply replays the others' edits?"
+answer = "Edits refer to positions, and concurrent edits shift positions: an insert at 3 means a different place once another user deleted at 1, so replicas apply edits at different spots and diverge."
+
+[[checks]]
+prompt = "When would you pick a CRDT over OT?"
+answer = "When editing must work offline or peer to peer without a central server ordering operations, since CRDT merges converge in any order; OT suits a central server with always-online clients and keeps operations small."

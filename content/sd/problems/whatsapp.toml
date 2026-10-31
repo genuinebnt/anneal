@@ -1,0 +1,127 @@
+title = "WhatsApp (chat)"
+kind = "hld"
+order = 4
+minutes = 45
+prompt = "Design a chat app like WhatsApp: one-to-one and small group chats, messages delivered in real time when the recipient is online and as soon as they come back when they are not, with delivery and read receipts."
+uses = ["delivery-framework", "realtime-updates", "queues-and-streams", "sharding", "data-modeling", "consistency-cap"]
+companies = ["Meta", "Microsoft", "Amazon", "Uber"]
+hints = [
+  "A user's phone holds a long-lived connection to one server. How does a message reach the server that holds the recipient's connection?",
+  "The recipient is offline for a day. Where does the message wait, and how does it get there when they reconnect?",
+  "What gives the messages in one chat a single order?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, measurable non-functional ones, and the estimate that shapes the design."
+reference = """
+**Functional**: send and receive messages in 1:1 and group chats (up to ~100 members); messages to offline users are delivered when they reconnect; sent, delivered and read receipts; history on the device.
+
+**Non-functional**: delivery under 500 ms when both are online; no message lost once the server accepted it; per-chat order preserved; 1B users, ~20B messages a day.
+
+**Estimate**: ~230k messages a second on average, ~500k at peak; ~100M concurrent connections, spread over thousands of gateway servers.
+"""
+[[steps.points]]
+id = "req-offline"
+text = "Offline delivery: messages wait and arrive on reconnect"
+level = "mid"
+[[steps.points]]
+id = "req-durable"
+text = "No message lost once accepted, and order kept within a chat"
+level = "senior"
+[[steps.points]]
+id = "req-scale"
+text = "Concurrent connections estimated and named as the scaling problem"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`User`, `Chat` (participants), `Message` (chat, sender, sequence number, body, sent time), `Inbox` entries (undelivered messages per device), `Receipt`."
+[[steps.points]]
+id = "ent-inbox"
+text = "A per-device inbox of undelivered messages, apart from chat history"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 5
+prompt = "How clients and servers talk, in both directions."
+reference = """
+A WebSocket per device carries events both ways:
+```
+→ send {chat_id, client_msg_id, body}        ← ack {client_msg_id, msg_id, seq}
+← message {chat_id, msg_id, seq, sender, body} → delivered / read {msg_id}
+```
+REST for the rest: `GET /chats`, `GET /chats/{id}/messages?before=seq`. The client's `client_msg_id` makes resends idempotent.
+"""
+[[steps.points]]
+id = "api-ws"
+text = "A persistent bidirectional connection (WebSocket) for messages and receipts"
+level = "mid"
+[[steps.points]]
+id = "api-idem"
+text = "A client-generated message id so a resend after a timeout is not a duplicate"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "A design that works: sending, routing to the recipient's connection, and offline delivery."
+reference = """
+- **Gateways** hold the WebSocket connections. A **session registry** (Redis) maps user/device to the gateway that holds it.
+- **Chat service** receives a message, assigns the next **sequence number for that chat**, writes it to the **message store** (Cassandra, partitioned by chat id, clustered by seq), then fans out to each recipient device.
+- For an online device, publish to its gateway (look up the registry, or a pub/sub channel per gateway); for an offline one, append to its **inbox**.
+- On reconnect the device asks for its inbox (or messages after its last seen seq per chat), then acks so they are removed.
+"""
+[[steps.points]]
+id = "hld-registry"
+text = "Gateways plus a registry (or pub/sub) to find the gateway holding the recipient"
+level = "mid"
+[[steps.points]]
+id = "hld-store"
+text = "Messages stored partitioned by chat, ordered by a per-chat sequence"
+level = "senior"
+[[steps.points]]
+id = "hld-offline"
+text = "Inbox per offline device, drained and acknowledged on reconnect"
+level = "mid"
+
+[[steps]]
+name = "Deep dives"
+minutes = 15
+prompt = "Ordering, failures, groups, and scale."
+reference = """
+- **Ordering**: one sequencer per chat (the chat's partition owner, or an atomic counter keyed by chat), so all members see the same order; clients sort by seq and fill gaps.
+- **Exactly-once display**: at-least-once delivery plus dedupe by msg id on the device.
+- **Gateway dies**: devices reconnect elsewhere and resume from their last seq; the registry entry expires.
+- **Groups**: fan out per member device at send time (fine up to ~100s); for huge channels, members pull.
+- **Receipts**: small events through the same path, batched; read state per member per chat.
+- **End-to-end encryption** (if asked): the server routes ciphertext it cannot read; keys per device.
+"""
+[[steps.points]]
+id = "dd-seq"
+text = "A per-chat sequencer gives one order; clients fill gaps by seq"
+level = "senior"
+[[steps.points]]
+id = "dd-dedupe"
+text = "At-least-once delivery with dedupe by message id on the device"
+level = "senior"
+[[steps.points]]
+id = "dd-reconnect"
+text = "Gateway failure handled: reconnect anywhere and resume from the last seq"
+level = "staff"
+
+[[probes]]
+question = "Two people in a group send a message at the same instant to different servers. How do all members see the same order?"
+answer = "The chat has one sequencer: both messages go through the owner of the chat's partition (or an atomic counter keyed by chat id), which assigns increasing sequence numbers; every client orders by that number, not by arrival or clock."
+
+[[probes]]
+question = "A gateway server crashes with 200,000 connected users. What happens to messages sent to them during the next ten seconds?"
+answer = "Sends find no live connection (the registry entry is stale or expires), so messages go to the devices' inboxes. The devices reconnect to other gateways, register again, and drain the inbox from their last seq; nothing is lost because the message was stored before fan-out."
+
+[[probes]]
+question = "How do you show 'delivered' and 'read' without doubling the traffic?"
+answer = "Receipts are tiny events sent over the same socket, batched (one per chat for the newest message, which implies all earlier ones), stored as the last delivered and read seq per member, and only shown to the sender."
