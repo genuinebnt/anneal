@@ -1,0 +1,169 @@
+pattern = "1-D Dynamic Programming"
+
+tagline = "Solve each small version of the problem once, write the answer in a table, and build every bigger answer from the cells before it."
+
+what = [
+    "Dynamic programming is recursion that **remembers**. A problem is made of smaller versions of itself, and those smaller versions **repeat**: the answer for 5 is needed by 6, by 7 and by 8. Instead of recomputing it each time, you compute it once, store it in a table, and read it back.",
+    "To set one up, say **what one cell means** (\"the fewest coins that make amount `a`\"), say **how a cell is built from earlier cells** (the recurrence), and fill the table in an order where everything a cell reads is already there. Run two below: coins, where a cell reads several others, and take-or-skip, where it reads two.",
+]
+
+demos = ["dp-coins", "dp-rob"]
+
+applies = [
+    "\"The **number of ways**\", \"the **fewest**\", \"the **most**\", \"is it **possible**\" for a total built from smaller pieces.",
+    "A choice at each position along a line, where the best choice depends on a **few earlier positions**: stairs, house robber, decode ways.",
+    "**Coin change and knapsack**: reach a target using items, with or without reuse.",
+    "**Subsequences**: the longest increasing one, or splitting a string into dictionary words.",
+    "A recursion you wrote that is **correct but too slow** because it solves the same inputs again.",
+]
+
+yes = [
+    "The problem has **overlapping subproblems**: the same smaller input is needed by many bigger ones.",
+    "The best answer for a bigger input is built from **best answers** to smaller ones (optimal substructure).",
+    "The number of **distinct subproblems is small** (n, or n × target), even though the number of ways to reach them is huge.",
+]
+
+no = [
+    "You must **list every solution**, not count or optimise them: that is backtracking, because DP throws the paths away.",
+    "A **greedy** choice is provably safe, so there is no need to compare options.",
+    "The subproblems **never repeat**: memoising only adds memory (a plain divide and conquer).",
+]
+
+apply = [
+    "**Define a cell in words.** \"`dp[i]` is the best answer using the first i items\" or \"for amount i\". If you cannot say it, you do not have a DP yet.",
+    "**Write the recurrence.** Each cell as a function of earlier cells: `dp[i] = max(dp[i-1], dp[i-2] + x)`.",
+    "**Set the base cases.** The cells that depend on nothing: `dp[0]`.",
+    "**Choose the order.** Fill so that every cell a formula reads is already filled. For a line, left to right usually works.",
+    "**Find the answer cell,** often the last, and ask if the table can shrink: if a cell reads only the previous two, you need only two variables.",
+    "**State the invariant.** \"After step i, `dp[i]` holds the answer to the i-th subproblem.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"how many **ways**\" to reach n, each step depends on the last few: stairs, tribonacci"
+kind = "Recurrence"
+move = "dp[i] = dp[i-1] + dp[i-2] (or similar). Two variables are enough."
+glyph = "recur"
+technique = "1-D Dynamic Programming:recurrence"
+
+[[which]]
+says = "\"pick items along a line, but **not two neighbours**\": house robber"
+kind = "Take or skip"
+move = "dp[i] = max(skip it: dp[i-1], take it: dp[i-2] + value)."
+glyph = "takeskip"
+technique = "1-D Dynamic Programming:take-skip"
+
+[[which]]
+says = "\"the **fewest coins**\", \"ways to make change\", an item may be used **many times**"
+kind = "Coin change"
+move = "dp[a] = best over each coin c of dp[a − c] + 1. Fill amounts from 0 up."
+glyph = "coinsdp"
+technique = "1-D Dynamic Programming:unbounded"
+
+[[which]]
+says = "\"the **longest increasing** subsequence\", a chain where each item beats the last"
+kind = "LIS"
+move = "dp[i] = 1 + the best dp[j] over earlier j with a smaller value; or a sorted tails list with binary search."
+glyph = "lisdp"
+technique = "1-D Dynamic Programming:lis"
+
+[[which]]
+says = "\"choose items so the total hits a **target exactly**\": partition equal subset sum"
+kind = "Knapsack"
+move = "A boolean table over sums; for each item, mark every sum reachable by adding it (go downwards so an item is used once)."
+glyph = "knap"
+technique = "1-D Dynamic Programming:subset"
+
+[[which]]
+says = "\"can this string be **split into words** from a dictionary\""
+kind = "Prefix DP"
+move = "dp[i] is true if some j < i has dp[j] true and s[j:i] is a word."
+glyph = "prefixdp"
+technique = "1-D Dynamic Programming:prefix-dp"
+
+[[which]]
+says = "\"the best **product** of a subarray\", where a negative can flip a small into a big"
+kind = "Min and max run"
+move = "Track both the largest and smallest product ending here; a negative swaps their roles."
+glyph = "minmax"
+technique = "1-D Dynamic Programming:min-max-run"
+
+[[which]]
+says = "\"**palindromic** substrings\": the longest, or how many"
+kind = "Expand around a centre"
+move = "From each centre, grow while the ends match. 2n − 1 centres, each growing at most n."
+glyph = "expandc"
+technique = "1-D Dynamic Programming:expand"
+
+[[which]]
+says = "\"count **sequences** of length n where each step is limited by the last\""
+kind = "Counting DP"
+move = "dp[length][last] counts the ways; each cell sums the allowed previous cells."
+glyph = "countst"
+technique = "1-D Dynamic Programming:count-states"
+
+[[cost]]
+name = "Plain recursion, no memory"
+time = "exponential"
+space = "O(n)"
+why = "Each call splits into several calls for smaller inputs, and the same inputs are solved again and again. For house robber the number of calls grows like the Fibonacci numbers; for coin change it grows even faster. This is the cost to beat."
+
+[[cost]]
+name = "Memoised recursion or a table"
+time = "O(states × work per state)"
+space = "O(states)"
+why = "Each distinct subproblem is solved once and then read in constant time. So the cost is the number of cells times the work to fill one: n × 1 for house robber, amount × coins for coin change."
+
+[[cost]]
+name = "Coin change"
+time = "O(amount × coins)"
+space = "O(amount)"
+why = "There are amount + 1 cells and filling each one tries every coin. Without the table the same amounts are re-solved exponentially often."
+
+[[cost]]
+name = "Take or skip, recurrences on a line"
+time = "O(n)"
+space = "O(1)"
+why = "Each cell reads only the previous one or two, so only those need to be kept. Two variables replace the table, and the time is one pass."
+
+[[cost]]
+name = "Longest increasing subsequence"
+time = "O(n²), or O(n log n)"
+space = "O(n)"
+why = "The table version compares each item with all earlier ones: n²/2 comparisons. Keeping a sorted list of the smallest possible tail for each length, and binary searching it for each item, makes each item log n."
+
+[[cost]]
+name = "Knapsack, subset sum"
+time = "O(items × target)"
+space = "O(target)"
+why = "A table of reachable sums is as long as the target, and each item sweeps it once. It is polynomial in the *value* of the target, not in its number of bits, so it is slow for enormous targets."
+
+[[cost]]
+name = "Word break"
+time = "O(n²) or O(n · L)"
+space = "O(n)"
+why = "For each end position i, try each split point j (n²), or only the words up to the longest word L. Each check is a set lookup. The table of booleans is n long."
+
+[[with]]
+pattern = "Backtracking"
+how = "Memoised backtracking is top-down DP: cache the answer for each state before returning it. Use backtracking to list the solutions and DP to count or optimise them."
+example = "word-break"
+
+[[with]]
+pattern = "2-D Dynamic Programming"
+how = "When a cell needs two indexes (a position in each of two strings, a row and a column), the line becomes a table. The recurrence is the same idea with one more dimension."
+example = "unique-paths"
+
+[[with]]
+pattern = "Greedy"
+how = "If a greedy choice is provably safe, it replaces the table: Kadane's algorithm is the DP \"best run ending here\" reduced to one number."
+example = "maximum-subarray"
+
+[[with]]
+pattern = "Binary Search"
+how = "The faster longest increasing subsequence keeps a sorted list of tails and binary searches it for each item, replacing the inner loop of the table version."
+example = "longest-increasing-subsequence"
+
+[[with]]
+pattern = "Trees"
+how = "Tree DP computes a value per subtree, with the cells being the nodes. House robber III returns two values per node (rob it, skip it) and the parent combines them."
+example = "house-robber-iii"

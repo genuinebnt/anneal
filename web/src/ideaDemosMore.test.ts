@@ -147,3 +147,61 @@ test("N-Queens prunes attacked squares, backs up when a row is full, and ends wi
     assert.ok((last.work.bars[0]!.value as number) < 4 ** 4, "far fewer squares than full boards");
     assert.equal(DEMOS["bt-queens"]!.simulate({ items: [], param: 5 }).at(-1)!.result, "columns 1 3 5 2 4");
 });
+
+test("coin change fills one cell per amount from smaller cells, and ends with the fewest coins", () => {
+    const frames = run("dp-coins");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3 coins");
+    assert.equal(frames.length, 1 + 11 + 1);
+    assert.deepEqual(last.grid!.cells[0], ["0", "1", "1", "2", "2", "1", "2", "2", "3", "3", "2", "3"]);
+    assert.ok((last.work.bars[0]!.value as number) > 100, "a plain recursion would make hundreds of calls");
+    assert.equal(DEMOS["dp-coins"]!.simulate({ items: ["5"], param: 3 }).at(-1)!.result, "impossible");
+    assert.equal(frames[5]!.grid!.marks!.filter((m) => m.tone === "read").length, 3, "amount 5 reads from 4, 3 and 0");
+});
+
+test("take or skip keeps the better of leaving a house and robbing it, each prefix once", () => {
+    const frames = run("dp-rob");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "19");
+    assert.deepEqual(last.grid!.cells[1], ["0", "2", "7", "11", "11", "12", "19"]);
+    assert.equal(frames.length, 1 + 5 + 1);
+});
+
+test("the LCS table has a cell per pair of prefixes, and a match extends the diagonal", () => {
+    const frames = run("dp2-lcs");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "3");
+    assert.equal(frames.length, 1 + 15 + 1);
+    assert.equal(last.grid!.cells.length, 6);
+    assert.equal(last.grid!.cells[0]!.length, 4);
+    assert.equal(last.work.bars[0]!.value, 15);
+    assert.ok(frames.some((f) => /a match/.test(f.say)));
+    assert.equal(DEMOS["dp2-lcs"]!.parse("abc", ""), null, "needs two words");
+});
+
+test("the cheapest grid path adds the cost of a cell to the cheaper of above and left, and traces back", () => {
+    const frames = run("dp2-path");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "7");
+    assert.equal(frames.length, 1 + 9 + 1);
+    assert.equal(last.grid!.marks!.length, 5, "a route through a 3x3 grid touches five cells");
+    assert.equal(last.grid!.cells[2]![2], "7");
+});
+
+test("the jump game keeps one number, stops when it can reach the end, and says when it is stranded", () => {
+    const frames = run("greedy-jump");
+    assert.equal(frames[frames.length - 1]!.result, "reachable");
+    assert.equal(frames.length, 1 + 2, "reach 4 covers the last index at the second item");
+    const stuck = DEMOS["greedy-jump"]!.simulate({ items: ["3", "2", "1", "0", "4"] });
+    assert.equal(stuck[stuck.length - 1]!.result, "stranded");
+    assert.equal(value(stuck[stuck.length - 1]!, "REACH"), 3);
+});
+
+test("the best run extends while it helps and restarts when the old run drags it down", () => {
+    const frames = run("greedy-kadane");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "6");
+    assert.deepEqual(last.win, [3, 7]);
+    assert.ok(frames.some((f) => /Start a new run/.test(f.say)));
+    assert.equal(frames.length, 1 + 8 + 1);
+});

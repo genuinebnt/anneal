@@ -370,3 +370,20 @@ test("Advanced Graphs: Dijkstra settles nodes closest first with a heap, and Kru
     await expect(page.locator(".id-nv-e.id-nv-hit")).toHaveCount(4);
     await expect(page.locator(".id-nv-e.id-nv-cut")).toHaveCount(2);
 });
+
+test("1-D DP: a table fills cell by cell with the cells it reads lit, and the answer is the last cell", async ({ page }) => {
+    await page.goto("/dsa/patterns/D13/idea");
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(12);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-tb-c.id-tb-cur")).toHaveCount(1);
+    await expect(page.locator(".id-tb-c.id-tb-read").first()).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3 coins");
+    // a plain recursion makes far more calls than the table has cells
+    const [calls, cells] = await page.locator(".id-work .id-wr em").allInnerTexts();
+    expect(Number(calls)).toBeGreaterThan(Number(cells));
+    await page.getByRole("radio", { name: /house robber/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("19");
+});

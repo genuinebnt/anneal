@@ -80,6 +80,15 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     euler: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], w2: [[0, 10]] },
     cyclesg: { n: 10, w: [[3, 10]], dots: [3, 6, 9], ptr: [3, 9] },
     bridge: { n: 10, w: [[0, 4]], w2: [[6, 10]], dots: [4, 5], ptr: [4, 5] },
+    recur: { n: 10, w: [], bars: [1, 1, 2, 3, 5, 8, 13, 21, 34, 55].map((x) => Math.min(10, Math.ceil(Math.log2(x + 1) * 1.8))), ptr: [7] },
+    takeskip: { n: 10, w: [], dots: [0, 2, 4, 6, 8], bars: [5, 2, 7, 3, 9, 4, 6, 2, 8, 3] },
+    coinsdp: { n: 10, w: [], bars: [0, 1, 1, 2, 2, 1, 2, 2, 3, 3], ptr: [9] },
+    lisdp: { n: 10, w: [], bars: [3, 1, 4, 2, 5, 6, 3, 7, 8, 9], dots: [1, 3, 4, 5, 7, 8, 9] },
+    knap: { n: 10, w: [], dots: [0, 2, 3, 5, 7, 8], ptr: [9] },
+    prefixdp: { n: 10, w: [[0, 3]], w2: [[3, 6], [6, 10]], dots: [2, 5, 9] },
+    minmax: { n: 10, w: [], bars: [2, 3, 6, 10, 2, 7, 5, 3, 8, 4], ptr: [3, 4] },
+    expandc: { n: 10, w: [[2, 7]], w2: [[3, 6]], dots: [4], ptr: [4] },
+    countst: { n: 10, w: [], dots: [1, 2, 3, 5, 6, 7], bars: [2, 3, 5, 4, 4, 6, 7, 6, 8, 9] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 
