@@ -86,3 +86,42 @@ test("Kruskal keeps an edge only when it joins two groups, and stops at n minus 
     assert.equal(last.graph!.edges.filter((e) => e.tone === "cut").length, 2, "the two heavier edges that would close a cycle");
     assert.equal(value(last, "GROUPS"), 1);
 });
+
+test("a heap pushes at the end and lets a smaller item rise, then a pop sinks the replacement", () => {
+    const frames = run("heap-sift");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "1 2 3", "three pops give the three smallest in order");
+    // after pushing 5 3 8 1 9 2 7 the array is a valid min-heap
+    const afterPush = frames.find((f) => f.say.startsWith("Pop:"))!;
+    const h = afterPush.cells!.map(Number);
+    h.push(0);
+    const before = frames[frames.indexOf(afterPush) - 1]!.cells!.map(Number);
+    for (let i = 1; i < before.length; i++) assert.ok(before[(i - 1) >> 1]! <= before[i]!, "a parent is never larger than its child");
+    assert.equal(before[0], 1);
+    assert.equal(last.cells!.length, 4, "7 pushed, 3 popped");
+    for (let i = 1; i < last.cells!.length; i++) assert.ok(Number(last.cells![(i - 1) >> 1]) <= Number(last.cells![i]));
+    assert.ok(last.work.bars[0]!.value < last.work.bars[1]!.value + 20);
+    assert.equal(DEMOS["heap-sift"]!.parse("1,2", "3"), null, "cannot pop more than was pushed");
+});
+
+test("the size-k heap keeps only the k largest and drops anything that does not beat its root", () => {
+    const frames = run("heap-topk");
+    const last = frames[frames.length - 1]!;
+    assert.equal(last.result, "9 8 7");
+    assert.ok(Math.max(...frames.map((f) => f.graph!.nodes.length)) <= 3, "the heap never holds more than k");
+    assert.ok(frames.some((f) => /does not beat/.test(f.say)), "small numbers are thrown away at once");
+    assert.equal(DEMOS["heap-topk"]!.parse("1,2,3", "3"), null, "k must be smaller than the stream");
+});
+
+test("a trie reuses shared prefixes, and a search follows one edge per letter", () => {
+    const ins = run("trie-insert");
+    const end = ins[ins.length - 1]!;
+    assert.equal(end.result, "9 nodes", "car card care cat dog is 17 letters but only 9 nodes");
+    assert.equal(ins.filter((f) => /already in the trie/.test(f.say)).length, 8, "card and care reuse c a r (3 each); cat reuses c a");
+    const found = run("trie-search");
+    assert.equal(found[found.length - 1]!.result, "found");
+    const prefix = DEMOS["trie-search"]!.simulate({ items: ["car", "card", "ca"] });
+    assert.equal(prefix[prefix.length - 1]!.result, "prefix only");
+    const none = DEMOS["trie-search"]!.simulate({ items: ["car", "cow"] });
+    assert.equal(none[none.length - 1]!.result, "not found");
+});

@@ -311,3 +311,17 @@ test("Graphs: a breadth-first search labels distances and keeps a queue, and flo
     await expect(page.locator(".id-res")).toContainText("3");
     await expect(page.locator(".id-tb-c.id-tb-done")).toHaveCount(7);
 });
+
+test("Heap: pushing builds a tree beside the array, and the size-k heap keeps only k", async ({ page }) => {
+    await page.goto("/dsa/patterns/D8/idea");
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-cell").first()).toBeVisible();
+    await expect(page.locator("svg.id-nv")).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("1 2 3");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(4);
+    await page.getByRole("radio", { name: /k largest/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("9 8 7");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(3);
+});

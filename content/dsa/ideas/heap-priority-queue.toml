@@ -1,0 +1,154 @@
+pattern = "Heap / Priority Queue"
+
+tagline = "Keep only the best item within reach: a heap gives you the smallest or largest in one step and repairs itself in log n."
+
+what = [
+    "A heap keeps one promise: the **smallest (or largest) item is always on top**, and taking it out or adding an item costs only **O(log n)**. It does not keep the rest sorted, and that is exactly why it is cheap: you only pay for the order you actually need.",
+    "Reach for it whenever a problem says \"the k-th\", \"the top k\", \"the next best\" or \"always process the most urgent first\". Two ideas cover most of it: a **heap of size k** that throws away everything that cannot make the top k, and a heap used as a **to-do list** where the best item is always taken next. Run both below.",
+]
+
+demos = ["heap-sift", "heap-topk"]
+
+applies = [
+    "\"The **k-th largest / smallest**\", \"the **k most** frequent / closest\", from a stream or an array.",
+    "**Repeatedly take the best** item and maybe put new ones back: last stone weight, merge k sorted lists, task scheduling.",
+    "A **running median** of a stream (two heaps, one for each half).",
+    "A **simulation** with a clock, where the next event is the soonest or the cheapest available.",
+    "Any greedy that says \"at each step take the best option available *now*\" while new options keep arriving.",
+]
+
+yes = [
+    "You need the **best item again and again** while the set of candidates changes.",
+    "You need only the **top k**, not a full sort, so most items can be forgotten as soon as they lose.",
+    "The data arrives as a **stream**, or is too big to sort.",
+]
+
+no = [
+    "You need **all** the items in order, once: just sort, it is simpler and as fast.",
+    "You need to look up **any** item by value, or the k-th item in the *middle*: a heap only answers for the top. Use a hash map or a sorted structure.",
+    "The array is **already sorted** and you want one element: it is an index lookup or a binary search.",
+]
+
+apply = [
+    "**Say what \"best\" means.** Smallest, largest, soonest, cheapest. Python's `heapq` is a min-heap, so for \"largest\" push negated values.",
+    "**Decide the heap's size.** All the items, or capped at k. A capped heap of the k largest is a *min*-heap, so its root is the weakest member you can evict.",
+    "**Decide what an entry is.** A number, or a tuple like `(priority, item)` so the heap orders by the first part.",
+    "**Say when to pop.** To take the answer, to evict the weakest, or when an item is stale.",
+    "**State the invariant.** \"The heap holds exactly the candidates that could still be the answer.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"the **k-th largest**\" in a stream, \"keep the top k\""
+kind = "Heap of size k"
+move = "Keep a min-heap of the k best. A newcomer either beats the root and replaces it, or is dropped."
+glyph = "sizek"
+technique = "Heap / Priority Queue:size-k"
+
+[[which]]
+says = "\"**repeatedly** take the biggest, process it, put results back\": stones, merging"
+kind = "Heap as a work pool"
+move = "Pop the best, do the work, push what it produces. The heap always hands you the next best."
+glyph = "pool"
+technique = "Heap / Priority Queue:pool"
+
+[[which]]
+says = "\"the k-th largest of an **unsorted array**\", O(n) on average"
+kind = "Quickselect"
+move = "Partition like quicksort, but keep only the side that contains the k-th item."
+glyph = "partition"
+technique = "Heap / Priority Queue:quickselect"
+
+[[which]]
+says = "\"run the most frequent task first, but **the same one can't repeat** for n slots\""
+kind = "Greedy with a cooldown"
+move = "A max-heap of counts plus a queue of tasks cooling down; a task returns to the heap when its wait is over."
+glyph = "cooldown"
+technique = "Heap / Priority Queue:cooldown"
+
+[[which]]
+says = "\"events at given **times**, one worker takes the best available\""
+kind = "Simulation with a clock"
+move = "Sort by start time; at each moment, move newly available tasks into a heap and take the best."
+glyph = "clock"
+technique = "Heap / Priority Queue:schedule-sim"
+
+[[which]]
+says = "\"the **running median** of a stream\""
+kind = "Two heaps"
+move = "A max-heap for the lower half and a min-heap for the upper half, kept equal in size. The median sits at the tops."
+glyph = "twoheaps"
+technique = "Heap / Priority Queue:two-heaps"
+
+[[which]]
+says = "\"pick at most k items; each one **unlocks** more\": IPO"
+kind = "Greedy with a heap"
+move = "Unlock everything affordable into a heap, take the best, repeat k times."
+glyph = "pool"
+technique = "Heap / Priority Queue:greedy-heap"
+
+[[cost]]
+name = "Sort everything"
+time = "O(n log n)"
+space = "O(n)"
+why = "Sorting puts all n items in order when you only wanted the top few, and it needs every item at once. This is the cost to beat."
+
+[[cost]]
+name = "Build a heap, then pop k times"
+time = "O(n + k log n)"
+space = "O(n)"
+why = "Heapify builds a heap of n items in O(n), not O(n log n), because most items sit near the bottom and barely move. Each of the k pops then sinks one item down about log n levels."
+
+[[cost]]
+name = "Heap of size k over a stream"
+time = "O(n log k)"
+space = "O(k)"
+why = "Each of the n items costs one comparison with the root, and when it wins, one replacement that sinks at most log k levels, because the heap never holds more than k items. When k is small this beats sorting, and it never needs the whole stream in memory."
+
+[[cost]]
+name = "Push or pop"
+time = "O(log n)"
+space = "O(1)"
+why = "A heap is a complete tree stored in an array, so it is only about log n levels tall. An item moves at most one level per comparison, and it can only move up (on push) or down (on pop) the one path."
+
+[[cost]]
+name = "Quickselect"
+time = "O(n) average, O(n²) worst"
+space = "O(1)"
+why = "Each partition costs n and then discards one side, so the work is n + n/2 + n/4 + … = 2n on average. A bad pivot each time keeps almost everything and makes it quadratic, which a random pivot makes very unlikely."
+
+[[cost]]
+name = "Two heaps for the median"
+time = "O(log n) per number, O(1) to read"
+space = "O(n)"
+why = "A new number goes into one heap and may move one item across, each a log n operation. The median is read off the tops without looking at anything else. Both heaps together hold every number."
+
+[[cost]]
+name = "Cooldown scheduling"
+time = "O(n log m)"
+space = "O(m)"
+why = "Each of the n task slots takes one pop and maybe one push on a heap of the m distinct tasks, each O(log m). With 26 letters, m is constant."
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "Top-k problems start with a count. A map gives each value's frequency, then a heap of size k (O(n log k)) or buckets (O(n)) picks the k biggest."
+example = "top-k-frequent-elements"
+
+[[with]]
+pattern = "Linked List"
+how = "Merging k sorted lists keeps one pointer per list and a heap of their current heads: pop the smallest, advance that list, push its next node."
+example = "merge-k-sorted-lists"
+
+[[with]]
+pattern = "Advanced Graphs"
+how = "Dijkstra's algorithm is BFS with the queue replaced by a heap, so the node popped next is always the closest one not yet settled."
+example = "network-delay-time"
+
+[[with]]
+pattern = "Intervals"
+how = "To find how many rooms a set of meetings needs, sort by start and keep a min-heap of end times: if the earliest end is before the next start, reuse that room."
+example = "meeting-rooms-ii"
+
+[[with]]
+pattern = "Sliding Window"
+how = "The maximum of every window can use a heap with lazy deletion (drop the top if it has left the window), though a monotonic deque does it in O(n)."
+example = "sliding-window-maximum"
