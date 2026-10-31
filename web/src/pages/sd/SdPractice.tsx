@@ -2,9 +2,8 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type SdAttempt, type SdDiagram, type SdMark, type SdProblem } from "../../api";
-import { HowFound, Page3, Panel, Tile } from "../../components/layout";
+import { HowFound, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdMd } from "../../components/SdMd";
-import { Skeleton } from "../../components/Skeleton";
 import { mmss } from "../../focusStore";
 import { SdFrame } from "./SdHome";
 
@@ -178,7 +177,7 @@ export function SdPractice({ id }: { id: string }) {
     });
 
     const v = q.data;
-    if (!v) return <SdFrame><Page3 crumb={["SYSTEM DESIGN", "PRACTICE"]} title="Practice" center={q.isError ? <p className="notice bad">No problem called {id}.</p> : <Skeleton lines={8} />} /></SdFrame>;
+    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "PRACTICE"]} title="Practice" error={q.isError ? <p className="notice bad">No problem called {id}.</p> : undefined} /></SdFrame>;
     const p = v.problem;
     const cur = p.steps[step]!;
     const elapsed = Math.round((now - Date.parse(started)) / 1000);

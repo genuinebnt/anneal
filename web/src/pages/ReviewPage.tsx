@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type Grade, type ReviewItem, type ReviewQueue } from "../api";
 import { Header } from "../components/Header";
-import { HowFound, ListCard, Page3, Tile } from "../components/layout";
+import { HowFound, ListCard, Page3, Tile, PageLoading } from "../components/layout";
 import { Skeleton } from "../components/Skeleton";
 import { Companies, Md, PyCode } from "../components/dsaBits";
 import { RecallCurve } from "../components/RecallCurve";
@@ -35,11 +35,7 @@ export function ReviewPage() {
         {q.data ? (
           <Session queue={q.data} />
         ) : (
-          <main className="page">
-            <div className="wrap" style={{ paddingBlock: 28 }}>
-              {q.isError ? <p className="rempty">Couldn't reach the API. <Link to="/dsa">Back to DSA</Link></p> : <Skeleton lines={5} />}
-            </div>
-          </main>
+          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" error={q.isError ? <p className="rempty">Couldn't reach the API. <Link to="/dsa">Back to DSA</Link></p> : undefined} />
         )}
       </div>
     </>

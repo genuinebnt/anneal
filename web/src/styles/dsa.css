@@ -312,3 +312,21 @@ a.d-step:hover{border-color:var(--dim)}
 .p-mix{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .p-mix i{height:8px;border-radius:3px;background:var(--line)}.p-mix i.solve{background:var(--acc)}.p-mix i.practice{background:var(--vio)}
 .p-warn{margin:0;font:500 12px var(--mono);color:var(--warn);background:var(--warn-bg);border-radius:8px;padding:8px 10px}
+/* the DSA home in the three-panel frame (the approved mockup) */
+.s-3 .ly-lp .d-today{display:grid;grid-template-columns:1fr;gap:8px;margin:0}
+.s-3 .ly-lp .d-step{display:flex;align-items:center;gap:12px;padding:10px 12px;min-width:0}
+.s-3 .ly-lp .d-step span{min-width:0}
+.s-3 .ly-lp .d-step b,.s-3 .ly-lp .d-step small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-3 .d-lists{display:flex;flex-wrap:wrap;gap:6px;margin:0}
+.s-3 .ly-lp .d-rail-in>*:first-child{background:none;border:0;padding:0;box-shadow:none}
+.s-3 .d-acc{font-style:normal;color:var(--acc)}
+.s-3 .d-clearall{border:0;background:none;color:var(--acc);font:500 11px var(--mono);cursor:pointer}
+.s-3 .s-next .s-pills{align-items:center}
+.s-3 .s-next .s-pills .d-reveal{padding:3px 10px}
+.dn-acts{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:14px}
+.dn-solve{flex:1;min-width:220px;display:inline-flex;justify-content:center;align-items:center;gap:8px;padding:12px 18px;border-radius:12px;background:color-mix(in oklab,var(--acc) 14%,var(--panel));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--acc) 45%,transparent);color:color-mix(in oklab,var(--acc) 78%,var(--fg));font:600 14.5px var(--sans);text-decoration:none;transition:background .2s}
+.dn-solve:hover{background:color-mix(in oklab,var(--acc) 22%,var(--panel))}
+.dn-open{display:inline-flex;align-items:center;padding:11px 16px;border-radius:12px;background:var(--inset);color:var(--fg);font:500 13.5px var(--sans);text-decoration:none}
+.dn-open:hover{background:color-mix(in oklab,var(--acc) 10%,var(--inset))}
+.dn-vid{color:var(--mut);font:500 13px var(--sans);text-decoration:none}.dn-vid:hover{color:var(--fg)}
+.s-3 .s-next .s-links{margin-top:12px}

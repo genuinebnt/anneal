@@ -36,7 +36,7 @@ test("the list can be compact, and a pattern's heading folds its problems", asyn
     await expect(first.locator(".d-pcard")).toHaveCount(0);
     await page.getByRole("button", { name: "Expand all" }).click();
     await expect(first.locator(".d-pcard").first()).toBeVisible();
-    await page.getByRole("button", { name: "Filters" }).first().click();
+    // the filters are always in the left panel
     await page.getByRole("radio", { name: "Compact" }).click();
     expect(await page.evaluate(() => document.documentElement.dataset.density)).toBe("compact");
     await page.getByRole("radio", { name: "Comfortable" }).click();

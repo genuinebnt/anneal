@@ -4,8 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { api, type DsaProblem, type Grade, type MySolution } from "../api";
 import { Companies, Md, Mark, ProblemTags, PyCode, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
-import { Page3 } from "../components/layout";
-import { Skeleton } from "../components/Skeleton";
+import { Page3, PageLoading } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { RecallCurve } from "../components/RecallCurve";
 import { ConfirmButton } from "../components/ui";
@@ -228,7 +227,13 @@ export function DsaProblemPage({ slug }: { slug: string }) {
             {toast}
         </>
     );
-    if (!o || (!p && outside.isLoading)) return frame(<div className="pp-pad">{overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />}</div>);
+    if (!o || (!p && outside.isLoading))
+        return (
+            <>
+                <Header area="dsa" />
+                <PageLoading crumb={["DSA", "Problem"]} title="…" error={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
+            </>
+        );
     if (!p) return frame(<p className="notice bad pp-pad">No problem called {slug}. <Link to="/dsa">Back to the list</Link></p>);
 
     const pattern = o.patterns.find((x) => x.code === p.pattern);

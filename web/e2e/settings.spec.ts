@@ -68,7 +68,7 @@ test("the backup downloads as an anneal backup and the theme can be set to syste
 
 test("Hide LeetCode Premium in the filters and the Settings switch are the same setting", async ({ page }) => {
     await page.goto("/dsa");
-    await page.getByRole("button", { name: "Filters" }).first().click();
+    // the filters are always in the left panel
     const hide = page.getByRole("button", { name: "Hide LeetCode Premium" });
     await expect(hide).toHaveAttribute("aria-pressed", "true");
     await hide.click();

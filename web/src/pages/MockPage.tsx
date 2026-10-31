@@ -3,9 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type Grade, type MockConfig, type MockData } from "../api";
 import { Header, MOCK_FRESH } from "../components/Header";
-import { Skeleton } from "../components/Skeleton";
 import { Segmented, Stepper } from "../components/ui";
-import { HowFound, Page3, Panel, Tile } from "../components/layout";
+import { HowFound, Page3, Panel, Tile, PageLoading } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { DIFF, leetcode, niceDate, statusOf } from "../dsa";
 import {
@@ -66,11 +65,7 @@ export function MockPage() {
                 {q.data ? (
                     <MockApp data={q.data} />
                 ) : (
-                    <main className="page">
-                        <div className="wrap" style={{ paddingBlock: 28 }}>
-                            {q.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={5} />}
-                        </div>
-                    </main>
+                    <PageLoading crumb={["DSA", "Mock interview"]} title="Mock interview" error={q.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
                 )}
             </div>
         </>

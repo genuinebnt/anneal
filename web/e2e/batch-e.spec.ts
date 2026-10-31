@@ -7,7 +7,7 @@ const clean = async (page: Page, ...ids: string[]) => {
 test("the DSA home shows the Next up card and its button without scrolling", async ({ page }) => {
     await page.goto("/dsa");
     await expect(page.locator(".s-next h3")).toBeInViewport();
-    await expect(page.locator(".s-next .s-cta")).toBeInViewport();
+    await expect(page.locator(".s-next .dn-solve")).toBeInViewport();
 });
 
 test("the header says what is left of today", async ({ page }) => {

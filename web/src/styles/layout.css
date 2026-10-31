@@ -119,3 +119,32 @@ a.ly-ps:hover{background:color-mix(in oklab,var(--acc) 5%,transparent)}
     .ly-pbar button svg{width:15px;height:15px}
     .ly-pbar span{font:600 11px var(--mono);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
+/* loading: the frame drawn as soft shapes that shimmer in the accent, staggered so the page seems to assemble */
+.ly-loading .ly-sk{display:grid;gap:10px;align-content:start}
+.ly-loading .ly-sk i,.ly-sk-tile i,.ly-sk-tile b{display:block;height:12px;border-radius:7px;background:linear-gradient(100deg,var(--inset) 30%,color-mix(in oklab,var(--ca,var(--acc)) 14%,var(--inset)) 50%,var(--inset) 70%);background-size:300% 100%;animation:ly-shim 1.6s var(--ease,ease) infinite;animation-delay:calc(var(--i,0) * 90ms)}
+.ly-loading .ly-sk i.h{width:38%;height:10px;opacity:.8}
+.ly-loading .ly-sk i:nth-child(3n){width:82%}.ly-loading .ly-sk i:nth-child(3n+1){width:94%}
+.ly-loading .ly-sk i.card{height:58px;width:100%;border-radius:12px}
+.ly-loading .ly-sk i.row{height:30px;width:100%;border-radius:9px}
+.ly-loading .ly-sk.big{min-height:220px}.ly-loading .ly-sk.big i:not(.h){height:16px}
+.ly-sk-tile{display:grid;gap:8px;min-width:150px}.ly-sk-tile i{width:60%;height:9px}.ly-sk-tile b{width:45%;height:22px}
+.ly-sk-c{display:grid;gap:14px}
+.ly-sk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.ly-loading .ly-pn{animation:ly-rise .5s var(--ease,ease) backwards;animation-delay:calc(var(--i,0) * 70ms)}
+.ly-sk-err{color:var(--mut)}
+@keyframes ly-shim{0%{background-position:100% 0}100%{background-position:0 0}}
+@keyframes ly-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.ly-loading .ly-sk i,.ly-sk-tile i,.ly-sk-tile b,.ly-loading .ly-pn{animation:none}}
+html[data-motion="reduce"] .ly-loading .ly-sk i,html[data-motion="reduce"] .ly-sk-tile i,html[data-motion="reduce"] .ly-sk-tile b,html[data-motion="reduce"] .ly-loading .ly-pn{animation:none}
+/* every page in the frame arrives the same way: tiles, then the side panels and the centre, rising in a short stagger, so a
+   page that waited on data and one that did not feel alike */
+.ly-page .ly-tiles>*{animation:ly-rise .45s var(--ease,ease) backwards}
+.ly-page .ly-tiles>*:nth-child(2){animation-delay:50ms}.ly-page .ly-tiles>*:nth-child(3){animation-delay:100ms}.ly-page .ly-tiles>*:nth-child(4){animation-delay:150ms}
+/* backwards, not both: a finished animation must not keep a panel in its own stacking context, or the next panel paints over
+   its popups */
+.ly-page .ly-lp>*,.ly-page .ly-cp>*,.ly-page .ly-rp>*{animation:ly-rise .5s var(--ease,ease) backwards}
+.ly-page .ly-lp>*:nth-child(2),.ly-page .ly-cp>*:nth-child(2),.ly-page .ly-rp>*:nth-child(2){animation-delay:70ms}
+.ly-page .ly-lp>*:nth-child(3),.ly-page .ly-cp>*:nth-child(3),.ly-page .ly-rp>*:nth-child(3){animation-delay:140ms}
+.ly-page .ly-lp>*:nth-child(n+4),.ly-page .ly-cp>*:nth-child(n+4),.ly-page .ly-rp>*:nth-child(n+4){animation-delay:200ms}
+@media (prefers-reduced-motion:reduce){.ly-page .ly-tiles>*,.ly-page .ly-lp>*,.ly-page .ly-cp>*,.ly-page .ly-rp>*{animation:none}}
+html[data-motion="reduce"] .ly-page .ly-tiles>*,html[data-motion="reduce"] .ly-page .ly-lp>*,html[data-motion="reduce"] .ly-page .ly-cp>*,html[data-motion="reduce"] .ly-page .ly-rp>*{animation:none}

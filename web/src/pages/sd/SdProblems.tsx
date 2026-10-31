@@ -1,8 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../api";
-import { HowFound, ListCard, Page3, Panel, Tile } from "../../components/layout";
-import { Skeleton } from "../../components/Skeleton";
+import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdFrame } from "./SdHome";
 
 const KINDS: [string, string][] = [["all", "All"], ["hld", "High-level"], ["api", "API"], ["lld", "Low-level"]];
@@ -12,7 +11,7 @@ export function SdProblems() {
     const q = useQuery({ queryKey: ["sd"], queryFn: api.sd });
     const [kind, setKind] = useState("all");
     const o = q.data;
-    if (!o) return <SdFrame><Page3 crumb={["SYSTEM DESIGN", "PROBLEMS"]} title="Problems" center={<Skeleton lines={6} />} /></SdFrame>;
+    if (!o) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "PROBLEMS"]} title="Problems" /></SdFrame>;
     const title = (id: string) => o.concepts.find((c) => c.id === id)?.title ?? id;
     const shown = [...o.problems].filter((p) => kind === "all" || p.kind === kind).sort((a, b) => a.order - b.order);
     const drilled = o.problems.filter((p) => p.attempts > 0).length;

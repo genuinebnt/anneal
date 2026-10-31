@@ -213,3 +213,30 @@ export function ReadingPath({ steps }: { steps: PathStep[] }) {
         </ol>
     );
 }
+
+/** A page while its data loads: the frame itself, drawn as soft shapes where the tiles, panels and cards will be, so the page
+ *  fills in place instead of jumping from a spinner. `error` replaces the centre with a message once loading failed. */
+export function PageLoading({ crumb, title, sub, tiles = 3, left = true, right = true, error }: { crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: number; left?: boolean; right?: boolean; error?: ReactNode }) {
+    const bars = (n: number, cls = "") => Array.from({ length: n }, (_, i) => <i key={i} className={cls} style={{ "--i": i } as CSSProperties} />);
+    return (
+        <Page3
+            crumb={crumb}
+            title={title}
+            sub={sub}
+            className="ly-loading"
+            tiles={tiles ? <>{Array.from({ length: tiles }, (_, i) => <div key={i} className="ly-tl ly-sk-tile" style={{ "--i": i } as CSSProperties}><i /><b /><i /></div>)}</> : undefined}
+            left={left && !error ? <section className="ly-pn ly-sk"><i className="h" />{bars(5, "card")}</section> : undefined}
+            center={
+                error ? (
+                    <section className="ly-pn ly-sk-err">{error}</section>
+                ) : (
+                    <div className="ly-sk-c" role="status" aria-label="Loading">
+                        <section className="ly-pn ly-sk big"><i className="h" />{bars(4)}</section>
+                        <div className="ly-sk-grid">{Array.from({ length: 3 }, (_, i) => <section key={i} className="ly-pn ly-sk" style={{ "--i": i } as CSSProperties}><i className="h" />{bars(2)}</section>)}</div>
+                    </div>
+                )
+            }
+            right={right && !error ? <section className="ly-pn ly-sk"><i className="h" />{bars(3, "row")}</section> : undefined}
+        />
+    );
+}

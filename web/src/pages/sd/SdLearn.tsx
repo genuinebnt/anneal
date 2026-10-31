@@ -2,17 +2,16 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type CSSProperties } from "react";
 import { api, type SdMark } from "../../api";
-import { HowFound, ListCard, Page3, Panel, Tile } from "../../components/layout";
+import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdFigure } from "../../components/SdFigure";
 import { SdMd } from "../../components/SdMd";
-import { Skeleton } from "../../components/Skeleton";
 import { SD_GROUPS, SdFrame, groupOf } from "./SdHome";
 
 /** Every concept page, by group. */
 export function SdLearn() {
     const q = useQuery({ queryKey: ["sd"], queryFn: api.sd });
     const o = q.data;
-    if (!o) return <SdFrame><Page3 crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" center={<Skeleton lines={6} />} /></SdFrame>;
+    if (!o) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" /></SdFrame>;
     const groups = SD_GROUPS.map((g) => ({ ...g, items: o.concepts.filter((c) => c.group === g.id).sort((a, b) => a.order - b.order) }));
     const minutes = o.concepts.reduce((n, c) => n + c.minutes, 0);
     const left = (
@@ -93,7 +92,7 @@ export function SdConceptPage({ id }: { id: string }) {
     const q = useQuery({ queryKey: ["sd-concept", id], queryFn: () => api.sdConcept(id) });
     const all = useQuery({ queryKey: ["sd"], queryFn: api.sd });
     const v = q.data;
-    if (!v) return <SdFrame><Page3 crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" center={q.isError ? <p className="notice bad">No page called {id}.</p> : <Skeleton lines={8} />} /></SdFrame>;
+    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" error={q.isError ? <p className="notice bad">No page called {id}.</p> : undefined} /></SdFrame>;
     const c = v.concept;
     const g = groupOf(c.group);
     const siblings = (all.data?.concepts ?? []).filter((x) => x.group === c.group).sort((a, b) => a.order - b.order);

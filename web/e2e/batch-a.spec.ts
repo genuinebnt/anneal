@@ -49,7 +49,8 @@ test("a page that is still loading shows a placeholder, not bare text", async ({
         await route.continue();
     });
     await page.goto("/dsa/review");
-    await expect(page.locator(".sk")).toBeVisible();
+    // the page's own frame, drawn as soft shapes while it loads
+    await expect(page.locator(".ly-loading .ly-sk").first()).toBeVisible();
 });
 
 test("? opens the list of shortcuts and Escape closes it", async ({ page }) => {

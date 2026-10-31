@@ -2,8 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, type CSSProperties } from "react";
 import { api, type SystemSample, type SystemView } from "../api";
 import { Header } from "../components/Header";
-import { HowFound, Kv, Page3, Panel, Tile } from "../components/layout";
-import { Skeleton } from "../components/Skeleton";
+import { HowFound, Kv, Page3, Panel, Tile, PageLoading } from "../components/layout";
 import { Segmented } from "../components/ui";
 
 /** The VPS and the app on it (GET /api/system): the host now and over the day, the containers, the database and the API's requests.
@@ -17,7 +16,7 @@ export function AnalyticsPage() {
             <Header />
             <div className="an-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
                 {!s ? (
-                    <Page3 crumb={["Analytics"]} title="Analytics" sub="The VPS, its containers and the app on it." center={q.isError ? <p className="notice bad">Couldn't read the server's numbers: {(q.error as Error).message}</p> : <Skeleton lines={8} />} />
+                    <PageLoading crumb={["Analytics"]} title="Analytics" sub="The VPS, its containers and the app on it." tiles={4} error={q.isError ? <p className="notice bad">Couldn't read the server's numbers: {(q.error as Error).message}</p> : undefined} />
                 ) : (
                     <Body s={s} range={range} setRange={setRange} />
                 )}

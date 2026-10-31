@@ -2,9 +2,8 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type Grade, type SdCard } from "../../api";
-import { HowFound, ListCard, Page3, Panel, Tile } from "../../components/layout";
+import { HowFound, ListCard, Page3, Panel, Tile, PageLoading } from "../../components/layout";
 import { SdMd } from "../../components/SdMd";
-import { Skeleton } from "../../components/Skeleton";
 import { SdFrame } from "./SdHome";
 
 const GRADES: [Grade, string, string][] = [["again", "Again", "var(--bad)"], ["hard", "Hard", "var(--warn)"], ["good", "Good", "var(--grn)"], ["easy", "Easy", "var(--vio)"]];
@@ -42,7 +41,7 @@ export function SdReview() {
     const q = useQuery({ queryKey: ["sd-review"], queryFn: api.sdReview });
     const [done, setDone] = useState(0);
     const v = q.data;
-    if (!v) return <SdFrame><Page3 crumb={["SYSTEM DESIGN", "REVIEW"]} title="Review" center={<Skeleton lines={6} />} /></SdFrame>;
+    if (!v) return <SdFrame><PageLoading crumb={["SYSTEM DESIGN", "REVIEW"]} title="Review" /></SdFrame>;
     const card = v.due[0];
     const graded = () => {
         setDone((n) => n + 1);

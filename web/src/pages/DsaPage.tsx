@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { PageLoading, Page3, Panel, Tile } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { getPref, setPref } from "../prefs";
 import { usePremiumSwitch } from "../premium";
@@ -136,7 +137,7 @@ export function DsaPage() {
         e.preventDefault();
         search.current?.focus();
       }
-      if (e.key === "f") setF((cur) => ({ ...cur, rail: cur.rail === "filters" ? "activity" : "filters" }));
+      if (e.key === "f") document.getElementById("d-filters")?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (e.key === "1" || e.key === "2" || e.key === "3") {
         setView((["patterns", "problems", "practice"] as const)[Number(e.key) - 1]!);
         setDrill(null);
@@ -153,136 +154,100 @@ export function DsaPage() {
     return (
       <>
         <Header area="dsa" />
-        <main className="page" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-          <div className="wrap">{overview.isError ? <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p> : <Skeleton lines={6} />}</div>
-        </main>
+        <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+          <PageLoading crumb={["DSA", "PROBLEMS"]} title="Solve, review, remember." error={overview.isError ? <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p> : undefined} />
+        </div>
       </>
     );
   }
 
+  const tiles = (
+    <>
+      <Tile em="Patterns" strong={<CountUp value={o.patterns.length} />} small="in the NeetCode order" />
+      <Tile em="Problems" strong={<CountUp value={o.problems.filter((p) => counted(o, p)).length} />} small={`${(o.problems.length + o.patterns.reduce((n, p) => n + p.practice_total, 0)).toLocaleString()} with practice`} />
+      <Tile em="To finish the 150" strong={<CountUp value={model.minutesLeft150} format={hours} />} small="at your pace" hint="An estimate of the time left: 12 minutes for each unsolved easy problem of the 150, 25 for a medium, 45 for a hard." />
+    </>
+  );
+  // the left panel: today's steps, the list, and every filter (they were in a drawer before; nothing is dropped)
+  const left = (
+    <>
+      <Panel title="Today">
+        <TodayStrip o={o} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
+      </Panel>
+      {shown !== "practice" && (
+        <Panel title="List">
+          <div className="s-chips d-lists">
+            {LISTS.map(([k, label]) => (
+              <button key={k} className={`s-chip${f.list === k ? " s-on" : ""}`} aria-pressed={f.list === k} onClick={() => update({ list: k })}>
+                {label} <small>{model.listCounts[k]}</small>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+      <Panel title="Filters" aside={model.active > 0 ? <button className="d-clearall" onClick={clearAll}>clear {model.active}</button> : undefined} id="d-filters">
+        <FilterRail o={o} f={f} model={model} flip={flip} update={update} clearAll={clearAll} />
+      </Panel>
+    </>
+  );
+  const center = (
+    <>
+      <WeeklySummary today={o.today} />
+      <NextUp o={o} streak={activity.data?.streak ?? 0} />
+      <Goals o={o} f={f} setList={(list) => update({ list })} />
+      <div className="s-tools">
+        <label className="s-search">
+          <span>⌕</span>
+          <input ref={search} type="search" placeholder="search title, number or tag…" value={f.q} onChange={(e) => update({ q: e.target.value })} aria-label="Search problems" autoComplete="off" spellCheck={false} />
+          <kbd>/</kbd>
+        </label>
+        <SlidingSeg
+          label="View"
+          value={shown}
+          onChange={(v) => {
+            setView(v);
+            setDrill(null);
+          }}
+          options={(["patterns", "problems", "practice"] as const).map((v) => ({
+            key: v,
+            label: (
+              <>
+                {v === "patterns" ? "▦ patterns" : v === "problems" ? "≡ problems" : "✎ practice"}
+                <small className="vn">{v === "patterns" ? o.patterns.length : v === "problems" ? model.items.length : o.patterns.reduce((n, p) => n + p.practice_total, 0)}</small>
+              </>
+            ),
+          }))}
+        />
+      </div>
+      {shown !== "practice" && <ActiveChips f={f} o={o} flip={flip} update={update} clearAll={clearAll} />}
+      <div id="content" style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+        {shown === "patterns" ? (
+          <PatternGrid o={o} model={model} />
+        ) : shown === "practice" ? (
+          <PracticeGrid o={o} log={log} />
+        ) : (
+          <ProblemGroups o={o} model={model} pickCompany={(name) => flip("companies", name)} picked={f.companies} uncapped={f.patterns.size > 0} openGroups={openGroups} openGroup={(code) => setOpenGroups(new Set([...openGroups, code]))} log={log} clearAll={clearAll} />
+        )}
+      </div>
+    </>
+  );
+  const right = (
+    <ActivityRail
+      o={o}
+      activity={activity.data}
+      tracks={tracks.data ?? []}
+      showDue={() => {
+        setDrill("problems");
+        update({ status: new Set<Status>(["due"]) });
+      }}
+    />
+  );
+
   return (
     <>
       <Header area="dsa" />
-      <MockRoot prefix="s-" className="s-dsa" style={{ "--s-ac": "var(--acc)", "--s-acb": "var(--acc-bg)", "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-        <main className="s-wrap">
-          <section className="s-hero">
-            <div>
-              <div className="s-eye s-rv" style={rise(0).style}>
-                <b>DSA</b> / PROBLEMS
-              </div>
-              <h1 className="s-rv" style={rise(1).style}>
-                Solve, review, <em>remember.</em>
-              </h1>
-            </div>
-            <div className="s-stats s-rv" style={rise(3).style}>
-              <div>
-                <b>
-                  <CountUp value={o.patterns.length} />
-                </b>
-                <span>PATTERNS</span>
-              </div>
-              <div>
-                <b>
-                  <CountUp value={o.problems.filter((p) => counted(o, p)).length} />
-                </b>
-                <span>PROBLEMS</span>
-              </div>
-              <div>
-                <b>
-                  <CountUp value={model.minutesLeft150} format={hours} />
-                </b>
-                <span className="hinted" tabIndex={0} data-tip="An estimate of the time left: 12 minutes for each unsolved easy problem of the 150, 25 for a medium, 45 for a hard.">TO FINISH THE 150</span>
-              </div>
-            </div>
-          </section>
-
-          <div className="s-main">
-            <div className="cat-main">
-              <WeeklySummary today={o.today} />
-              <TodayStrip o={o} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
-              <NextUp o={o} streak={activity.data?.streak ?? 0} />
-              <Goals o={o} f={f} setList={(list) => update({ list })} />
-              <div className="s-tools s-rv" style={rise(5).style}>
-                <label className="s-search">
-                  <span>⌕</span>
-                  <input ref={search} type="search" placeholder="search title, number or tag…" value={f.q} onChange={(e) => update({ q: e.target.value })} aria-label="Search problems" autoComplete="off" spellCheck={false} />
-                  <kbd>/</kbd>
-                </label>
-                <SlidingSeg
-                  label="View"
-                  value={shown}
-                  onChange={(v) => {
-                    setView(v);
-                    setDrill(null);
-                  }}
-                  options={(["patterns", "problems", "practice"] as const).map((v) => ({
-                    key: v,
-                    label: (
-                      <>
-                        {v === "patterns" ? "▦ patterns" : v === "problems" ? "≡ problems" : "✎ practice"}
-                        <small className="vn">{v === "patterns" ? o.patterns.length : v === "problems" ? model.items.length : o.patterns.reduce((n, p) => n + p.practice_total, 0)}</small>
-                      </>
-                    ),
-                  }))}
-                />
-                <button className={`d-fbtn${f.rail === "filters" ? " on" : ""}`} aria-pressed={f.rail === "filters"} onClick={() => update({ rail: f.rail === "filters" ? "activity" : "filters" })}>
-                  ⚙ Filters {model.active > 0 && <i>{model.active}</i>}
-                  <kbd>f</kbd>
-                </button>
-              </div>
-              {shown !== "practice" && (
-                <>
-                <div className="s-flab s-rv" style={rise(6).style}>LIST</div>
-                <div className="s-chips s-rv" style={rise(6).style}>
-                  {LISTS.map(([k, label]) => (
-                    <button key={k} className={`s-chip${f.list === k ? " s-on" : ""}`} aria-pressed={f.list === k} onClick={() => update({ list: k })}>
-                      {label} <small>{model.listCounts[k]}</small>
-                    </button>
-                  ))}
-                </div>
-                <ActiveChips f={f} o={o} flip={flip} update={update} clearAll={clearAll} />
-                </>
-              )}
-              <div id="content" style={{ display: "flex", flexDirection: "column", gap: 28 }}>
-                {shown === "patterns" ? (
-                  <PatternGrid o={o} model={model} />
-                ) : shown === "practice" ? (
-                  <PracticeGrid o={o} log={log} />
-                ) : (
-                  <ProblemGroups o={o} model={model} pickCompany={(name) => flip("companies", name)} picked={f.companies} uncapped={f.patterns.size > 0} openGroups={openGroups} openGroup={(code) => setOpenGroups(new Set([...openGroups, code]))} log={log} clearAll={clearAll} />
-                )}
-              </div>
-            </div>
-            {f.rail === "filters" && <button className="d-backdrop" aria-label="Close filters" tabIndex={-1} onClick={() => update({ rail: "activity" })} />}
-            <aside className={`cat-rail s-rail${f.rail === "filters" ? " drawer" : ""}`} aria-label="Activity and filters">
-              <div className="d-drawer-head">
-                <b>Filters</b>
-                <button onClick={() => update({ rail: "activity" })}>Show {model.items.length} problems</button>
-              </div>
-              <div className="d-railtabs" role="tablist">
-                <button className={f.rail === "activity" ? "on" : ""} role="tab" aria-selected={f.rail === "activity"} onClick={() => update({ rail: "activity" })}>
-                  Activity
-                </button>
-                <button className={f.rail === "filters" ? "on" : ""} role="tab" aria-selected={f.rail === "filters"} onClick={() => update({ rail: "filters" })}>
-                  Filters {model.active > 0 && <i>{model.active}</i>}
-                </button>
-              </div>
-              {f.rail === "activity" ? (
-                <ActivityRail
-                  o={o}
-                  activity={activity.data}
-                  tracks={tracks.data ?? []}
-                  showDue={() => {
-                    setDrill("problems");
-                    update({ status: new Set<Status>(["due"]), rail: "filters" });
-                  }}
-                />
-              ) : (
-                <FilterRail o={o} f={f} model={model} flip={flip} update={update} clearAll={clearAll} />
-              )}
-            </aside>
-          </div>
-        </main>
+      <MockRoot prefix="s-" className="s-dsa s-3" style={{ "--s-ac": "var(--acc)", "--s-acb": "var(--acc-bg)", "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
+        <Page3 crumb={["DSA", "PROBLEMS"]} title={<>Solve, review, <em className="d-acc">remember.</em></>} tiles={tiles} left={left} center={center} right={right} label="Today and filters" />
       </MockRoot>
       {toast}
     </>
@@ -519,11 +484,7 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
         </div>
       </div>
       <h3>{next.title}</h3>
-      {technique && !ideaShown ? (
-        <p><button className="d-reveal" onClick={() => setReveal(true)}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" /><circle cx="8" cy="8" r="2" /></svg>Show the idea</button></p>
-      ) : (
-        <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>
-      )}
+      {(ideaShown || !technique) && <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>}
       <div className="s-pills">
         <span className={`s-pill${next.difficulty === "easy" ? " s-g" : ""}`} style={next.difficulty === "easy" ? undefined : { color: DIFF[next.difficulty][1] }}>
           {next.difficulty}
@@ -543,6 +504,9 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
             premium
           </span>
         )}
+        {technique && !ideaShown && (
+          <button className="d-reveal" onClick={() => setReveal(true)}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" /><circle cx="8" cy="8" r="2" /></svg>Show the idea</button>
+        )}
       </div>
       <div className="s-ml">
         <span>GOAL · {Math.round(pct)}% DONE</span>
@@ -551,18 +515,20 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
       <div className="s-meter">
         <i style={{ width: ready ? `${pct}%` : 0 }} />
       </div>
-      <a className="s-cta" href={leetcode(next.slug)} target="_blank" rel="noreferrer">
-        Solve on LeetCode <span className="s-ar">↗</span>
-      </a>
-      <div className="s-links">
-        <Link to="/d/$slug" params={{ slug: next.slug }}>
-          the problem page
+      <div className="dn-acts">
+        <a className="dn-solve" href={leetcode(next.slug)} target="_blank" rel="noreferrer">
+          Solve on LeetCode <span aria-hidden="true">↗</span>
+        </a>
+        <Link className="dn-open" to="/d/$slug" params={{ slug: next.slug }}>
+          The problem page
         </Link>
         {next.video && (
-          <a href={videoUrl(next.video)} target="_blank" rel="noreferrer">
+          <a className="dn-vid" href={videoUrl(next.video)} target="_blank" rel="noreferrer">
             ▶ NeetCode's video
           </a>
         )}
+      </div>
+      <div className="s-links">
         {reviews > 0 && (
           <Link className="d-plan-link" to="/dsa/review" style={{ color: "var(--vio)" }}>
             Review {reviews} due ›
@@ -824,7 +790,7 @@ function ProblemCard({ p, o, model, log, pickCompany, picked }: { p: DsaProblem;
       </div>
       <div className="d-pside">
         {when}
-        <div className="d-acts">
+        <div className="dn-acts">
           {p.video && (
             <a href={videoUrl(p.video)} target="_blank" rel="noreferrer" title="NeetCode's video">
               ▶
@@ -1120,7 +1086,7 @@ function FilterRail({ o, f, model, flip, update, clearAll }: { o: DsaOverview; f
           <span>LEETCODE TAGS</span>
           <small>all of</small>
         </h4>
-        <input className="d-tsearch" placeholder="find a tag…" value={tagQ} onChange={(e) => setTagQ(e.target.value)} />
+        <input className="d-tsearch" aria-label="Find a topic" placeholder="find a tag…" value={tagQ} onChange={(e) => setTagQ(e.target.value)} />
         <div className="d-opts">
           {tagList.map((t) => (
             <Opt key={t} label={t} n={tc.get(t) ?? 0} on={f.tags.has(t)} onClick={() => flip("tags", t)} />

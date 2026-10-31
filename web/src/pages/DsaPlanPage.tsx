@@ -1,10 +1,9 @@
-import { Skeleton } from "../components/Skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, type DsaOverview, type SrsSettings, type Weekday } from "../api";
 import { Link } from "@tanstack/react-router";
 import { Header } from "../components/Header";
-import { HowFound, Page3, Tile } from "../components/layout";
+import { HowFound, Page3, Tile, PageLoading } from "../components/layout";
 import { DateField, Segmented, Select, Stepper } from "../components/ui";
 import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
@@ -21,7 +20,7 @@ export function DsaPlanPage() {
       <Header area="dsa" />
       <div className="p-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
         {o ? <Editor key={o.today} o={o} /> : (
-          <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} center={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : <Skeleton lines={6} />} />
+          <PageLoading crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} left={false} error={overview.isError ? <p className="rempty">Couldn't reach the API.</p> : undefined} />
         )}
       </div>
     </>
