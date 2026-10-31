@@ -5,7 +5,7 @@ test("the whole Next up card opens the problem page, the LeetCode button still g
     await page.goto("/dsa");
     const card = page.locator(".s-next");
     await expect(card.locator("h3")).toBeVisible();
-    const href = await card.locator(".s-cta").getAttribute("href");
+    const href = await card.locator(".dn-solve").getAttribute("href");
     expect(href).toContain("leetcode.com/problems/");
     await card.locator("h3").click();
     await expect(page).toHaveURL(/\/d\/[a-z0-9-]+$/);
