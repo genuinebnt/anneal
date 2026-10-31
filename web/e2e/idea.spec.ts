@@ -325,3 +325,18 @@ test("Heap: pushing builds a tree beside the array, and the size-k heap keeps on
     await expect(page.locator(".id-res")).toContainText("9 8 7");
     await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(3);
 });
+
+test("Tries: words grow a tree that reuses shared letters, and a lookup follows one edge per letter", async ({ page }) => {
+    await page.goto("/dsa/patterns/D10/idea");
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("9 nodes");
+    await expect(page.locator("svg.id-nv .id-nv-n")).toHaveCount(10);
+    await page.getByRole("radio", { name: /look a word up/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("found");
+    const box = page.getByLabel(/Words to store/);
+    await box.fill("car, card, ca");
+    await box.blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("prefix only");
+});

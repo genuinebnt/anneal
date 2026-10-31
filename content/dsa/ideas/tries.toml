@@ -1,0 +1,123 @@
+pattern = "Tries"
+
+tagline = "Words that start the same share a path, so a prefix question costs one step per letter, however many words are stored."
+
+what = [
+    "A trie is a tree of letters. Every word is a **path from the root**, and a mark on the last node says \"a word ends here\". Words that begin the same share the same nodes, so a prefix is stored **once**, and asking \"does anything start with `ca`?\" is just walking two edges.",
+    "That makes lookups cost **the length of the word**, not the number of words, and it lets you ask *prefix* questions that a hash set cannot answer. Watch words go in, sharing nodes, and then watch a lookup follow a path.",
+]
+
+demos = ["trie-insert", "trie-search"]
+
+applies = [
+    "\"Does this **word** exist?\" and \"does any word **start with** this prefix?\", asked many times.",
+    "**Autocomplete** and \"search suggestions\": list the words under a prefix.",
+    "A **wildcard** such as `b.d`, where a `.` could be any letter.",
+    "Finding **many words in a grid** at once, so the search for them shares its walks.",
+    "Questions about the **bits** of numbers, such as the largest XOR of two numbers (a trie with two edges per node).",
+]
+
+yes = [
+    "You store a **set of strings** and ask about their **prefixes**, not only about whole words.",
+    "Many words **share beginnings**, so storing them once saves work.",
+    "The search should **stop as soon as a prefix is impossible**, instead of trying every word.",
+]
+
+no = [
+    "You only ask \"is this **exact** word in the set?\": a hash set is simpler and as fast.",
+    "The words are **long and share nothing**: the trie is just a heavier way to store a list.",
+    "You need words in **sorted** order or a range: a sorted array or a balanced tree fits better.",
+]
+
+apply = [
+    "**Choose the node.** A dictionary from letter to child (any alphabet) or an array of 26 (lowercase only), plus an `end` flag, and sometimes a count.",
+    "**Insert.** Walk the word; at each letter reuse the child if it exists, create it if not; mark the last node.",
+    "**Search.** Walk the word; if a letter has no child, stop with \"no\". At the end, the answer is the `end` flag for a word, or \"yes\" for a prefix.",
+    "**Decide what a node also stores.** A count of words below it (autocomplete ranking), or the word itself (a grid search can output it without rebuilding).",
+    "**State the invariant.** \"A node exists exactly when some stored word has that prefix.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"does this **word** exist\", \"does any word **start with** this\""
+kind = "Plain trie"
+move = "Insert each word letter by letter; a search follows the letters and checks the end mark."
+glyph = "prefixw"
+technique = "Tries:trie"
+
+[[which]]
+says = "a search with a **wildcard**: `b.d` matches `bad`, `bed`"
+kind = "Trie with DFS"
+move = "On a normal letter follow its edge; on `.` try every child, and succeed if any branch does."
+glyph = "wild"
+technique = "Tries:trie-dfs"
+
+[[which]]
+says = "\"find **all the words** from a list that appear in a grid\""
+kind = "Trie driving a grid search"
+move = "Walk the grid and the trie together; stop a path the moment its prefix is not in the trie."
+glyph = "gridtrie"
+technique = "Tries:trie-grid"
+
+[[which]]
+says = "\"the **largest XOR** of two numbers\""
+kind = "Binary trie"
+move = "Store each number's bits, high to low; for a number, walk the opposite bit whenever it exists."
+glyph = "bitstrie"
+technique = "Tries:xor-trie"
+
+[[which]]
+says = "\"how many words **start with** this prefix\", ranked autocomplete"
+kind = "Counts on nodes"
+move = "Store at each node how many words pass through it; a prefix query reads one number."
+glyph = "counts"
+technique = "Tries:prefix-counts"
+
+[[cost]]
+name = "Compare with every stored word"
+time = "O(N · L)"
+space = "O(N · L)"
+why = "Checking a prefix against each of the N stored words, each of length up to L, grows with the number of words. This is the cost to beat."
+
+[[cost]]
+name = "Insert or search one word"
+time = "O(L)"
+space = "O(L)"
+why = "Each letter is one step down the tree, so the work follows the length L of the word and ignores how many words are stored. Insert may create up to L new nodes."
+
+[[cost]]
+name = "Storing N words"
+time = "O(total letters)"
+space = "O(total letters)"
+why = "In the worst case nothing is shared, and every letter of every word is its own node. With shared prefixes it is smaller, which is the whole point. A dictionary child map costs more per node than a 26-slot array but fits any alphabet."
+
+[[cost]]
+name = "Wildcard search"
+time = "O(26^w · L) worst"
+space = "O(L)"
+why = "A `.` branches into every child, so with w wildcards the search can fan out by up to 26 each time. Words without wildcards stay O(L), and a wildcard under a sparse node only follows the few children it has."
+
+[[cost]]
+name = "Many words in a grid"
+time = "O(R · C · 4^L)"
+space = "O(total letters)"
+why = "Each starting cell can branch four ways to depth L, but a path is dropped the moment its prefix leaves the trie, so far fewer paths survive than the bound suggests. One trie serves every word instead of one grid search per word."
+
+[[with]]
+pattern = "Backtracking"
+how = "Searching a grid for words is backtracking guided by a trie: the trie tells you when a path can no longer spell anything, so you prune it."
+example = "word-search"
+
+[[with]]
+pattern = "Bit Manipulation"
+how = "Bits are a two-letter alphabet. A trie of numbers' bits, high bit first, finds the partner with the largest XOR by taking the opposite bit at each level."
+example = "word-search-ii"
+
+[[with]]
+pattern = "Arrays & Hashing"
+how = "A hash set answers \"is this whole word stored\" in O(L), but cannot answer \"does anything start with this\". A trie answers both."
+example = "implement-trie-prefix-tree"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "Autocomplete ranks the words under a prefix by how often they were typed: the trie finds the candidates and a heap keeps the best few."
+example = "design-search-autocomplete-system"
