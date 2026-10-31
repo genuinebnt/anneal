@@ -1,0 +1,114 @@
+title = "Top-k and leaderboards"
+kind = "hld"
+order = 14
+minutes = 35
+prompt = "Design two related features: a real-time leaderboard for a mobile game with 50 million players (my rank, the top 100, my neighbours), and 'top 100 trending songs' over the last hour, day and week for a streaming service with billions of plays a day."
+uses = ["delivery-framework", "redis", "probabilistic-structures", "stream-processing", "sharding"]
+companies = ["Spotify", "Amazon", "Meta", "Riot Games", "Google"]
+hints = [
+  "Which Redis structure gives you a rank in O(log n)? How big is it for 50 million players?",
+  "Counting every song exactly per hour is a lot of counters. Do you need exact counts for a top-100 list?",
+  "How do you get 'last 24 hours' without recounting a day of plays every minute?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
+reference = """
+**Leaderboard**: update a player's score, get the top N, get my rank and the players around me; seasons reset.
+**Trending**: top 100 songs by plays for the last hour, day and week, refreshed every minute; approximate counts acceptable.
+
+**Non-functional**: rank queries under 50 ms; score updates visible within a second; trending can lag a minute.
+
+**Estimate**: 50M players × ~50 bytes in a sorted set ≈ a few GB, fits in one Redis. Plays: 5B a day ≈ 60,000 a second, peaks of 200,000.
+"""
+[[steps.points]]
+id = "req-split"
+text = "Separated exact per-player ranks from approximate global top-k"
+level = "senior"
+[[steps.points]]
+id = "req-est"
+text = "Estimated the sorted set size and the play event rate"
+level = "mid"
+
+[[steps]]
+name = "Core entities"
+minutes = 2
+prompt = "Name the things the system stores."
+reference = "`Score` (player, season, points), `PlayEvent` (song, user, time), `WindowCount` (song, time bucket, count), `TopList` (window, computed at, ranked songs)."
+[[steps.points]]
+id = "ent-bucket"
+text = "Counts kept per time bucket rather than per raw window"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 3
+prompt = "What do clients call?"
+reference = "`POST /scores { player_id, delta }` (server-side, from the game server, never the client), `GET /leaderboard/top?n=100`, `GET /leaderboard/me` → `{ rank, score, around: [...] }`, `GET /trending?window=1h|24h|7d`."
+[[steps.points]]
+id = "api-trust"
+text = "Scores submitted by trusted game servers, not by clients"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 14
+prompt = "Draw both features."
+reference = """
+**Leaderboard**: a Redis **sorted set** per season: `ZINCRBY season:12 50 player:7` to update, `ZREVRANGE season:12 0 99 WITHSCORES` for the top, `ZREVRANK` for my rank, then `ZREVRANGE rank-5 rank+5` for my neighbours, all O(log n). Scores are also written durably to a database (the sorted set can be rebuilt from it). Ties broken by encoding time into the score.
+
+**Trending**: play events go to **Kafka**; a stream job (Flink) counts per song in **one-minute buckets** (with a count-min sketch plus a heap per shard if the song catalogue is huge), and every minute merges the buckets of the last 60 minutes, 24 hours (hourly buckets), and 7 days into a top-100 list per window. Results are written to Redis or a small table and served from a cache.
+"""
+[[steps.points]]
+id = "hld-zset"
+text = "Redis sorted set with the right commands for top, rank and neighbours"
+level = "mid"
+[[steps.points]]
+id = "hld-durable"
+text = "Scores persisted durably so the sorted set can be rebuilt"
+level = "senior"
+[[steps.points]]
+id = "hld-buckets"
+text = "Sliding windows built from small time buckets, merged each minute"
+level = "senior"
+[[steps.points]]
+id = "hld-stream"
+text = "Play events through a log and a stream processor, sharded by song"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 11
+prompt = "Scale beyond one node, hot keys, and accuracy."
+reference = """
+- **500M players**: shard the sorted set by score range (a player moves shards as the score crosses boundaries) so a global rank is the sum of counts in higher shards plus the rank within the shard; or shard by player and compute approximate ranks from a score histogram. Top N comes from the top shard.
+- **Hot songs**: a viral song's counter is hot; pre-aggregate in each stream worker (local counts per second) before merging.
+- **Accuracy**: count-min sketches overestimate; keep exact counts for candidates that enter the heap, or recompute exact daily charts in batch from the raw log (Lambda) when royalties depend on them.
+- **Abuse**: replays by bots inflate counts; filter per-user repeat plays before counting.
+"""
+[[steps.points]]
+id = "dd-shard-rank"
+text = "A way to shard the leaderboard and still compute global rank"
+level = "staff"
+[[steps.points]]
+id = "dd-hot"
+text = "Pre-aggregation for hot keys before the global merge"
+level = "senior"
+[[steps.points]]
+id = "dd-accuracy"
+text = "Approximate streaming counts vs exact batch counts, chosen by purpose"
+level = "senior"
+
+[[probes]]
+question = "How do you compute 'top songs in the last 24 hours' every minute without recounting a day of events?"
+answer = "Keep counts in time buckets (minutes for the last hour, hours for the day). Each minute, add the newest bucket and subtract the one that left the window (or merge the 24 hourly buckets), then take the top 100 from the merged counts: the work is proportional to buckets and distinct songs, not to raw plays."
+
+[[probes]]
+question = "Two players have the same score. How does a sorted set rank them, and how would you make the earlier achiever rank higher?"
+answer = "Redis orders equal scores lexicographically by member, which is arbitrary for players. Encode a tie-breaker into the score, for example score × 10^10 + (max_time − achieved_time), so for equal points the earlier time gives a larger value."
+
+[[probes]]
+question = "Why is it fine for trending to be approximate but not the player's own score?"
+answer = "Trending shows a ranked list where a small counting error rarely changes positions and nobody can check exact numbers; a player sees their own score and rank and will notice any mistake, and rewards may depend on it, so it is exact and durable."

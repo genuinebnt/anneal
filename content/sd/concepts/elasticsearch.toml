@@ -1,0 +1,79 @@
+title = "Elasticsearch"
+group = "technology"
+order = 6
+minutes = 12
+lede = "A distributed search engine on Lucene: documents are analysed into terms and stored in inverted indexes, spread over shards, and ranked by relevance. It is the usual answer for full-text search, filters with facets, and log search, but not for the system of record."
+say = "Postgres stays the source of truth; changes flow through CDC into Elasticsearch, which serves the search box with BM25 relevance plus filters on price and category, and a second of lag is acceptable."
+related = ["indexes", "typeahead-tries", "replication", "sharding"]
+
+[[sections]]
+heading = "The inverted index"
+body = """
+A B-tree finds rows by a value; an **inverted index** finds documents by the words in them. For each term it keeps a **postings list**: the documents that contain it (and where).
+
+| term | postings |
+|---|---|
+| `rust` | 1, 4, 9 |
+| `async` | 4, 7 |
+| `tokio` | 4 |
+
+The query `rust async` intersects the lists: document 4. Lists are sorted and compressed, so intersecting millions of ids is fast.
+
+**Analysis** turns text into terms when indexing and again at query time: a tokenizer splits words, filters lowercase them, remove stop words, stem (`running` → `run`) or add synonyms. A `text` field is analysed for full-text search; a `keyword` field is stored whole for exact filters, sorting and aggregations.
+"""
+
+[[sections]]
+heading = "Relevance"
+body = """
+The default score is **BM25**: a document ranks higher when the query's terms appear in it often (with diminishing returns), when those terms are rare across all documents (inverse document frequency), and when the field is short. Boost fields (`title^3`), add recency or popularity with a `function_score`, or rerank the top results.
+
+Use **filter context** for yes/no conditions (price < 50, in stock): filters do not score and are cached, so they are much cheaper than scoring queries.
+"""
+
+[[sections]]
+heading = "Shards, replicas and near real time"
+body = """
+- An index is split into **primary shards** (each a Lucene index), fixed when the index is created; changing the count means a split, shrink or reindex. Each has **replica shards** on other nodes for failover and read throughput.
+- A search goes to one copy of every shard, each returns its top hits, and the coordinating node merges them (scatter-gather). Many tiny shards make every query slower; aim for shards of tens of GB.
+- New documents go to an in-memory buffer and a **translog**; a **refresh** (every second by default) writes a new immutable **segment** and makes them searchable. Search is therefore **near real time**: about one second behind. Segments are merged in the background; an update is a delete plus a new document.
+"""
+
+[[sections]]
+heading = "Keeping it in sync with the database"
+body = """
+Elasticsearch can lose recent writes in some failures and has no multi-document transactions, so it is a **derived view**:
+
+1. **Change data capture**: read the database's log (Debezium on Postgres or MySQL) into Kafka, and a consumer indexes each change. Ordered per key, replayable, no dual writes.
+2. **Outbox**: the service writes an event row in the same transaction as the data; a relay publishes it.
+3. Avoid **dual writes** from the app (write the DB, then ES): one can fail and they drift.
+
+Keep a way to **rebuild the index from scratch** (reindex into a new index, then swap an alias), because mappings change and drift happens.
+"""
+
+[[sections]]
+heading = "Pagination and other traps"
+body = """
+- `from` + `size` makes every shard collect `from + size` hits; it is capped at 10,000 by default. For deep paging use **`search_after`** with a sort key (a cursor), or a point-in-time for a stable view.
+- Mapping explosions: indexing arbitrary JSON keys creates a field per key; set dynamic mapping to strict or use a flattened type.
+- High-cardinality aggregations (unique users) are approximate (HyperLogLog-based `cardinality`).
+
+> [!INTERVIEW]
+> Say what is analysed (text) and what is filtered (keyword), how the index is fed (CDC, not dual writes), and that results lag by about a second.
+"""
+
+[[checks]]
+prompt = "Why should the product catalogue's source of truth be Postgres rather than Elasticsearch, and how do the two stay in sync?"
+answer = "Elasticsearch is near real time, has no multi-document transactions and can lose recently acknowledged writes in some failure cases, so it is a derived index. Keep Postgres as the source, stream changes through CDC (or an outbox) into a consumer that indexes them, and be able to reindex from Postgres when needed."
+
+[[checks]]
+prompt = "A user pages to page 2,000 of search results at 20 per page and the request fails. Why, and what is the fix?"
+answer = "from + size = 40,000 exceeds the default max_result_window of 10,000, and each shard would have to collect and sort 40,000 hits. Use search_after with the last hit's sort values (a cursor), usually with a point in time; or stop offering deep page numbers."
+
+[[checks]]
+prompt = "What is the difference between a `text` and a `keyword` field, and which do you use for a category filter?"
+answer = "A text field is analysed into terms for full-text matching and scoring; a keyword field stores the exact value for filtering, sorting and aggregations. A category filter uses keyword in filter context (exact, unscored, cached)."
+
+[[figures]]
+name = "inverted-index"
+after = "The inverted index"
+caption = "Each term points at the documents containing it; a query intersects the lists."

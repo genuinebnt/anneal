@@ -1,0 +1,57 @@
+title = "Load balancers and API gateways"
+group = "core"
+order = 9
+minutes = 10
+lede = "The front door of every design: load balancers spread traffic over healthy servers, at the connection (L4) or request (L7) level, and API gateways add authentication, rate limits and routing in one place. Each is replicated so that it is not itself the single point of failure."
+say = "Clients hit a global anycast address, a regional L7 load balancer terminates TLS and routes by path to the services, picking the least-loaded healthy instance; WebSocket servers are behind an L4 balancer."
+related = ["api-styles", "consistent-hashing", "resilience", "realtime-updates"]
+
+[[sections]]
+heading = "L4 and L7"
+body = """
+| | L4 (transport) | L7 (application) |
+|---|---|---|
+| sees | IP addresses and ports | HTTP: path, headers, cookies |
+| routes by | connection | each request |
+| can do | very fast forwarding, any TCP/UDP protocol | TLS termination, path routing, retries, compression, header rewriting |
+| examples | AWS NLB, IPVS, Maglev | AWS ALB, Envoy, NGINX, HAProxy |
+
+Long-lived connections (WebSockets, gRPC streams) are balanced only when they open, so a server that was added later gets few of them until clients reconnect.
+"""
+
+[[sections]]
+heading = "Choosing a server"
+body = """
+- **Round robin** (optionally weighted): fine when requests cost about the same.
+- **Least connections** or least outstanding requests: better when request times vary.
+- **Power of two choices**: pick two servers at random and send to the less loaded one; nearly as good as checking all, without global state.
+- **Consistent hashing** on a key (user id, cache key): the same key goes to the same server, which keeps caches warm; adding a server moves only a slice of keys.
+- **Sticky sessions**: pin a user to a server by cookie. Avoid when you can: keep servers stateless and put sessions in Redis.
+"""
+
+[[sections]]
+heading = "Health and redundancy"
+body = """
+- **Health checks**: active (probe `/health` every few seconds) and passive (eject a server that returns errors). Remove a server before deploying it (**connection draining**).
+- The balancer itself runs as several instances behind one address: a floating IP with failover, **anycast** (the same IP announced from many places, the network picks the nearest), or DNS returning several addresses.
+- **Global load balancing**: DNS or anycast sends users to the nearest healthy region; failover moves them when a region fails.
+"""
+
+[[sections]]
+heading = "API gateway"
+body = """
+An L7 entry point for many services that centralises cross-cutting work: **authentication** (validate the JWT once), **rate limiting**, request routing and versioning, request/response transformation, caching, and metrics. A **backend for frontend** is a gateway per client type (mobile, web) that shapes responses for it.
+
+Keep business logic out of the gateway; it should stay thin and fast.
+
+> [!INTERVIEW]
+> Draw the load balancer as replicated, say what algorithm it uses and why, and keep the servers behind it stateless.
+"""
+
+[[checks]]
+prompt = "Why can a newly added WebSocket server sit almost idle while the old ones stay overloaded?"
+answer = "Load balancers place a WebSocket when the connection opens and it then lives for hours; existing clients stay on the old servers. Only new or reconnecting clients reach the new server. Fixes: least-connections balancing for new connections and gradually asking clients on busy servers to reconnect."
+
+[[checks]]
+prompt = "What does 'power of two choices' do and why is it better than picking a random server?"
+answer = "For each request it picks two servers at random and sends to the one with fewer outstanding requests. Random choice leaves some servers with much longer queues by chance; comparing just two cuts the worst-case load dramatically, nearly matching checking every server, without global coordination."

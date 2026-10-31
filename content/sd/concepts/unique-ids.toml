@@ -1,0 +1,52 @@
+title = "Unique ID generation"
+group = "core"
+order = 10
+minutes = 9
+lede = "Every design needs ids: for rows, messages, orders, short links. The choice decides whether ids leak counts, sort by time, fit in 64 bits, and can be made on many machines without coordination."
+say = "Message ids are Snowflake-style 64-bit ids: millisecond timestamp, machine id, sequence; they sort by time, so a chat page is a range scan, and no service is called to make one."
+related = ["sharding", "indexes", "clocks-and-ordering"]
+
+[[sections]]
+heading = "The options"
+body = """
+| Scheme | Size | Sorted by time | Coordination | Notes |
+|---|---|---|---|---|
+| database auto-increment | 64 bit | yes | one database | simple; a bottleneck and leaks counts |
+| UUID v4 | 128 bit | no | none | random: B-tree inserts land everywhere, poor locality |
+| UUID v7 (RFC 9562) | 128 bit | yes | none | millisecond time then random bits; a good default |
+| ULID | 128 bit | yes | none | like v7, encoded as 26 readable characters |
+| Snowflake | 64 bit | yes | a machine id per node | compact, fast, needs machine ids |
+| ranges from a ticket server | 64 bit | roughly | rare | each server takes a block of 1,000 ids |
+"""
+
+[[sections]]
+heading = "Snowflake"
+body = """
+Twitter's layout: **1 sign bit + 41 bits of milliseconds since a custom epoch + 10 bits of machine id + 12 bits of sequence**.
+
+- 41 bits of milliseconds last about 69 years.
+- 10 bits allow 1,024 generators; 12 bits allow 4,096 ids per millisecond per generator (about 4 million a second each).
+- If the sequence runs out within a millisecond, wait for the next one.
+- If the clock **moves backwards**, refuse to issue ids (or wait) until it catches up; otherwise ids could repeat.
+- Machine ids come from configuration, the pod's ordinal, or a lease in etcd or ZooKeeper.
+"""
+
+[[sections]]
+heading = "What to consider"
+body = """
+- **Index locality**: time-ordered ids append to the end of a B-tree; random UUIDs scatter writes across pages and bloat the index.
+- **Exposure**: sequential ids reveal volume (order 10,042 today, 10,542 tomorrow) and are guessable; never let an id stand in for authorisation.
+- **Short codes** (URL shortener): encode a counter or id in base62 (7 characters ≈ 3.5 trillion values), or use random codes with a uniqueness check.
+- **Sharding**: ids that embed a shard number route without a lookup (Instagram put the shard id in its 64-bit ids).
+
+> [!INTERVIEW]
+> Say whether ids need to sort by time, fit 64 bits, or hide counts, then pick: UUID v7 by default, Snowflake for compact sortable ids at scale.
+"""
+
+[[checks]]
+prompt = "Why do random UUID v4 primary keys slow down inserts into a large Postgres table compared with UUID v7?"
+answer = "Random keys insert at random places in the B-tree index, so every insert touches a different leaf page that may not be cached, causing page splits and random I/O. UUID v7 starts with a timestamp, so new keys go to the rightmost pages, which stay in memory."
+
+[[checks]]
+prompt = "A Snowflake generator's clock jumps back 5 ms after an NTP correction. What can go wrong and what should it do?"
+answer = "It could reissue timestamps it has already used with the same machine id and restart the sequence, producing duplicate ids. It must detect that the clock is behind the last timestamp used and wait (or refuse) until the clock passes it."

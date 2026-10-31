@@ -4,7 +4,7 @@ order = 6
 minutes = 7
 lede = "Files, photos and videos do not belong in your database or flowing through your app servers. Clients upload straight to object storage with a presigned URL, in chunks, and you keep only metadata."
 say = "The client asks the API for a presigned S3 URL, uploads the file in 5 MB parts directly, and an event on completion marks the file ready and starts processing."
-related = ["data-modeling", "queues-and-streams"]
+related = ["data-modeling", "queues-and-streams", "object-storage"]
 
 [[sections]]
 heading = "Presigned URLs"

@@ -1,0 +1,57 @@
+title = "Clocks and ordering"
+group = "distributed"
+order = 5
+minutes = 11
+lede = "Machines' clocks drift and jump, so a timestamp cannot safely say which of two events happened first. Logical clocks capture cause and effect, hybrid clocks add real time back, and Spanner waits out its clock uncertainty to give a true order."
+say = "I would not order edits by wall-clock timestamps from different servers; each document's edits get a sequence number from its single writer, and across services I'd carry a hybrid logical clock."
+related = ["consensus-raft", "replication", "crdts", "quorums"]
+
+[[sections]]
+heading = "Why wall clocks lie"
+body = """
+- Quartz clocks drift (tens of parts per million: about a second a day without correction).
+- **NTP** corrects them, but only to within milliseconds on a good network, and corrections can make the clock **jump backwards**.
+- Virtual machines pause; leap seconds happen.
+
+Two consequences:
+1. **Measure durations with a monotonic clock** (`Instant` in Rust, `CLOCK_MONOTONIC`), never the time of day.
+2. **Last write wins** by timestamp silently drops a write when the writer's clock is behind: node A writes at 10:00:00.005 by its clock, node B writes later in reality but its clock says 10:00:00.003, so A's older value wins.
+"""
+
+[[sections]]
+heading = "Lamport clocks"
+body = """
+Each node keeps a counter. It increments it for every event, sends it with every message, and on receiving sets `counter = max(own, received) + 1`. If event a caused b (happened before it), then `L(a) < L(b)`. Ties are broken by node id, giving a **total order consistent with causality**.
+
+The reverse does not hold: `L(a) < L(b)` does not mean a caused b. Lamport clocks cannot tell concurrent events apart.
+"""
+
+[[sections]]
+heading = "Vector clocks"
+body = """
+Each node keeps one counter **per node**. Compare two vectors: if every entry of A is ≤ B's, A happened before B; if each has an entry larger than the other's, they are **concurrent**, a real conflict to resolve (keep both versions, merge, or ask the user).
+
+Used for conflict detection in Dynamo-style stores. The cost: the vector grows with the number of writers, so systems prune it or use version vectors per replica.
+"""
+
+[[sections]]
+heading = "Hybrid logical clocks and TrueTime"
+body = """
+- **Hybrid logical clock** (HLC): physical time plus a logical counter. It stays close to wall time (readable, usable for "as of 10:00" snapshots) and still respects causality when clocks are skewed. CockroachDB and YugabyteDB use it.
+- **TrueTime** (Google Spanner): GPS and atomic clocks give each server a time interval `[earliest, latest]` with a known small error (a few ms). A transaction picks a timestamp and **waits out the uncertainty** before committing (commit wait), so timestamps order transactions exactly as they happened in real time: external consistency.
+
+> [!INTERVIEW]
+> When a design orders events, say who assigns the order: one leader's sequence number, a log offset (Kafka partition), a logical clock, or a database's commit timestamp, never raw client clocks.
+"""
+
+[[checks]]
+prompt = "Two replicas accept writes to the same key with last-write-wins on wall-clock timestamps. Describe how a later write can be lost."
+answer = "If the replica handling the later write has a clock running behind, it stamps the write with an earlier time than the earlier write; when versions are compared, the earlier write has the larger timestamp and wins, so the later write is silently discarded."
+
+[[checks]]
+prompt = "Vector clocks A = [2, 1, 0] and B = [1, 2, 0] for the same key. What is their relationship and what must the system do?"
+answer = "Neither is ≤ the other in every entry (A is ahead in the first, B in the second), so they are concurrent: a conflict. The system must keep both versions (siblings) and merge them, by application logic, a CRDT, or by asking the user."
+
+[[checks]]
+prompt = "Why should a request timeout be measured with a monotonic clock rather than the time of day?"
+answer = "The time of day can jump forwards or backwards when NTP corrects it, making the measured duration negative or wildly long; a monotonic clock only moves forward at a steady rate, so durations are correct."

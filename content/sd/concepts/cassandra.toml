@@ -1,0 +1,105 @@
+title = "Cassandra"
+group = "technology"
+order = 4
+minutes = 13
+lede = "A wide-column store built for writes at any scale: data is spread over a ring of equal nodes by partition key, every write is an append to a log-structured engine, and you choose per query how many replicas must answer."
+say = "Messages go in Cassandra, partitioned by conversation id and clustered by time descending, so loading a chat is one partition read; I'd write and read at LOCAL_QUORUM with a replication factor of 3."
+related = ["storage-engines", "quorums", "consistent-hashing", "data-modeling"]
+
+[[sections]]
+heading = "The data model: design for the query"
+body = """
+A table has a **primary key** of two parts: the **partition key** decides which nodes hold the row, and the **clustering columns** sort rows inside the partition.
+
+```sql
+CREATE TABLE messages (
+    conversation_id uuid,
+    sent_at         timeuuid,
+    sender_id       uuid,
+    body            text,
+    PRIMARY KEY ((conversation_id), sent_at)
+) WITH CLUSTERING ORDER BY (sent_at DESC);
+```
+
+`SELECT * FROM messages WHERE conversation_id = ? LIMIT 50` reads one partition, already sorted: the fastest query Cassandra has.
+
+- There are **no joins** and secondary indexes are weak. Model **one table per query** and write the same data to several tables (denormalise on write).
+- A query must name the full partition key. Filtering on anything else is a full-cluster scan (`ALLOW FILTERING` is the warning sign).
+- Keep partitions bounded: a few hundred thousand rows or ~100 MB at most. A partition that grows forever (all events of a busy user) needs a **bucket** in the key, such as `(user_id, day)`.
+
+> [!WARNING]
+> An unbounded partition is the most common Cassandra mistake in interviews and in production: it makes one node hot and reads slow.
+"""
+
+[[sections]]
+heading = "The ring and replication"
+body = """
+Nodes sit on a **consistent-hash ring**; each owns ranges of token values (many small ranges per node, called vnodes, so load spreads evenly and a new node takes a little from everyone). A row lives on the node owning `hash(partition key)` and the next **RF − 1** nodes (replication factor, usually 3), placed in different racks or zones.
+
+There is **no leader**: any node can take any request and act as the **coordinator**, forwarding to the replicas. Nodes learn who is up through **gossip**.
+"""
+
+[[sections]]
+heading = "Tunable consistency"
+body = """
+Each read and write names a **consistency level**: how many replicas must answer.
+
+| Level | Meaning | Use |
+|---|---|---|
+| `ONE` | one replica | fastest, may read stale data |
+| `QUORUM` | a majority of RF (2 of 3) | consistent if both reads and writes use it |
+| `LOCAL_QUORUM` | a majority in the local data centre | the usual production choice across regions |
+| `ALL` | every replica | one node down makes it fail |
+
+With replication factor N, writes to W replicas and reads from R: if **R + W > N**, every read overlaps the latest write. QUORUM + QUORUM with N = 3 gives 2 + 2 > 3.
+
+Conflicts are settled by **last write wins** on the write's timestamp, so clock skew between clients can lose an update. For compare-and-set (a username is unique), **lightweight transactions** (`INSERT … IF NOT EXISTS`) run Paxos among the replicas, about four round trips: use them rarely.
+"""
+
+[[sections]]
+heading = "The write and read path"
+body = """
+**Write**: append to the **commit log** (durability), insert into the in-memory **memtable**, acknowledge. When the memtable fills it is flushed to an immutable **SSTable** on disk. No read before write, no in-place update: that is why writes are so cheap.
+
+**Read**: check the memtable, then the SSTables that might hold the key (each has a **Bloom filter** to skip the ones that do not), merge the versions, newest timestamp wins. **Compaction** merges SSTables in the background so reads touch fewer files:
+
+- size-tiered (the default; good for writes),
+- leveled (good for reads and updates),
+- time-window (time series with TTLs: whole old files are dropped).
+
+**Deletes** write a **tombstone**, kept for `gc_grace_seconds` (10 days by default) so that a replica that was down learns about the delete. Many tombstones in a partition (a queue modelled as a table) make reads scan dead rows: a known anti-pattern.
+"""
+
+[[sections]]
+heading = "Repair: how replicas converge"
+body = """
+- **Hinted handoff**: a coordinator holds writes for a replica that is down and replays them when it returns (for a limited window, three hours by default).
+- **Read repair**: a read that sees replicas disagree sends the newest value to the stale ones.
+- **Anti-entropy repair**: replicas compare **Merkle trees** of their data and stream only the ranges that differ. Run it regularly, within `gc_grace_seconds`, or deleted data can come back.
+"""
+
+[[sections]]
+heading = "When to pick it, and when not"
+body = """
+| Good fit | Poor fit |
+|---|---|
+| very high write rates (events, messages, IoT, time series) | ad-hoc queries and joins, reporting |
+| known access patterns, read by key and range | strong consistency across rows, multi-row transactions |
+| multi-region active-active | small data (operational cost is high) |
+| availability over consistency | counters that must be exact, queues |
+
+> [!INTERVIEW]
+> Name the partition key and the clustering order out loud, say how big a partition gets, and say which consistency level you read and write at.
+"""
+
+[[checks]]
+prompt = "Events for every user go into a table with `PRIMARY KEY ((user_id), event_time)`. A few users generate millions of events a day. What goes wrong and how do you fix the key?"
+answer = "Those users' partitions grow without bound: one node holds a huge, hot partition and reads slow down. Add a time bucket to the partition key, such as `((user_id, day), event_time)`, so each partition is bounded; a read for a range spans a known number of buckets."
+
+[[checks]]
+prompt = "Replication factor 3. Writes use ONE and reads use ONE. Can a read miss a write that was just acknowledged? What would you change?"
+answer = "Yes: the write may have reached one replica and the read may ask a different one (1 + 1 is not greater than 3). Use QUORUM (or LOCAL_QUORUM) for both, so 2 + 2 > 3 and every read set overlaps the write set."
+
+[[checks]]
+prompt = "Why are writes in Cassandra cheaper than in a B-tree database such as Postgres?"
+answer = "A write is a sequential append to the commit log plus an in-memory insert into the memtable; there is no read of the old row and no in-place page update. Sorting and merging happen later in bulk, when memtables flush to SSTables and compaction runs."

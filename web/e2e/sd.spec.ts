@@ -7,7 +7,7 @@ test("System design is an area: home, the groups, and a concept page with its dr
     await expect(page.locator(".sd-sec", { hasText: "Key technologies" })).toBeVisible();
     await page.locator(".hd-tabs a", { hasText: "Learn" }).click();
     await expect(page.locator(".sd-group#technology")).toContainText("Kafka");
-    await page.locator(".sd-group#technology .ly-it", { hasText: "Kafka" }).click();
+    await page.locator(".sd-group#technology .ly-it", { has: page.getByText("Kafka", { exact: true }) }).click();
     await expect(page.locator(".ly-h1")).toHaveText("Kafka");
     await expect(page.locator(".sd-fig svg").first()).toBeVisible();
     await expect(page.locator(".sd-md table").first()).toBeVisible();

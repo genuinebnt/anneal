@@ -1,0 +1,133 @@
+title = "Payment system"
+kind = "hld"
+order = 13
+minutes = 40
+prompt = "Design the payments backend of an online marketplace: buyers pay with cards through an external processor, sellers are paid out later, and every cent must be accounted for even when calls time out or services crash."
+uses = ["delivery-framework", "multi-step-processes", "resilience", "isolation-anomalies", "postgres"]
+companies = ["Stripe", "PayPal", "Amazon", "Uber", "Shopify"]
+hints = [
+  "The call to the card processor times out. Was the buyer charged? What do you do next?",
+  "How would an auditor check that no money appeared or disappeared?",
+  "Your records and the processor's records disagree at the end of the day. How do you find out?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
+reference = """
+**Functional**: charge a buyer for an order (authorise, then capture), refunds, pay sellers on a schedule, show balances and history.
+
+**Non-functional**: **correctness over everything**: never charge twice, never lose a payment; strongly consistent balances; full audit trail; PCI scope kept minimal (never store card numbers); available, but it is better to fail a payment than to get it wrong.
+
+**Estimate**: 1M payments a day ≈ 12 a second, peaks of a few hundred. Volume is small; the difficulty is correctness, not scale.
+"""
+[[steps.points]]
+id = "req-correct"
+text = "Exactly-once effect on money and auditability stated as the main requirements"
+level = "mid"
+[[steps.points]]
+id = "req-pci"
+text = "Card data kept out of the system (tokenised by the processor)"
+level = "senior"
+[[steps.points]]
+id = "req-scale"
+text = "Noted that the load is modest and correctness, not throughput, is hard"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 4
+prompt = "Name the things the system stores."
+reference = """
+`Payment` (order, amount, currency, status state machine: created → authorised → captured → refunded / failed, idempotency key, processor reference), `LedgerEntry` (double-entry: account, debit or credit, amount, transaction id; append-only), `Account` (buyer, seller, platform fees, processor clearing), `Payout`.
+"""
+[[steps.points]]
+id = "ent-ledger"
+text = "A double-entry, append-only ledger"
+level = "senior"
+[[steps.points]]
+id = "ent-state"
+text = "Payment status as an explicit state machine"
+level = "mid"
+
+[[steps]]
+name = "API"
+minutes = 4
+prompt = "How does checkout call it?"
+reference = """
+`POST /payments { order_id, amount, currency, payment_method_token }` with an `Idempotency-Key` header → `{ payment_id, status }`. `POST /payments/{id}/capture`, `POST /payments/{id}/refunds { amount }`. Processor webhooks: `POST /webhooks/processor`, verified by signature.
+"""
+[[steps.points]]
+id = "api-idem"
+text = "Idempotency key required on payment creation; a retry returns the stored result"
+level = "mid"
+[[steps.points]]
+id = "api-amount"
+text = "Amounts as integer minor units with a currency, never floats"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 14
+prompt = "Draw the charge path and where the money is recorded."
+reference = """
+1. **Payment service** inserts the payment row (status `created`) keyed by the idempotency key in Postgres. A duplicate request finds the row and returns its current state.
+2. It calls the **processor** (Stripe, Adyen) with its own idempotency key derived from the payment id, so a retried call cannot charge twice.
+3. On the response (or the webhook), it moves the payment to `authorised`/`captured` and writes **ledger entries** in the same transaction: debit buyer clearing, credit seller balance and platform fee; entries always sum to zero.
+4. Events go out through an **outbox** (order service marks the order paid, notifications).
+5. **Payouts**: a scheduled job sums seller balances from the ledger and pays out through the processor, writing ledger entries for each payout.
+6. **Reconciliation**: daily, compare the processor's settlement report with the ledger line by line; mismatches go to a queue for investigation.
+"""
+[[steps.points]]
+id = "hld-idem-proc"
+text = "Idempotency key passed to the processor as well as checked locally"
+level = "senior"
+[[steps.points]]
+id = "hld-ledger-tx"
+text = "Status change and ledger entries written in one database transaction"
+level = "senior"
+[[steps.points]]
+id = "hld-recon"
+text = "Daily reconciliation against the processor's reports"
+level = "senior"
+[[steps.points]]
+id = "hld-outbox"
+text = "Downstream events published through an outbox"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 13
+prompt = "Timeouts, unknown states, and concurrency."
+reference = """
+- **Timeout from the processor**: the outcome is unknown. Mark the payment `pending`, retry with the **same** idempotency key (the processor returns the original result), or query its status; webhooks also resolve it. Never create a new charge.
+- **Stuck payments**: a sweeper finds payments pending too long and resolves them by querying the processor.
+- **Concurrency**: two refunds racing on one payment: lock the payment row (`SELECT … FOR UPDATE`) or use a version check so the total refunded never exceeds the captured amount.
+- **Ledger rules**: append-only (corrections are new reversing entries), balances derived from entries (cached in a balance table updated in the same transaction), every transaction balanced.
+- **Multi-currency**: store amount and currency; convert at a recorded FX rate, never implicitly.
+"""
+[[steps.points]]
+id = "dd-unknown"
+text = "Timeouts handled as unknown state, resolved by retry with the same key or status query"
+level = "senior"
+[[steps.points]]
+id = "dd-race"
+text = "Concurrent refunds or captures serialised by row lock or version check"
+level = "senior"
+[[steps.points]]
+id = "dd-append"
+text = "Ledger corrections as reversing entries, never edits"
+level = "staff"
+
+[[probes]]
+question = "Why a double-entry ledger instead of a balance column per user?"
+answer = "Every movement is recorded as entries that sum to zero across accounts, so money cannot appear or vanish without an unbalanced transaction showing it; the history explains every balance, and auditors and reconciliation can recompute balances from entries. A single mutable balance column loses that history and hides bugs."
+
+[[probes]]
+question = "The client retries POST /payments after a network error. How do you guarantee one charge?"
+answer = "The request carries an idempotency key; the first request stored a payment row under that key (unique constraint), so the retry finds it and returns its state. The processor call uses a key derived from the payment id, so even a retried processor call returns the original charge."
+
+[[probes]]
+question = "At the end of the day the processor says it settled 10,002 payments and your ledger has 10,000. What happens?"
+answer = "Reconciliation flags the two settlements without a matching ledger entry (perhaps webhooks lost or payments stuck pending); they go to an investigation queue, are resolved by querying the processor, and fixed with new ledger entries, never by editing old ones."

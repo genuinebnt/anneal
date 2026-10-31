@@ -15,7 +15,7 @@ pub const SD_LEVELS: &[&str] = &["mid", "senior", "staff"];
 /// The kinds of practice problem.
 pub const SD_KINDS: &[&str] = &["hld", "api", "lld"];
 /// The animated drawings the web app can show on a concept page (`web/src/components/SdFigure.tsx`). A name here needs a drawing there.
-pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream"];
+pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream", "lsm-tree", "saga", "circuit-breaker", "quorum", "bloom-filter", "inverted-index"];
 
 #[derive(Debug, Clone, Default)]
 pub struct SdCatalog {

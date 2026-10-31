@@ -1,0 +1,68 @@
+title = "Probabilistic data structures"
+group = "advanced"
+order = 4
+minutes = 11
+lede = "When exact answers need too much memory, a small structure can give a nearly right one with a known error: a Bloom filter for 'have I seen this?', HyperLogLog for 'how many distinct?', a count-min sketch for 'how often?', and heavy-hitter sketches for top-k."
+say = "The crawler keeps a Bloom filter of seen URLs, about 1.2 GB for a billion at a 1% false-positive rate; a false positive only skips a page, which is acceptable."
+related = ["storage-engines", "redis", "stream-processing", "typeahead-tries"]
+
+[[sections]]
+heading = "Bloom filter: have I seen it?"
+body = """
+A bit array of m bits and k hash functions. To **add** an item, set the k bits its hashes point to. To **check**, look at those k bits: if any is 0 the item was **definitely never added**; if all are 1 it was **probably** added.
+
+- No false negatives; false positives at a rate you choose: about **10 bits per item for 1%**, 15 bits for 0.1%.
+- Items cannot be removed (a counting Bloom filter can, at four times the memory) and the filter does not store the items.
+- Uses: skip disk reads for absent keys (LSM SSTables), "already crawled this URL?", "has this user seen this post?", weak-password checks.
+"""
+
+[[sections]]
+heading = "HyperLogLog: how many distinct?"
+body = """
+Hash every item; in a random hash, a run of k leading zeros happens about once per 2^k distinct items, so the longest run seen estimates the count. HyperLogLog splits items into many buckets by their first bits and averages the estimates.
+
+- Redis's HyperLogLog uses **12 KB** per counter for any cardinality with about **0.81%** standard error (`PFADD`, `PFCOUNT`, `PFMERGE`).
+- Counters **merge**: daily unique visitors per page can be unioned into weekly ones without the raw data.
+- Uses: unique visitors, distinct search queries, unique viewers of a video.
+"""
+
+[[sections]]
+heading = "Count-min sketch: how often?"
+body = """
+A grid of d rows × w counters, one hash function per row. Adding an item increments one counter per row; its estimated count is the **minimum** of its d counters. Collisions only add, so the estimate **never undercounts** and overcounts by at most a small fraction of the total with high probability.
+
+- Fixed memory regardless of how many distinct items.
+- Uses: frequency of queries or hashtags in a stream, rate limiting by approximate counts.
+"""
+
+[[sections]]
+heading = "Top-k and heavy hitters"
+body = """
+To find the k most frequent items in a stream: count each item in a count-min sketch and keep a min-heap of the k items with the highest estimates; when an item's estimate beats the heap's smallest, swap it in. Algorithms such as **Space-Saving** or Misra-Gries keep k counters directly with error bounds.
+
+For "top 100 songs this hour" at huge scale: sketches per shard per minute, merged into a heap per window; exact counts are rebuilt offline from the log if precision matters (the Lambda pattern).
+
+| Question | Structure | Memory | Error |
+|---|---|---|---|
+| seen before? | Bloom filter | ~10 bits/item | false positives only |
+| distinct count | HyperLogLog | 12 KB | ~0.8% |
+| frequency of x | count-min sketch | d × w counters | overcounts only |
+| most frequent | sketch + heap, Space-Saving | O(k) | approximate ranks |
+"""
+
+[[checks]]
+prompt = "A Bloom filter says a URL has been crawled. Can you be sure? What if it says it has not?"
+answer = "'Has been' is only probable: all k bits may have been set by other URLs (a false positive), so a small fraction of new URLs are wrongly skipped. 'Has not' is certain: if any of the k bits is 0, the URL was never added."
+
+[[checks]]
+prompt = "Why does a count-min sketch take the minimum across its rows rather than the average?"
+answer = "Each row's counter is the item's true count plus whatever other items collided into it, so every row overestimates; the smallest one has the fewest collisions and is the closest to the true count."
+
+[[checks]]
+prompt = "You must report unique daily visitors for 10 million pages and also weekly totals. Why is HyperLogLog a good fit?"
+answer = "Each page's daily counter is 12 KB regardless of visitors, with under 1% error, instead of storing every visitor id; and HyperLogLog counters merge, so a week's unique count is the union of seven daily counters without double counting returning visitors."
+
+[[figures]]
+name = "bloom-filter"
+after = "Bloom filter: have I seen it?"
+caption = "Adding sets three bits; a check with any zero bit is a sure no, all ones only a maybe."

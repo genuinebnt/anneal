@@ -1,0 +1,128 @@
+title = "Web crawler"
+kind = "hld"
+order = 11
+minutes = 40
+prompt = "Design a crawler that fetches a billion web pages a month for a search engine: start from seed URLs, follow links, store the pages, and recrawl pages as they change, while staying polite to every site."
+uses = ["delivery-framework", "queues-and-streams", "probabilistic-structures", "object-storage", "resilience"]
+companies = ["Google", "Microsoft", "Amazon", "OpenAI"]
+hints = [
+  "One billion pages a month is how many fetches a second? How many bytes a day?",
+  "Two different URLs often point at the same page, and the same URL is linked a million times. How do you avoid fetching twice?",
+  "How do you make sure no single site gets hammered by hundreds of your workers at once?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 6
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
+reference = """
+**Functional**: from seed URLs, fetch pages, extract links, add new URLs, store raw HTML for the indexer; recrawl changed pages; respect `robots.txt`.
+
+**Non-functional**: politeness (at most one request at a time per host, crawl-delay honoured); robust to traps, huge pages and dead servers; scalable to billions; fault tolerant (a crashed worker loses nothing).
+
+**Estimate**: 1B pages / 30 days ≈ **400 pages a second**, peaks around 1,000. At ~100 KB per page: 40 MB/s, about **100 TB a month** of raw HTML (compressed to roughly a quarter). The URL frontier holds tens of billions of URLs over time.
+"""
+[[steps.points]]
+id = "req-polite"
+text = "Politeness (robots.txt, per-host rate) stated as a requirement"
+level = "mid"
+[[steps.points]]
+id = "req-estimate"
+text = "Fetch rate and storage estimated (about 400 pages/s, ~100 TB a month)"
+level = "mid"
+[[steps.points]]
+id = "req-traps"
+text = "Robustness to crawler traps, duplicates and slow servers named"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 3
+prompt = "Name the things the system stores."
+reference = "`URL` (normalised, with priority, last crawled, next due), `Host` (robots rules, crawl delay, next allowed time, IP), `Page` (content hash, fetched at, location of the HTML in object storage, outlinks)."
+[[steps.points]]
+id = "ent-host"
+text = "Per-host state (robots rules, next allowed fetch time) kept separately"
+level = "senior"
+
+[[steps]]
+name = "API and interfaces"
+minutes = 3
+prompt = "This is a pipeline, not a user API: what goes in and out of each stage?"
+reference = """
+Frontier: `enqueue(url, priority)`, `next_batch(worker) -> urls` (only hosts that are allowed now). Fetcher → parser: `(url, status, headers, body_location)`. Parser → frontier: new normalised URLs. Output to the indexer: a stream of `PageFetched` events with the object-storage key.
+"""
+[[steps.points]]
+id = "api-stages"
+text = "Stages connected by queues with clear messages (frontier, fetch, parse, store)"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Draw the crawl loop and explain how a URL travels through it."
+reference = """
+1. **URL frontier**: priority queues (front queues by importance: PageRank, freshness) feeding **per-host back queues**; each back queue is served by one worker at a time and has a next-allowed time, so one host is never fetched in parallel.
+2. **Fetchers**: many async workers; DNS results cached (DNS is a hidden bottleneck); robots.txt fetched and cached per host; timeouts and a max page size.
+3. **Store raw pages** in object storage (S3), compressed, keyed by URL hash; metadata in a wide-column store (URL → last fetch, hash, status).
+4. **Parser**: extracts links, normalises them (lowercase host, drop fragments, resolve relative links, strip tracking parameters).
+5. **Seen-URL check**: a **Bloom filter** (≈10 bits per URL: a few GB for billions) in front of the URL store; a false positive only skips a page.
+6. **Content dedup**: hash the content (and a **SimHash** for near-duplicates); skip pages already seen under another URL.
+7. Queues (Kafka) between stages so each scales separately and survives crashes.
+"""
+[[steps.points]]
+id = "hld-frontier"
+text = "Frontier with priority plus per-host queues enforcing politeness"
+level = "senior"
+[[steps.points]]
+id = "hld-dedup-url"
+text = "URL normalisation and a seen-set (Bloom filter or URL store) to avoid refetching"
+level = "mid"
+[[steps.points]]
+id = "hld-dedup-content"
+text = "Content hashing (and near-duplicate detection) to skip mirrored pages"
+level = "senior"
+[[steps.points]]
+id = "hld-storage"
+text = "Raw HTML in object storage, metadata in a key-value or wide-column store"
+level = "mid"
+[[steps.points]]
+id = "hld-dns"
+text = "DNS caching and robots.txt caching named as needed for throughput"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 13
+prompt = "Traps, recrawl scheduling, failure and scale-out."
+reference = """
+- **Traps**: infinite calendars, session ids in URLs, endless generated links. Cap depth and URLs per host, detect repeating path patterns, and limit URL length.
+- **Recrawl**: estimate each page's change rate from history (content hash changed or not) and schedule the next visit accordingly; news homepages hourly, static pages monthly; honour `Last-Modified` and ETag with conditional GETs.
+- **Partitioning**: shard the frontier and workers **by host hash**, so all of a host's URLs land on one node and politeness stays local; discovered links for other hosts are routed to their shard.
+- **Failure**: frontier state is durable (Kafka or a database); a worker that dies leaves its leased URLs to time out and be reissued; idempotent writes keyed by URL.
+- **Priority**: important and fresh pages first, so a partial crawl is still useful.
+"""
+[[steps.points]]
+id = "dd-traps"
+text = "Crawler traps handled (depth and per-host caps, pattern detection)"
+level = "senior"
+[[steps.points]]
+id = "dd-recrawl"
+text = "Recrawl frequency driven by observed change rate and conditional GETs"
+level = "senior"
+[[steps.points]]
+id = "dd-partition"
+text = "Work partitioned by host so politeness needs no global coordination"
+level = "staff"
+
+[[probes]]
+question = "Why is a Bloom filter acceptable for the seen-URL set even though it has false positives?"
+answer = "A false positive makes the crawler think a new URL was seen, so that page is skipped; at 1% that loses a small fraction of pages, which the next crawl or another link may recover. False negatives, which would cause refetching, cannot happen. In exchange, billions of URLs fit in a few GB of memory."
+
+[[probes]]
+question = "Two hundred workers all pull URLs from wikipedia.org at once. What stops that?"
+answer = "The frontier keeps a back queue per host served by one worker at a time, with a next-allowed timestamp from the crawl delay; URLs of a host only leave the frontier when that host's time has come. Partitioning by host keeps each host on one shard."
+
+[[probes]]
+question = "How do you decide when to recrawl a page?"
+answer = "Track whether its content hash changed on past visits and estimate a change rate; schedule the next crawl sooner for pages that change often or matter more, later for static ones; use conditional GETs (If-Modified-Since, ETag) so an unchanged page costs a tiny 304."

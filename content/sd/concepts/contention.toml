@@ -4,7 +4,7 @@ order = 3
 minutes = 8
 lede = "Many users wanting the same thing at once: the last seat, the last item, the same counter. Correctness first (one winner), then throughput."
 say = "Holding a seat is a conditional update on its row in one transaction; the hold expires after ten minutes, and a virtual waiting room meters the rush when sales open."
-related = ["postgres", "redis", "consistency-cap"]
+related = ["postgres", "redis", "consistency-cap", "leases-and-fencing", "dynamodb"]
 
 [[sections]]
 heading = "Getting one winner"

@@ -1,0 +1,56 @@
+title = "Object storage (S3)"
+group = "technology"
+order = 7
+minutes = 10
+lede = "A flat store of immutable blobs addressed by key, priced per gigabyte and per request, built for eleven nines of durability. Every design with files, images, video, backups or a data lake puts the bytes here and only the metadata in a database."
+say = "Clients upload straight to S3 with a presigned multipart upload; the API only issues the URL and records metadata when S3's event says the object is complete, and a CDN serves reads."
+related = ["large-blobs", "replication", "caching"]
+
+[[sections]]
+heading = "The model"
+body = """
+- A **bucket** holds **objects**; each object is bytes plus metadata, found by a **key** such as `videos/2026/10/abc.mp4`. There are no real folders: `/` is just a character, and listing by **prefix** imitates them.
+- Objects are **immutable**: you replace the whole object, never edit a byte range in place. Versioning keeps old versions.
+- Size: up to **5 TB** per object; one `PUT` carries up to 5 GB, larger needs **multipart upload**.
+- Since December 2020 S3 gives **strong read-after-write consistency** for every request, including overwrites, deletes and lists.
+"""
+
+[[sections]]
+heading = "Uploads and downloads that skip your servers"
+body = """
+- **Presigned URL**: the API signs a URL that allows one `PUT` (or `GET`) of one key for a few minutes; the client talks to S3 directly, so your servers never carry the bytes.
+- **Multipart upload**: split the file into parts (5 MB to 5 GB, up to 10,000 parts), upload them in parallel, retry only failed parts, then **complete** the upload. Abort or expire incomplete uploads with a lifecycle rule, or you pay for the orphaned parts.
+- **Range GET**: read bytes 0–1 MB of a large object; video players and parallel downloaders use it.
+- **Events**: S3 can notify a queue or a function when an object is created, which is how processing (thumbnails, transcoding, virus scan) starts.
+"""
+
+[[sections]]
+heading = "Durability, cost and speed"
+body = """
+| Property | What to say |
+|---|---|
+| durability | designed for 99.999999999%: objects are stored redundantly across several facilities (erasure coding) |
+| availability | 99.99% for the standard class: lower than durability |
+| throughput | at least 3,500 writes and 5,500 reads a second **per prefix**, and it scales with more prefixes |
+| latency | tens of milliseconds to the first byte: put a **CDN** in front for user-facing reads |
+| cost | per GB stored by class (standard, infrequent access, Glacier archive), per request, and per GB sent out |
+
+**Lifecycle rules** move old objects to cheaper classes or delete them; that is how a video site keeps cold uploads cheap.
+"""
+
+[[sections]]
+heading = "Inside, roughly"
+body = """
+An object store is two systems: a **metadata service** (key → where the pieces are, versions, ACL), itself a sharded, replicated database, and a **data plane** of storage nodes holding erasure-coded chunks (for example 6 data + 3 parity chunks spread across zones: any 6 rebuild the object). A background process scrubs and repairs chunks. This is the design to give for "design S3".
+
+> [!INTERVIEW]
+> Never send large files through the API servers or store them in the database; say presigned URLs, multipart, a CDN for reads, and metadata in the database.
+"""
+
+[[checks]]
+prompt = "Why use presigned URLs for uploads instead of posting the file to your API?"
+answer = "The bytes go straight from the client to object storage, so API servers do not spend bandwidth, memory and connection time proxying gigabytes; the API only authorises the upload (signs a short-lived URL for one key) and records metadata, so it scales independently of file sizes."
+
+[[checks]]
+prompt = "A 4 GB upload over a phone connection fails at 90%. How does multipart upload help?"
+answer = "The file is sent as independent parts (say 16 MB each), uploaded in parallel and retried individually; a failure only resends the failed part, and the upload resumes with the parts already stored. The object appears only when the upload is completed."

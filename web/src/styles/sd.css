@@ -30,6 +30,9 @@
 .sd-list a i{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}.sd-list a i.done{background:var(--grn)}
 .sd-list a em{margin-left:auto;font:500 11px var(--mono);font-style:normal;color:var(--dim)}
 .sd-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.sd-cards .ly-itm>span{display:inline-flex;align-items:center;height:20px;padding:0 9px;border-radius:7px;font:500 11px var(--sans);color:var(--dim);background:var(--inset)}
+.sd-cards .ly-itm>span.on{color:color-mix(in oklab,var(--grn) 72%,var(--fg));background:color-mix(in oklab,var(--grn) 16%,transparent)}
+.sd-cards .ly-itm>span.hot{color:color-mix(in oklab,var(--warn) 72%,var(--fg));background:color-mix(in oklab,var(--warn) 16%,transparent)}
 .sd-group{margin-bottom:22px;scroll-margin-top:calc(var(--hdr-h,100px) + 16px)}
 .sd-gh{display:flex;align-items:baseline;gap:12px;margin:0 0 10px;font-size:17px;color:var(--fg)}
 .sd-gh::before{content:"";width:10px;height:10px;border-radius:3px;background:var(--c);align-self:center}

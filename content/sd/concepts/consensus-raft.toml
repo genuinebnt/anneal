@@ -4,7 +4,7 @@ order = 1
 minutes = 11
 lede = "How a few machines agree on one sequence of decisions even when some crash: elect a leader, replicate a log, and commit an entry once a majority has it. Raft is the version built to be understood; etcd, Consul and Kafka's KRaft run it."
 say = "The lock service is three etcd nodes running Raft, so it survives one failure; a write commits once two of three have it in their log, and clients use the lease's revision as a fencing token."
-related = ["replication", "consistency-cap", "kafka"]
+related = ["replication", "consistency-cap", "kafka", "coordination-services", "leases-and-fencing"]
 
 [[sections]]
 heading = "Why it is needed"

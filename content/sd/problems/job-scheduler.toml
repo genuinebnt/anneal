@@ -1,0 +1,116 @@
+title = "Distributed job scheduler"
+kind = "hld"
+order = 15
+minutes = 40
+prompt = "Design a service that runs jobs for other teams: one-off jobs at a given time and recurring cron jobs, millions of them a day, each run at least once and on time even when machines fail."
+uses = ["delivery-framework", "leases-and-fencing", "coordination-services", "queues-and-streams", "resilience"]
+companies = ["Amazon", "Google", "Airbnb", "Uber", "Stripe"]
+hints = [
+  "How do you find the jobs that are due in the next second among 100 million without scanning them all?",
+  "A worker picks up a job and dies halfway. How does someone else know to run it, and how do you stop both running it?",
+  "Two scheduler instances both see the same due job. What prevents a double dispatch?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
+reference = """
+**Functional**: create, update, cancel jobs (one-off at a time, or a cron expression); run them on workers; retries with backoff; see run history and status.
+
+**Non-functional**: a job starts within a few seconds of its time; **at least once**, with duplicates rare and harmless (jobs should be idempotent); no single point of failure; millions of runs a day.
+
+**Estimate**: 10M runs a day ≈ 120 a second, with spikes at the top of each hour (cron's favourite minute) of 50,000 in one second.
+"""
+[[steps.points]]
+id = "req-semantics"
+text = "At-least-once execution stated, with idempotent jobs expected"
+level = "mid"
+[[steps.points]]
+id = "req-spike"
+text = "Noticed the top-of-the-hour spike from cron schedules"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 3
+prompt = "Name the things the system stores."
+reference = "`Job` (id, owner, payload or handler, schedule: time or cron, retry policy, timeout), `Run` (job, scheduled for, status: pending → leased → running → succeeded / failed, attempt, lease owner, lease expiry), `Worker`."
+[[steps.points]]
+id = "ent-run"
+text = "Runs kept separate from job definitions, with a lease owner and expiry"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 3
+prompt = "What do other teams call?"
+reference = "`POST /jobs { schedule, payload, retry, timeout, idempotency_key }`, `PATCH /jobs/{id}`, `DELETE /jobs/{id}`, `GET /jobs/{id}/runs`. Workers: `lease(n) -> runs`, `heartbeat(run_id)`, `complete(run_id, result)`."
+[[steps.points]]
+id = "api-worker"
+text = "A worker protocol with lease, heartbeat and complete"
+level = "senior"
+
+[[steps]]
+name = "High-level design"
+minutes = 15
+prompt = "Draw how a due job becomes a running one."
+reference = """
+1. **Job store** (Postgres, sharded by job id when large) with an index on `next_run_at`. Creating a job computes its first `next_run_at`.
+2. **Schedulers** (several instances, each owning some shards, assigned through etcd leases) poll `WHERE next_run_at <= now() + 5s` with `FOR UPDATE SKIP LOCKED`, create a `Run`, advance `next_run_at` to the next cron time in the same transaction, and enqueue the run.
+3. **Queue** (Kafka, SQS, or the runs table itself) buffers runs; priorities or per-tenant queues stop one team from flooding the rest.
+4. **Workers** lease a run, heartbeat while running, and complete it. A run whose lease expires (worker died) goes back to pending and is retried with backoff, up to a limit, then to a dead-letter state with an alert.
+5. A **time-bucketed index** (runs by second) or a delay queue makes "what is due now" a cheap range read rather than a scan.
+"""
+[[steps.points]]
+id = "hld-index"
+text = "Due jobs found by an index or time buckets on next run time, not a scan"
+level = "mid"
+[[steps.points]]
+id = "hld-skip-locked"
+text = "Claiming due jobs safely across schedulers (SKIP LOCKED, shard ownership)"
+level = "senior"
+[[steps.points]]
+id = "hld-lease"
+text = "Worker leases with heartbeats; expired leases are retried"
+level = "senior"
+[[steps.points]]
+id = "hld-next"
+text = "Next run time advanced in the same transaction that creates the run"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 14
+prompt = "Duplicates, the hourly spike, and long jobs."
+reference = """
+- **Double execution**: a worker paused past its lease while another took the run. Give each lease a **fencing token** (attempt number); the worker passes it to whatever it writes, and completion with an old token is rejected. Jobs should still be idempotent.
+- **Top-of-the-hour spike**: enqueue runs a little ahead (pre-fetch the next minute's runs), add jitter to jobs that do not need the exact second, and autoscale workers on queue depth.
+- **Long jobs**: heartbeats extend the lease; a job that stops heartbeating is presumed dead; very long workflows belong in a workflow engine (Temporal) with checkpoints.
+- **Time zones and DST**: store cron in the job's time zone and compute next times with a proper library; a 2:30 job on a spring-forward day is skipped or run, by policy.
+- **Missed runs**: after an outage, run each missed job once (not once per missed tick) unless the job asks for catch-up.
+"""
+[[steps.points]]
+id = "dd-fencing"
+text = "Fencing tokens or attempt numbers to stop a stale worker's writes"
+level = "staff"
+[[steps.points]]
+id = "dd-spike"
+text = "The hourly spike handled with pre-fetching, jitter and autoscaling"
+level = "senior"
+[[steps.points]]
+id = "dd-missed"
+text = "A policy for missed runs and DST"
+level = "senior"
+
+[[probes]]
+question = "Two scheduler instances poll the same jobs table. How do you stop them dispatching the same run twice?"
+answer = "Either give each scheduler exclusive ownership of shards (assigned through etcd or ZooKeeper leases), or claim rows with SELECT … FOR UPDATE SKIP LOCKED inside a transaction that creates the run and advances next_run_at, so a second scheduler skips rows already locked and sees the advanced time afterwards."
+
+[[probes]]
+question = "A worker leases a run, then its VM freezes for two minutes. The lease was one minute. What happens?"
+answer = "The lease expires and the run is handed to another worker with a new attempt number. When the frozen worker wakes and tries to complete or write results, its old attempt number (fencing token) is rejected, so only the new attempt's results count; idempotent jobs make any side effects already done harmless."
+
+[[probes]]
+question = "Why advance next_run_at in the same transaction that creates the run?"
+answer = "If they were separate, a crash between them would either create the run without moving the schedule (the next poll creates a duplicate) or move the schedule without a run (the run is lost). One transaction makes both happen or neither."

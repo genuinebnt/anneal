@@ -1,0 +1,62 @@
+title = "Resilience: timeouts, retries, circuit breakers"
+group = "pattern"
+order = 8
+minutes = 11
+lede = "In a system of many services, something is always slow or down. Timeouts bound the wait, retries with backoff and jitter recover from blips without a storm, circuit breakers stop calling a dependency that is failing, and bulkheads and load shedding keep one problem from sinking everything."
+say = "Calls to the payment provider have a 2-second timeout, three retries with exponential backoff and jitter using the same idempotency key, and a circuit breaker; when it opens we queue the payment and tell the user it is processing."
+related = ["multi-step-processes", "queues-and-streams", "api-styles"]
+
+[[sections]]
+heading = "Timeouts first"
+body = """
+A call without a timeout can hold a thread or connection forever, and a slow dependency then exhausts the caller's pools: the failure spreads upstream. Set a timeout on every network call, based on the dependency's measured p99, and pass a **deadline** down the chain (a request with 800 ms left should not start a 2-second call).
+"""
+
+[[sections]]
+heading = "Retries without a storm"
+body = """
+Retry only what is **transient** (timeouts, 503, connection reset), never 400s, and only **idempotent** operations (or ones carrying an idempotency key).
+
+- **Exponential backoff**: wait 100 ms, 200, 400, 800… up to a cap.
+- **Jitter**: randomise each wait (for example uniformly between 0 and the backoff). Without it, every client that failed at the same moment retries at the same moment, and the recovering service is hit by synchronised waves.
+- **Limit**: a few attempts, and a **retry budget** (retries at most 10% of requests) so that a struggling service is not handed three times its normal load.
+- Retry at one layer only: if the client, the gateway and the service each retry three times, one failure becomes 27 calls.
+"""
+
+[[sections]]
+heading = "Circuit breakers"
+body = """
+A breaker wraps calls to one dependency and tracks failures:
+
+1. **Closed**: calls pass; failures are counted over a window.
+2. **Open**: once failures pass a threshold (say 50% of the last 20 calls), calls fail immediately without touching the dependency, for a cool-off period.
+3. **Half-open**: after the cool-off, a few trial calls go through; success closes the breaker, failure opens it again.
+
+The caller fails fast and can use a **fallback** (a cached value, a default, queue it for later) instead of piling up waiting requests, and the dependency gets room to recover.
+"""
+
+[[sections]]
+heading = "Bulkheads, shedding and degradation"
+body = """
+- **Bulkheads**: separate connection pools or thread pools per dependency, so a slow recommendations service cannot use up the threads checkout needs.
+- **Load shedding**: when overloaded, reject some work early and cheaply (429 or 503) rather than slowing every request until all time out. Shed low-priority traffic first; prefer dropping requests that have waited past their deadline.
+- **Backpressure**: bounded queues and channels make producers slow down instead of buffering without limit.
+- **Graceful degradation**: turn off non-essential features (recommendations, live counts) to keep the core path working.
+"""
+
+[[checks]]
+prompt = "A database blips for two seconds and 10,000 clients all retry after exactly one second, then two, then four. What happens and what fixes it?"
+answer = "Every client retries in lockstep, so the database receives synchronised spikes of 10,000 requests just as it recovers and may fall over again (a retry storm). Add jitter so retries spread over the interval, cap attempts, and use a retry budget or circuit breaker."
+
+[[checks]]
+prompt = "Describe the three states of a circuit breaker and what moves it between them."
+answer = "Closed: calls pass and failures are counted; too many failures in the window opens it. Open: calls fail fast without reaching the dependency for a cool-off period. Half-open: after the cool-off a few trial calls go through; if they succeed it closes, if they fail it opens again."
+
+[[checks]]
+prompt = "Why is it dangerous to retry a POST /charge on timeout, and how do you make it safe?"
+answer = "The timeout does not tell you whether the charge happened; retrying may charge twice. Send an idempotency key with the request so the provider (or your service) recognises the retry and returns the first result instead of charging again."
+
+[[figures]]
+name = "circuit-breaker"
+after = "Circuit breakers"
+caption = "Failures open the breaker; after a rest one trial call decides whether it closes."

@@ -4,7 +4,7 @@ order = 2
 minutes = 10
 lede = "What can go wrong when transactions run at the same time, and which isolation level stops each problem: dirty reads, lost updates, write skew and phantoms."
 say = "Two doctors going off call at once is write skew; read committed allows it, so that check runs under serializable, or with SELECT … FOR UPDATE on the rows it depends on."
-related = ["postgres", "contention", "consistency-cap"]
+related = ["postgres", "contention", "consistency-cap", "multi-step-processes"]
 
 [[sections]]
 heading = "The anomalies"

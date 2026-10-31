@@ -4,7 +4,7 @@ order = 3
 minutes = 8
 lede = "Suggesting completions as someone types: a trie keyed by prefix with the top results stored at each node, built offline from what people search, served from memory in milliseconds."
 say = "Each trie node stores its top 10 completions, so a lookup is a walk down the prefix and a read; the trie is rebuilt hourly from search logs and served from memory, sharded by prefix."
-related = ["caching", "scaling-reads"]
+related = ["caching", "scaling-reads", "elasticsearch"]
 
 [[sections]]
 heading = "The trie"

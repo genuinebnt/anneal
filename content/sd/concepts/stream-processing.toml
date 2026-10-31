@@ -1,0 +1,69 @@
+title = "Stream processing"
+group = "advanced"
+order = 5
+minutes = 12
+lede = "Computing over events as they arrive: counts per minute, joins, alerts. The hard parts are time (events arrive late and out of order), state (kept across millions of keys and restored after failures) and exactly-once results."
+say = "Clicks go to Kafka; a Flink job counts per ad in one-minute tumbling windows on event time with a watermark two minutes behind, and writes to the OLAP store idempotently keyed by ad and window."
+related = ["kafka", "queues-and-streams", "probabilistic-structures", "clocks-and-ordering"]
+
+[[sections]]
+heading = "Event time and processing time"
+body = """
+- **Event time**: when it happened (the timestamp in the click).
+- **Processing time**: when the job sees it.
+
+A phone offline for ten minutes sends its clicks late; a consumer that restarts reprocesses an hour in a minute. Results computed on processing time change with every delay and replay. Results on **event time** are the same however the events arrive, so analytics and billing use event time.
+"""
+
+[[sections]]
+heading = "Windows"
+body = """
+| Window | Shape | Example |
+|---|---|---|
+| tumbling | fixed, non-overlapping | clicks per ad per minute |
+| sliding (hopping) | fixed length, starting every step | requests in the last 5 minutes, every 10 seconds |
+| session | ends after a gap of inactivity | a user's visit, closed after 30 idle minutes |
+"""
+
+[[sections]]
+heading = "Watermarks and late data"
+body = """
+When is the 10:00–10:01 window complete? Events can always arrive late. A **watermark** is the job's assertion "I believe all events up to time T have arrived", typically the largest event time seen minus an allowed lateness. When the watermark passes 10:01, the window fires.
+
+Events behind the watermark are **late**: drop them, send them to a side output, or update the result (allowed lateness: fire again with a correction). The trade-off is latency against completeness.
+"""
+
+[[sections]]
+heading = "State and exactly once"
+body = """
+Counting per ad means state per key, kept in the job (Flink keeps it in RocksDB on local disk). On failure the job must restore that state and resume from the matching input offset.
+
+- **Checkpoints**: Flink periodically snapshots all operator state consistently with the Kafka offsets (barriers flow through the graph). After a crash it restores the last checkpoint and rereads from those offsets.
+- That gives exactly-once **state**. For exactly-once **output**, the sink must be transactional (Kafka transactions committed with the checkpoint) or **idempotent** (upsert keyed by ad and window, so a replay overwrites with the same value).
+
+> [!NOTE]
+> End-to-end exactly once is really "effectively once": events may be processed twice, but the results reflect each exactly once.
+"""
+
+[[sections]]
+heading = "Architectures"
+body = """
+- **Lambda**: a stream layer for fast approximate results plus a batch layer that recomputes exact results from the raw log; two code paths to keep in sync.
+- **Kappa**: only a stream; to fix or change logic, replay the log (Kafka with long retention, or the data lake) through a new version of the job.
+- Tools: **Flink** (event time, large state, exactly once), **Kafka Streams** (a library inside your service), Spark Structured Streaming (micro-batches).
+
+> [!INTERVIEW]
+> Say event time, the window type, the watermark and what happens to late events, where state lives, and how the sink makes replays harmless.
+"""
+
+[[checks]]
+prompt = "Why do billing counts use event time rather than processing time?"
+answer = "Processing time depends on when events happen to reach the job: delays, offline devices and replays after a failure would move clicks into different windows and change the counts. Event time assigns each click to the window it happened in, so results are reproducible."
+
+[[checks]]
+prompt = "The watermark is set to the maximum event time minus 2 minutes. A click from 10:00:30 arrives when the watermark is 10:03. What happens to it, and what are the options?"
+answer = "It is late: the 10:00–10:01 window has already fired. The job can drop it, route it to a side output for later reconciliation, or, with allowed lateness configured, update the window's result and emit a correction."
+
+[[checks]]
+prompt = "A Flink job restores from a checkpoint and reprocesses five minutes of clicks. How do you keep the counts in the database from being doubled?"
+answer = "Make the sink idempotent: write each window's count as an upsert keyed by (ad, window start), so a replay overwrites with the same value; or use a transactional sink committed together with the checkpoint."

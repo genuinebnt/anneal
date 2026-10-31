@@ -1,0 +1,75 @@
+title = "Storage engines: B-tree and LSM tree"
+group = "distributed"
+order = 3
+minutes = 12
+lede = "The two ways databases lay data out on disk. A B-tree updates sorted pages in place and reads fast; a log-structured merge tree appends everything and sorts later, so it writes fast. Knowing which one sits under a database explains most of its behaviour."
+say = "This workload is ninety percent writes of new events, so an LSM engine such as Cassandra or RocksDB fits: writes are sequential appends, and time-window compaction drops old files whole."
+related = ["indexes", "cassandra", "postgres", "probabilistic-structures"]
+
+[[sections]]
+heading = "The write-ahead log"
+body = """
+Both engines first append each change to a **write-ahead log** (WAL) and flush it to disk before acknowledging. If the process crashes, replaying the log rebuilds what was in memory. The log is sequential, so it is cheap even on slow disks. Replication often ships this same log to followers.
+"""
+
+[[sections]]
+heading = "B-tree: sorted pages, changed in place"
+body = """
+Data lives in fixed-size **pages** (8 KB in Postgres, 16 KB in InnoDB) forming a balanced tree: a few levels of index pages point to leaf pages holding sorted keys. A lookup reads one page per level, 3 or 4 for billions of rows, most of them cached.
+
+- **Write**: find the leaf, change it in place (writing the page back), split it when full.
+- **Strengths**: fast point and range reads, predictable latency, each key in one place (easy locking and transactions).
+- **Costs**: random writes, and a whole page rewritten for a small change (**write amplification**); half-empty pages after splits.
+
+Postgres, MySQL InnoDB, SQL Server, Oracle and most relational databases use B-trees.
+"""
+
+[[sections]]
+heading = "LSM tree: append now, sort later"
+body = """
+1. Writes go to the WAL and an in-memory sorted table, the **memtable**.
+2. When the memtable is full it is written out as an immutable, sorted file: an **SSTable**.
+3. A read checks the memtable, then SSTables from newest to oldest. Each SSTable has a **Bloom filter** (is the key maybe here?) and a sparse index, so most files are skipped without a disk read.
+4. **Compaction** merges SSTables in the background, keeping the newest version of each key and dropping deleted ones (deletes are **tombstones** until then).
+
+- **Strengths**: writes are sequential, very high write throughput, good compression.
+- **Costs**: a read may touch several files (**read amplification**), compaction uses disk and CPU and can cause latency spikes, old versions use space until compacted (**space amplification**).
+
+RocksDB, LevelDB, Cassandra, ScyllaDB, HBase, and the storage under many newer databases (CockroachDB's Pebble, TiKV) use LSM trees.
+"""
+
+[[sections]]
+heading = "Choosing"
+body = """
+| | B-tree | LSM tree |
+|---|---|---|
+| write throughput | good | excellent |
+| point and range reads | excellent, predictable | good, needs filters and compaction |
+| updates in place | yes | no, new versions |
+| space | fragmentation | old versions until compaction |
+| tail latency | steady | compaction can cause spikes |
+| typical home | transactional, read-heavy | ingest-heavy: events, logs, metrics, messages |
+
+> [!NOTE]
+> Leveled compaction keeps one sorted run per level, so reads touch few files at the price of more rewriting; size-tiered merges similar-sized files, writing less but leaving more files to read.
+
+> [!INTERVIEW]
+> When you pick a database, say which engine is under it and why that matches the read/write mix.
+"""
+
+[[checks]]
+prompt = "Why does an LSM tree need Bloom filters, and what would reads look like without them?"
+answer = "A key may be in the memtable or any of many SSTables, so a read for a missing or old key would have to search every file on disk. A Bloom filter per SSTable says 'definitely not here' for most files from memory, so the read touches only the files that may hold the key."
+
+[[checks]]
+prompt = "In an LSM engine a key was deleted, yet an old value of it still sits in older SSTables. How does the delete win, and when is the space freed?"
+answer = "The delete writes a tombstone, which is newer than the old value; reads merge versions and the tombstone hides it. Compaction eventually merges the files containing both and drops the old value and, after a grace period, the tombstone itself, freeing the space."
+
+[[checks]]
+prompt = "Name the three amplifications and which engine suffers more from each."
+answer = "Write amplification (bytes written to disk per byte of data): B-trees rewrite whole pages, LSM trees rewrite during compaction; both pay, leveled LSM often most. Read amplification (files or pages read per lookup): worse in LSM trees. Space amplification (disk used per live byte): LSM trees keep old versions until compaction; B-trees lose space to half-empty pages."
+
+[[figures]]
+name = "lsm-tree"
+after = "LSM tree: append now, sort later"
+caption = "Writes fill the memtable, which flushes to sorted files; compaction merges them."

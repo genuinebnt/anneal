@@ -4,7 +4,7 @@ order = 5
 minutes = 9
 lede = "Two ways to hand work from one service to another without waiting: a queue hands each message to one worker and forgets it once done; a stream keeps an ordered log that many readers replay."
 say = "Sending the welcome email is a job, so it goes on a queue with retries and a dead-letter queue; the order events go on a stream because billing, search and analytics all read them."
-related = ["kafka", "scaling-writes"]
+related = ["kafka", "scaling-writes", "multi-step-processes", "stream-processing", "resilience"]
 
 [[sections]]
 heading = "Why go asynchronous"

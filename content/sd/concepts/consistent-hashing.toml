@@ -4,7 +4,7 @@ order = 6
 minutes = 7
 lede = "A way to spread keys over servers so that adding or removing one server moves only about 1/N of the keys, instead of almost all of them."
 say = "The cache nodes sit on a consistent-hash ring with virtual nodes, so adding a node moves only its share of keys and the rest stay cached."
-related = ["sharding", "caching"]
+related = ["sharding", "caching", "quorums", "load-balancing"]
 
 [[sections]]
 heading = "The problem with modulo"

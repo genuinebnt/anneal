@@ -1,0 +1,49 @@
+title = "etcd and ZooKeeper"
+group = "technology"
+order = 8
+minutes = 10
+lede = "Small, strongly consistent stores replicated by consensus, used to coordinate other systems: leader election, locks with leases, configuration, service discovery and membership. Kubernetes keeps all its state in etcd; older Kafka and HBase used ZooKeeper."
+say = "The scheduler instances elect a leader through an etcd lease: whoever holds the key runs the dispatch loop, the lease expires if it dies, and every write it makes carries the lease revision as a fencing token."
+related = ["consensus-raft", "leases-and-fencing", "replication"]
+
+[[sections]]
+heading = "What they give you"
+body = """
+Both run on three or five nodes with a consensus protocol (Raft in etcd, ZAB in ZooKeeper), so every write is agreed by a majority and reads can be **linearizable**. On top of a small key-value tree they offer:
+
+| Need | etcd | ZooKeeper |
+|---|---|---|
+| liveness tied to a client | **lease** with a TTL, kept alive by heartbeats; keys attached to it vanish when it expires | **ephemeral znode**, deleted when the client's session ends |
+| ordering | every change gets a global **revision** | **sequential znodes** get an increasing suffix; `zxid` orders changes |
+| be told of changes | **watch** a key or prefix from a revision (a stream) | **watches** (one-shot, re-registered) |
+| atomic compare-and-set | **transactions**: `if (rev == x) then put else …` | versioned `setData` |
+"""
+
+[[sections]]
+heading = "Recipes"
+body = """
+- **Leader election**: every candidate tries to create the key `/svc/leader` attached to its lease, only if absent; the winner is leader while it keeps the lease alive; the others watch the key and try again when it disappears. In ZooKeeper, each creates an ephemeral sequential node and the lowest number leads; each watches only the node just before it, so a failure wakes one waiter, not all (no herd).
+- **Distributed lock**: the same, with the lock key; release by deleting it, or let the lease expire if the holder dies.
+- **Service discovery**: each instance registers `/services/api/<id>` with its address on a lease; clients watch the prefix.
+- **Configuration**: put config under a key; services watch it and reload.
+"""
+
+[[sections]]
+heading = "Limits"
+body = """
+- They are for **small, important data**: kilobytes per key, a few GB in total (etcd's default request limit is 1.5 MiB). Never put user data or high-rate counters in them.
+- Every write goes through the leader and a majority: thousands of writes a second, not millions.
+- A lease or session only says "the holder stopped heartbeating". A holder paused by garbage collection may still think it owns the lock: guard the protected resource with a **fencing token** (the revision or zxid).
+- An odd number of nodes: 3 tolerate one failure, 5 tolerate two.
+
+> [!INTERVIEW]
+> When a design needs exactly one active worker or a lock that survives crashes, name etcd or ZooKeeper, a lease, and a fencing token.
+"""
+
+[[checks]]
+prompt = "In a ZooKeeper leader election, why does each candidate watch only its predecessor's node rather than the leader's?"
+answer = "If everyone watched the leader's node, its deletion would wake every candidate at once and they would all rush to check (a herd). Watching only the node just before yours means one deletion wakes one candidate, which checks whether it is now the lowest."
+
+[[checks]]
+prompt = "Why not use etcd to store per-user session data for a web app with ten million users?"
+answer = "etcd is built for small coordination data: every write goes through consensus on a leader, throughput is thousands of writes a second and the recommended total size is a few GB. Session data is large and write-heavy; use Redis or a database."

@@ -4,7 +4,7 @@ order = 5
 minutes = 8
 lede = "Keeping copies of the same data on several machines: to survive a machine dying, and to serve more reads than one machine can."
 say = "Postgres with one primary and two replicas: writes go to the primary, timelines read from replicas, and a user's own reads go to the primary for a few seconds after they post."
-related = ["sharding", "consistency-cap", "scaling-reads"]
+related = ["sharding", "consistency-cap", "scaling-reads", "quorums", "storage-engines"]
 
 [[sections]]
 heading = "Leader and followers"

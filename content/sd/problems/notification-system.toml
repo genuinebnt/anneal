@@ -1,0 +1,122 @@
+title = "Notification system"
+kind = "hld"
+order = 12
+minutes = 35
+prompt = "Design a service that other teams call to notify users by push, SMS and email: transactional messages (a password reset, an order shipped) and large campaigns to millions, respecting each user's preferences."
+uses = ["delivery-framework", "queues-and-streams", "resilience", "multi-step-processes", "redis"]
+companies = ["Meta", "Amazon", "Uber", "Airbnb"]
+hints = [
+  "A password reset and a marketing blast both arrive. How do you keep the blast from delaying the reset?",
+  "The SMS provider times out. Did the message go? What do you do?",
+  "Where do the user's preferences, quiet hours and devices live, and when are they checked?",
+]
+
+[[steps]]
+name = "Requirements"
+minutes = 5
+prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
+reference = """
+**Functional**: send to a user over push (APNs, FCM), SMS and email; templates with variables; user preferences (opt-outs per channel and category, quiet hours); scheduled sends and campaigns; delivery status.
+
+**Non-functional**: transactional messages delivered in seconds; at-least-once with **no visible duplicates**; campaigns must not starve transactional traffic; respect provider rate limits; auditable.
+
+**Estimate**: 10M push, 1M SMS, 5M email a day ≈ 200 a second average; campaigns spike to 50,000 a second.
+"""
+[[steps.points]]
+id = "req-priority"
+text = "Transactional vs bulk priority stated as a requirement"
+level = "mid"
+[[steps.points]]
+id = "req-prefs"
+text = "User preferences, opt-outs and quiet hours included"
+level = "mid"
+[[steps.points]]
+id = "req-dupes"
+text = "At-least-once delivery with deduplication, not exactly once"
+level = "senior"
+
+[[steps]]
+name = "Core entities"
+minutes = 3
+prompt = "Name the things the system stores."
+reference = "`Notification` (id, user, category, template, data, priority, idempotency key), `Template` (per channel and locale), `Preference` (user × category × channel), `Device` (push tokens), `Delivery` (notification × channel: status, provider id, attempts)."
+[[steps.points]]
+id = "ent-delivery"
+text = "Delivery attempts tracked per channel, separate from the notification"
+level = "senior"
+
+[[steps]]
+name = "API"
+minutes = 4
+prompt = "How do other services call it?"
+reference = """
+`POST /notifications { user_id | segment, category, template_id, data, channels?, send_at?, idempotency_key }` → `202 { id }`. `GET /notifications/{id}` for status. Providers call back webhooks with delivery receipts.
+"""
+[[steps.points]]
+id = "api-idem"
+text = "Idempotency key on the send request"
+level = "mid"
+[[steps.points]]
+id = "api-async"
+text = "Accepted asynchronously (202) with a status endpoint"
+level = "mid"
+
+[[steps]]
+name = "High-level design"
+minutes = 13
+prompt = "Draw the path from a request to a phone."
+reference = """
+1. **API** validates, dedups on the idempotency key, writes the notification, and publishes to a queue.
+2. **Router / fan-out**: loads preferences, quiet hours and devices (cached), renders the template per channel, drops opted-out channels, and enqueues one job per channel.
+3. **Separate queues per channel and priority** (`push.high`, `push.bulk`, `sms.high`…), so a campaign never sits in front of a password reset.
+4. **Channel workers** call providers (APNs, FCM, Twilio, SES) with per-provider rate limiting, retries with backoff and jitter, and circuit breakers; failover to a second SMS provider.
+5. **Delivery log** records each attempt; provider webhooks update status. Invalid push tokens are removed.
+6. **Campaigns**: a scheduler expands a segment in batches into the bulk queues at a controlled rate.
+"""
+[[steps.points]]
+id = "hld-queues"
+text = "Queues per channel and priority so bulk never delays transactional"
+level = "senior"
+[[steps.points]]
+id = "hld-prefs"
+text = "Preferences and templates applied before enqueueing per channel"
+level = "mid"
+[[steps.points]]
+id = "hld-workers"
+text = "Workers with provider rate limits, retries and circuit breakers"
+level = "senior"
+
+[[steps]]
+name = "Deep dives"
+minutes = 10
+prompt = "Duplicates, provider failure, and campaign scale."
+reference = """
+- **Duplicates**: a worker may send and crash before recording it. Pass a deterministic id to the provider where supported, record "sending" before the call and "sent" after, and dedup on (notification, channel) within a window. A rare duplicate push is tolerated; a duplicate SMS charge is not.
+- **Provider outage**: breaker opens, messages wait in the queue (or go to the backup provider); priority queues drain first when it recovers.
+- **Campaign to 20M users**: expand the segment in pages, throttle to provider limits and the users' local time; precompute renders; a kill switch to stop a bad campaign.
+- **Rate per user**: cap notifications per user per hour to avoid spamming; collapse similar ones ("5 new likes").
+"""
+[[steps.points]]
+id = "dd-dupes"
+text = "Concrete deduplication around the provider call"
+level = "senior"
+[[steps.points]]
+id = "dd-outage"
+text = "Provider outage handled with breakers, backlog and failover"
+level = "senior"
+[[steps.points]]
+id = "dd-campaign"
+text = "Campaign expansion throttled, local-time aware, with a kill switch"
+level = "staff"
+
+[[probes]]
+question = "A marketing campaign enqueues 20 million pushes at 9:00, and a user's password reset arrives at 9:01. How long does the reset wait in your design?"
+answer = "Seconds: the reset goes into the high-priority queue, which has its own workers (or is always served first), while the campaign drains through the bulk queue at a throttled rate."
+
+[[probes]]
+question = "The SMS provider's API times out after you sent the request. What does the worker do?"
+answer = "It cannot know whether the SMS was sent. Retry with the same idempotency or client reference if the provider supports it; otherwise check the delivery status or wait for the webhook before retrying, accepting a rare duplicate only for low-cost channels."
+
+[[probes]]
+question = "Where do you check quiet hours and opt-outs, and why there?"
+answer = "In the router before enqueueing per channel, using cached preferences, so no work is done for channels the user disabled; quiet hours delay the job (schedule it for the morning in the user's time zone) rather than drop it, for categories that allow delay."

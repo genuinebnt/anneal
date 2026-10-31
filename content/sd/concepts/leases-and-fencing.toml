@@ -1,0 +1,58 @@
+title = "Leases, locks and fencing tokens"
+group = "distributed"
+order = 6
+minutes = 10
+lede = "A distributed lock is really a lease: ownership that expires unless renewed. Because a holder can pause and wake up after its lease ran out, safety comes from a fencing token that the protected resource checks, not from the lock alone."
+say = "Workers take a lease on the job from etcd; the lease's revision is a fencing token sent with every write to storage, which rejects any token older than the last one it saw."
+related = ["coordination-services", "consensus-raft", "clocks-and-ordering", "contention"]
+
+[[sections]]
+heading = "Why locks become leases"
+body = """
+A lock held by a process that crashes would block everyone forever, so a distributed lock always carries a **time limit**: the holder owns it for, say, 10 seconds and must renew before then. That is a **lease**. If the holder dies, the lease expires and someone else can take it.
+"""
+
+[[sections]]
+heading = "The paused holder"
+body = """
+1. Client 1 takes the lease (10 s) and starts writing a file.
+2. Client 1 stops for 15 s: a garbage-collection pause, a VM migration, a slow disk.
+3. The lease expires; client 2 takes it and writes the file.
+4. Client 1 wakes up, still believing it holds the lease, and writes too. The file is now corrupt.
+
+Checking "do I still hold it?" before writing does not help: the pause can happen right after the check. **No lock service can prevent this on its own.**
+"""
+
+[[sections]]
+heading = "Fencing tokens"
+body = """
+Every time the lease is granted, the lock service hands out a **token that only increases** (33, then 34). The client sends the token with every write, and the **resource** (the storage or database) remembers the highest token it has accepted and **rejects anything lower**.
+
+In the story above, client 2 writes with token 34; client 1 wakes and writes with 33, and storage rejects it. Safety now rests on the resource's check, which is not affected by pauses.
+
+- etcd: the key's revision; ZooKeeper: the zxid or znode version; a database: a version column in a conditional update (`UPDATE … WHERE token < :new`).
+"""
+
+[[sections]]
+heading = "Choosing a lock"
+body = """
+| Purpose | Choice |
+|---|---|
+| efficiency (avoid doing work twice; an occasional double is harmless) | a Redis `SET key value NX PX 10000` lease is fine |
+| correctness (two holders would corrupt data or double-charge) | a consensus store (etcd, ZooKeeper) **plus** fencing tokens checked by the resource |
+| one row or seat | often no lock service at all: a conditional write or `SELECT … FOR UPDATE` in the database |
+
+> [!NOTE]
+> Redlock (taking a Redis lock on a majority of independent nodes) was debated publicly: it depends on bounded clock drift and pauses and produces no fencing token, so it does not make a correctness lock safe.
+
+> [!INTERVIEW]
+> Say whether the lock is for efficiency or correctness; for correctness, name the fencing token and who checks it.
+"""
+
+[[checks]]
+prompt = "Client 1 holds a lease, pauses for longer than the lease, then writes. Client 2 already took the lease and wrote. How do fencing tokens stop client 1's write from doing damage?"
+answer = "Each grant comes with an increasing token (client 1 got 33, client 2 got 34). The storage records the highest token it has accepted; after client 2's write with 34 it rejects client 1's late write carrying 33, so the stale holder cannot overwrite."
+
+[[checks]]
+prompt = "When is a simple Redis SET NX lock good enough?"
+answer = "When it is only for efficiency: it prevents most duplicate work, and the rare case of two holders (after a failover or a pause) causes extra work but no corruption, such as two workers regenerating the same cache entry."

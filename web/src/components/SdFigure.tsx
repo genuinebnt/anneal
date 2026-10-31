@@ -222,6 +222,150 @@ const FIGS: Record<string, { steps: number; ms: number; draw: (t: number) => Rea
             </>
         ),
     },
+    "lsm-tree": {
+        steps: 10,
+        ms: 800,
+        draw: (t) => {
+            const mem = t < 4 ? t + 1 : t === 4 ? 0 : t < 8 ? t - 4 : 3;
+            const l0 = t < 4 ? 1 : t < 9 ? 2 : 0;
+            const l1 = t < 9 ? 1 : 2;
+            const merging = t === 8;
+            return (
+                <>
+                    <Box x={14} y={84} w={84} label="Writes" tone="acc" />
+                    <Box x={150} y={22} w={150} h={32} label="WAL · append" r={6} />
+                    <Box x={150} y={96} w={150} label="memtable" tone={t === 4 ? "line" : "warn"} sub={`${mem} of 4 keys · sorted`} />
+                    <Arrow d="M98 96 L148 40" on={t % 2 === 0} />
+                    <Arrow d="M98 104 L148 112" on={t % 2 === 0} />
+                    <Arrow d="M300 114 L328 76" on={t === 4} dash />
+                    <text className="sf-lab" x={330} y={30}>L0 · flushed files</text>
+                    {Array.from({ length: l0 }, (_, i) => <Box key={i} x={330 + i * 92} y={40} w={84} h={32} label={`SSTable ${i + 1}`} tone={merging ? "vio" : t === 4 && i === 1 ? "grn" : "line"} r={6} />)}
+                    <text className="sf-lab" x={330} y={122}>L1 · compacted</text>
+                    {Array.from({ length: l1 }, (_, i) => <Box key={i} x={330 + i * 112} y={132} w={104} h={32} label={i === 0 ? "a…m" : "n…z"} tone={t === 9 && i === 1 ? "grn" : "line"} r={6} />)}
+                    {merging && <Arrow d="M420 74 L420 128" on />}
+                    <text className="sf-lab" x={14} y={208}>{t === 4 ? "memtable full: written out as an immutable sorted file" : merging ? "compaction merges files, keeps the newest version of each key" : t === 9 ? "fewer files to check on each read" : "a write is a log append plus an in-memory insert"}</text>
+                </>
+            );
+        },
+    },
+    saga: {
+        steps: 9,
+        ms: 850,
+        draw: (t) => {
+            const steps = ["Reserve stock", "Charge card", "Book courier"];
+            const comp = ["Release stock", "Refund"];
+            // the courier step fails at t = 3; the charge is refunded at 4 and the stock released at 5
+            const undone = (i: number) => (i === 1 && t >= 4) || (i === 0 && t >= 5);
+            const state = (i: number) => (i === 2 ? (t >= 3 ? "bad" : t === 2 ? "acc" : "line") : undone(i) ? "vio" : t > i ? "grn" : t === i ? "acc" : "line");
+            return (
+                <>
+                    <Box x={14} y={84} w={100} label="Orchestrator" tone="warn" />
+                    {steps.map((s, i) => <Box key={s} x={170 + i * 156} y={40} w={130} label={s} tone={state(i)} sub={i === 2 && t >= 3 ? "failed" : t > i && i < 2 ? "done" : ""} />)}
+                    {comp.map((c, i) => <Box key={c} x={170 + i * 156} y={140} w={130} h={32} label={c} tone={(i === 1 && t >= 4) || (i === 0 && t >= 5) ? "vio" : "line"} r={6} />)}
+                    <Arrow d="M300 58 H324" on={t === 1} />
+                    <Arrow d="M456 58 H480" on={t === 2} />
+                    {t >= 4 && <Arrow d="M391 76 L391 136" on={t === 4} dash />}
+                    {t >= 5 && <Arrow d="M235 76 L235 136" on={t === 5} dash />}
+                    <text className="sf-lab" x={14} y={208}>{t < 3 ? "each step commits on its own" : t === 3 ? "a step fails: undo what already happened" : t < 6 ? "compensations run in reverse order" : "the order ends cancelled, nothing half done"}</text>
+                </>
+            );
+        },
+    },
+    "circuit-breaker": {
+        steps: 12,
+        ms: 750,
+        draw: (t) => {
+            const st = t < 4 ? "closed" : t < 8 ? "open" : t < 10 ? "half-open" : "closed";
+            const fails = t < 4 ? t + 1 : 0;
+            const passes = st === "closed" || (st === "half-open" && t === 9);
+            return (
+                <>
+                    <Box x={14} y={84} w={90} label="Caller" tone="acc" />
+                    <Box x={210} y={84} w={120} label="Breaker" tone={st === "open" ? "bad" : st === "half-open" ? "warn" : "grn"} sub={st} />
+                    <Box x={450} y={84} w={120} label="Payments" tone={t < 4 ? "bad" : t >= 9 ? "grn" : "line"} sub={t < 4 ? "timing out" : t >= 9 ? "recovered" : "resting"} />
+                    <Arrow d="M104 102 H208" on />
+                    {passes && <Arrow d="M330 102 H448" on={t % 2 === 0} />}
+                    {st === "open" && <text className="sf-lab" x={210} y={150}>fails fast · fallback</text>}
+                    {["closed", "open", "half-open"].map((s, i) => <Box key={s} x={170 + i * 110} y={10} w={100} h={26} label={s} tone={s === st ? (s === "open" ? "bad" : s === "half-open" ? "warn" : "grn") : "line"} r={13} />)}
+                    <text className="sf-lab" x={14} y={208}>{st === "closed" && t < 4 ? `calls pass · failures ${fails} of 4` : st === "open" ? "too many failures: stop calling for a while" : st === "half-open" ? "a trial call goes through" : "it worked: closed again"}</text>
+                </>
+            );
+        },
+    },
+    quorum: {
+        steps: 8,
+        ms: 900,
+        draw: (t) => {
+            const write = t < 4;
+            const v = (i: number) => (write ? (i < 2 && t >= 1 ? "v2" : "v1") : i === 2 && t < 7 ? "v1" : "v2");
+            return (
+                <>
+                    <Box x={14} y={84} w={84} label="Client" tone="acc" />
+                    <Box x={170} y={84} w={110} label="Coordinator" tone="warn" sub={write ? (t >= 2 ? "2 acks: done" : "write v2") : t >= 5 ? "newest: v2" : "read"} />
+                    {[0, 1, 2].map((i) => (
+                        <g key={i}>
+                            <Box x={430} y={18 + i * 66} w={130} label={`replica ${i + 1}`} tone={write ? (i < 2 && t >= 1 ? "grn" : "line") : i > 0 ? (i === 2 && t >= 5 && t < 7 ? "vio" : "grn") : "line"} sub={v(i)} />
+                            {(write || i > 0) && <Arrow d={`M280 102 L428 ${36 + i * 66}`} on={write ? i < 2 && t % 2 === 0 : t % 2 === 1} dash={write && i === 2} />}
+                        </g>
+                    ))}
+                    <Arrow d="M98 102 H168" on />
+                    {!write && t >= 6 && <Arrow d="M495 106 L495 148" on dash />}
+                    <text className="sf-lab" x={14} y={208}>{write ? "N = 3, W = 2: acknowledged once two replicas have it" : t < 6 ? "R = 2: ask two, the newest version wins" : "read repair sends v2 to the stale replica"}</text>
+                </>
+            );
+        },
+    },
+    "bloom-filter": {
+        steps: 8,
+        ms: 1000,
+        draw: (t) => {
+            const ops: { word: string; bits: number[]; add: boolean }[] = [
+                { word: "add a", bits: [2, 7, 11], add: true },
+                { word: "add b", bits: [4, 7, 13], add: true },
+                { word: "check c", bits: [2, 9, 13], add: false },
+                { word: "check d", bits: [4, 11, 13], add: false },
+            ];
+            const step = Math.min(3, Math.floor(t / 2));
+            const op = ops[step]!;
+            const set = new Set(ops.slice(0, Math.min(2, step + 1)).filter((o) => o.add).flatMap((o) => o.bits));
+            const verdict = !op.add ? (op.bits.every((b) => set.has(b)) ? "all set: probably seen (here a false positive)" : "a bit is 0: definitely never added") : `set bits ${op.bits.join(", ")}`;
+            return (
+                <>
+                    <Box x={14} y={30} w={110} label={op.word} tone={op.add ? "acc" : "vio"} />
+                    {Array.from({ length: 16 }, (_, i) => (
+                        <g key={i}>
+                            <rect className={`sf-cell${set.has(i) ? " full" : ""}${op.bits.includes(i) ? " new" : ""}`} x={40 + i * 36} y={110} width={30} height={30} rx={5} />
+                            <text className="sf-off" x={55 + i * 36} y={160}>{i}</text>
+                        </g>
+                    ))}
+                    {op.bits.map((b) => <Arrow key={b} d={`M124 52 L${55 + b * 36} 106`} on />)}
+                    <text className="sf-lab" x={14} y={200}>{verdict}</text>
+                </>
+            );
+        },
+    },
+    "inverted-index": {
+        steps: 6,
+        ms: 1000,
+        draw: (t) => {
+            const docs = ["1 · rust ownership", "4 · rust async tokio", "7 · async python"];
+            const terms: [string, string][] = [["async", "4, 7"], ["ownership", "1"], ["python", "7"], ["rust", "1, 4"], ["tokio", "4"]];
+            const q = t >= 2;
+            return (
+                <>
+                    <text className="sf-lab" x={14} y={20}>documents</text>
+                    {docs.map((d, i) => <Box key={d} x={14} y={30 + i * 50} w={170} h={34} label={d} tone={q && t >= 4 && i === 1 ? "grn" : "line"} r={6} />)}
+                    <text className="sf-lab" x={250} y={20}>term → postings</text>
+                    {terms.map(([w, p], i) => <Box key={w} x={250} y={30 + i * 36} w={180} h={28} label={`${w}  →  ${p}`} tone={q && (w === "rust" || w === "async") ? "warn" : "line"} r={6} />)}
+                    {t < 2 && <Arrow d="M184 96 L248 50" on />}
+                    <Box x={480} y={60} w={140} label={q ? "rust async" : "analyse"} tone="acc" sub={q ? "query" : "lowercase, split"} />
+                    {q && <Arrow d="M480 80 L432 48" on={t % 2 === 0} />}
+                    {q && <Arrow d="M480 86 L432 152" on={t % 2 === 1} />}
+                    <text className="sf-lab" x={14} y={208}>{t < 2 ? "indexing splits text into terms and records where each appears" : t < 4 ? "a query looks up each term's list" : "intersect {1, 4} and {4, 7}: document 4"}</text>
+                </>
+            );
+        },
+    },
 };
 
 /** An animated drawing for a system design page, by name (the names are listed in `crates/content/src/sd.rs`). */

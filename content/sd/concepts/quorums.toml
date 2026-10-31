@@ -1,0 +1,55 @@
+title = "Quorums, repair and gossip"
+group = "distributed"
+order = 4
+minutes = 11
+lede = "How leaderless, Dynamo-style stores stay available and still converge: write to W of N replicas, read from R, make the sets overlap, and repair the differences in the background. Gossip spreads who is alive."
+say = "With N = 3, W = 2 and R = 2 every read overlaps the latest acknowledged write; during a partition the store uses a sloppy quorum with hinted handoff, so writes stay available and are repaired later."
+related = ["replication", "cassandra", "consistency-cap", "consistent-hashing"]
+
+[[sections]]
+heading = "N, W and R"
+body = """
+Each key is stored on **N** replicas. A write is acknowledged after **W** of them confirm; a read asks **R** of them and takes the newest version.
+
+- **R + W > N**: the replicas read and the replicas written overlap in at least one node, so a read sees the latest acknowledged write (if versions can be compared).
+- Typical: N = 3, W = 2, R = 2. Write-heavy: W = 1, R = 3. Read-heavy: W = 3, R = 1.
+- The cluster survives N − W failures for writes and N − R for reads.
+
+> [!WARNING]
+> R + W > N is not linearizability. Concurrent writes, a write that failed on some replicas but succeeded on others, and last-write-wins with skewed clocks can all still return surprising values.
+"""
+
+[[sections]]
+heading = "Sloppy quorums and hinted handoff"
+body = """
+If some of a key's N home replicas are unreachable, a **sloppy quorum** lets the write land on other healthy nodes, which keep a **hint**: "this belongs to node C". When C comes back the hints are handed off to it. Writes stay available during a partition, at the cost that a read from the home replicas may not see them until handoff finishes.
+"""
+
+[[sections]]
+heading = "Repairing differences"
+body = """
+- **Read repair**: a read that sees replicas disagree writes the newest version back to the stale ones. Cheap, but only fixes keys that are read.
+- **Anti-entropy**: replicas periodically compare their data using **Merkle trees** (a hash tree over key ranges). Equal root hashes mean equal data; otherwise walk down only the subtrees that differ and stream those keys. Comparing two replicas of millions of keys costs a few hashes when they mostly agree.
+- **Conflicts**: last write wins by timestamp (simple, loses concurrent updates), version vectors that keep siblings for the application to merge (the original Dynamo, Riak), or CRDTs that merge automatically.
+"""
+
+[[sections]]
+heading = "Gossip and failure detection"
+body = """
+Without a leader, nodes learn about each other by **gossip**: every second each node exchanges its view (members, heartbeat counters, status) with a few random peers. News reaches all n nodes in about log n rounds, and no single node is a bottleneck.
+
+A node is suspected dead when its heartbeat stops increasing. Fixed timeouts misfire under load, so systems such as Cassandra use a **phi accrual detector**: a suspicion level that grows with how unusual the silence is given past heartbeat intervals.
+"""
+
+[[checks]]
+prompt = "N = 5. Which W and R would you pick for a read-heavy store that must see the latest write, and how many failures can reads and writes each survive?"
+answer = "For example W = 4 and R = 2 (4 + 2 > 5): reads are cheap and overlap every write. Writes survive one failure (5 − 4) and reads survive three (5 − 2). W = 3, R = 3 balances both at two failures."
+
+[[checks]]
+prompt = "Why do replicas compare Merkle trees instead of sending each other all their keys?"
+answer = "A Merkle tree summarises key ranges by hashes; if the roots match the replicas agree and nothing more is sent, and when they differ only the subtrees with different hashes are explored. Repair then transfers just the differing ranges instead of every key."
+
+[[figures]]
+name = "quorum"
+after = "N, W and R"
+caption = "Two of three replicas acknowledge the write; a read of two always meets one of them."

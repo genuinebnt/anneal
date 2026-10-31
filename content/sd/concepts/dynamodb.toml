@@ -1,0 +1,73 @@
+title = "DynamoDB"
+group = "technology"
+order = 5
+minutes = 12
+lede = "AWS's managed key-value and document store: items are found by a partition key and an optional sort key, latency stays in single-digit milliseconds at any size, and you pay for (or provision) reads and writes rather than servers."
+say = "Bookings go in DynamoDB with the show as partition key and the seat as sort key; a conditional write `attribute_not_exists(holder)` makes the seat hold atomic, and a GSI on user id serves 'my bookings'."
+related = ["data-modeling", "sharding", "cassandra", "contention"]
+
+[[sections]]
+heading = "Keys and items"
+body = """
+- A table holds **items** (up to 400 KB each), found by a **primary key**: a **partition key** alone, or a partition key plus a **sort key**.
+- All items with one partition key form an **item collection**, stored together and sorted by sort key. `Query` reads a range of it (`begins_with`, `between`, newest first); `GetItem` reads one item; `Scan` reads the whole table and is almost never the answer.
+- The partition key is hashed to choose a **physical partition**. Each partition serves about **3,000 read units and 1,000 write units a second**, so a key that takes most of the traffic is a hot partition however big the table is.
+
+| Access pattern | Key design |
+|---|---|
+| a user's orders, newest first | PK `USER#42`, SK `ORDER#2026-10-31#981` |
+| one order by id | PK `ORDER#981` |
+| a chat's messages by time | PK `CHAT#7`, SK `<timestamp>` |
+"""
+
+[[sections]]
+heading = "Secondary indexes"
+body = """
+| | Global secondary index (GSI) | Local secondary index (LSI) |
+|---|---|---|
+| key | any partition and sort key | same partition key, another sort key |
+| created | any time | only when the table is created |
+| consistency | eventually consistent only | strong reads possible |
+| capacity | its own | shares the table's; limits each item collection to 10 GB |
+
+A GSI is a second copy of the data, kept up to date asynchronously. Use it for the second and third access patterns; project only the attributes the query needs.
+"""
+
+[[sections]]
+heading = "Capacity and cost"
+body = """
+- **On-demand**: pay per request, scales instantly to traffic that doubles quickly; good for new or spiky workloads.
+- **Provisioned**: set read and write capacity units (with auto scaling); cheaper for steady traffic.
+- A **read unit** is one strongly consistent read a second of up to 4 KB (or two eventually consistent ones); a **write unit** is one write a second of up to 1 KB. Large items cost more on every access, so keep big blobs in S3 and store the key.
+"""
+
+[[sections]]
+heading = "Correctness tools"
+body = """
+- **Conditional writes**: `PutItem … ConditionExpression attribute_not_exists(pk)` or `version = :expected`: optimistic locking and "create only if absent", atomic on one item.
+- **Transactions**: `TransactWriteItems` changes up to 100 items, across tables, all or nothing (at twice the cost of plain writes).
+- **Atomic counters**: `UpdateItem … SET n = n + :one`.
+- **Streams**: an ordered log of item changes per key, kept 24 hours; trigger Lambdas, feed search indexes or caches (change data capture).
+- **TTL**: an attribute with an expiry time; expired items are deleted in the background (not at the exact second).
+"""
+
+[[sections]]
+heading = "Single-table design"
+body = """
+Because there are no joins, related entities are often stored in **one table** with generic key names (`PK`, `SK`) and prefixed values, so one `Query` returns a customer and their recent orders together. It is fast and cheap, but every access pattern must be known in advance, and the schema is harder to read. In an interview, say the access patterns first, then the keys that serve them.
+
+> [!TIP]
+> Global tables replicate a table across regions, active-active, resolving concurrent writes by last writer wins. Fine for profiles and carts; not for a balance that must never go negative.
+"""
+
+[[checks]]
+prompt = "A table of votes uses the candidate id as partition key. During a live final, two candidates get almost all the votes and writes are throttled. Why, and what do you do?"
+answer = "Each partition key maps to one partition with about 1,000 write units a second, so two keys cannot absorb the load however large the table. Shard the key (`CANDIDATE#7#<0..N-1>`, chosen at random per write) and sum the shards on read, or buffer votes in a stream and write aggregates."
+
+[[checks]]
+prompt = "How do you stop two users from booking the same seat with DynamoDB, without a separate lock service?"
+answer = "Make the booking a conditional write on the seat's item: `UpdateItem` setting the holder with `ConditionExpression attribute_not_exists(holder)` (or holder = null). DynamoDB applies it atomically on that item, so only one request succeeds; the other gets ConditionalCheckFailed."
+
+[[checks]]
+prompt = "Why can a read from a GSI miss an item you wrote a moment ago?"
+answer = "A GSI is updated asynchronously from the table and only supports eventually consistent reads, so for a short time after a write the index may not have it yet. Read from the base table with a strongly consistent read when you must see your own write."

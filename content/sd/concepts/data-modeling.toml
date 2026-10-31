@@ -4,7 +4,7 @@ order = 1
 minutes = 8
 lede = "Choosing what to store, how to key it, and which database fits the way it is read and written."
 say = "Links go in Postgres keyed by short code; clicks are append-only and huge, so they go to a column store and get rolled up by day."
-related = ["indexes", "sharding", "postgres"]
+related = ["indexes", "sharding", "postgres", "cassandra", "dynamodb", "unique-ids"]
 
 [[sections]]
 heading = "Start from the queries"

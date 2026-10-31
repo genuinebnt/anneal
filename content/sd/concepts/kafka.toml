@@ -4,7 +4,7 @@ order = 1
 minutes = 12
 lede = "A distributed, replicated log. Producers append records to the end of a partition; consumers read forward from an offset they keep, so many readers can replay the same history at their own pace."
 say = "I'd put the events on Kafka, partitioned by order id so each order's events stay in order, and let each downstream service read them as its own consumer group."
-related = ["queues-and-streams", "replication", "scaling-writes"]
+related = ["queues-and-streams", "replication", "scaling-writes", "stream-processing", "multi-step-processes"]
 
 [[sections]]
 heading = "The model"
