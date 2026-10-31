@@ -36,6 +36,7 @@ import { GraphPage } from "./pages/GraphPage";
 import { LogPage } from "./pages/LogPage";
 import { CompanyPage } from "./pages/CompanyPage";
 import { SdHome } from "./pages/sd/SdHome";
+import { ReadPage } from "./pages/ReadPage";
 import { SdConceptPage, SdLearn } from "./pages/sd/SdLearn";
 import { SdProblems } from "./pages/sd/SdProblems";
 import { SdPractice } from "./pages/sd/SdPractice";
@@ -204,6 +205,7 @@ const routes = [
     },
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/sd/review", component: SdReview }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/dsa/read", component: ReadPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

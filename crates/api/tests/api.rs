@@ -650,6 +650,28 @@ async fn a_system_design_drill_marked_makes_review_cards_that_grading_schedules(
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn reading_has_its_own_schedule(db: PgPool) {
+    let app = test_app_with(db.clone(), &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    // nothing solved yet: the solved scope is empty, everything is offered in the all scope
+    let (_, q) = call(&app, Method::GET, "/api/dsa/read", None).await;
+    assert_eq!(q["in_scope"], 0);
+    let (_, q) = call(&app, Method::GET, "/api/dsa/read?scope=all&pattern=D1", None).await;
+    assert!(!q["new"].as_array().unwrap().is_empty());
+    let id = q["new"][0].as_str().unwrap().to_owned();
+    let (status, g) = call(&app, Method::POST, &format!("/api/dsa/read/{id}"), Some(json!({ "grade": "good" }))).await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert!(g["days"].as_u64().unwrap() >= 1);
+    // it is read now, and not due; no coding review was made
+    let (_, q) = call(&app, Method::GET, "/api/dsa/read?scope=all&pattern=D1", None).await;
+    assert_eq!(q["read"], 1);
+    assert!(q["due"].as_array().unwrap().is_empty());
+    let reviews: i64 = sqlx::query_scalar("SELECT count(*) FROM reviews").fetch_one(&db).await.unwrap();
+    assert_eq!(reviews, 0);
+    let (status, _) = call(&app, Method::POST, "/api/dsa/read/nope", Some(json!({ "grade": "good" }))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn ai_help_says_plainly_when_it_is_off(db: PgPool) {
     let app = test_app(db);
     let (status, s) = call(&app, Method::GET, "/api/ai", None).await;

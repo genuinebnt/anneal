@@ -1034,6 +1034,8 @@ export const api = {
   sdMark: (id: number, marks: Record<string, SdMark>) => request<{ score: number | null; cards: number }>("PUT", `/sd/attempts/${id}/marks`, { marks }),
   sdCheck: (concept: string, index: number, mark: SdMark) => request<{ ok: boolean }>("POST", "/sd/checks", { concept, index, mark }),
   sdReview: () => request<SdReviewView>("GET", "/sd/review"),
+  readQueue: (scope: "solved" | "all", pattern?: string) => request<ReadQueue>("GET", `/dsa/read?scope=${scope}${pattern ? `&pattern=${pattern}` : ""}`),
+  readGrade: (id: string, grade: Grade) => request<{ due: string; days: number }>("POST", `/dsa/read/${id}`, { grade }),
   aiStatus: () => request<{ enabled: boolean; provider?: string; model?: string }>("GET", "/ai"),
   aiAsk: (kind: "sd-concept" | "sd-problem" | "dsa-problem", id: string, turns: { role: "user" | "model"; text: string }[]) => request<{ answer: string; model: string }>("POST", "/ai/ask", { kind, id, turns }),
   sdAiReview: (attempt: number) => request<SdAiReview>("POST", `/sd/attempts/${attempt}/ai-review`),
@@ -1100,6 +1102,9 @@ export interface SystemSample { t: number; cpu: number | null; load1: number | n
 export interface SystemContainer { name: string; image: string; state: string; status: string; cpu: string | null; mem: string | null; mem_pct: string | null; net: string | null; block: string | null }
 export interface SystemHit { t: number; method: string; path: string; status: number; ms: number }
 export interface SystemMinute { t: number; n: number; errors: number; ms_sum: number; ms_max: number }
+/** Reading to remember: what to read now (`GET /api/dsa/read`). */
+export interface ReadQueue { today: string; due: { id: string; due: string; reps: number; lapses: number; last_grade: string | null }[]; new: string[]; read: number; in_scope: number; week: number }
+
 /** System design prep (docs/SYSTEM_DESIGN.md). */
 export type SdMark = "got" | "part" | "miss";
 export interface SdConceptRow { id: string; title: string; group: string; order: number; minutes: number; lede: string; checks: number; checked: number }

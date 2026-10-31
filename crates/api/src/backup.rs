@@ -40,6 +40,7 @@ const TABLES: &[&str] = &[
     "streak_marks",
     "sd_attempts",
     "sd_cards",
+    "dsa_read",
 ];
 
 const FORMAT: &str = "anneal-backup";

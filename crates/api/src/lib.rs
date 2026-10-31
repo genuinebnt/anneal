@@ -28,6 +28,7 @@ pub mod statement;
 mod store;
 pub mod ai;
 pub mod meaning;
+pub mod reading;
 pub mod sd;
 pub mod system;
 mod views;
@@ -134,6 +135,8 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/sd/review/{card}", post(sd::grade))
         .route("/sd/attempts/{id}/ai-review", post(ai::review_attempt))
         .route("/ai", get(ai::status))
+        .route("/dsa/read", get(reading::queue))
+        .route("/dsa/read/{id}", post(reading::grade))
         .route("/ai/ask", post(ai::ask))
         .route("/dsa/mock/config", put(mock::put_config))
         .route("/dsa/mock/rounds", post(mock::post_round))

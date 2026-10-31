@@ -28,7 +28,7 @@ const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses" | "/
 /** How long the Mock page's data counts as fresh, so coming back to it within a minute shows it at once. */
 export const MOCK_FRESH = 60_000;
 
-type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses" | "/sd" | "/sd/learn" | "/sd/problems" | "/sd/review"; label: string; match: (path: string) => boolean; badge?: "due" };
+type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/dsa/read" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses" | "/sd" | "/sd/learn" | "/sd/problems" | "/sd/review"; label: string; match: (path: string) => boolean; badge?: "due" };
 
 /** Pages about everything, not one area: Progress covers DSA, Rust and Courses; it has its own place beside the areas. */
 const GLOBAL: Tab[] = [
@@ -44,6 +44,7 @@ const TABS: Record<AreaId, Tab[]> = {
         { to: "/dsa", label: "Problems", match: (p) => p === "/dsa" || p.startsWith("/dsa/patterns") || p.startsWith("/dsa/practice") || p.startsWith("/d/") },
         { to: "/dsa/plan", label: "Plan", match: (p) => p.startsWith("/dsa/plan") },
         { to: "/dsa/review", label: "Review", match: (p) => p.startsWith("/dsa/review"), badge: "due" },
+        { to: "/dsa/read", label: "Read", match: (p) => p.startsWith("/dsa/read") },
         { to: "/dsa/calendar", label: "Calendar", match: (p) => p.startsWith("/dsa/calendar") },
         { to: "/dsa/company", label: "Company", match: (p) => p.startsWith("/dsa/company") },
         { to: "/dsa/mock", label: "Mock interview", match: (p) => p.startsWith("/dsa/mock") },

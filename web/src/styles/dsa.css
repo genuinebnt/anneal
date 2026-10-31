@@ -330,3 +330,32 @@ a.d-step:hover{border-color:var(--dim)}
 .dn-open:hover{background:color-mix(in oklab,var(--acc) 10%,var(--inset))}
 .dn-vid{color:var(--mut);font:500 13px var(--sans);text-decoration:none}.dn-vid:hover{color:var(--fg)}
 .s-3 .s-next .s-links{margin-top:12px}
+/* Read: a card per problem, the statement first, the idea after you try to recall it (pages/ReadPage.tsx) */
+.rd-acc{font-style:normal;color:var(--acc)}
+.rd-card{display:grid;gap:12px}
+.rd-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.rd-k{font:600 10.5px var(--mono);letter-spacing:.14em;color:var(--acc)}
+.rd-diff{font:600 11px var(--mono)}
+.rd-card h2{margin:0;font-size:26px;letter-spacing:-.015em}
+.rd-stmt{max-height:none}
+.rd-stmt.folded{max-height:180px;overflow:hidden;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+.rd-recall{display:grid;gap:10px;padding:14px 16px;border-radius:12px;background:color-mix(in oklab,var(--acc) 7%,var(--inset))}
+.rd-recall p{margin:0;color:var(--mut);font-size:14px}
+.rd-go{justify-self:start;display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border:0;border-radius:11px;background:color-mix(in oklab,var(--acc) 14%,var(--panel));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--acc) 45%,transparent);color:color-mix(in oklab,var(--acc) 78%,var(--fg));font:600 14px var(--sans);cursor:pointer}
+.rd-go kbd{font:500 11px var(--mono);color:var(--dim)}
+.rd-idea{display:grid;gap:14px;animation:ly-rise .4s var(--ease,ease) backwards}
+.rd-ins{display:grid;gap:4px;padding:14px 16px;border-radius:12px;background:color-mix(in oklab,var(--grn) 8%,var(--inset))}
+.rd-ins span,.rd-sec>span{font:600 10.5px var(--mono);letter-spacing:.14em;color:var(--dim)}
+.rd-ins p{margin:0;font-size:15.5px;line-height:1.5;color:var(--fg)}
+.rd-tech{margin:0;color:var(--mut);font-size:13.5px}.rd-tech b{color:var(--fg)}
+.rd-sec{display:grid;gap:8px}
+.rd-marks{display:grid;grid-template-columns:repeat(3,1fr) auto;gap:8px;align-items:stretch}
+.rd-marks button{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border:0;border-radius:12px;background:color-mix(in oklab,var(--c) 14%,var(--inset));color:var(--fg);font:600 14px var(--sans);cursor:pointer}
+.rd-marks button:hover:not(:disabled){background:color-mix(in oklab,var(--c) 24%,var(--inset))}
+.rd-marks kbd{font:500 11px var(--mono);color:var(--dim)}
+.rd-open{display:inline-flex;align-items:center;padding:0 14px;border-radius:12px;background:var(--inset);color:var(--mut);font:500 13px var(--sans);text-decoration:none}
+.rd-dim{margin:0;color:var(--dim);font-size:13px}
+.rd-scope{display:grid;grid-template-columns:1fr 1fr;width:100%}
+.rd-pat{display:grid;gap:6px;margin-top:12px;font:500 11px var(--mono);color:var(--dim)}
+.rd-pat select{padding:8px 10px;border:0;border-radius:9px;background:var(--inset);color:var(--fg);font:400 13px var(--sans)}
+@media (max-width:640px){.rd-marks{grid-template-columns:repeat(3,1fr)}.rd-open{grid-column:1/-1;justify-content:center;padding:10px}.rd-card h2{font-size:22px}}
