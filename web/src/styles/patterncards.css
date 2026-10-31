@@ -42,3 +42,14 @@
 @keyframes pt-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 html[data-motion="reduce"] .pt-due::before{animation:none}
 @media (prefers-reduced-motion:reduce){.pt-due::before{animation:none}}
+
+/* No colour on the card itself: a neutral surface and border, and only the hover effect (a lift and a soft shadow). The drawing keeps moving. */
+.s-root .s-trk.pt{--c-line:var(--line2);--c-glow:transparent;--c-bg:var(--panel);border-color:var(--line2);background:var(--panel);transition:translate .4s var(--ease),border-color .25s,box-shadow .4s}
+.s-root .s-trk.pt::before{display:none}
+.s-root .s-trk.pt:hover,.s-root .s-trk.pt:focus-within{translate:0 -4px;border-color:var(--line);box-shadow:var(--card-hi),0 24px 40px -26px var(--shadow)}
+.pt-num,.pt-tag{color:var(--mut)}
+.pt-fig .lp{transition:transform .55s var(--ease)}
+.s-root .s-trk.pt:hover .pt-fig .lp,.s-root .s-trk.pt:focus-within .pt-fig .lp{transform:scale(1.05)}
+html[data-motion="reduce"] .s-root .s-trk.pt:hover,html[data-motion="reduce"] .s-root .s-trk.pt:focus-within{translate:none}
+html[data-motion="reduce"] .pt-fig .lp{transition:none;transform:none!important}
+@media (prefers-reduced-motion:reduce){.s-root .s-trk.pt:hover,.s-root .s-trk.pt:focus-within{translate:none}.pt-fig .lp{transition:none;transform:none!important}}

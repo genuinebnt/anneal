@@ -22,3 +22,18 @@ test("every pattern card on the DSA home has its drawing, its progress and a nex
     await cards.first().locator(".pt-hd").click();
     await expect(page).toHaveURL(/\/dsa\/patterns\//);
 });
+
+test("a pattern card has no colour of its own, its drawing keeps moving, and hover lifts it", async ({ page }) => {
+    await page.goto("/dsa");
+    const card = page.locator(".s-trk.pt", { hasText: "Sliding Window" });
+    await expect(card).toBeVisible();
+    const running = () => card.locator(".pt-fig .lp [class*=lp-]").first().evaluate((e) => getComputedStyle(e).animationPlayState);
+    expect(await running()).toBe("running");
+    const lift = () => card.evaluate((e) => { const t = getComputedStyle(e).translate; return t === "none" ? 0 : parseFloat(t.split(" ")[1] ?? "0"); });
+    await expect.poll(lift).toBe(0);
+    const rest = { bg: await card.evaluate((e) => getComputedStyle(e).backgroundColor) };
+    await card.hover();
+    await expect.poll(lift).toBeLessThan(-2);
+    expect(await running()).toBe("running");
+    expect(await card.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(rest.bg);
+});

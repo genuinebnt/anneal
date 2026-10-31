@@ -76,7 +76,7 @@ technique = "Math & Geometry:number-theory"
 says = "\"add one\", \"add two numbers\", \"multiply strings\", digits too big for an int"
 kind = "Digit arithmetic"
 move = "Work from the last digit with a carry, exactly as on paper, storing digits in a list."
-glyph = "carry"
+glyph = "digitcarry"
 technique = "Math & Geometry:digits"
 
 [[which]]

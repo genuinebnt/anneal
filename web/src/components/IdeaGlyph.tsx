@@ -116,7 +116,7 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     markersm: { n: 10, w: [[0, 10]], dots: [0, 3, 6], ptr: [0, 3, 6] },
     fastpow: { n: 10, w: [], bars: [1, 2, 4, 6, 8, 10, 9, 7, 5, 3].map((x) => x), ptr: [0, 9] },
     gcdm: { n: 10, w: [[0, 10]], w2: [[0, 6]], dots: [6], ptr: [6] },
-    carry: { n: 10, w: [], dots: [1, 4, 7], ptr: [8, 9], w2: [[8, 10]] },
+    digitcarry: { n: 10, w: [], dots: [1, 4, 7], ptr: [8, 9], w2: [[8, 10]] },
     numcycle: { n: 10, w: [[3, 10]], dots: [1, 2, 3, 6, 9], ptr: [3, 9] },
     baseconv: { n: 10, w: [], bars: [2, 5, 3, 8, 1, 6, 4, 7, 2, 5], ptr: [9] },
     points: { n: 10, w: [], dots: [1, 2, 6, 7], w2: [[1, 3], [6, 8]] },
