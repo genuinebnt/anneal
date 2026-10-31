@@ -1,0 +1,157 @@
+pattern = "Greedy"
+
+tagline = "Take the best-looking choice right now and never look back, which works exactly when that choice can be proved safe."
+
+what = [
+    "A greedy algorithm builds an answer by making the **locally best choice at each step and never undoing it**. It is fast, because there is no search and nothing to remember beyond a few numbers. The catch is that it is only *correct* when the best-looking choice is also the one an optimal answer can contain.",
+    "So the real work is **the argument**, not the code: \"why can taking this never hurt?\" Run two below. The jump game keeps just the farthest reach, and Kadane's algorithm keeps just a running sum that restarts when it goes negative.",
+]
+
+demos = ["greedy-jump", "greedy-kadane"]
+
+applies = [
+    "**One pass with a running state**: a balance, a count, the farthest reach, the best run so far.",
+    "\"Choose as many as possible under a **budget**\" after sorting by cost, size or end time.",
+    "**Can you get to the end?**: jump game, gas station, can all the cars finish.",
+    "**Build the largest or smallest** number or string by deciding one position at a time.",
+    "**Splitting** a sequence into the most or the fewest parts so that each part satisfies a rule.",
+]
+
+yes = [
+    "A **local choice never has to be undone**: taking the best now cannot make the final answer worse (you can argue it).",
+    "Sorting by one key, or keeping one running number, **dominates** every alternative.",
+    "The problem has a **simple exchange argument**: swapping any other choice for the greedy one never makes things worse.",
+]
+
+no = [
+    "A choice **changes what later choices are possible** in a way you cannot dominate: coin change with coins 1, 3, 4 and amount 6 (greedy takes 4+1+1, the best is 3+3). Use DP.",
+    "You must **list** every solution: that is backtracking.",
+    "You cannot say **why** the greedy choice is safe. If you cannot argue it, test it against a brute force.",
+]
+
+apply = [
+    "**Say what the greedy choice is.** Take the item with the earliest end, the largest value per unit, the farthest reach.",
+    "**Sort if it needs an order** (by end time, by cost, by a custom comparison), so the best choice is always at the front.",
+    "**Keep only what the future needs.** A single number is often enough: the reach, the running sum, the lowest price so far.",
+    "**Argue it is safe.** Either an exchange argument (any optimal answer can be changed to use this choice) or an invariant (the running state is always the best possible).",
+    "**State the invariant.** \"After i items, the state is the best possible for those i.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"one pass keeping a **running total** or balance\": best time to buy and sell, valid brackets"
+kind = "Running-state scan"
+move = "Carry one or two numbers and update them per item. Reset or adjust when the state goes bad."
+glyph = "scanbal"
+technique = "Greedy:scan-balance"
+
+[[which]]
+says = "\"the best **contiguous subarray**\", sum or product"
+kind = "Kadane"
+move = "Extend the current run, or restart at this item if the run so far is dragging it down."
+glyph = "kadaneg"
+technique = "Greedy:kadane"
+
+[[which]]
+says = "\"**can you reach** the end\", each place says how far you can jump"
+kind = "Farthest reach"
+move = "Track the farthest index reachable; if you stand beyond it, you are stranded."
+glyph = "reachg"
+technique = "Greedy:reach"
+
+[[which]]
+says = "\"a **circular** route where each stop adds some and costs some\": gas station"
+kind = "Surplus"
+move = "Keep a running surplus; when it goes negative, the start cannot be any stop so far, so try the next."
+glyph = "surplusg"
+technique = "Greedy:surplus"
+
+[[which]]
+says = "\"choose the most items under a **budget**\", \"the best few of a list\""
+kind = "Sort then pick"
+move = "Sort by the cost or value that matters, then take from the front until the budget runs out."
+glyph = "sortpick"
+technique = "Greedy:sort-pick"
+
+[[which]]
+says = "\"split a string into the **most parts** so each letter is in one part\""
+kind = "Last seen"
+move = "Record the last position of each letter; a part ends when you reach the farthest last position seen."
+glyph = "lastseen"
+technique = "Greedy:last-seen"
+
+[[which]]
+says = "\"split cards into groups of **consecutive** values of size k\""
+kind = "Smallest first"
+move = "Always start a group at the smallest remaining value; it can only start there."
+glyph = "smallest"
+technique = "Greedy:group-smallest"
+
+[[which]]
+says = "\"make the **largest number**\" by swapping or removing digits"
+kind = "Digit construction"
+move = "Decide the leading digit first: the best available one, with a last-position map to know where it is."
+glyph = "digits"
+technique = "Greedy:swap-greedy"
+
+[[which]]
+says = "\"brackets with **wildcards** that can be open, close or nothing\""
+kind = "Range of balance"
+move = "Track the lowest and highest possible open count; it must always include zero at the end."
+glyph = "rangebal"
+technique = "Greedy:paren-range"
+
+[[cost]]
+name = "Try every choice"
+time = "exponential"
+space = "O(n)"
+why = "Without a proof that the greedy choice is safe, every step must try its alternatives, and the number of combinations multiplies at each step. The greedy argument is exactly what lets you skip all of them."
+
+[[cost]]
+name = "One-pass scan"
+time = "O(n)"
+space = "O(1)"
+why = "Each item is looked at once and updates a couple of variables. Nothing is stored about earlier items, because the running state already summarises them."
+
+[[cost]]
+name = "Jump game and Kadane"
+time = "O(n)"
+space = "O(1)"
+why = "Both keep a single number (the farthest reach, the sum of the current run) and decide per item. A brute force would check every start and end, about n²/2 pairs."
+
+[[cost]]
+name = "Sort, then pick"
+time = "O(n log n)"
+space = "O(1) to O(n)"
+why = "The sort dominates, since the pick afterwards is one linear pass. If the keys are small integers, counting sort makes the sort O(n). The extra memory is the sort's own."
+
+[[cost]]
+name = "Groups of consecutive values"
+time = "O(n log n)"
+space = "O(n)"
+why = "A heap or sorted counts gives the smallest remaining value in log n, and each card is removed once, so n × log n. A count map makes each lookup constant."
+
+[[cost]]
+name = "Last seen partitions"
+time = "O(n)"
+space = "O(1)"
+why = "One pass records where each of at most 26 letters last appears, and a second pass closes a part whenever the index reaches the farthest last position seen."
+
+[[with]]
+pattern = "Intervals"
+how = "Greedy is how you pick intervals: sort by end time and keep each interval that starts after the last kept one ends. Ending earliest leaves the most room for the rest."
+example = "non-overlapping-intervals"
+
+[[with]]
+pattern = "Heap / Priority Queue"
+how = "When the best choice changes as new options appear, a heap hands you the best available one in log n: task scheduling is greedy with a heap."
+example = "task-scheduler"
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "When the local best is not always safe, a table keeps every option. Coin change with unusual coins is the classic case where greedy fails and DP is needed."
+example = "coin-change"
+
+[[with]]
+pattern = "Two Pointers"
+how = "After sorting, a greedy match often walks two pointers: give the smallest cookie that satisfies the least greedy child, and move on."
+example = "assign-cookies"

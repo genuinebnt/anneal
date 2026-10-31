@@ -401,3 +401,19 @@ test("2-D DP: the LCS table fills with its neighbours lit, and the grid path is 
     await expect(page.locator(".id-res")).toContainText("7");
     await expect(page.locator(".id-tb-c.id-tb-hit")).toHaveCount(5);
 });
+
+test("Greedy: the jump game moves a reach marker and Kadane restarts its run when it drags", async ({ page }) => {
+    await page.goto("/dsa/patterns/D15/idea");
+    await expect(page.locator(".id-ptr span").filter({ hasText: "reach" })).toBeVisible();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("reachable");
+    const box = page.getByLabel("Jump lengths, separated by commas");
+    await box.fill("3,2,1,0,4");
+    await box.blur();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("stranded");
+    await page.getByRole("radio", { name: /best run/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("6");
+    await expect(page.locator(".id-cell.id-hit")).toHaveCount(4);
+});
