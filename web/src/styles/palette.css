@@ -1,0 +1,43 @@
+/* ⌘K, two panes (the approved mockup): results grouped with counts and a kind tile on each row, and the selected one with what it can
+   do. Surfaces and spacing separate the parts; there are no rules between them. Classes are `pk-`; the shell keeps `hd-pal`. */
+.hd-pal.pk{width:min(940px,calc(100vw - 32px));border-radius:18px;border-color:var(--line2);background:var(--panel);box-shadow:0 40px 90px -30px var(--shadow,oklch(0 0 0 / .5))}
+.pk-in{display:flex;align-items:center;gap:12px;padding:14px 18px 10px}
+.pk-in>svg{width:17px;height:17px;color:var(--dim);flex:none}
+.hd-pal.pk .pk-in input{flex:1;min-width:0;height:34px;padding:0;border:0;background:none;color:var(--fg);font:500 16px var(--sans);outline:0}
+.pk-in>kbd{font:500 11px var(--mono);color:var(--dim);padding:2px 7px;border-radius:6px;background:var(--inset)}
+.pk-lens{flex:none;max-width:44%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:5px 10px;border:0;border-radius:999px;background:color-mix(in oklab,var(--acc) 14%,transparent);color:var(--fg);font:500 12px var(--mono);cursor:pointer}
+.pk-lens:hover{background:color-mix(in oklab,var(--acc) 22%,transparent)}
+.pk-read{margin:0 12px 6px;padding:8px 12px;border-radius:10px;font-size:12.5px;line-height:1.45;color:var(--mut);background:color-mix(in oklab,var(--acc) 7%,transparent)}
+.pk-read b{color:var(--acc);font-weight:600}
+.pk-read kbd{font:500 10.5px var(--mono);padding:0 5px;border-radius:4px;background:var(--inset);color:var(--dim)}
+.hd-pal.pk .pk-body{grid-template-columns:minmax(0,1fr) 320px;height:min(56vh,520px);min-height:0}
+.hd-pal.pk .pk-body>ul{max-height:none;height:100%;padding:4px 8px 10px;overflow:auto}
+.hd-pal.pk .hd-grp{display:flex;justify-content:space-between;padding:12px 10px 5px;font:600 10px var(--mono);letter-spacing:.14em;color:var(--dim)}
+.hd-pal.pk .hd-grp em{font-style:normal;font-weight:500;letter-spacing:0}
+.hd-pal.pk .pk-opt{display:grid;grid-template-columns:30px minmax(0,1fr) auto auto;gap:11px;align-items:center;padding:7px 10px;border-radius:11px;color:var(--fg)}
+.pk-ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font:600 11.5px var(--mono);color:var(--c);background:color-mix(in oklab,var(--c) 12%,var(--bg))}
+.pk-txt{min-width:0;display:grid;gap:1px}
+.hd-pal.pk .pk-txt .hd-lab{font:500 13.5px var(--sans);color:var(--fg)}
+.pk-txt small{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk-kind{font:500 10.5px var(--mono);font-style:normal;color:var(--dim)}
+.hd-pal.pk .pk-opt.hd-sel{background:color-mix(in oklab,var(--acc) 11%,transparent)}
+.hd-pal.pk .pk-opt.hd-sel .pk-ico{background:color-mix(in oklab,var(--c) 24%,var(--bg))}
+.hd-pal.pk .hd-enter{border:0;background:var(--inset);color:var(--acc);padding:1px 6px}
+.hd-pal.pk .pk-prev{border-left:0;margin:4px 10px 10px 0;border-radius:14px;padding:16px;gap:10px;overflow:auto;background:color-mix(in oklab,var(--bg) 55%,var(--panel))}
+.pk-pk{align-self:start;font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--c);padding:3px 8px;border-radius:6px;background:color-mix(in oklab,var(--c) 13%,transparent)}
+.pk-sub{margin:0;font-size:12.5px;color:var(--mut)}
+.pk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.pk-chips span{font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:3px 7px;border-radius:6px;background:var(--inset);color:var(--mut)}
+.pk-idea{display:grid;gap:4px;padding:10px 12px;border-radius:10px;background:var(--inset);font-size:12.5px;line-height:1.45;color:var(--fg)}
+.pk-idea span{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.hd-pal.pk .pk-prev dl>div{border-top:0;padding:5px 0}
+.pk-acts{display:grid;gap:4px;margin-top:2px}
+.pk-acts button{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 11px;border:0;border-radius:9px;background:var(--inset);color:var(--fg);font:500 12.5px var(--sans);text-align:left;cursor:pointer;transition:background .15s}
+.pk-acts button:hover,.pk-acts button:focus-visible{background:color-mix(in oklab,var(--acc) 14%,var(--inset));outline:0}
+.pk-acts kbd{font:500 10.5px var(--mono);color:var(--dim)}
+.hd-pal.pk .pk-prev .go{margin-top:0}
+.hd-pal.pk .pk-foot{border-top:0;padding:8px 18px 12px;gap:16px;flex-wrap:wrap}
+.pk-foot span{display:inline-flex;gap:4px;align-items:center}
+.pk-foot kbd{font:500 10.5px var(--mono);padding:0 5px;border-radius:4px;background:var(--inset);color:var(--mut)}
+@media (max-width:760px){.hd-pal.pk .pk-body{grid-template-columns:1fr}.hd-pal.pk .pk-prev{display:none}.pk-foot span:nth-child(n+4){display:none}}
+.hd-pal.pk .pk-txt small{margin-left:0;text-align:left;font:400 11.5px var(--sans);color:var(--dim)}

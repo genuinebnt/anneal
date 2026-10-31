@@ -19,6 +19,8 @@ import { DIFF, MINUTES, inDays, leetcode, niceDate, statusOf, videoUrl } from ".
 const DIFFS = ["easy", "medium", "hard"];
 const LIST_NAME = { blind75: "Blind 75", neetcode150: "NeetCode 150", neetcode250: "NeetCode 250", all: "NeetCode All", practice: "Practice" };
 const SAME_IDEA_SHOWN = 7;
+/** The most Looks like it lists: past this the matches are too loose to help. */
+const ALIKE_MORE = 12;
 /** The four log tiles: short labels, since each one also says when the problem comes back. */
 const TILES: { grade: Grade; glyph: string; label: string; cls: string }[] = [
     { grade: "good", glyph: "✓", label: "On my own", cls: "ok" },
@@ -175,6 +177,13 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const [hintsShown, setHintsShown] = useState(0);
     useEffect(() => setHintsShown(0), [p?.id]);
     const [more, setMore] = useState(false);
+    // the left panel's tabs: Same idea (the technique's problems) or Looks like it (other techniques that read alike, from the local model)
+    const [leftTab, setLeftTabState] = useState<"same" | "alike">(() => getPref<"same" | "alike">("pp.left", "same"));
+    const setLeftTab = (t: "same" | "alike") => {
+        setLeftTabState(t);
+        setPref("pp.left", t);
+    };
+    const meaning = useQuery({ queryKey: ["meaning", { like: p?.id }], queryFn: () => api.meaning({ like: p!.id, k: 40 }), enabled: !!p, staleTime: Infinity, retry: false });
     // 1 to 4 log, U takes the last log back. The handler is set below, once the page knows what it can log.
     const keys = useRef<(e: KeyboardEvent) => void>(() => {});
     useEffect(() => {
@@ -227,6 +236,11 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     const teacher = p.practice_of ? o.problems.find((x) => x.id === p.practice_of) : undefined;
     const mustLearn = technique ? o.problems.find((x) => x.id === technique.must_learn) : undefined;
     const sameIdea = technique ? o.problems.filter((x) => x.technique === technique.id).sort((a, b) => a.order - b.order) : [];
+    const alike = (meaning.data?.hits ?? [])
+        .map((h) => ({ x: o.problems.find((q) => q.id === h.id), score: h.score }))
+        .filter((v): v is { x: DsaProblem; score: number } => !!v.x && v.x.technique !== p.technique)
+        .map((v) => ({ ...v, shared: v.x.tags.filter((t) => p.tags.includes(t)).length }));
+    const tabNow = sameIdea.length > 1 && (leftTab === "same" || alike.length === 0) ? "same" : "alike";
     const inPattern = o.problems.filter((x) => x.pattern === p.pattern).sort((a, b) => a.order - b.order);
     const at = inPattern.findIndex((x) => x.id === p.id);
     const prev = at > 0 ? inPattern[at - 1] : undefined;
@@ -408,20 +422,32 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     );
     const left = (
         <>
-                    {sameIdea.length > 1 && (
+                    {(sameIdea.length > 1 || alike.length > 0) && (
                         <div className="pp-card">
-                            <h3><span>SAME IDEA</span><span>{sameIdea.length} problems</span></h3>
-                            <div className="pp-rel">
-                                {(more ? sameIdea : sameIdea.slice(0, SAME_IDEA_SHOWN)).map((x) => (
-                                    <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} className={x.id === p.id ? "now" : ""}>
-                                        <i className={dotOf(x)} />
-                                        <span>{x.title}</span>
-                                        <small>{x.id === p.id ? "THIS" : x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>
-                                    </Link>
-                                ))}
+                            <div className="pp-ltabs" role="tablist" aria-label="Related problems">
+                                {sameIdea.length > 1 && <button role="tab" aria-selected={tabNow === "same"} className={tabNow === "same" ? "on" : ""} onClick={() => setLeftTab("same")}>Same idea<em>{sameIdea.length}</em></button>}
+                                {alike.length > 0 && <button role="tab" aria-selected={tabNow === "alike"} className={tabNow === "alike" ? "on" : ""} onClick={() => setLeftTab("alike")}>Looks like it<em>{Math.min(alike.length, ALIKE_MORE)}</em></button>}
                             </div>
-                            {sameIdea.length > SAME_IDEA_SHOWN && (
-                                <button className="pp-more" onClick={() => setMore(!more)}>{more ? "show fewer" : `+${sameIdea.length - SAME_IDEA_SHOWN} more`}</button>
+                            {/* both tabs are the same list: a row per problem, the rest behind "more" */}
+                            <div className="pp-rel">
+                                {tabNow === "same"
+                                    ? (more ? sameIdea : sameIdea.slice(0, SAME_IDEA_SHOWN)).map((x) => (
+                                          <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} className={x.id === p.id ? "now" : ""}>
+                                              <i className={dotOf(x)} />
+                                              <span>{x.title}</span>
+                                              <small>{x.id === p.id ? "THIS" : x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>
+                                          </Link>
+                                      ))
+                                    : alike.slice(0, more ? ALIKE_MORE : SAME_IDEA_SHOWN).map(({ x, score, shared }) => (
+                                          <Link key={x.id} to="/d/$slug" params={{ slug: x.slug }} title={`Similarity ${score.toFixed(2)} (1 is the same meaning)${shared ? `, ${shared} shared topic${shared === 1 ? "" : "s"}` : ""}`}>
+                                              <i className={dotOf(x)} />
+                                              <span>{x.title}</span>
+                                              <small>{score.toFixed(2)} · {x.role === "must_learn" ? "MUST" : DIFF[x.difficulty][0][0]}</small>
+                                          </Link>
+                                      ))}
+                            </div>
+                            {(tabNow === "same" ? sameIdea.length : Math.min(alike.length, ALIKE_MORE)) > SAME_IDEA_SHOWN && (
+                                <button className="pp-more" onClick={() => setMore(!more)}>{more ? "show fewer" : `+${(tabNow === "same" ? sameIdea.length : Math.min(alike.length, ALIKE_MORE)) - SAME_IDEA_SHOWN} more`}</button>
                             )}
                         </div>
                     )}

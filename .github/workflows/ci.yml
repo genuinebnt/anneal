@@ -47,8 +47,17 @@ jobs:
         with:
           components: clippy, rustfmt, rust-analyzer, rust-src
       - uses: Swatinem/rust-cache@v2
+      # The meaning model (bge-small-en-v1.5, pinned and checksummed), kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/anneal/models
+          key: meaning-model-5c38ec7c
+      - name: Meaning model
+        run: tools/fetch-model.sh
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+        env:
+          ANNEAL_MODEL: /home/runner/.cache/anneal/models/bge-small-en-v1.5
       - name: Validate content
         run: cargo run -q --locked -p anneal-cli -- validate
       # The published course modules meet the owner's stage standards (docs/COURSE_STANDARDS.md).
@@ -112,8 +121,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked -p anneal-api
+      # The meaning model (bge-small-en-v1.5, pinned and checksummed), kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/anneal/models
+          key: meaning-model-5c38ec7c
+      - name: Meaning model
+        run: tools/fetch-model.sh
       - name: Start the API
         env:
+          ANNEAL_MODEL: /home/runner/.cache/anneal/models/bge-small-en-v1.5
           ANNEAL_DATABASE_URL: postgres://anneal:anneal@localhost:5435/anneal
           ANNEAL_SANDBOX: host
           ANNEAL_ADDR: 127.0.0.1:8791

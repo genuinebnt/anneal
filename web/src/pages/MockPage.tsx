@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type Grade, type MockConfig, type MockData } from "../api";
-import { Header } from "../components/Header";
+import { Header, MOCK_FRESH } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
 import { Segmented, Stepper } from "../components/ui";
 import { HowFound, Page3, Panel, Tile } from "../components/layout";
@@ -58,7 +58,7 @@ function storeRound(r: Round | null) {
 
 /** A timed round of random LeetCode problems, set up the way you choose (docs/DSA.md, decision 25). */
 export function MockPage() {
-    const q = useQuery({ queryKey: ["dsa-mock"], queryFn: api.mock });
+    const q = useQuery({ queryKey: ["dsa-mock"], queryFn: api.mock, staleTime: MOCK_FRESH });
     return (
         <>
             <Header area="dsa" />

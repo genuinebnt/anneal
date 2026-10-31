@@ -520,7 +520,7 @@ function NextUp({ o, streak }: { o: DsaOverview; streak: number }) {
       </div>
       <h3>{next.title}</h3>
       {technique && !ideaShown ? (
-        <p><button className="d-reveal" onClick={() => setReveal(true)}>Show the idea</button></p>
+        <p><button className="d-reveal" onClick={() => setReveal(true)}><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" /><circle cx="8" cy="8" r="2" /></svg>Show the idea</button></p>
       ) : (
         <p>{technique ? `The idea: ${technique.name.toLowerCase()}.` : BLURB[patternName(next.pattern)]}</p>
       )}

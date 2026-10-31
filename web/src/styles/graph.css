@@ -39,3 +39,5 @@
 .gr-nb i{width:7px;height:7px;border-radius:50%}.gr-nb em{font:500 10.5px var(--mono);font-style:normal;color:var(--dim)}
 .gr-acts{display:flex;gap:6px;flex-wrap:wrap}
 @media (max-width:900px){.gr-wrap{height:520px;min-height:0}.gr-legend{display:none}.gr-keys{display:none}}
+.gr-li.is-key{cursor:default}
+.gr-lnote{margin:2px 4px 8px;font-size:10.5px;line-height:1.4;color:var(--dim);white-space:normal}

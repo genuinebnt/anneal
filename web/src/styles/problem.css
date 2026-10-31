@@ -155,3 +155,10 @@
 .ly-lp .pp-pn{grid-template-columns:minmax(0,1fr);gap:8px}
 .ly-lp .pp-pn a:last-child{text-align:left}
 .ly-page.pp.reading .ly-cp{max-width:860px;margin:0 auto;width:100%}
+/* the left panel's related problems: Same idea and Looks like it as tabs over one list */
+.pp-ltabs{display:flex;gap:4px;margin-bottom:10px}
+.pp-ltabs button{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;padding:6px 10px;border:0;border-radius:9px;background:none;color:var(--mut);font:500 12.5px var(--sans);cursor:pointer;transition:background .15s,color .15s}
+.pp-ltabs button:hover{color:var(--fg)}
+.pp-ltabs button.on{background:color-mix(in oklab,var(--acc) 13%,transparent);color:var(--fg)}
+.pp-ltabs em{font:500 10.5px var(--mono);font-style:normal;color:var(--dim)}
+.pp-ltabs button:only-child{flex:none;cursor:default}

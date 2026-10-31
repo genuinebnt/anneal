@@ -155,3 +155,13 @@
 .lg-3 .lg-btns{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
 .lg-3 .lg-b{justify-content:center;text-align:center;height:38px}
 @media (max-width:900px){.lg-3 .lg-row{grid-template-columns:minmax(0,1fr)}.lg-3 .lg-btns{grid-template-columns:repeat(2,minmax(0,1fr))}.lg-3 .lg-b{height:46px}}
+/* Plan: the week as columns (the approved mockup) */
+.p-wkc{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;align-items:end;height:74px;margin:6px 0 4px;padding-bottom:16px}
+.p-wkc span{position:relative;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px}
+.p-wkc i{display:block;border-radius:4px;min-height:0}
+.p-wkc .nw{background:var(--acc)}
+.p-wkc .rv{background:color-mix(in oklab,var(--vio) 75%,transparent)}
+.p-wkc .rest i{opacity:.25}
+.p-wkc .top i{filter:saturate(1.3) brightness(1.08)}
+.p-wkc em{position:absolute;bottom:-16px;left:0;right:0;text-align:center;font:500 10px var(--mono);font-style:normal;color:var(--dim)}
+.p-res .p-save .nu-go{flex:1}

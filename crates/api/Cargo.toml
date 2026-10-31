@@ -1,6 +1,7 @@
 [package]
 name = "anneal-api"
 description = "HTTP API for anneal: content, runs, hints and progress"
+default-run = "anneal-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,12 +23,16 @@ tempfile.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "chrono", "json"] }
 thiserror.workspace = true
 tokio.workspace = true
-tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "compression-br"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fsrs = "6.6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 ammonia = "4"
+candle-core = "=0.11.0"
+candle-nn = "=0.11.0"
+candle-transformers = "=0.11.0"
+tokenizers = { version = "0.22.2", default-features = false, features = ["fancy-regex"] }
 
 [dev-dependencies]
 futures-util = "0.3"

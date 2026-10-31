@@ -15,6 +15,8 @@ export interface GNode {
     pat: number;
     r: number;
     state?: State;
+    /** For a pattern or technique: the share of its problems in scope that are solved, 0 to 1. */
+    done?: number;
     slug?: string;
     code?: string;
     x: number;
@@ -63,6 +65,10 @@ export function buildGraph(o: DsaOverview, scope: DsaProblem[], companies = 10):
         proNode.set(p.id, id);
         edges.push([tecNode.get(p.technique) ?? patNode.get(pi)!, id, "uses"]);
     }
+    // how much of each technique and pattern is solved
+    const share = (ps: DsaProblem[]) => (ps.length ? ps.filter((p) => p.state.solved).length / ps.length : 0);
+    for (const [tid, id] of tecNode) nodes[id]!.done = share(scope.filter((p) => p.technique === tid));
+    for (const [pi, id] of patNode) nodes[id]!.done = share(scope.filter((p) => (patIdx.get(p.pattern) ?? 0) === pi));
     // a problem links to the problem of another technique it shares the most tags with, when that is at least three
     for (const p of scope) {
         let best: DsaProblem | undefined;

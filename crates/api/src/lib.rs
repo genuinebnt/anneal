@@ -26,6 +26,7 @@ pub mod solutions;
 pub mod streaks;
 pub mod statement;
 mod store;
+pub mod meaning;
 pub mod system;
 mod views;
 
@@ -57,6 +58,8 @@ pub struct AppState {
     pub lsp: lsp::LspConfig,
     pub auth: auth::AuthConfig,
     pub courses: Arc<Vec<anneal_content::course::Course>>,
+    /// Meaning vectors for the DSA problems, and the model that embeds a search ([`meaning`]).
+    pub meaning: Arc<meaning::Meaning>,
 }
 
 /// The API under `/api`. If `web_dist` is a built web app, it's served for every other path.
@@ -116,6 +119,7 @@ pub fn app(state: AppState, web_dist: Option<&Path>) -> Router {
         .route("/dsa/patterns/{pattern}", get(dsa::pattern))
         .route("/dsa/review", get(review::queue))
         .route("/dsa/mock", get(mock::get))
+        .route("/dsa/meaning", get(meaning::get))
         .route("/dsa/mock/config", put(mock::put_config))
         .route("/dsa/mock/rounds", post(mock::post_round))
         .route("/dsa/handwritten/{pattern}", get(practice::for_pattern))

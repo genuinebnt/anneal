@@ -1027,6 +1027,9 @@ export const api = {
   unmarkDay: (id: number) => request<Streaks>("DELETE", `/streaks/marks/${id}`),
   stats: () => request<ProgressStats>("GET", "/stats"),
   system: () => request<SystemView>("GET", "/system"),
+  /** Problems that mean the most nearly the same as a problem (`like`) or a piece of text (`q`): exact, over every problem. */
+  meaning: (ask: { like?: string; q?: string; k?: number }) =>
+    request<MeaningAnswer>("GET", `/dsa/meaning?${new URLSearchParams(Object.entries(ask).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])).toString()}`),
   reviews: () => request<ReviewsView>("GET", "/reviews"),
   resolve: (id: string) => request<ProblemDetail>("POST", `/problems/${id}/resolve`),
   dsa: () => request<DsaOverview>("GET", "/dsa"),
@@ -1086,6 +1089,18 @@ export interface SystemSample { t: number; cpu: number | null; load1: number | n
 export interface SystemContainer { name: string; image: string; state: string; status: string; cpu: string | null; mem: string | null; mem_pct: string | null; net: string | null; block: string | null }
 export interface SystemHit { t: number; method: string; path: string; status: number; ms: number }
 export interface SystemMinute { t: number; n: number; errors: number; ms_sum: number; ms_max: number }
+/** Where meaning search stands, and its hits (`GET /api/dsa/meaning`). */
+export interface MeaningAnswer {
+  phase: "off" | "building" | "ready" | "failed";
+  model: string;
+  dims: number;
+  compared: number;
+  can_search: boolean;
+  built_ms: number | null;
+  error: string | null;
+  hits: { id: string; score: number }[];
+}
+
 export interface SystemView {
   host: { hostname: string | null; os: string | null; kernel: string | null; cpus: number | null; uptime: number | null };
   now: {

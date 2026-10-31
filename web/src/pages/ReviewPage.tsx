@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type Grade, type ReviewItem, type ReviewQueue } from "../api";
 import { Header } from "../components/Header";
-import { HowFound, Page3, Tile } from "../components/layout";
+import { HowFound, ListCard, Page3, Tile } from "../components/layout";
 import { Skeleton } from "../components/Skeleton";
 import { Companies, Md, PyCode } from "../components/dsaBits";
 import { RecallCurve } from "../components/RecallCurve";
@@ -48,7 +48,7 @@ export function ReviewPage() {
 
 type SortKey = "forgotten" | "overdue" | "pattern";
 const SORTS: [SortKey, string][] = [
-  ["forgotten", "Most forgotten"],
+  ["forgotten", "Forgotten"],
   ["overdue", "Overdue"],
   ["pattern", "Pattern"],
 ];
@@ -221,6 +221,9 @@ function Session({ queue }: { queue: ReviewQueue }) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [tab, setTab] = useState(0);
+  const [filter, setFilter] = useState("");
+  // the centre's tabs: the review itself, the reviews that go with it, and its tries
+  const [view, setView] = useState<"recall" | "with" | "tries">("recall");
   const sessionStart = useRef(Date.now());
 
   const sorted = useMemo(() => {
@@ -232,12 +235,38 @@ function Session({ queue }: { queue: ReviewQueue }) {
     };
     return [...pending].sort(by[sort]);
   }, [pending, sort, all]);
+  const shownIds = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    return f ? sorted.filter((id) => { const it = all.get(id)!; return `${it.problem.title} ${it.pattern} ${it.problem.number}`.toLowerCase().includes(f); }) : sorted;
+  }, [sorted, filter, all]);
   const setSort = (s: SortKey) => {
     setSortState(s);
     setPref("review.sort", s);
   };
 
   const item = current ? all.get(current) : undefined;
+  useEffect(() => {
+    setView("recall");
+  }, [current]);
+  // Review with this: the other reviews (today's and later ones) about the same thing, by technique, shared topics and meaning
+  const alike = useQuery({ queryKey: ["meaning", { like: item?.problem.id }], queryFn: () => api.meaning({ like: item!.problem.id, k: 50 }), enabled: !!item, staleTime: Infinity, retry: false });
+  const tries = useQuery({ queryKey: ["dsa-preview", item?.problem.id], queryFn: () => api.preview(item!.problem.id), enabled: !!item });
+  const withThis = useMemo(() => {
+    if (!item) return [];
+    const near = new Map((alike.data?.hits ?? []).map((h) => [h.id, h.score]));
+    return [...all.values()]
+      .filter((o) => o.problem.id !== item.problem.id && !results.some((r) => r.id === o.problem.id))
+      .map((o) => {
+        const tags = o.problem.tags.filter((t) => item.problem.tags.includes(t));
+        const same = !!item.technique && o.technique === item.technique;
+        const m = near.get(o.problem.id);
+        const why = [...(same ? ["same technique"] : []), ...(m && m > 0.7 ? [`means the same (${m.toFixed(2)})`] : []), ...(tags.length ? [`${tags.length} shared topic${tags.length === 1 ? "" : "s"}`] : [])];
+        return { o, why, score: (same ? 3 : 0) + (m ? Math.max(0, m - 0.6) * 10 : 0) + tags.length * 0.5, today: pending.includes(o.problem.id) };
+      })
+      .filter((x) => x.score >= 1.5)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+  }, [item, all, alike.data, results, pending]);
   useEffect(() => {
     const slug = item?.problem.slug;
     window.history.replaceState(window.history.state, "", slug ? `?p=${slug}` : location.pathname);
@@ -383,6 +412,10 @@ function Session({ queue }: { queue: ReviewQueue }) {
       <div className="rv-qh">
         <span className="rv-lab">REVIEWS · {pending.length} LEFT</span>
       </div>
+      <label className="cm-find rv-find">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" /></svg>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter reviews…" aria-label="Filter reviews" />
+      </label>
       <div className="rv-sort" role="group" aria-label="Sort the reviews">
         {SORTS.map(([k, label]) => (
           <button key={k} className={sort === k ? "on" : ""} aria-pressed={sort === k} onClick={() => setSort(k)}>{label}</button>
@@ -396,8 +429,9 @@ function Session({ queue }: { queue: ReviewQueue }) {
             <span className={`r ${r.grade}`}>{r.grade}</span>
           </div>
         ))}
-        {sorted.map((id, i) => {
+        {shownIds.map((id) => {
           const it = all.get(id)!;
+          const i = sorted.indexOf(id);
           return (
             <button key={id} className={`rv-qi pick${id === current ? " cur" : ""}`} aria-current={id === current} onClick={() => pick(id)} style={{ "--rc": `${Math.round(it.recall * 100)}%` } as CSSProperties}>
               <span className="n">{done + i + 1}</span>
@@ -409,6 +443,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
             </button>
           );
         })}
+        {filter && shownIds.length === 0 && <p className="rv-none">No review matches “{filter}”.</p>}
       </div>
       <Ahead items={waitingAll} today={queue.today} onPick={pick} open={waitingAll.length > 0 && sorted.length + results.length < 8} />
     </section>
@@ -429,14 +464,52 @@ function Session({ queue }: { queue: ReviewQueue }) {
         <span className="rv-cap">{queue.due} due · room for {queue.capacity} today</span>
         <Link className="rv-ghost" to="/dsa">Exit</Link>
       </div>
-      <div className="rv-card rv-main" key={item.problem.id}>
+      <div className="rv-tabs" role="tablist" aria-label="This review">
+        <button role="tab" aria-selected={view === "recall"} className={view === "recall" ? "on" : ""} onClick={() => setView("recall")}>{step === "recall" ? "Recall" : "Check"}</button>
+        <button role="tab" aria-selected={view === "with"} className={view === "with" ? "on" : ""} onClick={() => setView("with")}>Review with this<em>{withThis.length}</em></button>
+        <button role="tab" aria-selected={view === "tries"} className={view === "tries" ? "on" : ""} onClick={() => setView("tries")}>Your tries<em>{tries.data?.history.length ?? 0}</em></button>
+        <span className="sp" />
+        <span className="rv-tkeys">J K move · 1–4 grade · U undo</span>
+      </div>
+      {view === "with" && (
+        <div className="rv-card rv-with">
+          <span className="rv-lab">REVIEW WITH THIS</span>
+          {withThis.length === 0 ? (
+            <p className="rv-none">No other review is about the same thing.</p>
+          ) : (
+            <div className="ly-cards">
+              {withThis.map((x, i) => (
+                <ListCard key={x.o.problem.id} i={i} title={x.o.problem.title} note={x.today ? dueLabel(x.o.due, queue.today) : `ahead · ${dueLabel(x.o.due, queue.today)}`} w={Math.min(100, x.score * 18)} text={x.why.join(" · ")} onClick={() => pick(x.o.problem.id)} />
+              ))}
+            </div>
+          )}
+          <HowFound text="The other reviews, today's and later ones, that go with this one: the same technique first, then problems that mean the same (a small local model) and share LeetCode topics. Picking one adds it to this session." rows={[["Compared", `${all.size - 1} reviews`], ["Ranked by", "technique, meaning, topics"]]} />
+        </div>
+      )}
+      {view === "tries" && (
+        <div className="rv-card rv-with">
+          <span className="rv-lab">YOUR TRIES</span>
+          {(tries.data?.history ?? []).length === 0 ? <p className="rv-none">No tries logged yet.</p> : (
+            <div className="rv-tries">
+              {tries.data!.history.map((h, i, all) => (
+                <span key={i} className={`rv-try ${h.result}`}>
+                  <i>{TRY_GLYPH[h.result]}</i>
+                  {h.kind === "practice" ? "Practice" : `${all.slice(0, i + 1).filter((x) => x.kind !== "practice").length}${ORD(all.slice(0, i + 1).filter((x) => x.kind !== "practice").length)} try`}
+                  <small>{TRY_NAME[h.result]}</small>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {view === "recall" && <div className="rv-card rv-main" key={item.problem.id}>
         {step === "recall" ? (
           <Recall item={item} spent={spent} running={running} setRunning={setRunning} reveal={() => setStep("check")} skip={() => move(1)} canSkip={sorted.length > 1} today={queue.today} />
         ) : (
           <Check item={item} spent={spent} lesson={lesson.data ?? null} loading={lesson.isLoading} tab={tab} setTab={setTab} grade={grade} busy={log.isPending} error={error} />
         )}
-      </div>
-      {step === "check" ? <CheckExtras item={item} lesson={lesson.data ?? null} /> : <StatementCard id={item.problem.id} slug={item.problem.slug} />}
+      </div>}
+      {view === "recall" && (step === "check" ? <CheckExtras item={item} lesson={lesson.data ?? null} /> : <StatementCard id={item.problem.id} slug={item.problem.slug} />)}
     </>
   );
 
@@ -503,8 +576,6 @@ const LAST: Record<string, string> = { good: "✓ on my own", easy: "⚡ instant
 function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today }: { item: ReviewItem; spent: number; running: boolean; setRunning: (r: boolean) => void; reveal: () => void; skip: () => void; canSkip: boolean; today: string }) {
   const p = item.problem;
   const s = p.state;
-  const tries = useQuery({ queryKey: ["dsa-preview", p.id], queryFn: () => api.preview(p.id) });
-  const history = tries.data?.history ?? [];
   return (
     <>
       <span className="rv-lab">RECALL · SUGGESTED 6 MIN</span>
@@ -537,20 +608,6 @@ function Recall({ item, spent, running, setRunning, reveal, skip, canSkip, today
           </button>
         )}
       </div>
-      {history.length > 0 && (
-        <section className="rv-sec" aria-label="Your tries">
-          <span className="rv-lab">YOUR TRIES</span>
-          <div className="rv-tries">
-            {history.map((h, i) => (
-              <span key={i} className={`rv-try ${h.result}`}>
-                <i>{TRY_GLYPH[h.result]}</i>
-                {h.kind === "practice" ? "Practice" : `${history.slice(0, i + 1).filter((x) => x.kind !== "practice").length}${ORD(history.slice(0, i + 1).filter((x) => x.kind !== "practice").length)} try`}
-                <small>{TRY_NAME[h.result]}</small>
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
       {p.companies.length > 0 && (
         <section className="rv-sec" aria-label="Asked by">
           <span className="rv-lab">ASKED BY</span>

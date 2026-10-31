@@ -204,3 +204,38 @@
 .c-3 .c-tr .st{justify-self:end}
 .c-tfin{color:var(--fg)!important}
 @media (max-width:900px){.c-stk{grid-column:1/-1}.c-stk3{gap:12px;flex-wrap:wrap}}
+/* the timeline: a cascade in the order topics happen, months as soft bands, today and the target as markers, no row rules */
+.c-tl{gap:4px;padding:18px 20px 16px}
+.c-tl .tlsum{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.c-tl .tlsum span{font:500 11.5px var(--mono);color:var(--mut);padding:4px 9px;border-radius:999px;background:var(--inset)}
+.c-tl .tlsum b{color:var(--fg)}
+.c-tl .tlsum .ok{color:var(--grn)}.c-tl .tlsum .bad{color:var(--warn)}.c-tl .tlsum .bad b{color:var(--warn)}
+.c-tl .tlh,.c-tl .tlr{grid-template-columns:220px minmax(0,1fr)}
+.c-tl .tlax{border-bottom:0;height:20px}
+.c-tl .tlgrid{left:234px}
+.c-tl .tlgrid u{border-left:0;background:color-mix(in oklab,var(--fg) 3.5%,transparent);border-radius:6px}
+.c-tl .ttgt{position:absolute;top:0;bottom:0;border-left:2px dashed color-mix(in oklab,var(--grn) 70%,transparent)}
+.c-tl .ttgt em{position:absolute;top:-18px;left:-18px;font:700 11px var(--mono);color:var(--grn);font-style:normal}
+.c-tl .tlr{min-height:40px;border-bottom:0;border-radius:8px;transition:background .15s}
+.c-tl .tlr:hover{background:color-mix(in oklab,var(--fg) 3%,transparent)}
+.c-tl .tlt{min-width:0;gap:9px;padding-left:4px}
+.c-tl .tlt>i{width:6px;height:24px}
+.c-tl .tlt>div{min-width:0;flex:1}
+.c-tl .tlt b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-tl .tlt small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-tl .tllate{flex:none;font:600 10px var(--mono);font-style:normal;color:var(--warn);padding:2px 6px;border-radius:6px;background:color-mix(in oklab,var(--warn) 13%,transparent)}
+.c-tl .tlb{height:30px}
+.c-tl .tlb .bar{top:6px;height:18px;border-radius:999px;min-width:10px}
+.c-tl .tlb .bar.narrow{justify-content:flex-start;padding-right:0}
+.c-tl .tlb .bar.narrow span{position:absolute;left:calc(100% + 6px);color:var(--mut)}
+.c-tl .tlb .over{top:6px;height:18px;border-radius:0 999px 999px 0}
+.c-tl .tlb .dlm{top:4px;bottom:4px;border-left:2px solid var(--warn);border-radius:2px}
+.c-tl .tldone{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.c-tl .tldone>span{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-right:4px}
+.c-tl .tldone em{display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--sans);font-style:normal;color:var(--mut);padding:3px 9px;border-radius:999px;background:var(--inset)}
+.c-tl .tldone em i{width:6px;height:6px;border-radius:50%}
+@media (max-width:640px){.c-tl .tlh,.c-tl .tlr{grid-template-columns:120px minmax(0,1fr)}.c-tl .tlgrid{left:134px}.c-tl .tllate{display:none}}
+.c-tl .tlbody{padding-bottom:22px}
+.c-tl .tnow em,.c-tl .ttgt em{top:auto;bottom:-20px;left:0;transform:translateX(-50%)}
+.c-3 .c-quick button{display:flex;align-items:center;justify-content:center;padding:0 12px;text-align:center;border:0;background:var(--inset)}
+.c-3 .c-quick button:hover:not(:disabled){background:color-mix(in oklab,var(--acc) 12%,var(--inset))}

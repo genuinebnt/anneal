@@ -542,37 +542,67 @@ function Bar({ p, sel, note, hover, busy, onKind, onHover, kindOfRoutine }: { p:
 /* ---------- the timeline ---------- */
 
 function Timeline({ p, today }: { p: PlanView; today: string }) {
-    const rows = p.topics.filter((t) => t.status?.start);
-    const ends = rows.flatMap((t) => [t.status!.end, p.rules.targets[t.id] || t.covered ? t.status!.due : null]).filter((x): x is string => !!x).sort();
+    // in the order they happen: a cascade from today to the finish
+    const rows = p.topics.filter((t) => t.status?.start).sort((x, y) => x.status!.start!.localeCompare(y.status!.start!) || (x.status!.end ?? "").localeCompare(y.status!.end ?? ""));
+    const done = p.topics.filter((t) => t.done_earlier || (!t.status?.start && t.covered));
+    const target = p.rules.finish_by ?? p.summary.finish_by;
+    const ends = [...rows.flatMap((t) => [t.status!.end, p.rules.targets[t.id] || t.covered ? t.status!.due : null]), target].filter((x): x is string => !!x).sort();
     const end = ends[ends.length - 1] ?? add(today, 60);
-    const span = Math.max(30, days(today, end) + 7);
+    const span = Math.max(30, days(today, end) + 10);
     const pct = (d: string) => Math.max(0, Math.min(100, (days(today, d) / span) * 100));
-    const ticks: string[] = [];
-    for (let d = iso(Date.UTC(+today.slice(0, 4), +today.slice(5, 7), 1)); d < add(today, span); d = iso(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 1))) ticks.push(d);
+    const months: string[] = [];
+    for (let d = iso(Date.UTC(+today.slice(0, 4), +today.slice(5, 7) - 1, 1)); d < add(today, span); d = iso(Date.UTC(+d.slice(0, 4), +d.slice(5, 7), 1))) months.push(d);
+    const late = rows.filter((t) => t.status!.late > 0).length;
+    const last = rows.reduce<string | null>((m, t) => (t.status!.end && (!m || t.status!.end > m) ? t.status!.end : m), null);
     if (!rows.length) return <div className="c-tl"><p className="rempty">Nothing is in scope. Loosen the rules.</p></div>;
     return (
         <div className="c-tl">
-            <div className="tlh"><span /><div className="tlax">{ticks.map((d) => <em key={d} style={{ left: `${pct(d)}%` }}>{fmt(d, { month: "short" })}</em>)}</div></div>
+            <div className="tlsum">
+                <span><b>{rows.length}</b> topics to go</span>
+                {last && <span>last one ends <b>{short(last)}</b></span>}
+                {target && <span>target <b>{short(target)}</b></span>}
+                {late > 0 ? <span className="bad"><b>{late}</b> late</span> : <span className="ok">all on time</span>}
+            </div>
+            <div className="tlh"><span /><div className="tlax">{months.filter((d) => d > today).map((d) => <em key={d} style={{ left: `${pct(d)}%` }}>{fmt(d, { month: "short" })}</em>)}</div></div>
             <div className="tlbody">
-                <div className="tlgrid">{ticks.map((d) => <u key={d} style={{ left: `${pct(d)}%` }} />)}<b className="tnow" style={{ left: 0 }}><em>today</em></b></div>
+                <div className="tlgrid">
+                    {/* alternate months as soft bands, not lines */}
+                    {months.map((d, i) => i % 2 === 1 && <u key={d} style={{ left: `${pct(d)}%`, width: `${pct(months[i + 1] ?? add(today, span)) - pct(d)}%` }} />)}
+                    <b className="tnow" style={{ left: 0 }}><em>today</em></b>
+                    {target && <b className="ttgt" style={{ left: `${pct(target)}%` }}><em>target</em></b>}
+                </div>
                 {rows.map((t) => {
                     const s = t.status!;
                     const a = pct(s.start!), b = pct(s.end ?? s.start!);
+                    const w = Math.max(1.2, b - a);
                     const hasT = !!(s.due && (p.rules.targets[t.id] || t.covered));
                     const cls = s.late ? "late" : hasT ? "ok" : "free";
                     const lateFrom = s.late && hasT && s.due ? pct(s.due) : null;
                     return (
                         <div key={t.id} className="tlr">
-                            <div className="tlt"><i style={{ background: hue(t.id) }} /><div><b>{t.name}</b><small>{s.n} problems{hasT ? ` · due ${short(s.due!)}` : ""}</small></div></div>
+                            <div className="tlt" title={t.name}>
+                                <i style={{ background: hue(t.id) }} />
+                                <div>
+                                    <b>{t.name}</b>
+                                    <small>{s.n} left · {short(s.start!)}{s.end && s.end !== s.start ? ` → ${short(s.end)}` : ""}</small>
+                                </div>
+                                {s.late > 0 && <em className="tllate">{s.late >= 9999 ? "doesn't fit" : `${s.late}d late`}</em>}
+                            </div>
                             <div className="tlb" title={`${t.name}: ${s.n} problems, ${short(s.start!)} to ${s.end ? short(s.end) : "—"}${hasT ? `, due ${short(s.due!)}` : ""}`}>
-                                <i className={`bar ${cls}`} style={{ "--th": hue(t.id), left: `${a}%`, width: `${Math.max(1.4, b - a)}%` } as CSSProperties}><span>{s.n}</span></i>
+                                <i className={`bar ${cls}${w < 5 ? " narrow" : ""}`} style={{ "--th": hue(t.id), left: `${a}%`, width: `${w}%` } as CSSProperties}><span>{s.n}</span></i>
                                 {lateFrom !== null && <i className="over" style={{ left: `${lateFrom}%`, width: `${Math.max(0.8, b - lateFrom)}%` }} />}
-                                {hasT && <u className="dlm" style={{ left: `${pct(s.due!)}%` }}><em>{short(s.due!)}</em></u>}
+                                {hasT && <u className="dlm" style={{ left: `${pct(s.due!)}%` }} title={`due ${short(s.due!)}`} />}
                             </div>
                         </div>
                     );
                 })}
             </div>
+            {done.length > 0 && (
+                <div className="tldone">
+                    <span>Done</span>
+                    {done.map((t) => <em key={t.id}><i style={{ background: hue(t.id) }} />{t.name}</em>)}
+                </div>
+            )}
         </div>
     );
 }

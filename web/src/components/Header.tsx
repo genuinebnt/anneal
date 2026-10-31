@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api";
 import { ACCENTS, useAppearance } from "../settings";
 import { fresh, mmss, setTimer, toggleTimer, useFocus } from "../focusStore";
@@ -23,6 +23,9 @@ const AREAS: { id: AreaId; label: string; to: "/dsa" | "/rust" | "/courses"; col
     { id: "rust", label: "Rust", to: "/rust", color: "var(--vio)" },
     { id: "courses", label: "Courses", to: "/courses", color: "var(--grn)" },
 ];
+
+/** How long the Mock page's data counts as fresh, so coming back to it within a minute shows it at once. */
+export const MOCK_FRESH = 60_000;
 
 type Tab = { to: "/dsa" | "/dsa/plan" | "/dsa/review" | "/dsa/calendar" | "/dsa/company" | "/dsa/mock" | "/dsa/graph" | "/progress" | "/analytics" | "/settings" | "/log" | "/rust" | "/courses"; label: string; match: (path: string) => boolean; badge?: "due" };
 
@@ -343,9 +346,12 @@ function Crumb({ area, path }: { area: string; path: string; tabs: Tab[] }) {
     );
 }
 
-/** The pages of the current area (or the global pages): an ink line glides under the current one. */
+/** The pages of the current area (or the global pages): a tinted pill glides behind the current one. */
 function SubTabs({ tabs, later, color, path, due }: { tabs: Tab[]; later: string[]; color: string; path: string; due: number }) {
     const box = useRef<HTMLDivElement>(null);
+    const qc = useQueryClient();
+    // the Mock page draws from every problem (about 200 KB), so its data starts loading when the tab is pointed at or touched
+    const warm = (to: Tab["to"]) => to === "/dsa/mock" && void qc.prefetchQuery({ queryKey: ["dsa-mock"], queryFn: api.mock, staleTime: MOCK_FRESH });
     const [ink, setInk] = useState<{ x: number; w: number } | null>(null);
     useLayoutEffect(() => {
         const place = () => {
@@ -358,11 +364,11 @@ function SubTabs({ tabs, later, color, path, due }: { tabs: Tab[]; later: string
     }, [tabs, path, due]);
     return (
         <div className="hd-tabs" ref={box}>
-            {ink && <span className="hd-ink" style={{ transform: `translateX(${ink.x}px)`, width: ink.w, background: color }} />}
+            {ink && <span className="hd-ink" style={{ transform: `translateX(${ink.x}px)`, width: ink.w, "--ink": color } as CSSProperties} />}
             {tabs.map((t) => {
                 const on = t.match(path);
                 return (
-                    <Link key={t.label} to={t.to} className={on ? "on" : ""} aria-current={on ? "page" : undefined}>
+                    <Link key={t.label} to={t.to} className={on ? "on" : ""} aria-current={on ? "page" : undefined} onPointerEnter={() => warm(t.to)} onTouchStart={() => warm(t.to)} onFocus={() => warm(t.to)}>
                         {t.label}
                         {t.badge === "due" && due > 0 && <span className="hd-n hd-hot">{due}</span>}
                     </Link>
@@ -450,7 +456,7 @@ function MiniTimer() {
     const brk = cfg.mode === "pom" && s.phase !== "focus";
     const label = sw ? "Stopwatch" : cfg.mode === "timer" ? "Countdown" : brk ? "Break" : "Focus";
     return (
-        <span className={`hd-timer${s.running ? " run" : ""}${brk ? " brk" : ""}`}>
+        <span className={`hd-timer${s.running ? " run" : ""}${brk ? " brk" : ""}${s.running || s.secs !== fresh(cfg).secs ? " live" : ""}`}>
             <button className="hd-tring" onClick={toggleTimer} aria-label={`${s.running ? "Pause" : "Start"} the focus timer`} title={`${label}: ${s.running ? "pause" : "start"} (the same timer as the problem page)`}>
                 <span className="hd-tarc" style={{ "--p": p } as React.CSSProperties} />
                 {s.running ? (
@@ -460,7 +466,7 @@ function MiniTimer() {
                 )}
             </button>
             <b role="timer" aria-label={`${label} ${mmss(s.secs)}`}>{mmss(s.secs)}</b>
-            <button className="hd-treset" onClick={() => setTimer(fresh(cfg))} aria-label="Reset the focus timer" title="Reset">
+            <button className="hd-treset" onClick={() => setTimer(fresh(cfg))} aria-label="Stop and reset the focus timer" title="Stop and reset">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5" /></svg>
             </button>
         </span>

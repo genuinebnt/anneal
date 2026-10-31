@@ -161,8 +161,19 @@ function Editor({ o }: { o: DsaOverview }) {
             <div><dt>Practice per week</dt><dd>{room}</dd></div>
             <div><dt>Busiest day</dt><dd>{busiest}</dd></div>
           </dl>
-          <div className="p-mix" role="img" aria-label={`${solveDays} solve days, ${practiceDays} practice days, ${restDays} rest days`}>
-            {WEEKDAYS.map((d) => <i key={d} className={modeOf(s, d)} title={`${d}: ${modeOf(s, d)}`} />)}
+          {/* the week as columns: each day's new problems and practice, the busiest one standing out */}
+          <div className="p-wkc" role="img" aria-label={`${solveDays} solve days, ${practiceDays} practice days, ${restDays} rest days; busiest day ${busiest}`}>
+            {WEEKDAYS.map((d, i) => {
+              const n = newByDay[i] ?? 0;
+              const r = modeOf(s, d) === "rest" ? 0 : s.capacity[d];
+              return (
+                <span key={d} className={`${modeOf(s, d)}${n + r === busiest ? " top" : ""}`} title={`${d}: ${n} new, ${r} practice`}>
+                  <i className="rv" style={{ height: `${(r / busiest) * 100}%` }} />
+                  <i className="nw" style={{ height: `${(n / busiest) * 100}%` }} />
+                  <em>{d.slice(0, 2)}</em>
+                </span>
+              );
+            })}
           </div>
           {room < 14 && <p className="p-warn" role="status">Under 14 practice problems a week, recall starts to slip.</p>}
           <div className="p-save">

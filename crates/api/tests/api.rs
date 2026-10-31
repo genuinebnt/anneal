@@ -105,6 +105,7 @@ fn test_app_full(db: PgPool, content: &Path, auth: AuthConfig, web_dist: Option<
             ),
             auth,
             courses: Arc::new(vec![anneal_content::course::Course::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../courses/bustub")).expect("courses/bustub")]),
+            meaning: anneal_api::meaning::Meaning::off(),
         },
         web_dist,
     )
@@ -614,6 +615,17 @@ async fn system_reports_the_database_and_counts_requests(db: PgPool) {
     for key in ["cpu", "load", "mem", "swap", "disk"] {
         assert!(s["now"].get(key).is_some(), "{key}");
     }
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn meaning_search_says_when_it_is_off(db: PgPool) {
+    // the test app has neither the vectors file nor the model: the answer says so instead of failing
+    let app = test_app(db);
+    let (status, m) = call(&app, Method::GET, "/api/dsa/meaning?like=lc-two-sum", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(m["phase"], "off");
+    assert_eq!(m["can_search"], false);
+    assert_eq!(m["hits"].as_array().unwrap().len(), 0);
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]

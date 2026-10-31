@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use axum::Json;
+use axum::response::IntoResponse;
 use axum::extract::State;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ const MAX_ITEMS: usize = 12;
 /// A stored round: id, when it finished, its settings, its items and the seconds it ran.
 type RoundRow = (i64, DateTime<Utc>, Jsonb<Value>, Jsonb<Value>, i32);
 
-pub async fn get(State(s): State<AppState>) -> ApiResult<Json<Value>> {
+pub async fn get(State(s): State<AppState>) -> ApiResult<axum::response::Response> {
     let today = crate::activity::today();
     let progress = store::progress(&s.db).await?;
     let reviews = dsa_reviews(&s.catalog, store::reviews(&s.db).await?);
@@ -55,16 +56,28 @@ pub async fn get(State(s): State<AppState>) -> ApiResult<Json<Value>> {
     let rounds: Vec<RoundRow> =
         sqlx::query_as("SELECT id, finished_at, config, items, seconds FROM mock_rounds ORDER BY finished_at DESC, id DESC LIMIT $1").bind(HISTORY).fetch_all(&s.db).await?;
     let rounds: Vec<Value> = rounds.into_iter().map(|(id, at, config, items, seconds)| json!({ "id": id, "finished_at": at, "config": config.0, "items": items.0, "seconds": seconds })).collect();
-    // Plain data, so serializing can't fail; the value only exists to end the borrow of the catalog.
-    let problems = serde_json::to_value(&problems).expect("problems are plain data");
-    Ok(Json(json!({
-        "today": today,
-        "patterns": patterns,
-        "company_groups": s.catalog.dsa.company_groups,
-        "problems": problems,
-        "saved": saved.map(|j| j.0),
-        "rounds": rounds,
-    })))
+    // Serialized straight from the rows, never through a `Value`: that would widen each company's f32 frequency to f64 and
+    // print it as 92.5999984741211 instead of 92.6, on every company of all 1,669 problems.
+    let body = serde_json::to_string(&MockView {
+        today,
+        patterns,
+        company_groups: &s.catalog.dsa.company_groups,
+        problems,
+        saved: saved.map(|j| j.0),
+        rounds,
+    })
+    .expect("the mock view is plain data");
+    Ok(([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+#[derive(Serialize)]
+struct MockView<'a> {
+    today: chrono::NaiveDate,
+    patterns: Vec<Value>,
+    company_groups: &'a [anneal_content::CompanyGroup],
+    problems: Vec<crate::dsa::ProblemRow<'a>>,
+    saved: Option<Value>,
+    rounds: Vec<Value>,
 }
 
 /// Remembers the settings last used and the presets the owner saved. The page owns the shape; this only bounds it.

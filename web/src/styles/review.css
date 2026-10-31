@@ -133,3 +133,19 @@ kbd{font:500 11px var(--mono);color:var(--dim);border:1px solid var(--line);bord
 .ly-rp .rv-keys{margin:0}
 @media (max-width:1320px){.ly-rp .rv-ctx{grid-template-columns:repeat(auto-fit,minmax(270px,1fr));grid-column:1/-1}}
 .ly-cp .rv-stage{padding:0;min-height:0}.ly-cp .rv-wide{padding-inline:0}
+/* the sort tabs fit the left panel: three equal columns that may shrink */
+.ly-lp .rv-side .rv-sort{grid-auto-columns:minmax(0,1fr);width:100%;box-sizing:border-box}
+.ly-lp .rv-side .rv-sort button{min-width:0;padding:0 4px;overflow:hidden;text-overflow:ellipsis}
+/* the centre's tabs (the approved mockup): the review, the reviews that go with it, and its tries */
+.rv-tabs{display:flex;align-items:center;gap:4px;margin:2px 0 10px}
+.rv-tabs button{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:9px;font:500 13px var(--sans);color:var(--mut);transition:background .15s,color .15s}
+.rv-tabs button:hover{color:var(--fg)}
+.rv-tabs button.on{color:var(--fg);background:color-mix(in oklab,var(--acc) 13%,transparent)}
+.rv-tabs em{font:600 10.5px var(--mono);font-style:normal;padding:1px 6px;border-radius:999px;background:var(--inset);color:var(--dim)}
+.rv-tabs .sp{flex:1}
+.rv-tkeys{font:500 11px var(--mono);color:var(--dim)}
+.rv-with{display:grid;gap:12px}
+.rv-none{margin:4px 0;color:var(--dim);font-size:13px}
+.rv-find{margin-bottom:10px}
+@media (max-width:900px){.rv-tkeys{display:none}}
+.rv-tabs button{border:0;background:none}.rv-tabs button.on{background:color-mix(in oklab,var(--acc) 13%,transparent)}

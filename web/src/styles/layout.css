@@ -55,7 +55,7 @@ a.ly-tl:hover,button.ly-tl:hover{translate:0 -2px;border-color:var(--line);box-s
 .ly-dl div:nth-child(2n){border-right:0}.ly-dl div:nth-last-child(-n+2){border-bottom:0}
 .ly-dl dt{font-size:11px;color:var(--dim)}.ly-dl dd{margin:2px 0 0;font:500 12.5px var(--mono);overflow-wrap:anywhere}
 .ly-kv{display:grid}.ly-kv div{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line2);font-size:13px;color:var(--mut)}
-.ly-kv div:first-child{border-top:0}.ly-kv b{font:600 13px var(--mono);color:var(--fg)}
+.ly-kv div:first-child{border-top:0}.ly-kv b{font:600 13px var(--mono);color:var(--fg);min-width:0;text-align:right;overflow-wrap:anywhere}.ly-kv div>span{flex:none}
 .ly-lk{font:600 11px var(--mono);color:var(--acc)}
 .ly-rh{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:0 4px}
 

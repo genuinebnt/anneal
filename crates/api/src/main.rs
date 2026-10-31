@@ -26,6 +26,7 @@ use tracing_subscriber::EnvFilter;
 /// | `ANNEAL_ADDR` | `127.0.0.1:8787` |
 /// | `ANNEAL_PASSPHRASE_HASH` | unset: no login, allowed only on a loopback address. Make one with `anneal passphrase` |
 /// | `ANNEAL_COOKIE_SECURE` | `false`; set `true` when served over HTTPS |
+/// | `ANNEAL_MODEL` | unset: no search by meaning text. The bge-small-en-v1.5 directory (`tools/fetch-model.sh`) |
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -133,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(courses = courses.len(), stages = courses.iter().map(|c| c.stages().count()).sum::<usize>(), "courses loaded");
 
     let web_dist = PathBuf::from(env("ANNEAL_WEB_DIST", "web/dist"));
+    let meaning = anneal_api::meaning::Meaning::start(&loaded.catalog, &content, std::env::var_os("ANNEAL_MODEL").map(PathBuf::from).filter(|d| d.is_dir()));
     let state = AppState {
         catalog: Arc::new(loaded.catalog),
         runner: Arc::new(runner),
@@ -140,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         lsp,
         auth,
         courses: Arc::new(courses),
+        meaning,
     };
     let listener = tokio::net::TcpListener::bind(addr)
         .await

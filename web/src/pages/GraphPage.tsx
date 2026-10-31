@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api, type DsaOverview } from "../api";
@@ -95,6 +95,15 @@ function Workpage({ o }: { o: DsaOverview }) {
         return () => removeEventListener("keydown", k);
     }, []);
 
+    // `?node=pro:<id>` (from ⌘K's "Show in the graph") selects that node, widening the scope when it is outside the goal list
+    const wanted = (useSearch({ strict: false }) as { node?: string }).node;
+    useEffect(() => {
+        if (!wanted) return;
+        const n = g.nodes.find((x) => x.key === wanted);
+        if (n) setSelected(n.id);
+        else if (!scopeAll) setScopeAll(true);
+    }, [wanted, g, scopeAll]);
+
     const node = selected !== null ? g.nodes[selected] : undefined;
     const selProblem = node?.kind === "pro" ? byId.get(node.key.slice(4)) : undefined;
 
@@ -141,6 +150,24 @@ function Workpage({ o }: { o: DsaOverview }) {
         }
         return [];
     }, [node, sim, selProblem, o, byId, vectors, g]);
+
+    // Meaning: a problem by its own vector; a technique or pattern by its name, embedded on the server
+    const meaningAsk = !node || node.kind === "co" ? null : node.kind === "pro" ? { like: node.key.slice(4) } : { q: node.kind === "tec" ? `${node.label} (${o.patterns[node.pat]?.name ?? ""})` : node.label };
+    const meaning = useQuery({
+        queryKey: ["meaning", meaningAsk],
+        queryFn: () => api.meaning({ ...meaningAsk!, k: 30 }),
+        enabled: mode === "like" && sim === "meaning" && meaningAsk !== null,
+        staleTime: Infinity,
+        retry: false,
+    });
+    const alikeByMeaning = useMemo(
+        () =>
+            (meaning.data?.hits ?? [])
+                .map((h) => ({ h, p: byId.get(h.id) }))
+                .filter((x): x is { h: { id: string; score: number }; p: NonNullable<typeof x.p> } => !!x.p && counted(o, x.p))
+                .slice(0, 6),
+        [meaning.data, byId, o],
+    );
 
     const nodesN = g.nodes.length;
     const solved = scope.filter((p) => p.state.solved).length;
@@ -189,7 +216,32 @@ function Workpage({ o }: { o: DsaOverview }) {
                     </div>
                     {!node && <p>Click a node in the graph, or a lead, to see what looks like it.</p>}
                     {node && sim === "tags" && !selProblem && <p>Shared tags compare problems. Pick a problem, or use Surroundings for a {KIND_NAME[node.kind]}.</p>}
-                    {node && sim === "meaning" && <p className="gr-soon">Meaning vectors (a small model on the server, local only) are planned and not built yet. Shared tags and surroundings work now.</p>}
+                    {node && sim === "meaning" && node.kind === "co" && <p>Meaning compares problems. Pick a problem, a technique or a pattern.</p>}
+                    {node && sim === "meaning" && meaningAsk && (
+                        meaning.isLoading ? (
+                            <p className="gr-soon">Comparing every problem…</p>
+                        ) : meaning.isError ? (
+                            <p className="gr-soon">{node.kind === "pro" ? "Couldn't reach the meaning search." : "Searching by a name needs the model, which this server hasn't loaded yet."}</p>
+                        ) : meaning.data?.phase === "building" ? (
+                            <p className="gr-soon">The server is building the meaning vectors (a minute or two after a deploy). Try again shortly.</p>
+                        ) : meaning.data && meaning.data.phase !== "ready" ? (
+                            <p className="gr-soon">Meaning search is off on this server{meaning.data.error ? `: ${meaning.data.error}` : "."}</p>
+                        ) : (
+                            alikeByMeaning.length > 0 && (
+                                <div className="ly-cards">
+                                    {alikeByMeaning.map(({ h, p }, i) => (
+                                        <ListCard key={h.id} i={i} title={p.title} note={h.score.toFixed(2)} w={Math.max(0, (h.score - 0.5) * 200)} text={`${p.difficulty} · ${o.patterns.find((x) => x.code === p.pattern)?.name ?? ""}`} to={{ to: "/d/$slug", params: { slug: p.slug } }} />
+                                    ))}
+                                </div>
+                            )
+                        )
+                    )}
+                    {node && sim === "meaning" && meaning.data?.phase === "ready" && (
+                        <HowFound
+                            text={`Problems whose title, key idea and technique mean the most nearly the same as ${node.kind === "pro" ? "this one's" : `"${node.label}"`}, by a small language model running on this server (${meaning.data.model}). Nothing leaves it. Exact: every problem is compared.`}
+                            rows={[["Compared", `${meaning.data.compared.toLocaleString()} problems`], ["Ranked by", "cosine of the vectors"], ["Vectors", `${meaning.data.dims} dims`]]}
+                        />
+                    )}
                     {alike.length > 0 && (
                         <div className="ly-cards">
                             {alike.map((a, i) => (
@@ -238,6 +290,15 @@ function Workpage({ o }: { o: DsaOverview }) {
             <div className="gr-wrap">
                 <canvas ref={canvas} aria-label="The DSA graph" />
                 <div className="gr-legend">
+                    {colourBy === "state" && (
+                        <>
+                            <div className="gr-lh">My progress</div>
+                            {([["sol", "solved", "--grn"], ["due", "review due", "--vio"], ["att", "tried", "--warn"], ["new", "not started", "--dim"]] as const).map(([k, l, c]) => (
+                                <span key={k} className="gr-li is-key"><span className="gr-sw" style={{ background: `var(${c})` }} />{l}<em>{g.nodes.filter((n) => n.kind === "pro" && n.state === k).length}</em></span>
+                            ))}
+                            <p className="gr-lnote">techniques and patterns go from grey to green as they are solved; a pattern's ring is its share done</p>
+                        </>
+                    )}
                     <div className="gr-lh">Patterns</div>
                     {o.patterns.map((p, i) => (
                         <button key={p.code} className="gr-li" aria-pressed={!hiddenPats.has(i)} onClick={() => togglePat(i)}>
@@ -317,6 +378,20 @@ interface View {
     colourBy: "pattern" | "state";
     hiddenPats: Set<number>;
     hiddenEdges: Set<EdgeKind>;
+}
+
+/** `a` to `b` by `t` (0 to 1), both `oklch(L C H)` tokens, mixed in Oklab: the canvas takes no `color-mix()`. */
+function mixOklch(a: string, b: string, t: number) {
+    const lab = (c: string) => {
+        const m = /oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(c);
+        if (!m) return null;
+        const [l, ch, h] = [Number(m[1]), Number(m[2]), (Number(m[3]) * Math.PI) / 180];
+        return [l, ch * Math.cos(h), ch * Math.sin(h)];
+    };
+    const x = lab(a), y = lab(b);
+    if (!x || !y) return t < 0.5 ? a : b;
+    const [l, p, q] = x.map((v, i) => v + (y[i]! - v) * t);
+    return `oklab(${l} ${p} ${q})`;
 }
 
 /** The canvas: a force layout that settles, drag and pan, zoom on the wheel, and labels placed most important first. */
@@ -501,7 +576,11 @@ class Engine {
 
     private fill(n: GNode) {
         if (n.kind === "co") return this.css("--fg");
-        if (this.v.colourBy === "state" && n.kind === "pro") return ({ sol: this.css("--grn"), due: this.css("--vio"), att: this.css("--warn"), new: this.css("--line") })[n.state ?? "new"];
+        if (this.v.colourBy === "state") {
+            // problems by where they stand; techniques and patterns from not started to solved by how much of them is done
+            if (n.kind === "pro") return { sol: this.css("--grn"), due: this.css("--vio"), att: this.css("--warn"), new: this.css("--dim") }[n.state ?? "new"];
+            return mixOklch(this.css("--dim"), this.css("--grn"), n.done ?? 0);
+        }
         return colOf(n.pat);
     }
 
@@ -543,6 +622,20 @@ class Engine {
         for (const n of g.nodes) {
             const dim = this.dimmed(n);
             ctx.globalAlpha = dim ? 0.15 : 1;
+            // in progress mode a pattern carries a ring: how much of it is solved
+            if (v.colourBy === "state" && n.kind === "pat") {
+                ctx.save();
+                ctx.lineWidth = 3 / view.k;
+                ctx.strokeStyle = line;
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, n.r + 5 / view.k, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.strokeStyle = this.css("--grn");
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, n.r + 5 / view.k, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (n.done ?? 0));
+                ctx.stroke();
+                ctx.restore();
+            }
             ctx.fillStyle = this.fill(n);
             ctx.beginPath();
             if (n.kind === "tec") {

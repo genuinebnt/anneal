@@ -28,6 +28,9 @@ pub enum ApiError {
     Db(#[from] sqlx::Error),
     #[error(transparent)]
     Runner(#[from] anneal_runner::RunnerError),
+    /// A failure inside anneal that is not the database or the runner (the meaning model, for one).
+    #[error("{0:#}")]
+    Internal(anyhow::Error),
 }
 
 impl IntoResponse for ApiError {
@@ -41,7 +44,7 @@ impl IntoResponse for ApiError {
             ApiError::Busy(_) => (StatusCode::TOO_MANY_REQUESTS, "busy"),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             ApiError::WrongPassphrase => (StatusCode::UNAUTHORIZED, "wrong_passphrase"),
-            ApiError::Db(_) | ApiError::Runner(_) => {
+            ApiError::Db(_) | ApiError::Runner(_) | ApiError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }
         };

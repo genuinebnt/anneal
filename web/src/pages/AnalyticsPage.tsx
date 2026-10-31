@@ -152,7 +152,7 @@ function Body({ s, range, setRange }: { s: SystemView; range: "1h" | "6h" | "24h
             </Panel>
             {s.app.image && (
                 <Panel title="Running build">
-                    <Kv rows={[["Image", s.app.image.split(":").pop() ?? s.app.image], ["Container", s.app.status ?? "–"]]} />
+                    <Kv rows={[["Image", <span title={s.app.image}>{(s.app.image.split(":").pop() ?? s.app.image).slice(0, 12)}</span>], ["Container", s.app.status ?? "–"]]} />
                 </Panel>
             )}
             <HowFound

@@ -65,6 +65,7 @@ import "./styles/layout.css";
 import "./styles/mockint.css";
 import "./styles/analytics.css";
 import "./styles/graph.css";
+import "./styles/palette.css";
 
 const rootRoute = createRootRoute({
   component: () => (

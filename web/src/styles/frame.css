@@ -57,3 +57,44 @@ html[data-motion="reduce"] .hd-accp{animation:none}
 .hd-areas .hd-asep{width:1px;margin:7px 4px;background:var(--line2);flex:none}
 .hd-areas .hd-tro,.hd-dock .hd-tro{width:15px;height:15px;flex:none}
 @media (max-width:900px){.hd-dock a{min-width:0;flex:1}}
+/* Phones: the touch rule's min-width lets tabs shrink below their text, so they never shrink; the header's buttons keep their size and the
+   word beside the logo gives way first */
+.hd-tabs a,.hd-tabs .hd-later{flex:none}
+.hd-dock .hd-tro{width:20px;height:20px;padding:2px;box-sizing:border-box}
+@media (max-width:480px){
+  .hdr .hd-t1{gap:6px;padding:0 10px}
+  .hd-srch{flex:none;width:36px;height:36px;padding:0;justify-content:center}
+  .hd-srch span{display:none}
+  .hd-ib{width:36px;height:36px}
+  .logo b{display:none}
+  .hdr-r{gap:6px}
+}
+/* the current page in the second row is a tinted pill, not a line: the scroll progress runs along the bottom edge */
+.hd-tabs .hd-ink{top:7px;bottom:7px;height:auto;border-radius:9px;background:color-mix(in oklab,var(--ink,var(--acc)) 16%,transparent)}
+.hd-tabs a{z-index:1}
+/* the router marks the current link `active`, and a touch rule makes those inline-flex: keep the header's icon links centred */
+.hd-ib.active{display:grid}
+/* the spoiler reveal: a quiet chip */
+.d-reveal{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid var(--line2);border-radius:999px;background:var(--inset);color:var(--mut);font:500 12px var(--mono);text-decoration:none;cursor:pointer;transition:color .2s,border-color .2s,background .2s}
+.d-reveal svg{width:14px;height:14px;flex:none}
+.d-reveal:hover{color:var(--fg);text-decoration:none;border-color:color-mix(in oklab,var(--acc) 40%,var(--line2));background:color-mix(in oklab,var(--acc) 8%,var(--inset))}
+/* no rules between the header's rows or under it, nor above the phone dock: the surfaces and spacing separate them */
+.hdr{border-bottom:0}.hdr .hd-t2{border-top:0}.hd-dock{border-top:0}
+/* the logo and the areas take what they need and the search takes the rest, so the two never overlap */
+.hdr .hd-t1{grid-template-columns:auto minmax(0,1fr) auto}
+.hd-srch{justify-self:center;max-width:440px}
+/* the tab row's edge fade starts after the first and last tab, so the current pill is never faded */
+.hd-tabs{padding-inline:12px;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 10px,#000 calc(100% - 10px),transparent 100%);mask-image:linear-gradient(90deg,transparent 0,#000 10px,#000 calc(100% - 10px),transparent 100%)}
+.hdr .hd-t2{padding-left:8px}
+/* the filled thumb already marks the current area, so it carries no underline; the gap before Progress is space, not a rule */
+.hd-areas .hd-thumb::after,.hd-dock a.on::after{display:none}
+.hd-areas .hd-asep{background:none;width:6px;margin:0}
+.hd-chips>.hd-chip{border-left:0}
+.hd-vsep{background:none!important}
+/* the header timer stays one row whatever the browser does with its parts, and Stop shows whenever there is something to stop
+   (hover never happens on a touch screen) */
+.hd-timer{flex-direction:row;flex-wrap:nowrap;white-space:nowrap;gap:4px;padding:0 5px 0 4px}
+.hd-timer>*{flex:none}
+.hd-tring{min-width:26px;min-height:26px}
+.hd-timer>b{line-height:1;padding:0 2px}
+.hd-timer.live .hd-treset{opacity:1}
