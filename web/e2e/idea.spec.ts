@@ -387,3 +387,17 @@ test("1-D DP: a table fills cell by cell with the cells it reads lit, and the an
     await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
     await expect(page.locator(".id-res")).toContainText("19");
 });
+
+test("2-D DP: the LCS table fills with its neighbours lit, and the grid path is traced back from the corner", async ({ page }) => {
+    await page.goto("/dsa/patterns/D14/idea");
+    await expect(page.locator(".id-tb .id-tb-c")).toHaveCount(24);
+    await page.getByRole("button", { name: "Next →" }).click();
+    await page.getByRole("button", { name: "Next →" }).click();
+    await expect(page.locator(".id-tb-c.id-tb-cur")).toHaveCount(1);
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("3");
+    await page.getByRole("radio", { name: /cheapest path/i }).click();
+    await page.getByRole("button", { name: /^Step \d+$/ }).last().click();
+    await expect(page.locator(".id-res")).toContainText("7");
+    await expect(page.locator(".id-tb-c.id-tb-hit")).toHaveCount(5);
+});

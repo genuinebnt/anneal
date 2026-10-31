@@ -1,0 +1,137 @@
+pattern = "2-D Dynamic Programming"
+
+tagline = "When a subproblem needs two numbers to describe it, the table gets a second side, and each cell reads the neighbours beside and above it."
+
+what = [
+    "2-D dynamic programming is the same idea as the line version, with **one more index**. A cell is now \"the answer for the first i of this and the first j of that\": the first i letters of one string and the first j of another, or row i and column j of a grid. The recurrence reads a **small neighbourhood**: usually the cell above, the cell to the left, and the diagonal.",
+    "So you fill a table of m × n cells, **each in constant time**, instead of exploring exponentially many ways to line things up. Run two below: comparing two strings, and a cheapest path through a grid, where the answer cell is a corner and the path can be traced back.",
+]
+
+demos = ["dp2-lcs", "dp2-path"]
+
+applies = [
+    "**Two strings or arrays** compared position by position: longest common subsequence, edit distance, interleaving, distinct subsequences.",
+    "**Grid paths**: the number of paths, or the cheapest one, moving only right and down.",
+    "**State machines**: buying and selling a stock with a cooldown, a fee or a limit, where you are in one of a few states each day.",
+    "**Knapsack-like** problems with two limits, or when the order of items and the remaining capacity both matter.",
+    "Ranges: \"remove or merge items from a line\" where the cost depends on the **ends of a range** (burst balloons).",
+]
+
+yes = [
+    "A subproblem needs **two indexes** to describe it (a position in each of two inputs, or a row and a column).",
+    "Each cell depends only on a **few cells already filled**: left, above, diagonal.",
+    "The **number of cells** is small (m × n), even though the number of ways to line things up is huge.",
+]
+
+no = [
+    "One index is enough: use the **1-D** version, which needs a line, not a table.",
+    "You must **list** the alignments or paths: that is backtracking.",
+    "A **greedy** choice is provably safe, so no table is needed.",
+]
+
+apply = [
+    "**Say what a cell means.** \"`dp[i][j]` is the answer for a[:i] and b[:j]\" or for the grid cell (i, j).",
+    "**Write the recurrence in cases.** When the new letters match, one formula; when they do not, another (the best of dropping one or the other).",
+    "**Set the first row and column.** Usually an empty prefix: zero, or the length of the other prefix.",
+    "**Fill in an order that works.** Row by row and left to right is enough when cells read only up, left and diagonal.",
+    "**Check if you can shrink it.** If a row reads only the row above, two rows (or one with care) are enough.",
+    "**State the invariant.** \"After filling (i, j), `dp[i][j]` is final.\" If you can say it, the code follows.",
+]
+
+[[which]]
+says = "\"move only **right and down**\": the number of paths, or the cheapest"
+kind = "Grid DP"
+move = "A cell is its own cost plus the cheaper (or the sum) of the cell above and the cell to the left."
+glyph = "gridpathdp"
+technique = "2-D Dynamic Programming:grid-dp"
+
+[[which]]
+says = "\"compare **two strings**\": longest common subsequence, edit distance"
+kind = "Two-string DP"
+move = "dp[i][j] from the diagonal on a match, or from the best of the cell above and the cell to the left."
+glyph = "twostr"
+technique = "2-D Dynamic Programming:two-string"
+
+[[which]]
+says = "\"a subsequence where each element depends on the **previous two**\""
+kind = "Pair DP"
+move = "State is the last two chosen elements (or their indexes); each cell extends a shorter pair."
+glyph = "pairdp"
+technique = "2-D Dynamic Programming:pair-dp"
+
+[[which]]
+says = "\"buy and sell with a **cooldown / fee / at most k** trades\""
+kind = "State machine"
+move = "A few states per day (holding, sold, resting). Each day's value comes from the previous day's states."
+glyph = "statem"
+technique = "2-D Dynamic Programming:state-machine"
+
+[[which]]
+says = "\"the best path in a grid where you may move in **any direction**\""
+kind = "DFS with memory"
+move = "No fill order exists, so recurse from each cell and cache the answer per cell."
+glyph = "dfsmemo"
+technique = "2-D Dynamic Programming:dfs-memo"
+
+[[which]]
+says = "\"remove or merge items from a line; the cost depends on the **neighbours**\""
+kind = "Interval DP"
+move = "dp[i][j] is the best for the range i..j; try every last (or first) item to remove in the range."
+glyph = "intervaldp"
+technique = "2-D Dynamic Programming:interval"
+
+[[cost]]
+name = "Try every alignment"
+time = "exponential"
+space = "O(m + n)"
+why = "Each pair of letters either matches or one side is dropped, so the number of ways to line two strings up grows exponentially, and the same prefix pairs are solved over and over. This is the cost to beat."
+
+[[cost]]
+name = "Two-string table"
+time = "O(m · n)"
+space = "O(m · n)"
+why = "There are (m + 1)(n + 1) cells and each is filled from at most three neighbours in constant time. Since a cell reads only the row above, two rows are enough when you need only the length, bringing the space to O(n)."
+
+[[cost]]
+name = "Grid paths"
+time = "O(R · C)"
+space = "O(R · C) or O(C)"
+why = "Each cell reads two neighbours once. A row depends only on the row above and on itself, so one row of length C can be updated in place."
+
+[[cost]]
+name = "State machine"
+time = "O(n · states)"
+space = "O(states)"
+why = "Each day has a handful of states, each computed from the previous day's. Only the previous day is needed, so the table shrinks to a few variables."
+
+[[cost]]
+name = "DFS with memory on a grid"
+time = "O(R · C)"
+space = "O(R · C)"
+why = "Each cell's answer is computed once and then looked up. The recursion can be as deep as the longest path, up to R · C cells, so a very large grid may need an explicit order."
+
+[[cost]]
+name = "Interval DP"
+time = "O(n³)"
+space = "O(n²)"
+why = "There are about n²/2 ranges and for each you try every position inside it as the split or last item, up to n of them. That cubic cost is why interval DP is used only when n is a few hundred."
+
+[[with]]
+pattern = "1-D Dynamic Programming"
+how = "Most 2-D tables shrink to a line when each row reads only the row above: keep one row and update it. The 1-D version is the 2-D one with a dimension folded away."
+example = "coin-change"
+
+[[with]]
+pattern = "Backtracking"
+how = "A 2-D DP counts or optimises what backtracking would list. Target sum can be searched with +/- choices, or counted by a table of (index, running total)."
+example = "target-sum"
+
+[[with]]
+pattern = "Graphs"
+how = "DFS with memory on a grid is DP on a graph with no cycles: the longest increasing path is a longest path in a DAG, cached per cell."
+example = "longest-increasing-path-in-a-matrix"
+
+[[with]]
+pattern = "Greedy"
+how = "The single-trade stock problem needs no table: keep the lowest price so far. The table is for the versions with a cooldown or a limit, where the choice today changes what you may do tomorrow."
+example = "best-time-to-buy-and-sell-stock"

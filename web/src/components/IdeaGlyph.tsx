@@ -89,6 +89,12 @@ const SPEC: Record<string, { n: number; w: [number, number][]; w2?: [number, num
     minmax: { n: 10, w: [], bars: [2, 3, 6, 10, 2, 7, 5, 3, 8, 4], ptr: [3, 4] },
     expandc: { n: 10, w: [[2, 7]], w2: [[3, 6]], dots: [4], ptr: [4] },
     countst: { n: 10, w: [], dots: [1, 2, 3, 5, 6, 7], bars: [2, 3, 5, 4, 4, 6, 7, 6, 8, 9] },
+    gridpathdp: { n: 10, w: [], dots: [0, 1, 2, 4, 6, 8, 9], ptr: [9], w2: [[0, 3]] },
+    twostr: { n: 10, w: [[0, 5]], w2: [[5, 10]], dots: [1, 3, 6, 8] },
+    pairdp: { n: 10, w: [], dots: [1, 4, 8], w2: [[3, 5]], ptr: [8] },
+    statem: { n: 10, w: [], dots: [0, 3, 6, 9], w2: [[0, 2], [3, 5], [6, 8]] },
+    dfsmemo: { n: 10, w: [], dots: [0, 1, 2, 3, 4, 5, 6], bars: [1, 2, 3, 4, 5, 6, 7, 3, 2, 1], ptr: [6] },
+    intervaldp: { n: 10, w: [[0, 10]], w2: [[2, 8]], dots: [5], ptr: [2, 7] },
     ratio: { n: 10, w: [], bars: [2, 4, 8, 4, 2, 4, 8, 16, 8, 4], ptr: [0, 9] },
 };
 
