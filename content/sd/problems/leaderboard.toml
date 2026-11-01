@@ -16,12 +16,38 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
 reference = """
-**Leaderboard**: update a player's score, get the top N, get my rank and the players around me; seasons reset.
-**Trending**: top 100 songs by plays for the last hour, day and week, refreshed every minute; approximate counts acceptable.
+Two features that look alike and are not: one is **exact and per player**, the other **approximate and global**. Saying so first is half the answer.
 
-**Non-functional**: rank queries under 50 ms; score updates visible within a second; trending can lag a minute.
+**Leaderboard (game)**:
 
-**Estimate**: 50M players × ~50 bytes in a sorted set ≈ a few GB, fits in one Redis. Plays: 5B a day ≈ 60,000 a second, peaks of 200,000.
+1. Game servers report score changes for a player.
+2. Players see the **top 100**, **their own rank and score**, and the **players just above and below** them.
+3. Leaderboards are per **season** and reset; old seasons stay readable.
+
+**Trending (music)**:
+
+1. The **top 100 songs by plays** over the last **hour**, **day** and **week**, refreshed every minute.
+2. Approximate counts are fine for the list (nobody can check the 37th song's exact count); charts that pay royalties are not, and are computed separately.
+
+**Non-functional**:
+
+| | Leaderboard | Trending |
+|---|---|---|
+| Latency | rank queries under 50 ms | served from a cache, under 50 ms |
+| Freshness | my score change visible within ~1 s | the list may lag ~1 minute |
+| Accuracy | **exact**: players notice and rewards depend on it | approximate is acceptable |
+| Durability | scores never lost | counts can be recomputed from the event log |
+
+**Estimate** (assumptions labelled):
+
+```text
+leaderboard  50M players × ~100 B per sorted-set entry (assumption;
+             measure with MEMORY USAGE) ≈ 5 GB → fits one Redis node
+updates      10M daily players × 10 games ≈ 100M/day ≈ 1,200/s (×5 peak ≈ 6,000/s)
+plays        5B/day ≈ 58,000/s average, peaks ~200,000/s
+```
+
+The numbers say the leaderboard is **small** (one node) and the trending feature is a **stream** problem (200,000 events a second, counted over three sliding windows).
 """
 [[steps.points]]
 id = "req-split"
@@ -36,7 +62,16 @@ level = "mid"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Score` (player, season, points), `PlayEvent` (song, user, time), `WindowCount` (song, time bucket, count), `TopList` (window, computed at, ranked songs)."
+reference = """
+| Entity | Fields | Store |
+|---|---|---|
+| `Score` | player, season, points, achieved_at | the durable record: a database table; mirrored into a sorted set |
+| `PlayEvent` | song, user, time, duration listened | an event in a log (Kafka), never a row per play in a database |
+| `WindowCount` | song, **time bucket** (a minute or an hour), count | state in the stream processor |
+| `TopList` | window (1h, 24h, 7d), computed_at, ranked songs with counts | small; written every minute to Redis or a table |
+
+The key choice is `WindowCount` **per bucket**: a count per song per minute (and per hour for longer windows) can be added up into any window, and a bucket that leaves the window is dropped as a whole. Counting "the last 24 hours" directly would mean remembering every play's time.
+"""
 [[steps.points]]
 id = "ent-bucket"
 text = "Counts kept per time bucket rather than per raw window"
@@ -46,10 +81,27 @@ level = "senior"
 name = "API"
 minutes = 3
 prompt = "What do clients call?"
-reference = "`POST /scores { player_id, delta }` (server-side, from the game server, never the client), `GET /leaderboard/top?n=100`, `GET /leaderboard/me` → `{ rank, score, around: [...] }`, `GET /trending?window=1h|24h|7d`."
+reference = """
+```http
+POST /internal/scores        (game server → leaderboard, mutual TLS)
+{ "season": 12, "player_id": "p_7", "delta": 50, "match_id": "m_9921" }   -> 204
+
+GET /leaderboards/12/top?n=100          -> { "entries": [ { "rank": 1, "player": "p_3", "score": 98410 }, ... ] }
+GET /leaderboards/12/me                 -> { "rank": 48211, "score": 7340, "around": [ ...5 above, 5 below... ] }
+GET /trending?window=1h|24h|7d&n=100    -> { "computed_at": "...", "songs": [ { "id": "s_1", "plays": 412000 }, ... ] }
+```
+
+- **Scores come from game servers, never from the client.** A client can be modified to send any number; the game server that ran the match is the authority. `match_id` makes the report idempotent (a retried report for the same match is ignored).
+- `me` takes the player from the auth token, not a parameter.
+- Trending returns `computed_at`, so the client can say "updated a minute ago" and caches can key on it.
+"""
 [[steps.points]]
 id = "api-trust"
 text = "Scores submitted by trusted game servers, not by clients"
+level = "senior"
+[[steps.points]]
+id = "api-match-idem"
+text = "Score reports idempotent per match, so a retry does not add points twice"
 level = "senior"
 
 [[steps]]
@@ -57,9 +109,41 @@ name = "High-level design"
 minutes = 14
 prompt = "Draw both features."
 reference = """
-**Leaderboard**: a Redis **sorted set** per season: `ZINCRBY season:12 50 player:7` to update, `ZREVRANGE season:12 0 99 WITHSCORES` for the top, `ZREVRANK` for my rank, then `ZREVRANGE rank-5 rank+5` for my neighbours, all O(log n). Scores are also written durably to a database (the sorted set can be rebuilt from it). Ties broken by encoding time into the score.
+**The diagram**:
 
-**Trending**: play events go to **Kafka**; a stream job (Flink) counts per song in **one-minute buckets** (with a count-min sketch plus a heap per shard if the song catalogue is huge), and every minute merges the buckets of the last 60 minutes, 24 hours (hourly buckets), and 7 days into a top-100 list per window. Results are written to Redis or a small table and served from a cache.
+```text
+LEADERBOARD
+game server ─► score svc ─► scores DB (durable)
+                   └──────► Redis sorted set season:12
+player ─► leaderboard svc ─► ZREVRANGE / ZREVRANK
+
+TRENDING
+play events ─► Kafka (by song) ─► stream job: counts per
+               song per minute and hour ─► top 100 per
+               window, every minute ─► Redis ─► API (cached)
+```
+
+**Leaderboard: a Redis sorted set per season.** A sorted set keeps members ordered by score with a skip list plus a hash table, so updates and rank lookups are O(log n).
+
+| Need | Command | Cost |
+|---|---|---|
+| add points | `ZINCRBY season:12 50 p_7` | O(log n) |
+| top 100 | `ZREVRANGE season:12 0 99 WITHSCORES` | O(log n + 100) |
+| my rank | `ZREVRANK season:12 p_7` (0-based) | O(log n) |
+| my neighbours | `ZREVRANGE season:12 rank-5 rank+5 WITHSCORES` | O(log n + 11) |
+
+With 50M players, log₂ 50M ≈ 26 steps: microseconds. The score service writes the **database first** (the durable record) and then the sorted set; if Redis is lost, the set is rebuilt from the table in one pass.
+
+**Ties**: Redis orders equal scores lexicographically by member, which is arbitrary for players. Encode the tie-break into the score: `points × 10^7 + (season_end − achieved_at in seconds)`, so for equal points the earlier achiever has the larger value. Scores are double-precision floats, exact for integers up to 2^53 ≈ 9.0 × 10^15, so with a 10^7 multiplier points must stay under about 900 million: check the bound before choosing the multiplier.
+
+**Trending: buckets in a stream processor.**
+
+1. Play events go to **Kafka**, partitioned by song id, so each song's count lives on one worker.
+2. A **stream job** (Flink, Kafka Streams) keeps counts per song per **minute** (for the last hour) and per **hour** (for the day and week).
+3. Every minute it merges the buckets of each window and emits the **top 100** per partition; a final step merges the partitions' top lists (the global top 100 is among the union of each partition's top 100, because each song lives in exactly one partition).
+4. The lists go to Redis (or a small table), and the API serves them from cache.
+
+**Exact or sketched?** (assumptions labelled) If 20M distinct songs are played in an hour, exact counts are 20M × 16 B = 320 MB per hourly bucket, and a week of hourly buckets is 168 × 320 MB ≈ 54 GB across the cluster: affordable when sharded. A **count-min sketch** shrinks it: with error ε = 0.0001 of the total and failure probability δ = 1%, the width is ⌈e/ε⌉ = 27,183 and the depth ⌈ln(1/δ)⌉ = 5, so 136k counters × 4 B ≈ 544 KB per bucket. The price: an hour has 5B ÷ 24 ≈ 208M plays, so each count may be over by up to ε × 208M ≈ 21,000 plays. Pair the sketch with a heap of the current top candidates (keep exact counts only for them). Choose exact counts if the catalogue is moderate and you have the memory; a sketch if it is huge.
 """
 [[steps.points]]
 id = "hld-zset"
@@ -77,16 +161,33 @@ level = "senior"
 id = "hld-stream"
 text = "Play events through a log and a stream processor, sharded by song"
 level = "senior"
+[[steps.points]]
+id = "hld-tiebreak"
+text = "Ties broken by encoding time into the score, within the 2^53 exact range of a double"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 11
 prompt = "Scale beyond one node, hot keys, and accuracy."
 reference = """
-- **500M players**: shard the sorted set by score range (a player moves shards as the score crosses boundaries) so a global rank is the sum of counts in higher shards plus the rank within the shard; or shard by player and compute approximate ranks from a score histogram. Top N comes from the top shard.
-- **Hot songs**: a viral song's counter is hot; pre-aggregate in each stream worker (local counts per second) before merging.
-- **Accuracy**: count-min sketches overestimate; keep exact counts for candidates that enter the heap, or recompute exact daily charts in batch from the raw log (Lambda) when royalties depend on them.
-- **Abuse**: replays by bots inflate counts; filter per-user repeat plays before counting.
+**1. A leaderboard bigger than one node** (500M players: 500M × 100 B = 50 GB, or more updates than one node takes).
+
+| Approach | Rank query | Cost |
+|---|---|---|
+| **Shard by score range** (0-999, 1,000-4,999, ...) | rank = sum of `ZCARD` of every higher shard + rank within my shard | exact; a player **moves** shards when their score crosses a boundary (remove from one, add to another); ranges need rebalancing as scores grow |
+| Shard by player, rank from a histogram | count of players per score bucket gives "about rank 48,000" | approximate for most players, exact top N by asking each shard for its top N and merging |
+| Only the top is exact | exact sorted set for the top 100,000; everyone else sees a percentile ("top 12%") | what many games show anyway |
+
+The top 100 is easy in every scheme: it lives in the highest shard, or is the merge of each shard's top 100.
+
+**2. Hot keys.** A viral song gets a large share of plays; its partition's worker gets them all. **Pre-aggregate**: each producer or first-stage worker counts locally per second and sends one `(song, +n)` per second instead of n events. For the leaderboard, the hot spot is the sorted set itself during a tournament: batch score updates per player per second, and serve the top 100 from a copy refreshed every second instead of from the primary.
+
+**3. Accuracy by purpose.** A sketch overestimates; the trending list tolerates it. Royalty charts do not: recompute **exact** daily counts in a batch job from the raw event log (the log is the source of truth), and publish those. Two paths, one approximate and fast, one exact and late, each for its use.
+
+**4. Abuse.** Bots replaying a song inflate its count. Filter before counting: cap counted plays per user per song per hour, require a minimum listening time, and drop accounts flagged by fraud detection. For games, validate scores on the game server and flag impossible jumps.
+
+**5. Seasons.** A new season is a new key (`season:13`); the old set is kept read-only for a while, then archived to the database, never deleted in place.
 """
 [[steps.points]]
 id = "dd-shard-rank"
@@ -100,6 +201,10 @@ level = "senior"
 id = "dd-accuracy"
 text = "Approximate streaming counts vs exact batch counts, chosen by purpose"
 level = "senior"
+[[steps.points]]
+id = "dd-abuse"
+text = "Inflated counts filtered before counting (per-user caps, minimum listen time)"
+level = "mid"
 
 [[probes]]
 question = "How do you compute 'top songs in the last 24 hours' every minute without recounting a day of events?"
@@ -107,8 +212,30 @@ answer = "Keep counts in time buckets (minutes for the last hour, hours for the 
 
 [[probes]]
 question = "Two players have the same score. How does a sorted set rank them, and how would you make the earlier achiever rank higher?"
-answer = "Redis orders equal scores lexicographically by member, which is arbitrary for players. Encode a tie-breaker into the score, for example score × 10^10 + (max_time − achieved_time), so for equal points the earlier time gives a larger value."
+answer = "Redis orders equal scores lexicographically by member, which is arbitrary for players. Encode a tie-breaker into the score, for example score × 10^10 + (max_time − achieved_time), so for equal points the earlier time gives a larger value. Keep the result under 2^53, where a double stops representing every integer exactly."
 
 [[probes]]
 question = "Why is it fine for trending to be approximate but not the player's own score?"
 answer = "Trending shows a ranked list where a small counting error rarely changes positions and nobody can check exact numbers; a player sees their own score and rank and will notice any mistake, and rewards may depend on it, so it is exact and durable."
+
+[[probes]]
+question = "Each Kafka partition computes its own top 100 songs. Is the merge of those lists the true global top 100?"
+answer = "Yes, when partitioning is by song: each song is counted in exactly one partition, so a song in the global top 100 must be in its own partition's top 100. If plays of one song were spread over partitions (partitioned by user, say), a song could be 101st everywhere yet first overall, and the merge would miss it."
+
+[[sources]]
+title = "Redis: sorted sets"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/data-types/sorted-sets/"
+note = "skip list plus hash table, O(log n), equal scores ordered lexicographically"
+
+[[sources]]
+title = "Cormode and Muthukrishnan: An improved data stream summary, the count-min sketch"
+kind = "paper"
+url = "https://users.cs.utah.edu/~pandey/courses/cs6968/spring23/papers/cms.pdf"
+note = "width e/ε, depth ln(1/δ), error at most ε of the total"
+
+[[sources]]
+title = "Apache Flink: windows"
+kind = "docs"
+url = "https://ci.apache.org/projects/flink/flink-docs-master/docs/dev/datastream/operators/windows/"
+note = "tumbling and sliding windows (size and slide)"
