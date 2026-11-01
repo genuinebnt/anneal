@@ -16,11 +16,31 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
 reference = """
-**Functional**: charge a buyer for an order (authorise, then capture), refunds, pay sellers on a schedule, show balances and history.
+**Functional**:
 
-**Non-functional**: **correctness over everything**: never charge twice, never lose a payment; strongly consistent balances; full audit trail; PCI scope kept minimal (never store card numbers); available, but it is better to fail a payment than to get it wrong.
+1. **Charge** a buyer for an order through an external processor (Stripe, Adyen): authorise at checkout, capture when the order ships (or both at once).
+2. **Refund** fully or partly.
+3. **Pay out** sellers on a schedule (say weekly), minus the platform's fee.
+4. Show **balances and history** to sellers, and to finance.
 
-**Estimate**: 1M payments a day ≈ 12 a second, peaks of a few hundred. Volume is small; the difficulty is correctness, not scale.
+**Non-functional**, in priority order:
+
+| Requirement | Made concrete |
+|---|---|
+| Correctness | the **effect** on money happens exactly once: never charge twice, never lose a payment, never pay a seller twice. Retries are inevitable, so this comes from idempotency, not from hoping requests are delivered once |
+| Auditability | every cent traceable: who, when, why; nothing edited in place |
+| Consistency | balances strongly consistent; a payment's state never goes backwards |
+| Security | card numbers never touch our servers (PCI scope kept minimal) |
+| Availability | high, but **failing a payment beats getting it wrong**: when unsure, stop and reconcile |
+
+**Estimate** (assumptions labelled):
+
+```text
+payments      1M a day ≈ 12/s; a sale day at 20× ≈ 230/s
+ledger rows   ~4 entries per payment → 4M/day × ~150 B ≈ 0.6 GB/day ≈ 220 GB/year
+```
+
+One Postgres primary handles this comfortably. **Scale is not the problem; correctness is.** Saying so lets the rest of the interview go to timeouts, idempotency and the ledger.
 """
 [[steps.points]]
 id = "req-correct"
@@ -40,7 +60,33 @@ name = "Core entities"
 minutes = 4
 prompt = "Name the things the system stores."
 reference = """
-`Payment` (order, amount, currency, status state machine: created → authorised → captured → refunded / failed, idempotency key, processor reference), `LedgerEntry` (double-entry: account, debit or credit, amount, transaction id; append-only), `Account` (buyer, seller, platform fees, processor clearing), `Payout`.
+| Entity | Fields | Rule |
+|---|---|---|
+| `Payment` | id, order_id, amount (integer minor units), currency, **status**, idempotency_key (unique), processor_ref, attempts | status only moves forward along the state machine |
+| `LedgerTransaction` | id, kind (charge, refund, payout, fee), payment_id, created_at | groups entries; its entries sum to zero |
+| `LedgerEntry` | transaction_id, account_id, amount (signed minor units), currency | **append-only**: never updated or deleted |
+| `Account` | id, kind (buyer clearing, seller payable, platform revenue, processor fees, processor clearing), currency | balances are derived from entries |
+| `Payout` | seller, amount, period, status, processor_ref | its own state machine |
+
+**The payment state machine**:
+
+```text
+created ─► authorising ─► authorised ─► capturing ─► captured ─► refunded (partly / fully)
+              │                              │
+              └──► failed        unknown ◄───┘  (a timeout: resolved later, never guessed)
+```
+
+**Double entry, worked**: a $100.00 order, platform fee 10%, processor fee $3.20 (assumption).
+
+| Account | Debit | Credit |
+|---|---|---|
+| processor clearing (money the processor owes us) | 10,000 | |
+| seller payable | | 9,000 |
+| platform revenue | | 1,000 |
+| processor fees (expense) | 320 | |
+| processor clearing | | 320 |
+
+Debits 10,320 = credits 10,320: every transaction balances, so money cannot appear or vanish without an unbalanced transaction exposing it.
 """
 [[steps.points]]
 id = "ent-ledger"
@@ -56,7 +102,25 @@ name = "API"
 minutes = 4
 prompt = "How does checkout call it?"
 reference = """
-`POST /payments { order_id, amount, currency, payment_method_token }` with an `Idempotency-Key` header → `{ payment_id, status }`. `POST /payments/{id}/capture`, `POST /payments/{id}/refunds { amount }`. Processor webhooks: `POST /webhooks/processor`, verified by signature.
+```http
+POST /v1/payments
+Idempotency-Key: 6f1c2e0a-4b7d-4d3e-9a51-0c8e7d2f9b11
+{ "order_id": "ord_5512", "amount": 10000, "currency": "USD",
+  "payment_method": "pm_tok_8f2a", "capture": "on_ship" }
+
+201 { "id": "pay_31", "status": "authorised" }
+```
+
+```http
+POST /v1/payments/pay_31/capture          Idempotency-Key: ...   -> 200 { "status": "captured" }
+POST /v1/payments/pay_31/refunds          Idempotency-Key: ...   { "amount": 2500 } -> 201 { "refund_id": "re_4" }
+POST /webhooks/processor                  (signature verified)  -> 200
+```
+
+- **Idempotency key on every mutating call.** The first request stores the key with the payment; a retry with the same key returns the **stored result** instead of acting again. Reject a reuse of the key with different parameters (Stripe's API does exactly that, keeps keys for at least 24 hours, and accepts keys up to 255 characters).
+- **Amounts are integers in minor units** (cents) with an explicit currency, never floats: in binary floating point 0.1 + 0.2 = 0.30000000000000004, and a ledger that drifts by a cent is a broken ledger. Currencies differ in minor units (the yen has none), so the currency says how to display the integer.
+- **`payment_method` is a token** from the processor's hosted fields: the card number went from the buyer's browser straight to the processor. That is what keeps the system out of most of PCI DSS scope; under the PCI SSC's rules, for the simplest self-assessment (SAQ A) every card-capturing element of the payment page must come from the validated provider.
+- **Webhooks** are verified by signature and are themselves idempotent (the processor retries them).
 """
 [[steps.points]]
 id = "api-idem"
@@ -72,12 +136,41 @@ name = "High-level design"
 minutes = 14
 prompt = "Draw the charge path and where the money is recorded."
 reference = """
-1. **Payment service** inserts the payment row (status `created`) keyed by the idempotency key in Postgres. A duplicate request finds the row and returns its current state.
-2. It calls the **processor** (Stripe, Adyen) with its own idempotency key derived from the payment id, so a retried call cannot charge twice.
-3. On the response (or the webhook), it moves the payment to `authorised`/`captured` and writes **ledger entries** in the same transaction: debit buyer clearing, credit seller balance and platform fee; entries always sum to zero.
-4. Events go out through an **outbox** (order service marks the order paid, notifications).
-5. **Payouts**: a scheduled job sums seller balances from the ledger and pays out through the processor, writing ledger entries for each payout.
-6. **Reconciliation**: daily, compare the processor's settlement report with the ledger line by line; mismatches go to a queue for investigation.
+**The diagram**:
+
+```text
+checkout ─► payment svc ─► Postgres: payments, ledger, outbox
+                │   ▲                         │
+                ▼   │ result / webhook        ▼ outbox relay
+            processor (Stripe, Adyen)     events: order paid
+                                          notifications
+nightly: settlement report ─► reconciler ─► mismatches queue
+weekly:  payout job ─► ledger ─► processor payouts
+```
+
+**The charge, in atomic phases** (each phase one database transaction, committed **before** any call to the outside world, so a crash always leaves a known state to resume from):
+
+:::steps One charge, phase by phase
+- payment svc | tx 1: INSERT payment (created, key) | A retry with the same key finds this row and resumes from its status.
+- payment svc | tx 2: status = authorising | Recorded before the call, so a crash during it is visible as in-flight.
+- payment svc | call processor, Idempotency-Key = pay_31-auth | A retried call returns the original authorisation, never a second one.
+- payment svc | tx 3: status = authorised + ledger entries + outbox row | All or nothing: the state and the money move together.
+- outbox relay | publish PaymentAuthorised | The order service marks the order paid; at-least-once, consumers dedupe by event id.
+:::
+
+**1. Local idempotency**: a unique index on `idempotency_key` means two concurrent identical requests cannot both insert; the loser reads the winner's row.
+
+**2. Processor idempotency**: our key to the processor is derived from our payment id and the step (`pay_31-auth`, `pay_31-capture`). If our server crashes after the call and before tx 3, the retry sends the same key and the processor returns the original result. Without it, a retry could create a second charge.
+
+**3. State change and ledger in one transaction**: the payment becomes `captured` **and** its balanced entries are written in the same commit. A payment marked captured without entries, or entries without the status, cannot exist.
+
+**4. Outbox**: events for other services are inserted in that same transaction into an `outbox` table; a relay publishes them afterwards. Publishing to a broker inside the transaction is impossible, and publishing after commit can be lost in a crash; the outbox makes "state changed" and "event will be sent" one atomic fact.
+
+**5. Payouts**: a weekly job computes each seller's payable balance from the ledger, writes a `Payout` (with its own idempotency key per seller and period) and the entries moving money from seller payable to processor clearing, then asks the processor to pay out.
+
+**6. Reconciliation**: every night, compare the processor's settlement report with the ledger line by line (by processor reference): missing on either side, different amounts, different status. Mismatches go to a queue for a person or an automated resolver.
+
+**Datastore**: Postgres, for transactions across the payment row, ledger entries and outbox, serialisable checks where needed, and constraints (unique keys, a check that entries balance). A NoSQL store would push all of that into application code, the last place to want it for money.
 """
 [[steps.points]]
 id = "hld-idem-proc"
@@ -95,17 +188,48 @@ level = "senior"
 id = "hld-outbox"
 text = "Downstream events published through an outbox"
 level = "senior"
+[[steps.points]]
+id = "hld-phases"
+text = "Each step committed locally before the external call, so a crash leaves a resumable state"
+level = "staff"
 
 [[steps]]
 name = "Deep dives"
 minutes = 13
 prompt = "Timeouts, unknown states, and concurrency."
 reference = """
-- **Timeout from the processor**: the outcome is unknown. Mark the payment `pending`, retry with the **same** idempotency key (the processor returns the original result), or query its status; webhooks also resolve it. Never create a new charge.
-- **Stuck payments**: a sweeper finds payments pending too long and resolves them by querying the processor.
-- **Concurrency**: two refunds racing on one payment: lock the payment row (`SELECT … FOR UPDATE`) or use a version check so the total refunded never exceeds the captured amount.
-- **Ledger rules**: append-only (corrections are new reversing entries), balances derived from entries (cached in a balance table updated in the same transaction), every transaction balanced.
-- **Multi-currency**: store amount and currency; convert at a recorded FX rate, never implicitly.
+**1. The timeout: an unknown outcome.** The processor call times out. The buyer may or may not have been charged; both are possible and you cannot tell from your side.
+
+| Option | Verdict |
+|---|---|
+| assume it failed and charge again with a new key | **never**: a double charge |
+| assume it failed and tell the buyer | wrong when it succeeded: money taken, order not placed |
+| mark `unknown`, **retry with the same key** | the processor returns the original outcome if there was one |
+| query the processor's status by our reference | resolves it when retrying is not possible |
+| wait for the webhook | resolves it eventually; the other two are faster |
+
+Airbnb described the same rule in its payments idempotency library (Orpheus): classify each failure as retryable or not, because getting that wrong either double-charges or leaves payments stuck.
+
+**2. Stuck payments.** A sweeper finds payments in `authorising`, `capturing` or `unknown` for longer than a few minutes and resolves each by querying the processor, then completes the state machine. Nothing is left in limbo.
+
+**3. Concurrency.** Two refunds of $60 race on a $100 payment. Each reads "refunded so far: $0" and both succeed: $120 refunded (a write-skew-style anomaly). Serialise them:
+
+```sql
+BEGIN;
+SELECT amount, refunded FROM payments WHERE id = 'pay_31' FOR UPDATE;   -- the second refund waits here
+-- check refunded + 6000 <= amount, else reject
+UPDATE payments SET refunded = refunded + 6000 WHERE id = 'pay_31';
+INSERT INTO ledger_entries ...;
+COMMIT;
+```
+
+or use an optimistic version check (`UPDATE ... WHERE id = $1 AND version = $2`) and retry on conflict.
+
+**4. Ledger discipline.** Append-only: a mistake is corrected with a **new reversing transaction**, never an `UPDATE`, so the history explains every balance. Balances are derived from entries; for speed keep a `balances` table updated **in the same transaction** as the entries and check nightly that it equals the sum of entries. Square's *Books* is a published example of an immutable double-entry ledger run as a service.
+
+**5. Multi-currency.** Store amount and currency on every entry; never add different currencies. A conversion is its own transaction at a recorded rate, with entries in both currencies through an FX account.
+
+**6. Reconciliation finds what code missed.** Lost webhooks, a bug that skipped entries, a processor-side reversal (a chargeback) all show up as a mismatch the next morning. Each is fixed by new entries, and its cause is fixed in code.
 """
 [[steps.points]]
 id = "dd-unknown"
@@ -119,6 +243,10 @@ level = "senior"
 id = "dd-append"
 text = "Ledger corrections as reversing entries, never edits"
 level = "staff"
+[[steps.points]]
+id = "dd-sweeper"
+text = "A sweeper resolves payments stuck in an in-flight state by asking the processor"
+level = "senior"
 
 [[probes]]
 question = "Why a double-entry ledger instead of a balance column per user?"
@@ -131,3 +259,43 @@ answer = "The request carries an idempotency key; the first request stored a pay
 [[probes]]
 question = "At the end of the day the processor says it settled 10,002 payments and your ledger has 10,000. What happens?"
 answer = "Reconciliation flags the two settlements without a matching ledger entry (perhaps webhooks lost or payments stuck pending); they go to an investigation queue, are resolved by querying the processor, and fixed with new ledger entries, never by editing old ones."
+
+[[probes]]
+question = "Your service crashes after the processor captured the charge but before your transaction committed. Walk through recovery."
+answer = "The payment row says `capturing` (committed before the call). The sweeper finds it, retries the capture with the same idempotency key (or asks the processor for the status), gets the original success, and commits `captured` with its ledger entries and outbox row. No second capture happens, and no captured money goes unrecorded."
+
+[[sources]]
+title = "Stripe API: idempotent requests"
+kind = "docs"
+url = "https://docs.stripe.com/api/idempotent_requests"
+note = "keys up to 255 characters, kept at least 24 hours, a reuse with different parameters is an error"
+
+[[sources]]
+title = "Stripe: Designing robust and predictable APIs with idempotency"
+kind = "article"
+url = "https://stripe.com/blog/idempotency"
+note = "why retries need idempotency keys"
+
+[[sources]]
+title = "Leach: Implementing Stripe-like idempotency keys in Postgres"
+kind = "article"
+url = "https://brandur.org/idempotency-keys"
+note = "atomic phases committed before foreign calls, recovery points"
+
+[[sources]]
+title = "Airbnb: Avoiding double payments in a distributed payments system"
+kind = "article"
+url = "https://medium.com/airbnb-engineering/avoiding-double-payments-in-a-distributed-payments-system-2981f6b070bb"
+note = "Orpheus: idempotency and classifying failures as retryable"
+
+[[sources]]
+title = "Square: Books, an immutable double-entry accounting database service"
+kind = "article"
+url = "https://developer.squareup.com/blog/books-an-immutable-double-entry-accounting-database-service/"
+note = "an append-only double-entry ledger as a service"
+
+[[sources]]
+title = "PCI SSC FAQ: the payment page for SAQ A merchants using an iframe"
+kind = "standard"
+url = "https://www.pcisecuritystandards.org/faq/articles/Frequently_Asked_Question/How-is-the-payment-page-determined-for-SAQ-A-merchants-using-iframe"
+note = "card fields must come from the validated provider"
