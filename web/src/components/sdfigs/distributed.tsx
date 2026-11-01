@@ -2,6 +2,40 @@ import { Arrow, Box, type Fig } from "./parts";
 
 /** Figures for the distributed and advanced pages. Add each name to `SD_FIGURES_DISTRIBUTED` in `crates/content/src/sd.rs`. */
 export const FIGS_DISTRIBUTED: Record<string, Fig> = {
+    "fencing-token": {
+        steps: 8,
+        ms: 1100,
+        draw: (t) => {
+            const holder = t <= 2 ? 1 : t >= 4 ? 2 : 0;
+            const token = t >= 4 ? 34 : 33;
+            const highest = t >= 5 ? 34 : t >= 1 ? 33 : 0;
+            const c1 = t === 6 || t === 7 ? "bad" : t >= 2 && t <= 5 ? "warn" : "acc";
+            const c1sub = t === 0 ? "lease, token 33" : t === 1 ? "writes with 33" : t >= 2 && t <= 5 ? "paused (GC)" : "wakes, writes with 33";
+            const say = [
+                "client 1 takes the lease and gets token 33",
+                "its write carries 33; storage remembers 33",
+                "client 1 stops for a long garbage-collection pause",
+                "the lease expires while it sleeps",
+                "client 2 takes the lease: token 34",
+                "client 2 writes with 34; storage now expects at least 34",
+                "client 1 wakes, still sure it holds the lock, and writes with 33",
+                "storage rejects 33 < 34: the stale holder cannot do damage",
+            ];
+            return (
+                <>
+                    <Box x={14} y={30} w={150} label="client 1" tone={c1} sub={c1sub} />
+                    <Box x={14} y={130} w={150} label="client 2" tone={t >= 4 ? "acc" : "line"} sub={t >= 4 ? "lease, token 34" : "waiting"} />
+                    <Box x={250} y={80} w={140} label="lock service" tone={t === 3 ? "warn" : "line"} sub={holder ? `lease: client ${holder}, ${token}` : "lease expired"} />
+                    <Box x={470} y={80} w={150} label="storage" tone={t === 7 ? "grn" : "line"} sub={`highest token ${highest || "–"}`} />
+                    {t === 0 && <Arrow d="M248 92 L166 52" on />}
+                    {t === 4 && <Arrow d="M248 110 L166 146" on />}
+                    {(t === 1 || t === 6) && <Arrow d="M164 44 Q320 20 468 88" on dash={t === 6} />}
+                    {t === 5 && <Arrow d="M164 150 Q320 190 468 112" on />}
+                    <text className="sf-lab" x={14} y={212}>{say[t]}</text>
+                </>
+            );
+        },
+    },
     "raft-log": {
         steps: 10,
         ms: 900,

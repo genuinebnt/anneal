@@ -1,15 +1,30 @@
 title = "Leases, locks and fencing tokens"
 group = "distributed"
 order = 6
-minutes = 10
+minutes = 18
 lede = "A distributed lock is really a lease: ownership that expires unless renewed. Because a holder can pause and wake up after its lease ran out, safety comes from a fencing token that the protected resource checks, not from the lock alone."
 say = "Workers take a lease on the job from etcd; the lease's revision is a fencing token sent with every write to storage, which rejects any token older than the last one it saw."
-related = ["coordination-services", "consensus-raft", "clocks-and-ordering", "contention"]
+related = ["coordination-services", "consensus-raft", "clocks-and-ordering", "contention", "isolation-anomalies"]
+
+summary = [
+  "A distributed lock must **expire**, or a crashed holder blocks everyone forever: that makes it a **lease**.",
+  "A holder can **pause past its lease** (GC, VM migration, slow disk) and wake up still believing it holds the lock; no lock service can stop that alone.",
+  "**Fencing**: every grant carries a token that only grows, and the **resource rejects** writes with a token older than the newest it has seen.",
+  "Say whether a lock is for **efficiency** (a rare double is harmless) or **correctness** (it must never happen); only the second needs consensus and fencing.",
+  "For one row or one object, the database's own **conditional write** is often the whole lock.",
+]
 
 [[sections]]
 heading = "Why locks become leases"
 body = """
 A lock held by a process that crashes would block everyone forever, so a distributed lock always carries a **time limit**: the holder owns it for, say, 10 seconds and must renew before then. That is a **lease**. If the holder dies, the lease expires and someone else can take it.
+
+Gray and Cheriton introduced leases in 1989 for keeping file caches consistent: a server promises a client that the data will not change without warning for a term, and a failed or unreachable client costs at most one term of waiting. Their analysis made the trade explicit:
+
+- **Short leases** recover quickly from a dead holder but cost renewal traffic and make a slow network look like a lost lease.
+- **Long leases** are cheap to keep but leave the resource unowned for longer after the holder dies.
+
+Leases need **no synchronised clocks**, only clocks that run at about the same **rate**. The holder starts its own countdown when it *sends* the request (so the network delay only shortens its view of the lease) and stops a little early to allow for drift; the service waits the full term, measured from when it granted it. Redis's lock documentation spells out the same rule for Redlock: the validity is the lease time minus the time spent acquiring it, minus a margin for drift.
 """
 
 [[sections]]
@@ -21,6 +36,8 @@ body = """
 4. Client 1 wakes up, still believing it holds the lease, and writes too. The file is now corrupt.
 
 Checking "do I still hold it?" before writing does not help: the pause can happen right after the check. **No lock service can prevent this on its own.**
+
+The pauses are real. Stop-the-world garbage collection, a VM being live-migrated, the process being swapped out, a `SIGSTOP`, a write blocked on a full disk or a slow network file system, or a packet delayed in a queue: each can stop a thread for seconds between two lines of code, and none of them tells the thread it was stopped.
 """
 
 [[sections]]
@@ -31,6 +48,78 @@ Every time the lease is granted, the lock service hands out a **token that only 
 In the story above, client 2 writes with token 34; client 1 wakes and writes with 33, and storage rejects it. Safety now rests on the resource's check, which is not affected by pauses.
 
 - etcd: the key's revision; ZooKeeper: the zxid or znode version; a database: a version column in a conditional update (`UPDATE … WHERE token < :new`).
+
+The whole mechanism, run as the story above (a 10-second lease, a pause until 15 s):
+
+```rust title=fencing.rs hl=29-31
+/// The lock service: grants a lease for `ttl` milliseconds and, with every grant, a token that only grows.
+pub struct LockService {
+    holder: Option<u32>,
+    expires: u64,
+    next_token: u64,
+}
+
+impl LockService {
+    pub fn acquire(&mut self, client: u32, now: u64, ttl: u64) -> Option<u64> {
+        if self.holder.is_some() && now < self.expires {
+            return None; // someone holds an unexpired lease
+        }
+        self.next_token += 1;
+        self.holder = Some(client);
+        self.expires = now + ttl;
+        Some(self.next_token)
+    }
+}
+
+/// The protected resource: it remembers the highest token it has accepted and refuses anything older.
+pub struct Storage {
+    highest: u64,
+    pub writes: Vec<(u32, &'static str)>,
+    fencing: bool,
+}
+
+impl Storage {
+    pub fn write(&mut self, client: u32, token: u64, data: &'static str) -> Result<(), String> {
+        if self.fencing && token < self.highest {
+            return Err(format!("token {token} is older than {}", self.highest));
+        }
+        self.highest = self.highest.max(token);
+        self.writes.push((client, data));
+        Ok(())
+    }
+}
+```
+
+| Storage | Client 1's late write | The file afterwards |
+|---|---|---|
+| without the check | accepted | client 1's first half, client 2's file, client 1's second half: corrupt |
+| with the check | `token 33 is older than 34` | client 2's file stands |
+
+In a relational database the check is one conditional statement. Run on Postgres 18, client 2's write with 34 updated the row and client 1's late write with 33 updated **0 rows**:
+
+```sql title=fenced_write.sql
+UPDATE files SET body = 'from client 2', fence = 34 WHERE name = 'report' AND fence <= 34;  -- UPDATE 1
+UPDATE files SET body = 'from client 1', fence = 33 WHERE name = 'report' AND fence <= 33;  -- UPDATE 0
+```
+
+The application treats "0 rows" as "you no longer hold the lock" and stops.
+"""
+
+[[sections]]
+heading = "Where the token comes from"
+body = """
+The token must come from the same place that grants the lease, and that place must never hand out the same or a smaller number twice, even across its own failures. Consensus stores do this naturally, because every change gets the next index in a replicated log.
+
+| Service | The lease | The token |
+|---|---|---|
+| etcd | a lease with a TTL, kept alive by the client (the Go client's session defaults to 60 s); each contender writes a key under the lock's prefix, the key with the lowest creation revision holds the lock, and each waiter watches only the key just before its own | the key's revision |
+| ZooKeeper | an ephemeral sequential znode that disappears with the client's session; the lowest sequence number holds the lock and each waiter watches its predecessor | the znode's version or the transaction id (zxid) |
+| Chubby | locks held through a session with keep-alives | a **sequencer**: the lock's name, mode and generation number, which servers can check |
+| a database row | a lease column (`locked_until`) set with a conditional update | a version column incremented by the same update |
+
+Watching only the predecessor means a release wakes one waiter, not all of them: no thundering herd.
+
+**When the resource cannot check a token** (an old service, a third-party API), the options are weaker. Chubby added a **lock-delay**: when a holder fails rather than releasing, nobody else may take the lock for a period the client chooses, up to one minute, so delayed messages from the old holder probably arrive first. Probably is the word: it lowers the risk, it does not remove it. The better fix is to make the operation itself safe to repeat or conditional (an idempotency key, a compare-and-set on a version).
 """
 
 [[sections]]
@@ -45,8 +134,24 @@ body = """
 > [!NOTE]
 > Redlock (taking a Redis lock on a majority of independent nodes) was debated publicly: it depends on bounded clock drift and pauses and produces no fencing token, so it does not make a correctness lock safe.
 
+**The single-instance Redis lock**, as Redis documents it: `SET resource random_value NX PX 30000` takes the lock only if nobody holds it, with a 30-second expiry; the random value identifies the holder, so releasing deletes the key **only if it still holds that value** (`DELEX key IFEQ value` from Redis 8.4, or a short Lua script on older versions). Without that check a client whose lease already expired would delete the next holder's lock.
+
+**Redlock** runs the same `SET` on N independent Redis primaries (five in the documentation's example) and counts the lock as held if a majority accepted it and the time spent acquiring it was well under the lease. Martin Kleppmann argued in 2016 that this is unsafe for correctness: it assumes bounded pauses, network delays and clock jumps, and it produces no fencing token. Salvatore Sanfilippo (antirez), Redis's author, replied that the assumptions are reasonable in practice. Redis's documentation links both and, for anyone who needs correctness, says to implement fencing tokens, and warns that Redis expires keys by the wall clock rather than a monotonic one, so a clock change can hand one lock to two processes.
+
 > [!INTERVIEW]
 > Say whether the lock is for efficiency or correctness; for correctness, name the fencing token and who checks it.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Do you need a lock at all?** One row, one seat, one object: a conditional write in the database is simpler and has no lease to expire.
+2. **Efficiency or correctness?** For efficiency (a cron job that should usually run once), a Redis lease with a TTL is enough. For correctness, a consensus store and a fencing token.
+3. **The lease's length**: long enough to cover normal work plus renewals, short enough that a dead holder does not stall the system; renew in the background at a third or half of the TTL.
+4. **Who checks the token**, and what the holder does when its write is refused (stop, do not retry with the old token).
+
+> [!INTERVIEW]
+> "Only one scheduler may run a job. Each instance campaigns in etcd; the winner's key revision is the fencing token, the jobs table update includes `WHERE fence <= $token`, and a paused ex-leader's update matches no rows."
 """
 
 [[checks]]
@@ -56,3 +161,98 @@ answer = "Each grant comes with an increasing token (client 1 got 33, client 2 g
 [[checks]]
 prompt = "When is a simple Redis SET NX lock good enough?"
 answer = "When it is only for efficiency: it prevents most duplicate work, and the rare case of two holders (after a failover or a pause) causes extra work but no corruption, such as two workers regenerating the same cache entry."
+
+[[checks]]
+prompt = "A colleague proposes checking 'do I still hold the lease?' right before every write instead of using fencing tokens. Why is that not enough?"
+answer = "The pause can come between the check and the write: the check passes, the process stops for a GC pause or a VM migration, the lease expires and another client takes it, and then the write goes out. Only a check made by the resource at the moment it applies the write, against the newest token it has seen, closes that gap."
+
+[[checks]]
+prompt = "Why does a Redis lock store a random value, and why must the release compare it before deleting?"
+answer = "The value identifies the holder. A client whose lease expired during a pause may try to release a lock that now belongs to another client; deleting the key unconditionally would free someone else's lock. Releasing only if the stored value is still yours (DELEX in Redis 8.4, or a Lua script) prevents that."
+
+[[checks]]
+prompt = "How does an etcd lock avoid waking every waiter when the holder releases, and what serves as its fencing token?"
+answer = "Each contender writes a key under the lock's prefix with its lease; the key with the lowest creation revision holds the lock, and each waiter watches only the key created just before its own, so a release wakes exactly one waiter. The holder's key revision only grows across grants, so it is the fencing token the resource checks."
+
+[[checks]]
+prompt = "The resource you protect is a third-party API that cannot check tokens. What can you still do?"
+answer = "Lower the risk and make repeats harmless: keep work under a lock short and well within the lease; use a lock-delay after a holder fails (as Chubby does) so its delayed requests probably land first; send an idempotency key so a duplicate request has no second effect; or use a conditional operation the API does offer (compare on a version or ETag). A plain lock alone cannot make it safe."
+
+[[terms]]
+term = "Lease"
+means = "Ownership for a limited time, renewed by the holder; it lapses if the holder dies."
+section = "Why locks become leases"
+
+[[terms]]
+term = "Clock drift"
+means = "Clocks running at slightly different rates; leases tolerate a bounded amount of it."
+section = "Why locks become leases"
+
+[[terms]]
+term = "Process pause"
+means = "A stop of seconds between two instructions (GC, VM migration, swapping) that the process does not notice."
+section = "The paused holder"
+
+[[terms]]
+term = "Fencing token"
+means = "A number that grows with every lease grant; the resource rejects writes with an older one."
+section = "Fencing tokens"
+
+[[terms]]
+term = "Sequencer"
+means = "Chubby's fencing token: lock name, mode and generation number, checked by servers."
+section = "Where the token comes from"
+
+[[terms]]
+term = "Lock-delay"
+means = "After a holder fails, nobody may take the lock for a while, so its late messages probably land first."
+section = "Where the token comes from"
+
+[[terms]]
+term = "Redlock"
+means = "A Redis lock taken on a majority of independent primaries; it relies on timing and gives no token."
+section = "Choosing a lock"
+
+[[sources]]
+title = "Gray and Cheriton: Leases: an efficient fault-tolerant mechanism for distributed file cache consistency (SOSP 1989)"
+kind = "paper"
+url = "https://doi.org/10.1145/74850.74870"
+
+[[sources]]
+title = "Burrows: The Chubby lock service for loosely-coupled distributed systems (OSDI 2006)"
+kind = "paper"
+url = "https://www.usenix.org/legacy/event/osdi06/tech/full_papers/burrows/burrows.pdf"
+note = "sequencers and lock-delay"
+
+[[sources]]
+title = "Kleppmann: How to do distributed locking (2016)"
+kind = "article"
+url = "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+note = "fencing tokens and the critique of Redlock"
+
+[[sources]]
+title = "Sanfilippo: Is Redlock safe? (2016)"
+kind = "article"
+url = "https://antirez.com/news/101"
+note = "the reply"
+
+[[sources]]
+title = "Redis: distributed locks"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/"
+note = "SET NX PX, safe release, Redlock, the analysis links"
+
+[[sources]]
+title = "etcd client: the concurrency package (mutex, election, session)"
+kind = "docs"
+url = "https://github.com/etcd-io/etcd/tree/main/client/v3/concurrency"
+
+[[sources]]
+title = "Apache ZooKeeper: recipes (locks, leader election)"
+kind = "docs"
+url = "https://zookeeper.apache.org/doc/current/recipes.html"
+
+[[figures]]
+name = "fencing-token"
+after = "Fencing tokens"
+caption = "A paused holder wakes after its lease expired; its write carries an old token and the storage refuses it."
