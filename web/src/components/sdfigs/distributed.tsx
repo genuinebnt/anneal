@@ -70,8 +70,8 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                     {[0, 1, 2, 3].map((k) => (
                         <g key={k}>
                             <rect className={`sf-cell${fired.has(k) ? " full" : ""}`} x={x(k) + 2} y={60} width={131} height={60} rx={6} />
-                            <text className="sf-lab" x={x(k) + 8} y={52}>{`${k}:00-${k + 1}:00`}</text>
-                            {fired.has(k) && <text className="sf-lab" x={x(k) + 8} y={138}>{`fired: ${counts[k]} clicks`}</text>}
+                            <text className="sf-lab" x={x(k) + 8} y={138}>{`${k}:00-${k + 1}:00`}</text>
+                            {fired.has(k) && <text className="sf-lab" x={x(k) + 8} y={112}>{`fired: ${counts[k]} clicks`}</text>}
                         </g>
                     ))}
                     {seen.map((e, i) =>
@@ -84,8 +84,8 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                             <circle key={i} className={`sf-key${i === t - 1 ? " moved" : ""}`} cx={x(e)} cy={90} r={5} />
                         ),
                     )}
-                    {t > 0 && <path className="sf-arrow on" d={`M${x(wm)} 20 V150`} strokeDasharray="4 4" />}
-                    {t > 0 && <text className="sf-lab" x={x(wm) + 6} y={24}>{`watermark ${wm.toFixed(1)}`}</text>}
+                    {t > 0 && <path className="sf-arrow on" d={`M${x(wm)} 34 V122`} strokeDasharray="4 4" />}
+                    {t > 0 && <text className="sf-lab" x={x(wm) + 6} y={42}>{`watermark ${wm.toFixed(1)}`}</text>}
                     <text className="sf-lab" x={14} y={212}>{t === 0 ? "one-minute windows on event time; the watermark trails the newest event by 0.5 min" : late.has(t - 1) ? "an event behind the watermark: drop it, side-output it, or correct the result" : "a window fires when the watermark passes its end"}</text>
                 </>
             );
@@ -108,13 +108,14 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
             const found = pts.filter(([x, y]) => near(x, y)).length;
             const own = pts.filter(([x, y]) => inOwn(x, y) && near(x, y)).length;
             const cand = pts.filter(([x, y]) => inNine(x, y)).length;
+            // two short lines each, to fit beside the grid
             const say = [
-                "points filed by the cell they fall in",
-                "find everything within the circle",
-                `the own cell alone finds ${own} of ${found}: the point sits near an edge`,
-                `the cell and its 8 neighbours: ${cand} candidates`,
-                `filter by exact distance: all ${found} found`,
-                "cells at least as big as the radius always cover the circle",
+                ["points filed by the cell", "they fall in"],
+                ["find everything within", "the circle"],
+                [`the own cell alone finds ${own} of ${found}:`, "the point sits near an edge"],
+                ["the cell and its 8 neighbours:", `${cand} candidates`],
+                ["filter by exact distance:", `all ${found} found`],
+                ["cells at least as big as the radius", "always cover the circle"],
             ];
             return (
                 <>
@@ -129,7 +130,9 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                     })}
                     {t >= 1 && <circle className="sf-node" cx={q.x} cy={q.y} r={5} />}
                     <Box x={14} y={40} w={250} h={44} label={t < 2 ? "query: within the circle" : t === 2 ? "own cell only" : t === 3 ? "own cell + 8 neighbours" : "then exact distance"} tone={t === 2 ? "bad" : t >= 4 ? "grn" : "acc"} />
-                    <text className="sf-lab" x={14} y={212}>{say[t]}</text>
+                    {say[t]!.map((line, k) => (
+                        <text key={k} className="sf-lab" x={14} y={130 + k * 16}>{line}</text>
+                    ))}
                 </>
             );
         },
@@ -189,7 +192,7 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                         </g>
                     ))}
                     <Box x={420} y={60} w={190} label={`commit index ${commit}`} tone="grn" sub="held by 3 of 5" />
-                    <text className="sf-lab" x={420} y={130}>{t >= 1 && t <= 4 ? "client command appended" : t > 4 && commit < 7 ? "followers catch up" : "all caught up"}</text>
+                    <text className="sf-lab" x={420} y={130}>{t >= 1 && t <= 4 ? "client command appended" : lens.slice(1, 4).some((l) => l < lens[0]!) ? "followers catch up" : "all caught up"}</text>
                     <text className="sf-lab" x={14} y={214}>an entry commits once a majority of logs hold it; S5 being down changes nothing</text>
                 </>
             );
@@ -226,7 +229,8 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                             <g key={i}>
                                 {src && <Arrow d={`M${src.x} ${lane[src.n]!} L${e.x - 8} ${y - 4}`} on={i === t - 1} />}
                                 <circle className={pair.includes(i) ? "sf-node" : `sf-key${i === t - 1 ? " moved" : ""}`} cx={e.x} cy={y} r={pair.includes(i) ? 9 : 6} />
-                                <text className="sf-lab" x={e.x - 22} y={y - 12}>{e.v}</text>
+                                {/* a receive's arrow comes in from the upper left: put its label on the right */}
+                                <text className="sf-lab" x={src ? e.x + 10 : e.x - 22} y={src ? y - 10 : y - 12}>{e.v}</text>
                             </g>
                         );
                     })}
@@ -269,11 +273,10 @@ export const FIGS_DISTRIBUTED: Record<string, Fig> = {
                                 return (
                                     <g key={c}>
                                         <rect className={`sf-cell${v > 0 ? " full" : ""}${hit ? " new" : ""}`} x={200 + c * 40} y={30 + r * 50} width={34} height={34} rx={5} />
-                                        <text className="sf-off" x={217 + c * 40} y={51 + r * 50}>{v}</text>
+                                        <text className="sf-nl" x={217 + c * 40} y={51 + r * 50}>{v}</text>
                                     </g>
                                 );
                             })}
-                            {word && <Arrow d={`M124 102 L${198 + at[word]![r]! * 40} ${47 + r * 50}`} on />}
                         </g>
                     ))}
                     <text className="sf-lab" x={14} y={208}>
