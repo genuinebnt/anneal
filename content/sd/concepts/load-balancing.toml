@@ -1,51 +1,302 @@
 title = "Load balancers and API gateways"
 group = "core"
 order = 9
-minutes = 10
-lede = "The front door of every design: load balancers spread traffic over healthy servers, at the connection (L4) or request (L7) level, and API gateways add authentication, rate limits and routing in one place. Each is replicated so that it is not itself the single point of failure."
+minutes = 22
+lede = "The front door of every design: load balancers spread traffic over healthy servers, at the connection (L4) or request (L7) level, and API gateways add authentication, rate limits and routing in one place. Each is replicated so that it is not itself the single point of failure. The choice of algorithm matters more than it looks: on the same servers, the wrong one triples the wait."
 say = "Clients hit a global anycast address, a regional L7 load balancer terminates TLS and routes by path to the services, picking the least-loaded healthy instance; WebSocket servers are behind an L4 balancer."
-related = ["api-styles", "consistent-hashing", "resilience", "realtime-updates"]
+related = ["api-styles", "consistent-hashing", "resilience", "realtime-updates", "caching"]
+credit = "The lists of what load balancers and reverse proxies do, and of their disadvantages, are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#load-balancer) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "**L4** balances connections (fast, any protocol); **L7** balances requests (TLS, paths, headers, retries).",
+  "**Least outstanding requests**, or its cheap form **two random choices**, beats round robin whenever request costs vary.",
+  "A balancer acting on **stale load** information herds traffic onto one server; two random choices resists it.",
+  "**Health checks** (active probes and passive ejection) keep failed servers out; **draining** and **slow start** make deploys invisible.",
+  "Run the balancer itself as **several instances** behind a floating IP, anycast or DNS; keep servers stateless behind it.",
+]
+
+[[sections]]
+heading = "What a load balancer does"
+body = """
+A load balancer receives client requests, sends each to one of a set of servers, and returns the response. It is effective at:
+
+- keeping requests away from unhealthy servers;
+- keeping any one server from being overloaded;
+- removing the single server as a single point of failure, which is what lets you scale out with many cheap machines instead of up with one large one.
+
+It also often does work the servers would otherwise repeat:
+
+- **TLS termination**: decrypt requests and encrypt responses once, at the edge, so certificates live in one place and servers skip the cryptography;
+- **session persistence**: route a client's requests to the same server when the application keeps sessions in memory (better: keep servers stateless and sessions in Redis or a database);
+- as a **reverse proxy**: hide the servers' addresses, limit connections per client, compress responses, cache them, and serve static files.
+
+A reverse proxy is useful even in front of one server; a load balancer is useful once there are several servers doing the same job. NGINX, HAProxy and Envoy are both.
+
+The costs: the balancer can become the bottleneck if it is underpowered or misconfigured; it adds a component to run; and a single balancer is itself a single point of failure, so production runs several, which adds more complexity (see "Keeping the balancer up").
+"""
 
 [[sections]]
 heading = "L4 and L7"
 body = """
 | | L4 (transport) | L7 (application) |
 |---|---|---|
-| sees | IP addresses and ports | HTTP: path, headers, cookies |
+| sees | IP addresses and ports | HTTP: method, path, headers, cookies |
 | routes by | connection | each request |
-| can do | very fast forwarding, any TCP/UDP protocol | TLS termination, path routing, retries, compression, header rewriting |
-| examples | AWS NLB, IPVS, Maglev | AWS ALB, Envoy, NGINX, HAProxy |
+| can do | very fast forwarding, any TCP or UDP protocol | TLS termination, path and header routing, retries, compression, header rewriting, per-request metrics |
+| connections | one end to end (forwarded or NATed), or terminated and copied byte for byte | two: client to balancer, balancer to server |
+| examples | AWS NLB, Linux IPVS, Maglev | AWS ALB, Envoy, NGINX, HAProxy (in HTTP mode) |
 
-Long-lived connections (WebSockets, gRPC streams) are balanced only when they open, so a server that was added later gets few of them until clients reconnect.
+An **L4** balancer looks only at the packet headers and forwards each connection's packets to one server, often rewriting addresses (NAT). Some L4 designs use **direct server return**: the request goes through the balancer, but the server replies straight to the client, so the balancer carries only the small inbound half of the traffic. L4 costs less CPU and adds less latency, and works for protocols it does not understand (databases, MQTT, custom TCP).
+
+An **L7** balancer terminates the client's connection, reads each request, chooses a server, and sends the request over its own connection to that server. It can route `/api/*` to one service and `/video/*` to another, send billing traffic to hardened servers, retry an idempotent request on another server, and balance each HTTP/2 or gRPC call separately even when they share one client connection.
+
+**Long-lived connections** (WebSockets, gRPC streams, database connections) are placed once, when they open, and then stay for hours. A server added later gets few of them until clients reconnect, and an L4 balancer cannot spread the calls inside one HTTP/2 connection at all.
 """
 
 [[sections]]
 heading = "Choosing a server"
 body = """
-- **Round robin** (optionally weighted): fine when requests cost about the same.
-- **Least connections** or least outstanding requests: better when request times vary.
-- **Power of two choices**: pick two servers at random and send to the less loaded one; nearly as good as checking all, without global state.
-- **Consistent hashing** on a key (user id, cache key): the same key goes to the same server, which keeps caches warm; adding a server moves only a slice of keys.
-- **Sticky sessions**: pin a user to a server by cookie. Avoid when you can: keep servers stateless and put sessions in Redis.
+| Algorithm | How it picks | Good when | In practice |
+|---|---|---|---|
+| round robin (weighted) | each server in turn | requests cost about the same | the default in NGINX, Envoy and HAProxy |
+| random | any server | huge fleets, many balancers | HAProxy `balance random` |
+| least connections / least outstanding requests | the server with the fewest in flight | request costs vary | HAProxy `leastconn`, NGINX `least_conn` |
+| **two random choices** (P2C) | sample two servers, take the less loaded | the same, without scanning every server | Envoy's least request (2 choices by default), NGINX `random two`, HAProxy `random(2)` |
+| hash of a key | the same key, the same server | caches, sticky routing | Envoy ring hash and Maglev, NGINX `hash … consistent`, HAProxy `hash` |
+| first available | fill server 1, then 2… | saving power on idle servers | HAProxy `first` |
+
+Round robin is fair in **count**, not in **work**: if one request in ten takes ten times longer, servers that drew several slow ones build queues while others idle. Policies that look at load avoid this. Envoy's documentation, citing Mitzenmacher, notes that sampling two hosts and taking the one with fewer active requests is nearly as good as scanning all of them.
+
+To see how much it matters, a simulation: 10 servers each serving one request at a time, requests arriving at random at 90% of the fleet's capacity, two million requests per policy. Times are a request's wait plus service, in units of the average service time.
+
+| Policy | Mean | p99 | p99.9 | Mean, heavy tail | p99, heavy tail |
+|---|---|---|---|---|---|
+| random | 9.94 | 45.0 | 63.6 | 29.71 | 157.0 |
+| round robin | 5.78 | 26.7 | 40.2 | 24.06 | 127.5 |
+| two random choices | 3.00 | 10.5 | 14.4 | 6.11 | 34.6 |
+| least outstanding (all 10 checked) | 1.91 | 7.9 | 11.4 | 3.39 | 25.4 |
+| two random choices, load seen 5 units late | 4.42 | 14.7 | 19.8 | 7.81 | 39.5 |
+| least outstanding, load seen 5 units late | **13.91** | **50.6** | 62.0 | 15.42 | 66.7 |
+
+"Heavy tail": the same average cost, but 10% of requests take ten times as long as the rest. Three lessons:
+
+1. **Looking at load pays.** Two random choices cut round robin's p99 by 2.5× with exponential service times and by 3.7× with the heavy tail.
+2. **Two choices get most of the way** to checking every server, with no global state and O(1) work per request.
+3. **Stale information herds.** When the balancer's view of load is refreshed only every 5 service times (as when several balancers each see load late), "always the least loaded" sends every request in that window to the same server, and does **worse than picking at random**. Two random choices hardly notice: the two samples differ each time, so traffic still spreads.
+
+:::deeper The simulation | 3 min
+```rust title=lbsim.rs
+//! Load balancing policies, simulated: 10 servers, each serving one request at a time in arrival order, with requests
+//! arriving at random (Poisson) at 90% of the fleet's capacity. Prints the time a request spends queued plus served, in
+//! units of the mean service time.
+use std::collections::VecDeque;
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn unit(&mut self) -> f64 {
+        ((self.next() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+    fn exp(&mut self, mean: f64) -> f64 {
+        -mean * self.unit().ln()
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Policy {
+    Random,
+    RoundRobin,
+    LeastOutstanding,
+    TwoChoices,
+}
+
+struct Server {
+    busy_until: f64,
+    done_at: VecDeque<f64>, // completion times of its requests, in order
+}
+
+impl Server {
+    fn outstanding(&mut self, now: f64) -> usize {
+        while self.done_at.front().is_some_and(|&t| t <= now) {
+            self.done_at.pop_front();
+        }
+        self.done_at.len()
+    }
+}
+
+/// `stale`: the balancer sees load counts refreshed only every `stale` time units (0 = always fresh).
+fn run(policy: Policy, stale: f64, heavy_tail: bool, n: usize, seed: u64) -> (f64, f64, f64) {
+    let k = 10;
+    let mut rng = Rng(seed);
+    let mut servers: Vec<Server> = (0..k).map(|_| Server { busy_until: 0.0, done_at: VecDeque::new() }).collect();
+    let mut view = vec![0usize; k];
+    let mut next_refresh = 0.0;
+    let mut now = 0.0;
+    let mut rr = 0;
+    let mut times = Vec::with_capacity(n);
+    for _ in 0..n {
+        now += rng.exp(1.0 / (0.9 * k as f64));
+        for (i, s) in servers.iter_mut().enumerate() {
+            let o = s.outstanding(now);
+            if stale == 0.0 || now >= next_refresh {
+                view[i] = o;
+            }
+        }
+        if stale > 0.0 && now >= next_refresh {
+            next_refresh = now + stale;
+        }
+        let pick = match policy {
+            Policy::Random => rng.below(k),
+            Policy::RoundRobin => {
+                rr = (rr + 1) % k;
+                rr
+            }
+            Policy::LeastOutstanding => {
+                // ties go to a random one of the least loaded
+                let min = *view.iter().min().unwrap();
+                let ties: Vec<usize> = (0..k).filter(|&i| view[i] == min).collect();
+                ties[rng.below(ties.len())]
+            }
+            Policy::TwoChoices => {
+                let a = rng.below(k);
+                let mut b = rng.below(k - 1);
+                if b >= a {
+                    b += 1;
+                }
+                if view[b] < view[a] { b } else { a }
+            }
+        };
+        // service time: exponential with mean 1, or a heavy tail with the same mean (90% short, 10% ten times longer)
+        let service = if heavy_tail {
+            if rng.unit() < 0.9 { rng.exp(1.0 / 1.9) } else { rng.exp(10.0 / 1.9) }
+        } else {
+            rng.exp(1.0)
+        };
+        let s = &mut servers[pick];
+        let start = s.busy_until.max(now);
+        s.busy_until = start + service;
+        s.done_at.push_back(s.busy_until);
+        times.push(s.busy_until - now);
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mean = times.iter().sum::<f64>() / n as f64;
+    let p = |q: f64| times[((n as f64) * q) as usize];
+    (mean, p(0.99), p(0.999))
+}
+
+fn main() {
+    let n = 2_000_000;
+    for heavy in [false, true] {
+        println!("{}", if heavy { "\\nheavy-tailed service times (10% of requests take 10x longer)" } else { "exponential service times" });
+        println!("{:<34} {:>8} {:>8} {:>8}", "policy", "mean", "p99", "p99.9");
+        for (name, policy, stale) in [
+            ("random", Policy::Random, 0.0),
+            ("round robin", Policy::RoundRobin, 0.0),
+            ("two random choices", Policy::TwoChoices, 0.0),
+            ("least outstanding (all 10)", Policy::LeastOutstanding, 0.0),
+            ("two choices, load seen 5 late", Policy::TwoChoices, 5.0),
+            ("least outstanding, load seen 5 late", Policy::LeastOutstanding, 5.0),
+        ] {
+            let (mean, p99, p999) = run(policy, stale, heavy, n, 0x5EED);
+            println!("{name:<34} {mean:>8.2} {p99:>8.1} {p999:>8.1}");
+        }
+    }
+}
+```
+Run with `cargo run --release` (no dependencies). Random placement at 90% load gives each server an M/M/1 queue, whose mean time in system is 1 / (1 − 0.9) = 10; the simulation's 9.94 agrees.
+:::
 """
 
 [[sections]]
-heading = "Health and redundancy"
+heading = "Sticky routing and hashing"
 body = """
-- **Health checks**: active (probe `/health` every few seconds) and passive (eject a server that returns errors). Remove a server before deploying it (**connection draining**).
-- The balancer itself runs as several instances behind one address: a floating IP with failover, **anycast** (the same IP announced from many places, the network picks the nearest), or DNS returning several addresses.
-- **Global load balancing**: DNS or anycast sends users to the nearest healthy region; failover moves them when a region fails.
+Sometimes the same key should reach the same server: a cache shard that holds that user's data, a WebSocket server that holds a chat room, a server with a warm local cache.
+
+- **Hash a key** (user id, cache key, room id) with **consistent hashing**, so adding or removing a server moves only its share of keys. Envoy offers ring hash and Maglev; NGINX's `hash $key consistent` uses the ketama ring.
+- **Cookie stickiness**: the balancer sets a cookie naming the server. Exact, but a server's departure loses its users' in-memory sessions.
+- **Source IP hashing** (`ip_hash`, HAProxy `source`): crude. Many users share one IP behind a carrier or office NAT, a phone changes IP when it changes network, and HAProxy's documentation notes that when the number of running servers changes, many clients move to another server.
+
+Stickiness fights balancing: a hot key or a heavy user overloads its server. Prefer stateless servers with state in a shared store, and use hashing where locality is the whole point (caches, sharded in-memory state). Consistent hashing with bounded loads caps how far any server may exceed the average.
+"""
+
+[[sections]]
+heading = "Health checks"
+body = """
+A balancer must stop sending traffic to a server that has died or is failing, and start again when it recovers.
+
+- **Active checks**: probe each server on a schedule. HAProxy's defaults: a check every 2 seconds (`inter 2000`), marked down after 3 failures in a row (`fall 3`) and up after 2 successes (`rise 2`). Detection takes seconds, by design: one slow probe should not remove a server.
+- **Passive checks (outlier detection)**: watch real traffic. Envoy ejects a host after 5 consecutive server errors by default, for a base ejection time of 30 seconds that grows each time it is ejected again, and never ejects more than 10% of a cluster by default. Open-source NGINX has only passive checks: a server is skipped for `fail_timeout` after `max_fails` failures (1 by default).
+- **What the health endpoint checks**: a **shallow** check (the process answers) removes crashed or hung servers. A **deep** check (the process can reach the database) sounds better but is dangerous: if the shared database blips, every server fails its check at once and the balancer removes the whole fleet. Check what is local to the server; let dependencies fail requests, not health.
+- **Panic mode**: Envoy stops trusting health checks when fewer than 50% of hosts are healthy (by default) and balances across all hosts, because a health checker that marks most of the fleet down is more likely broken than the fleet. Sending some requests to bad hosts beats overloading the few that are left.
+
+> [!WARNING]
+> Health checks catch dead servers, not slow ones. A server answering in 5 seconds instead of 50 ms passes its probe; least-outstanding balancing and outlier detection on latency are what route around it.
+"""
+
+[[sections]]
+heading = "Deploys: draining and slow start"
+body = """
+A rolling deploy replaces servers one by one; users should never notice.
+
+1. **Drain**: mark the server as leaving. The balancer sends it no new requests while in-flight ones finish (with a deadline, say 30 seconds); long-lived connections are asked to reconnect elsewhere.
+2. Stop, update and start the server.
+3. **Readiness**: it joins only when its health check passes, which should mean caches are loaded and connections open, not just "the process started".
+4. **Slow start**: ramp its share up gradually instead of handing a cold server its full share at once. HAProxy's `slowstart` grows a server's weight linearly from 0 to 100% over the given time; Envoy's slow start mode scales a new endpoint's weight over a configured window, and its documentation notes that this helps when a few endpoints are new, not when the whole fleet is (they all ramp together).
+
+Least-connections balancing needs slow start most: a fresh server has zero connections, so without it every new request goes to the server with the coldest caches.
+"""
+
+[[sections]]
+heading = "Keeping the balancer up"
+body = """
+The balancer must not become the new single point of failure:
+
+- **Active-passive pair with a floating IP**: two balancers share a virtual IP via VRRP (keepalived); if the active one stops answering, the standby takes over the IP within seconds.
+- **Active-active behind DNS**: several balancers, all returned for the name. Clients spread across them, but DNS answers are cached for their TTL, so a dead balancer keeps receiving some clients until caches expire.
+- **Anycast and ECMP**: many balancers announce the same IP address; routers send each flow to one of them (equal-cost multi-path), and a balancer that fails stops announcing and drops out. Google's **Maglev** (NSDI 2016) works this way on ordinary Linux servers: routers spread packets over Maglev machines with ECMP; each machine picks the backend with the same consistent-hash table, so a connection's packets reach the same backend whichever Maglev machine receives them; and backends reply directly to clients.
+- **Cloud balancers** (AWS ALB and NLB, Google Cloud Load Balancing) are already replicated across zones by the provider; say so, and draw them as one box.
+"""
+
+[[sections]]
+heading = "Global load balancing"
+body = """
+With several regions, a first decision sends each user to a region:
+
+- **GeoDNS / latency-based DNS**: the DNS answer depends on where the resolver is (or on measured latency). Failover is as fast as the TTL lets clients notice, so keep TTLs short (tens of seconds) for names you may need to move.
+- **Anycast**: one IP announced from every region; the internet's routing delivers each user to a nearby one, and a region that withdraws its announcement stops receiving traffic without any DNS change. CDNs and global cloud balancers use it.
+- **Health-based failover**: the global layer checks each region and stops routing to one that fails, which only works if the other regions have spare capacity for the extra load.
+
+Inside the region, the regional L7 balancer takes over.
 """
 
 [[sections]]
 heading = "API gateway"
 body = """
-An L7 entry point for many services that centralises cross-cutting work: **authentication** (validate the JWT once), **rate limiting**, request routing and versioning, request/response transformation, caching, and metrics. A **backend for frontend** is a gateway per client type (mobile, web) that shapes responses for it.
+An L7 entry point for many services that centralises cross-cutting work: **authentication** (validate the JWT once), **rate limiting**, request routing and versioning, request and response transformation, caching, and metrics. A **backend for frontend** is a gateway per client type (mobile, web) that shapes responses for it.
 
-Keep business logic out of the gateway; it should stay thin and fast.
+Keep business logic out of the gateway; it should stay thin and fast. A gateway is also a load balancer for the services behind it, so everything above (algorithms, health, draining) applies to it as well.
 
 > [!INTERVIEW]
 > Draw the load balancer as replicated, say what algorithm it uses and why, and keep the servers behind it stateless.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Where**: a global layer (DNS or anycast) to a region, a regional L7 balancer or gateway, and balancers in front of internal services where they need it.
+2. **L4 or L7**, with the reason: L7 for HTTP and gRPC (per-request routing, TLS, retries), L4 for raw TCP or very long-lived connections.
+3. **The algorithm**: least outstanding requests or two random choices when request costs vary; consistent hashing when locality matters.
+4. **Health**: active checks plus outlier ejection; shallow health endpoints.
+5. **Deploys**: draining and slow start.
+6. **Its own availability**: several instances behind a floating IP, anycast or a managed balancer.
 """
 
 [[checks]]
@@ -55,3 +306,154 @@ answer = "Load balancers place a WebSocket when the connection opens and it then
 [[checks]]
 prompt = "What does 'power of two choices' do and why is it better than picking a random server?"
 answer = "For each request it picks two servers at random and sends to the one with fewer outstanding requests. Random choice leaves some servers with much longer queues by chance; comparing just two cuts the worst-case load dramatically, nearly matching checking every server, without global coordination."
+
+[[checks]]
+prompt = "Six load balancers each send every request to the server they believe has the fewest active requests, but each learns the servers' load only once a second. Latency gets worse than with random routing. Why?"
+answer = "Herding: between updates every balancer believes the same server is least loaded and sends it all of its traffic, so that server is flooded while the others idle, and the next update just moves the flood elsewhere. With stale information, two random choices (sample two servers, take the less loaded) avoids it, because each request compares a different random pair and traffic still spreads."
+
+[[checks]]
+prompt = "Your health endpoint returns 500 when the database is unreachable. The database has a 20-second failover. What happens to the site, and what should the health check test instead?"
+answer = "Every server fails its health check at the same moment, so the balancer removes the whole fleet and the site is down even for requests that did not need the database, and possibly for longer than the failover while servers rise back in. The health check should test what is local to the server (the process is up and can serve); dependency failures should fail or degrade individual requests, protected by timeouts and circuit breakers."
+
+[[checks]]
+prompt = "With round robin, why does the 99th percentile latency rise sharply when a small share of requests are much slower than the rest, even though average load is unchanged?"
+answer = "Round robin balances the count of requests, not the work: a server that happens to receive several slow requests builds a queue, and fast requests stuck behind them wait, while other servers sit idle. Balancing by outstanding requests (least requests or two random choices) sends new requests away from the server that is busy with slow ones."
+
+[[checks]]
+prompt = "A server rejoins a least-connections pool after a deploy and immediately times out. What happened, and what setting prevents it?"
+answer = "With zero connections it looks like the least loaded server, so the balancer sends it a burst of new requests while its caches, connection pools and JIT are cold, and it falls over. Slow start ramps a returning server's share up gradually (HAProxy slowstart, Envoy slow start mode), and a readiness check should only pass once it is warmed up."
+
+[[terms]]
+term = "Reverse proxy"
+means = "A server in front of other servers that clients talk to instead of them."
+section = "What a load balancer does"
+
+[[terms]]
+term = "TLS termination"
+means = "Decrypting at the balancer so the servers behind it do not."
+section = "What a load balancer does"
+
+[[terms]]
+term = "L4 load balancing"
+means = "Balancing connections by addresses and ports, without reading the request."
+section = "L4 and L7"
+
+[[terms]]
+term = "L7 load balancing"
+means = "Terminating the connection and balancing each request by its content."
+section = "L4 and L7"
+
+[[terms]]
+term = "Direct server return"
+means = "Servers reply straight to clients, so the balancer carries only inbound traffic."
+section = "L4 and L7"
+
+[[terms]]
+term = "Least outstanding requests"
+means = "Send to the server with the fewest requests in progress."
+section = "Choosing a server"
+
+[[terms]]
+term = "Power of two choices"
+means = "Sample two servers at random and send to the less loaded one."
+section = "Choosing a server"
+
+[[terms]]
+term = "Herding"
+means = "Many decisions made on the same stale view all pick the same target."
+section = "Choosing a server"
+
+[[terms]]
+term = "Sticky session"
+means = "Routing a client's requests to the same server every time."
+section = "Sticky routing and hashing"
+
+[[terms]]
+term = "Outlier detection"
+means = "Ejecting a server that real traffic shows is failing, without waiting for a probe."
+section = "Health checks"
+
+[[terms]]
+term = "Panic threshold"
+means = "Below this share of healthy hosts, Envoy ignores health and uses them all."
+section = "Health checks"
+
+[[terms]]
+term = "Connection draining"
+means = "Sending a leaving server no new requests while in-flight ones finish."
+section = "Deploys: draining and slow start"
+
+[[terms]]
+term = "Slow start"
+means = "Ramping a new server's share of traffic up over time."
+section = "Deploys: draining and slow start"
+
+[[terms]]
+term = "Anycast"
+means = "One IP address announced from many places; routing picks a nearby one."
+section = "Keeping the balancer up"
+
+[[terms]]
+term = "Floating IP"
+means = "An address that moves to a standby machine when the active one fails."
+section = "Keeping the balancer up"
+
+[[terms]]
+term = "Backend for frontend"
+means = "A gateway per client type that shapes responses for that client."
+section = "API gateway"
+
+[[sources]]
+title = "Envoy: supported load balancers"
+kind = "docs"
+url = "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers"
+note = "round robin, least request with two choices, ring hash, Maglev"
+
+[[sources]]
+title = "Envoy: outlier detection"
+kind = "docs"
+url = "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/outlier"
+
+[[sources]]
+title = "Envoy: panic threshold"
+kind = "docs"
+url = "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold"
+
+[[sources]]
+title = "Envoy: slow start mode"
+kind = "docs"
+url = "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start"
+
+[[sources]]
+title = "HAProxy configuration manual"
+kind = "docs"
+url = "https://docs.haproxy.org/dev/configuration.html"
+note = "balance algorithms, inter, rise, fall, slowstart"
+
+[[sources]]
+title = "NGINX: ngx_http_upstream_module"
+kind = "docs"
+url = "https://nginx.org/en/docs/http/ngx_http_upstream_module.html"
+note = "least_conn, random two, hash consistent, max_fails"
+
+[[sources]]
+title = "Mitzenmacher, Richa and Sitaraman: The Power of Two Random Choices, a survey"
+kind = "paper"
+url = "https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf"
+
+[[sources]]
+title = "Eisenbud et al.: Maglev, a fast and reliable software network load balancer (NSDI 2016)"
+kind = "paper"
+url = "https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/"
+note = "ECMP in front, consistent hashing, direct server return"
+
+[[sources]]
+title = "The System Design Primer: load balancer, reverse proxy"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#load-balancer"
+note = "CC BY 4.0"
+
+[[figures]]
+name = "two-choices"
+after = "Choosing a server"
+caption = "Each request samples two servers at random and joins the shorter queue; no balancer needs to know every server's load."
