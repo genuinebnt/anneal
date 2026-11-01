@@ -1,36 +1,261 @@
 title = "Data modeling"
 group = "core"
 order = 1
-minutes = 8
-lede = "Choosing what to store, how to key it, and which database fits the way it is read and written."
+minutes = 20
+lede = "Choosing what to store, how to key it, and which database fits the way it is read and written. In an interview the model is judged by one test: can every hot read and write be served by one lookup or one range scan, at the expected scale, while the rules that must never break are enforced by the database itself."
 say = "Links go in Postgres keyed by short code; clicks are append-only and huge, so they go to a column store and get rolled up by day."
-related = ["indexes", "sharding", "postgres", "cassandra", "dynamodb", "unique-ids"]
+related = ["indexes", "sharding", "postgres", "cassandra", "dynamodb", "unique-ids", "api-styles"]
+credit = "The reasons for SQL and for NoSQL, the kinds of data suited to NoSQL, and parts of the section on denormalisation are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#sql-or-nosql) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "Start from the **queries**: list the hot reads and writes, then shape tables and keys so each is one lookup or one range scan.",
+  "Keep the source of truth **normalised**; add **denormalised** copies only for hot reads, and say how they stay in sync.",
+  "Let the database enforce invariants: **unique**, **foreign key**, **check** and **exclusion** constraints beat application checks under concurrency.",
+  "In key-value and wide-column stores the **partition key** decides where data lives and what can be queried: one table per query, partitions bounded.",
+  "Change schemas by **expand and contract**: add, backfill, switch reads, and only then stop using the old shape.",
+]
 
 [[sections]]
 heading = "Start from the queries"
 body = """
-List the hot reads and writes first ("get a link by code", "a user's links, newest first", "clicks per day"), then shape tables and keys so each is one lookup. A model that is elegant but needs a join across shards on the hot path is wrong for the interview.
+A relational schema can answer questions nobody planned for; at scale, the questions you did plan for must be cheap. So list the access patterns first, with rough rates, and make each one a single lookup or a single range scan.
+
+For a URL shortener:
+
+| Access pattern | Rate | Shape |
+|---|---|---|
+| resolve a code to its target | 10,000/s | lookup by `code` |
+| create a link | 100/s | insert, `code` must be unique |
+| a user's links, newest first | 50/s | range scan by `owner_id`, ordered by time |
+| clicks per link per day | 10,000 writes/s, a few reads | append, then aggregate |
+
+Each line becomes a key or an index: `code` is the primary key; `(owner_id, created_at DESC)` is an index; clicks are not rows in `links` at all (see "Append-only data"). A model that is elegant but needs a join across shards, or a scan, on the hot path is wrong for the interview.
+
+> [!TIP]
+> Say the access patterns out loud before drawing tables. It shows the interviewer why each key exists, and it catches the query your model cannot answer before they do.
+"""
+
+[[sections]]
+heading = "Entities, keys and relationships"
+body = """
+The **core entities** from the requirements (User, Link, Click) become tables, documents or items. For each one decide:
+
+- **The primary key.** A **surrogate** key (a generated number or UUID) never changes and says nothing; a **natural** key (an email, a short code) carries meaning but can change. Use a natural key only when it is immutable and is how reads arrive, like a short code. See "Unique ID generation" for which ids sort by time and fit 64 bits.
+- **Relationships.** One-to-many: a foreign key on the "many" side (`links.owner_id`). Many-to-many: a join table whose primary key is both ids (`link_tags (code, tag_id)`). One-to-one: usually the same table, unless one side is large and rarely read.
+- **Invariants**, the rules that must never break: an email belongs to one user, a seat is sold once, a room is not double-booked. Put them in the database as constraints. An application check ("is it free? then insert") races with another request doing the same; a constraint is checked atomically with the write.
+
+```sql title=schema.sql
+CREATE TABLE users (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email      text NOT NULL UNIQUE,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE links (
+    code       text PRIMARY KEY,                      -- the short code is how every read arrives
+    owner_id   bigint NOT NULL REFERENCES users (id),
+    target     text NOT NULL CHECK (target LIKE 'https://%'),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX links_by_owner ON links (owner_id, created_at DESC);   -- "my links, newest first"
+
+-- many-to-many: a link can carry many tags, a tag many links
+CREATE TABLE tags      (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL UNIQUE);
+CREATE TABLE link_tags (
+    code   text   NOT NULL REFERENCES links (code),
+    tag_id bigint NOT NULL REFERENCES tags (id),
+    PRIMARY KEY (code, tag_id)
+);
+```
+
+An **exclusion constraint** (Postgres) states "no two rows may overlap" directly, which is what a booking system needs:
+
+```sql title=bookings.sql
+CREATE EXTENSION btree_gist;   -- lets the gist index compare room_id with =
+CREATE TABLE bookings (
+    id      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    room_id bigint NOT NULL,
+    during  tstzrange NOT NULL,
+    EXCLUDE USING gist (room_id WITH =, during WITH &&)
+);
+INSERT INTO bookings (room_id, during) VALUES (7, '[2026-11-01 14:00, 2026-11-01 15:00)');  -- ok
+INSERT INTO bookings (room_id, during) VALUES (7, '[2026-11-01 14:30, 2026-11-01 16:00)');  -- refused
+INSERT INTO bookings (room_id, during) VALUES (7, '[2026-11-01 15:00, 2026-11-01 16:00)');  -- ok: [ ) ranges touch, they do not overlap
+```
+
+```text title=output
+ERROR:  conflicting key value violates exclusion constraint "bookings_room_id_during_excl"
+DETAIL:  Key (room_id, during)=(7, ["2026-11-01 14:30:00+00","2026-11-01 16:00:00+00")) conflicts with existing key (room_id, during)=(7, ["2026-11-01 14:00:00+00","2026-11-01 15:00:00+00")).
+```
+"""
+
+[[sections]]
+heading = "Normalise, then denormalise on purpose"
+body = """
+**Normalised** means each fact is stored once and joined at read time. The first three normal forms, informally: every column holds one value (no lists in a cell); every column depends on the whole key; and on nothing but the key (a customer's address lives in `customers`, not copied into every `orders` row). Writes touch one place, and copies cannot disagree.
+
+**Denormalised** means a fact is copied to where it is read, so a hot read is one lookup instead of a join: the author's name stored on each post, a precomputed home timeline, a `comment_count` column. In most systems reads outnumber writes 100 to 1 or even 1,000 to 1, and a read that joins several large tables can spend most of its time on disk. Once data is spread across machines by federation or sharding, joins across them get harder still, and a copy avoids them.
+
+The costs:
+
+- data is duplicated, so storage grows;
+- every write must update each copy, so writes get slower, and a heavily written denormalised table can perform worse than the normalised one;
+- copies can disagree, so something must keep them in sync.
+
+Ways to keep copies in sync, from tightest to loosest:
+
+| Method | Staleness | Cost |
+|---|---|---|
+| same transaction updates the copy | none | slower writes; only within one database |
+| **materialised view** refreshed by the database (Postgres `REFRESH MATERIALIZED VIEW CONCURRENTLY`) | until the next refresh | a full recompute each refresh |
+| trigger or change data capture feeding the copy | seconds | another moving part |
+| background job rebuilds it | minutes | simplest; visibly stale |
+
+The rule: **the normalised data stays the source of truth**; every copy can be rebuilt from it, and you say how stale each copy may be.
 """
 
 [[sections]]
 heading = "Choosing a database"
 body = """
-| Need | Usually |
-|---|---|
-| Relations, transactions, ad-hoc queries | Postgres or MySQL (the default) |
-| Huge write volume, simple key lookups, many regions | Cassandra or DynamoDB |
-| Hot data in memory, counters, leaderboards | Redis |
-| Text search, filters, ranking | Elasticsearch |
-| Large files | object storage (S3) with metadata in a database |
-| Metrics over time | a time-series database |
+Default to a relational database and name the reason that would make you leave it.
 
-Say the default and the reason to leave it: "Postgres, until writes outgrow one primary."
+| Need | Usually | Why |
+|---|---|---|
+| relations, transactions, constraints, ad-hoc queries | Postgres or MySQL (the default) | joins, indexes, ACID, mature tooling |
+| huge write volume, simple key lookups, many regions | Cassandra or DynamoDB | partitioned by key, scales out writes |
+| hot data in memory, counters, leaderboards, rate limits | Redis | sub-millisecond, rich data structures |
+| text search, filters, relevance ranking | Elasticsearch or OpenSearch | inverted index |
+| large files (images, video, backups) | object storage (S3) with metadata in a database | cheap, durable, served by URL |
+| metrics and events over time, aggregates | a time-series or column store (ClickHouse, TimescaleDB) | compression, fast scans of few columns |
+| relationships many hops deep | a graph database, only if traversals dominate | follows edges without joins |
+
+Reasons for **SQL**: structured data and a strict schema; relational data and complex joins; transactions; clear patterns for scaling (replicas, partitioning); lookups by index are very fast; and the most established developers, community, code and tools.
+
+Reasons for **NoSQL**: semi-structured data or a schema that changes often; no need for joins; many terabytes or petabytes; very data-intensive workloads with very high throughput.
+
+Data that suits NoSQL well: rapid ingest of clickstream and log data; leaderboards and scores; temporary data such as a shopping cart; very hot tables; metadata and lookup tables.
+
+> [!INTERVIEW]
+> "Postgres, until writes outgrow one primary" is a complete answer. Picking Cassandra for 100 writes a second, or MongoDB "because it scales", without numbers, is a red flag.
 """
 
 [[sections]]
-heading = "Normalise or not"
+heading = "Key-value and wide-column stores"
 body = """
-**Normalised** (each fact once, joined at read time) keeps writes simple and data consistent. **Denormalised** (copies placed where they are read, such as a precomputed feed) makes reads one lookup and writes more work. Read-heavy hot paths usually denormalise; the source of truth stays normalised.
+Cassandra and DynamoDB store rows grouped by a **partition key**, hashed to decide which machine holds them, and sorted inside the partition by a **clustering** (Cassandra) or **sort** (DynamoDB) key. That gives exactly two cheap operations:
+
+- get one partition, or one row in it, by key;
+- read a range of a partition in sort order.
+
+Anything else (a query by another column, a join, a scan) is either impossible or expensive, so you **model one table per query** and write the data into each table that needs it. For chat messages read as "the latest 50 in this channel":
+
+```sql title=messages.cql
+-- Cassandra: one partition per channel and day, newest first inside it
+CREATE TABLE messages_by_channel (
+    channel_id bigint,
+    day        date,
+    message_id timeuuid,
+    author_id  bigint,
+    body       text,
+    PRIMARY KEY ((channel_id, day), message_id)
+) WITH CLUSTERING ORDER BY (message_id DESC);
+
+SELECT * FROM messages_by_channel WHERE channel_id = 42 AND day = '2026-11-01' LIMIT 50;
+
+-- a query by a column that is not part of the key
+SELECT * FROM messages_by_channel WHERE author_id = 1;
+```
+
+Run on Cassandra 5.0, the first query returns the channel's messages newest first; the second is refused outright:
+
+```text title=output
+InvalidRequest: Error from server: code=2200 [Invalid query] message="Cannot execute this query as it might
+involve data filtering and thus may have unpredictable performance. If you want to execute this query despite
+the performance unpredictability, use ALLOW FILTERING"
+```
+
+"Messages by author" needs its own table, `messages_by_author`, written alongside the first.
+
+Rules that keep it healthy:
+
+- **Spread the load**: a key with few values, or one hugely popular value, makes a hot partition that one machine must serve. DynamoDB documents each partition as delivering at most 3,000 read units and 1,000 write units a second, so a single hot key cannot exceed that, however large the table.
+- **Bound every partition**: a partition that grows forever (all messages of a busy channel, ever) becomes slow to read and repair. Add a **time bucket** to the key, as `day` does above; readers walk back one bucket at a time.
+- **Secondary access patterns** need their own table, or a global secondary index (DynamoDB), which is a second copy maintained asynchronously, so reads from it are eventually consistent.
+- **Item and value size**: DynamoDB items are limited to 400 KB; large blobs go to object storage with a pointer in the item.
+
+DynamoDB users often go further with **single-table design**: several entity types in one table, with keys like `PK = USER#42` and `SK = ORDER#2026-11-01#9`, so one query fetches a user and their recent orders together.
+"""
+
+[[sections]]
+heading = "Documents: embed or reference"
+body = """
+Document databases (MongoDB, or a JSONB column in Postgres) store a nested object per record. The modelling question is **embed or reference**:
+
+| Embed (nested inside the parent) | Reference (an id pointing elsewhere) |
+|---|---|
+| read together with the parent, almost always | read on its own, or by many parents |
+| bounded in number (a user's 3 addresses) | unbounded (a post's comments, a user's orders) |
+| changes with the parent | changes independently, or shared by many |
+
+Embedding makes the common read one fetch with no join. Unbounded embedding fails: documents have a size limit (16 MB in MongoDB) and every update rewrites a growing document. A Postgres `jsonb` column is a good middle ground for attributes that vary by row (product specifications) next to normal columns for everything you filter or join on.
+"""
+
+[[sections]]
+heading = "Append-only data"
+body = """
+Clicks, page views, sensor readings, audit logs: written once, never updated, read as aggregates. Do not put them in the table of the thing they describe (a `click_count` updated 10,000 times a second on hot rows is a lock fight).
+
+- Write raw events to a **log** (Kafka) and into a store built for appends and scans: a column store (ClickHouse, BigQuery) or a time-partitioned table.
+- Keep **rollups** for what is read: clicks per link per day, maintained by a stream job or by batched upserts.
+- Partition raw data **by time** so old data is dropped or archived by whole partitions, never row by row.
+
+```sql title=rollup.sql
+CREATE TABLE clicks_daily (
+    code   text NOT NULL,
+    day    date NOT NULL,
+    clicks bigint NOT NULL,
+    PRIMARY KEY (code, day)
+);
+-- a batch of counted clicks is added in one statement per (code, day)
+INSERT INTO clicks_daily VALUES ('abc123', '2026-11-01', 5)
+ON CONFLICT (code, day) DO UPDATE SET clicks = clicks_daily.clicks + EXCLUDED.clicks;
+```
+
+A dashboard reading "clicks per day for this link" is then one range scan of a few hundred rows, not a count over billions.
+"""
+
+[[sections]]
+heading = "Changing the schema"
+body = """
+Production schemas change while old and new code run side by side, so every change goes through **expand and contract**:
+
+1. **Expand**: add the new column or table, nullable or with a default. Old code ignores it.
+2. **Write both**: deploy code that writes the old and the new shape.
+3. **Backfill** existing rows in small batches.
+4. **Switch reads** to the new shape.
+5. **Contract**: stop writing the old shape; remove it only once nothing reads it (or keep it, unread).
+
+Some changes are cheap and some rewrite the whole table. Measured on Postgres 18 with a 1-million-row table (a 4-core cloud VM):
+
+| Statement | Time | Table rewritten? |
+|---|---|---|
+| `ADD COLUMN lang text NOT NULL DEFAULT 'en'` | 4.8 ms | no: a constant default is stored once in the catalogue (since Postgres 11) |
+| `ADD COLUMN shard int NOT NULL DEFAULT (random() * 100)::int` | 2.1 s | yes: a volatile default is computed per row |
+| `ADD CONSTRAINT … CHECK (…) NOT VALID` | 3.1 ms | no: only new rows are checked |
+| `VALIDATE CONSTRAINT …` | 125 ms | no: scans old rows without blocking writes |
+
+The rewrite holds an exclusive lock for its whole duration, so on a large table a "simple" migration is an outage. Build indexes with `CREATE INDEX CONCURRENTLY`, add constraints `NOT VALID` and validate them separately, and test migrations on a copy of production-sized data.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. List the **access patterns** with rates, reads and writes separately.
+2. Name the **entities** and their keys; draw the relationships.
+3. Pick the **store per kind of data** (often two or three: Postgres for core data, Redis for hot counters, object storage for blobs, a column store for events), each with a reason.
+4. Write the **key tables** next to the database in the diagram: primary key, the indexes, the partition key.
+5. Say which **invariants** the database enforces (unique, foreign key, exclusion) and where you **denormalise**, with how the copy stays in sync.
+6. Name what happens at 10× scale: which table is sharded, by which key.
 """
 
 [[checks]]
@@ -40,3 +265,127 @@ answer = "Append-only events, not rows in the links table: write them to a log o
 [[checks]]
 prompt = "When is a denormalised copy worth its cost?"
 answer = "When a hot read would otherwise need joins or many lookups and reads far outnumber writes, such as a home timeline; the copy is rebuilt or updated on write, and the normalised data stays the source of truth."
+
+[[checks]]
+prompt = "A booking service checks that a room is free, then inserts the booking. Under load it sometimes double-books. Why, and how should the data model prevent it?"
+answer = "Check-then-insert is a race: two requests both see the room free before either inserts. Let the database enforce the invariant atomically with the write: an exclusion constraint on (room, time range) in Postgres, or a unique constraint on (room, slot) when slots are fixed, so the second insert fails and the application reports the room taken."
+
+[[checks]]
+prompt = "In Cassandra you store a chat channel's messages with channel_id as the partition key. A busy channel slows down after a year. What went wrong and how do you change the key?"
+answer = "The partition is unbounded: every message the channel ever had lives in one partition on the same replicas, so it grows without limit, reads and repairs of it get slow, and the channel's traffic all lands on one set of nodes. Add a time bucket to the partition key, such as (channel_id, day), so each partition is bounded; readers fetch the latest bucket and walk back one bucket at a time."
+
+[[checks]]
+prompt = "You need a new NOT NULL column on a 500-million-row Postgres table that serves live traffic. How do you add it without an outage?"
+answer = "Expand and contract: add the column with a constant default (a catalogue-only change since Postgres 11, no rewrite) or as nullable; deploy code that writes it; backfill old rows in small batches; then add the NOT NULL rule as a CHECK constraint NOT VALID and VALIDATE it separately, which scans without blocking writes. Avoid a volatile default or anything that rewrites the table under an exclusive lock."
+
+[[checks]]
+prompt = "In a document store, would you embed a blog post's comments in the post document? Why or why not?"
+answer = "No: comments are unbounded and change independently, so the document would grow without limit (MongoDB documents are capped at 16 MB) and every new comment would rewrite it. Store comments separately with a reference to the post, indexed by (post id, time). Embed only small, bounded data that is read with the parent, such as a few addresses."
+
+[[terms]]
+term = "Access pattern"
+means = "A read or write the system must serve, with its rate and shape (lookup, range, aggregate)."
+section = "Start from the queries"
+
+[[terms]]
+term = "Surrogate key"
+means = "A generated identifier with no meaning, which never changes."
+section = "Entities, keys and relationships"
+
+[[terms]]
+term = "Join table"
+means = "A table of pairs of ids that models a many-to-many relationship."
+section = "Entities, keys and relationships"
+
+[[terms]]
+term = "Exclusion constraint"
+means = "A Postgres rule that no two rows may conflict on the given operators, such as overlapping ranges."
+section = "Entities, keys and relationships"
+
+[[terms]]
+term = "Normalised"
+means = "Each fact stored once and joined at read time."
+section = "Normalise, then denormalise on purpose"
+
+[[terms]]
+term = "Denormalised"
+means = "A fact copied to where it is read, trading write work and sync for faster reads."
+section = "Normalise, then denormalise on purpose"
+
+[[terms]]
+term = "Materialised view"
+means = "A stored query result the database can refresh."
+section = "Normalise, then denormalise on purpose"
+
+[[terms]]
+term = "Partition key"
+means = "The part of the key that is hashed to choose the machine holding the row."
+section = "Key-value and wide-column stores"
+
+[[terms]]
+term = "Clustering key"
+means = "The part of the key that sorts rows inside a partition (a sort key in DynamoDB)."
+section = "Key-value and wide-column stores"
+
+[[terms]]
+term = "Time bucket"
+means = "A date or hour added to a partition key so no partition grows forever."
+section = "Key-value and wide-column stores"
+
+[[terms]]
+term = "Rollup"
+means = "A precomputed aggregate, such as clicks per link per day."
+section = "Append-only data"
+
+[[terms]]
+term = "Expand and contract"
+means = "Change a schema by adding the new shape, moving to it, and only then retiring the old one."
+section = "Changing the schema"
+
+[[sources]]
+title = "The System Design Primer: SQL or NoSQL, denormalisation"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#sql-or-nosql"
+note = "CC BY 4.0"
+
+[[sources]]
+title = "PostgreSQL: constraints"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-constraints.html"
+note = "unique, foreign key, check and exclusion constraints"
+
+[[sources]]
+title = "PostgreSQL: ALTER TABLE"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-altertable.html"
+note = "which changes rewrite the table, NOT VALID and VALIDATE"
+
+[[sources]]
+title = "PostgreSQL: range types"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/rangetypes.html"
+note = "tstzrange and the exclusion constraint example"
+
+[[sources]]
+title = "Amazon DynamoDB: designing partition keys"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html"
+note = "per-partition throughput, spreading load"
+
+[[sources]]
+title = "Amazon DynamoDB: service quotas"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html"
+note = "item size and other limits"
+
+[[sources]]
+title = "Apache Cassandra: data modeling"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/index.html"
+note = "query-first design, partition and clustering keys"
+
+[[sources]]
+title = "MongoDB: data modeling"
+kind = "docs"
+url = "https://www.mongodb.com/docs/manual/data-modeling/"
+note = "embedding against references"
