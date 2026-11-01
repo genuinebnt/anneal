@@ -1,55 +1,309 @@
 title = "Design patterns in Rust"
 group = "rust"
 order = 1
-minutes = 12
-lede = "The patterns interviewers expect from a Rust engineer, and how ownership changes them: newtypes and typestate push rules into the compiler, builders replace long constructors, RAII guards replace try/finally, and traits or closures replace class hierarchies."
+minutes = 20
+lede = "The patterns interviewers expect from a Rust engineer, and how ownership changes them: newtypes and typestate push rules into the compiler, builders replace long constructors, RAII guards replace try/finally, and traits or closures replace class hierarchies. Each program on this page compiles and runs; the lines marked as not compiling were checked to fail with the error quoted."
 say = "I'd model the connection with typestate, so `send` only exists on `Connection<Open>`; misuse is a compile error, not a runtime check."
-related = ["rust-async"]
+related = ["rust-async", "solid-and-patterns", "concurrency-primitives"]
+credit = "The choice of idioms, patterns and anti-patterns, and parts of their explanations, are adapted from [Rust Design Patterns](https://rust-unofficial.github.io/patterns/) (rust-unofficial/patterns), licensed under the [Mozilla Public License 2.0](https://www.mozilla.org/en-US/MPL/2.0/). The code is written for anneal."
+
+summary = [
+  "**Newtype**: a one-field struct gives a value its own type and a validating constructor.",
+  "**Builder** for many optional settings; **typestate** makes invalid state transitions fail to compile.",
+  "**RAII guards** release in `Drop`, so cleanup runs on every path, early returns and panics included.",
+  "Strategy and command: **generics** for static dispatch, **`dyn Trait`** for runtime choice and mixed lists, **closures** for one-offs.",
+  "Avoid **clone to please the borrow checker**, **`Deref` as inheritance**, and `Rc<RefCell<…>>` everywhere.",
+]
 
 [[sections]]
 heading = "Newtype"
 body = """
-Wrap a primitive in a one-field struct to give it meaning and rules: `struct UserId(u64)` cannot be passed where an `OrderId(u64)` is expected, and the constructor can validate.
+Wrap a primitive in a one-field tuple struct to give it meaning and rules. `UserId(u64)` and `OrderId(u64)` are different types although both hold a `u64`, so swapping them is a compile error; a validating constructor means every `Email` that exists has already been checked; and the wrapper chooses which traits it exposes (a `Password` whose `Debug` never prints the secret). A newtype has no runtime cost: it has the same layout as the value inside.
 
-```rust
+```rust title=newtype.rs hl=7-17,21-23,47
+use std::fmt;
+
+/// An email address that has been checked once, at the boundary.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Email(String);
+
 impl Email {
     pub fn parse(s: &str) -> Result<Self, String> {
-        if s.contains('@') { Ok(Self(s.to_owned())) } else { Err(format!("not an email: {s}")) }
+        match s.split_once('@') {
+            Some((user, domain)) if !user.is_empty() && domain.contains('.') => Ok(Self(s.to_lowercase())),
+            _ => Err(format!("not an email address: {s:?}")),
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
+
+/// Ids of different things are different types, though both are a u64 underneath.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UserId(u64);
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrderId(u64);
+
+/// A secret that never prints itself, even by accident in a log line.
+pub struct Password(String);
+
+impl Password {
+    pub fn matches(&self, attempt: &str) -> bool {
+        self.0 == attempt // a real system compares hashes, in constant time
+    }
+}
+
+impl fmt::Debug for Password {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Password(****)")
+    }
+}
+
+fn send_receipt(to: &Email, user: UserId, order: OrderId) -> String {
+    format!("receipt for order {} of user {} to {}", order.0, user.0, to.as_str())
+}
+
+fn main() {
+    let to = Email::parse("Ana@Example.com").unwrap();
+    println!("{}", send_receipt(&to, UserId(42), OrderId(7)));
+    // send_receipt(&to, OrderId(7), UserId(42)); // does not compile: expected `UserId`, found `OrderId`
+    println!("{}", Email::parse("ana.example.com").unwrap_err());
+    let pw = Password("hunter2".into());
+    println!("{pw:?} matches: {}", pw.matches("hunter2"));
+}
 ```
-A function taking `Email` never has to re-check it.
+
+```text title=output
+receipt for order 7 of user 42 to ana@example.com
+not an email address: "ana.example.com"
+Password(****) matches: true
+```
+
+Uncommenting the swapped call fails with `error[E0308]: arguments to this function are incorrect`. The cost: a newtype does not inherit the inner type's methods or traits; you implement or derive the ones you want (which is usually the point).
 """
 
 [[sections]]
 heading = "Builder"
 body = """
-Rust has no default or named arguments, so a type with many optional settings takes a builder: methods that set one field and return `self`, and a `build()` that validates.
+Rust has no default or named arguments, so a type with many optional settings takes a builder: methods that set one field and return `self`, and a `build()` that validates everything at once and returns a `Result`. Required settings can be enforced by `build` (as here), or at compile time by making the builder itself a typestate.
 
-```rust
-let client = Client::builder().timeout(Duration::from_secs(5)).retries(3).build()?;
+```rust title=builder.rs hl=39-50
+use std::time::Duration;
+
+#[derive(Debug)]
+pub struct Client {
+    base_url: String,
+    timeout: Duration,
+    retries: u32,
+    user_agent: String,
+}
+
+/// Collects optional settings; `build` validates them all at once.
+#[derive(Default)]
+pub struct ClientBuilder {
+    base_url: Option<String>,
+    timeout: Option<Duration>,
+    retries: Option<u32>,
+    user_agent: Option<String>,
+}
+
+impl Client {
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::default()
+    }
+}
+
+impl ClientBuilder {
+    pub fn base_url(mut self, url: &str) -> Self {
+        self.base_url = Some(url.to_owned());
+        self
+    }
+    pub fn timeout(mut self, t: Duration) -> Self {
+        self.timeout = Some(t);
+        self
+    }
+    pub fn retries(mut self, n: u32) -> Self {
+        self.retries = Some(n);
+        self
+    }
+    pub fn build(self) -> Result<Client, String> {
+        let base_url = self.base_url.ok_or("base_url is required")?;
+        if !base_url.starts_with("https://") {
+            return Err(format!("base_url must use https: {base_url}"));
+        }
+        Ok(Client {
+            base_url,
+            timeout: self.timeout.unwrap_or(Duration::from_secs(10)),
+            retries: self.retries.unwrap_or(2),
+            user_agent: self.user_agent.unwrap_or_else(|| "anneal/1.0".into()),
+        })
+    }
+}
+
+fn main() {
+    let client = Client::builder().base_url("https://api.example.com").timeout(Duration::from_secs(5)).build();
+    let c = client.unwrap();
+    println!("{} timeout {:?}, {} retries, as {}", c.base_url, c.timeout, c.retries, c.user_agent);
+    println!("{:?}", Client::builder().retries(3).build());
+    println!("{:?}", Client::builder().base_url("http://api.example.com").build());
+}
 ```
+
+```text title=output
+https://api.example.com timeout 5s, 2 retries, as anneal/1.0
+Err("base_url is required")
+Err("base_url must use https: http://api.example.com")
+```
+
+Consuming builders (`fn timeout(mut self, …) -> Self`, as above) chain naturally in one expression; builders that take `&mut self` are easier to fill in a loop or conditionally. Deriving `Default` for the builder keeps `Client::builder()` a one-liner.
 """
 
 [[sections]]
 heading = "Typestate"
 body = """
-Encode the state in the type, so invalid transitions do not compile.
+Encode the state in the type, so invalid transitions do not compile. Each state is a zero-sized type; the connection is generic over it; methods are implemented only for the states where they make sense; and transitions **consume** the old value and return the new one, so the old state cannot be used afterwards.
 
-```rust
-struct Open; struct Closed;
-struct Connection<S> { sock: TcpStream, _s: PhantomData<S> }
-impl Connection<Closed> { fn open(self) -> io::Result<Connection<Open>> { /* … */ } }
-impl Connection<Open>   { fn send(&mut self, b: &[u8]) -> io::Result<()> { /* … */ } }
+```rust title=typestate.rs hl=16-37
+use std::io::{self, Read, Write};
+use std::marker::PhantomData;
+use std::net::{TcpListener, TcpStream};
+
+/// The states, as types with no data.
+pub struct Disconnected;
+pub struct Connected;
+pub struct Authenticated;
+
+/// A connection whose state is part of its type: methods exist only in the states where they make sense.
+pub struct Conn<S> {
+    stream: Option<TcpStream>,
+    _state: PhantomData<S>,
+}
+
+impl Conn<Disconnected> {
+    pub fn new() -> Self {
+        Conn { stream: None, _state: PhantomData }
+    }
+    pub fn connect(self, addr: &str) -> io::Result<Conn<Connected>> {
+        Ok(Conn { stream: Some(TcpStream::connect(addr)?), _state: PhantomData })
+    }
+}
+
+impl Conn<Connected> {
+    /// Consumes the connected state: the old value cannot be used again.
+    pub fn login(mut self, token: &str) -> io::Result<Conn<Authenticated>> {
+        self.stream.as_mut().unwrap().write_all(format!("AUTH {token}\\n").as_bytes())?;
+        Ok(Conn { stream: self.stream, _state: PhantomData })
+    }
+}
+
+impl Conn<Authenticated> {
+    pub fn send(&mut self, msg: &str) -> io::Result<()> {
+        self.stream.as_mut().unwrap().write_all(format!("MSG {msg}\\n").as_bytes())
+    }
+}
+
+fn main() -> io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?.to_string();
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut got = String::new();
+        s.read_to_string(&mut got).unwrap();
+        got
+    });
+
+    let conn = Conn::new().connect(&addr)?;
+    // conn.send("hi"); // does not compile: no method named `send` found for struct `Conn<Connected>`
+    let mut conn = conn.login("secret")?;
+    conn.send("hello")?;
+    drop(conn);
+    print!("server received:\\n{}", server.join().unwrap());
+    Ok(())
+}
 ```
-`send` simply does not exist on a closed connection.
+
+```text title=output
+server received:
+AUTH secret
+MSG hello
+```
+
+Uncommenting `conn.send("hi")` before `login` fails with error E0599, "no method named send found for struct Conn<Connected>": the protocol is checked by the compiler. `PhantomData<S>` lets the struct mention `S` without storing one, so the state costs nothing at runtime. Use typestate when misuse is costly and the states are known statically (protocols, builders with required fields, resource lifecycles); use a plain `enum` when the state is only known at runtime (a connection that may drop at any time).
 """
 
 [[sections]]
 heading = "RAII guards"
 body = """
-Acquire in a constructor, release in `Drop`: `MutexGuard` unlocks when it goes out of scope, a `File` closes, a transaction rolls back unless committed. Cleanup runs on every path, including early returns and panics.
+Acquire in a constructor, release in `Drop`: `MutexGuard` unlocks when it goes out of scope, a `File` closes, a transaction rolls back unless committed. Cleanup runs on every path, including early returns, `?` and panics, which replaces `try/finally` and `defer`.
+
+```rust title=raii.rs hl=32-38
+use std::cell::RefCell;
+
+/// A pretend database: a list of committed rows.
+#[derive(Default)]
+pub struct Db {
+    rows: RefCell<Vec<String>>,
+}
+
+/// A transaction guard: its writes reach the database only if `commit` is called; dropping it rolls them back.
+pub struct Tx<'a> {
+    db: &'a Db,
+    pending: Vec<String>,
+    committed: bool,
+}
+
+impl Db {
+    pub fn begin(&self) -> Tx<'_> {
+        Tx { db: self, pending: Vec::new(), committed: false }
+    }
+}
+
+impl Tx<'_> {
+    pub fn insert(&mut self, row: &str) {
+        self.pending.push(row.to_owned());
+    }
+    pub fn commit(mut self) {
+        self.db.rows.borrow_mut().append(&mut self.pending);
+        self.committed = true;
+    } // `self` is dropped here, after committing
+}
+
+impl Drop for Tx<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            println!("  rolled back {} pending row(s)", self.pending.len());
+        }
+    }
+}
+
+fn transfer(db: &Db, fail: bool) -> Result<(), String> {
+    let mut tx = db.begin();
+    tx.insert("debit ana 10");
+    if fail {
+        return Err("card declined".into()); // early return: Drop rolls back
+    }
+    tx.insert("credit bo 10");
+    tx.commit();
+    Ok(())
+}
+
+fn main() {
+    let db = Db::default();
+    println!("{:?}", transfer(&db, false));
+    println!("{:?}", transfer(&db, true));
+    println!("committed rows: {:?}", db.rows.borrow());
+}
+```
+
+```text title=output
+Ok(())
+  rolled back 1 pending row(s)
+Err("card declined")
+committed rows: ["debit ana 10", "credit bo 10"]
+```
+
+The early `return Err(…)` never mentions the transaction, yet its pending row is rolled back. `commit` takes `self` by value, so a committed transaction cannot be used again. Destructors do not run if the process aborts or the value is leaked with `mem::forget`, so never rely on `Drop` for durability, only for releasing resources.
 
 > [!TIP]
 > Interviewers like hearing that a guard must not be held across an `.await` (a `std::sync::MutexGuard` is not `Send`), so scope it in a block.
@@ -65,14 +319,169 @@ body = """
 | one-off behaviour | a closure: `impl Fn(&Event) -> bool` |
 
 Prefer generics for hot paths, `dyn` for plugin-like collections.
+
+```rust title=strategy.rs hl=23-25,28-30,33-35
+/// One behaviour, three ways to vary it: a generic, a trait object, a closure.
+pub trait Eviction {
+    /// Picks which of the cached keys to drop; each key comes with (last used, times used).
+    fn victim(&self, keys: &[(&str, u64, u32)]) -> usize;
+}
+
+pub struct Lru;
+pub struct Lfu;
+
+impl Eviction for Lru {
+    fn victim(&self, keys: &[(&str, u64, u32)]) -> usize {
+        (0..keys.len()).min_by_key(|&i| keys[i].1).unwrap()
+    }
+}
+
+impl Eviction for Lfu {
+    fn victim(&self, keys: &[(&str, u64, u32)]) -> usize {
+        (0..keys.len()).min_by_key(|&i| keys[i].2).unwrap()
+    }
+}
+
+/// Static dispatch: one copy of this function per policy type, calls can be inlined.
+fn evict_generic<E: Eviction>(policy: &E, keys: &[(&str, u64, u32)]) -> String {
+    keys[policy.victim(keys)].0.to_owned()
+}
+
+/// Dynamic dispatch: one function for every policy, chosen at runtime through a vtable.
+fn evict_dyn(policy: &dyn Eviction, keys: &[(&str, u64, u32)]) -> String {
+    keys[policy.victim(keys)].0.to_owned()
+}
+
+/// A closure for one-off behaviour, no trait needed.
+fn evict_with(pick: impl Fn(&[(&str, u64, u32)]) -> usize, keys: &[(&str, u64, u32)]) -> String {
+    keys[pick(keys)].0.to_owned()
+}
+
+fn main() {
+    // (key, last used at, times used)
+    let keys = [("a", 30, 9), ("b", 10, 50), ("c", 20, 1)];
+    println!("LRU evicts {}", evict_generic(&Lru, &keys));
+    println!("LFU evicts {}", evict_generic(&Lfu, &keys));
+    let from_config: Box<dyn Eviction> = if std::env::args().count() > 1 { Box::new(Lfu) } else { Box::new(Lru) };
+    println!("configured policy evicts {}", evict_dyn(from_config.as_ref(), &keys));
+    let policies: Vec<Box<dyn Eviction>> = vec![Box::new(Lru), Box::new(Lfu)]; // mixed types in one list
+    println!("{} policies loaded", policies.len());
+    println!("largest key evicts {}", evict_with(|k| (0..k.len()).max_by_key(|&i| k[i].0).unwrap(), &keys));
+}
+```
+
+```text title=output
+LRU evicts b
+LFU evicts c
+configured policy evicts b
+2 policies loaded
+largest key evicts c
+```
+
+- **Generics** are monomorphised: the compiler makes a copy of `evict_generic` for each policy, so calls are direct and can be inlined, at the cost of code size and of the type being fixed at compile time.
+- **Trait objects** (`&dyn Eviction`, `Box<dyn Eviction>`) carry a pointer to a vtable: one copy of the code, a choice made at runtime (from configuration), and lists of mixed types. The trait must be object-safe (dyn-compatible): no generic methods, no `Self` by value in signatures.
+- **Closures** need no trait at all for one-off behaviour; `impl Fn` keeps static dispatch, `Box<dyn Fn>` stores them.
+
+The **command** pattern is the same idea applied to actions: a `Box<dyn Command>` (or an `enum` of commands, when the set is closed) that can be queued, logged, sent to another thread or undone. In Rust, a closed set of commands is usually an `enum` matched in one place, and an open set is a trait.
+"""
+
+[[sections]]
+heading = "Idioms worth knowing"
+body = """
+Small habits that interviewers notice:
+
+- **Borrowed argument types**: take `&str` rather than `&String`, `&[T]` rather than `&Vec<T>`, `&Path` rather than `&PathBuf`; callers can then pass owned values, literals and slices alike.
+- **`Default`**: derive it, construct with `Type { field: x, ..Default::default() }`, and let builders and `mem::take` rely on it.
+- **`mem::take` and `mem::replace`**: move a value out of a `&mut` by leaving a default (or a given value) behind, instead of cloning it or wrapping it in `Option`. The classic use is changing an enum's variant while keeping the data it holds.
+- **Extension traits**: add methods to a type you do not own by defining a trait and implementing it for that type.
+
+```rust title=idioms.rs hl=27-29,38-42
+use std::mem;
+
+/// Borrowed argument types: `&str` accepts a `&String`, a string literal and a slice of either.
+fn shout(s: &str) -> String {
+    s.to_uppercase()
+}
+
+/// An extension trait: new methods on a type you do not own.
+trait WordCount {
+    fn words(&self) -> usize;
+}
+
+impl WordCount for str {
+    fn words(&self) -> usize {
+        self.split_whitespace().count()
+    }
+}
+
+#[derive(Debug, Default)]
+struct Batch {
+    name: String,
+    items: Vec<u32>,
+}
+
+impl Batch {
+    /// Hands the current items to the caller and leaves an empty Vec behind: no clone, no Option.
+    fn flush(&mut self) -> Vec<u32> {
+        mem::take(&mut self.items)
+    }
+}
+
+enum Upload {
+    Pending { file: String },
+    Done { file: String, url: String },
+}
+
+/// Moves the String out of the old state into the new one, through a `&mut`, without cloning it.
+fn finish(u: &mut Upload, url: &str) {
+    if let Upload::Pending { file } = u {
+        *u = Upload::Done { file: mem::take(file), url: url.to_owned() };
+    }
+}
+
+fn main() {
+    let owned = String::from("rust");
+    println!("{} {} {}", shout(&owned), shout("literal"), shout(&owned[..2]));
+    println!("{} words", "the quick brown fox".words());
+
+    let mut b = Batch { name: "clicks".into(), ..Default::default() };
+    b.items.extend([1, 2, 3]);
+    let sent = b.flush();
+    println!("sent {sent:?}, left {:?} in {}", b.items, b.name);
+
+    let mut up = Upload::Pending { file: "cat.png".into() };
+    finish(&mut up, "https://cdn.example.com/cat.png");
+    if let Upload::Done { file, url } = &up {
+        println!("{file} -> {url}");
+    }
+}
+```
+
+```text title=output
+RUST LITERAL RU
+4 words
+sent [1, 2, 3], left [] in clicks
+cat.png -> https://cdn.example.com/cat.png
+```
 """
 
 [[sections]]
 heading = "Anti-patterns to name"
 body = """
-- **Cloning to please the borrow checker**: restructure ownership (borrow shorter, split structs, `mem::take`) instead.
-- **`Deref` to fake inheritance**: implement the trait or delegate explicitly.
-- **`Rc<RefCell<…>>` everywhere**: usually a sign the ownership tree is unclear; an arena with indices often fits better.
+- **Cloning to please the borrow checker**: a `.clone()` added only to silence an error usually hides a design problem and costs an allocation; worse, the clone can quietly diverge from the original. Restructure ownership instead: borrow for a shorter scope, split a struct so two fields can be borrowed separately, use `mem::take`, or pass ownership on.
+- **`Deref` to fake inheritance**: implementing `Deref<Target = Base>` on a wrapper so that `wrapper.base_method()` works looks like subclassing, but it is surprising (method lookup silently falls through), it does not make the wrapper usable where a trait bound is required, and `Deref` is meant for smart pointers. Implement the trait, or delegate the few methods explicitly.
+- **`Rc<RefCell<…>>` everywhere**: usually a sign the ownership tree is unclear; turn the graph into a tree with one owner, or use an arena with indices (a `Vec` of nodes and `usize` ids), which also makes the structure easy to share across threads later.
+- **`#![deny(warnings)]` in a library's source**: a new compiler release that adds a warning then breaks the build; deny warnings in CI (`RUSTFLAGS="-D warnings"`) instead.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Reach for **types first**: a newtype for each id and validated value, an `enum` for each closed set of states, typestate where misuse must be impossible.
+2. Model resources with **RAII**: locks, transactions, connections, temporary files.
+3. Say **why** you chose a generic or a trait object.
+4. Keep ownership a **tree**; reach for `Arc` and locks only where state is truly shared across threads, and say what each lock protects.
+5. Name the anti-pattern you are avoiding when the obvious fix would be a `.clone()`.
 """
 
 [[checks]]
@@ -82,3 +491,98 @@ answer = "It gives each meaning its own type, so ids of different things cannot 
 [[checks]]
 prompt = "When would you use `Box<dyn Trait>` instead of a generic `T: Trait`?"
 answer = "When the concrete type is only known at runtime or a collection must hold different types (a list of handlers or plugins); generics are better when the type is known at compile time, since they are statically dispatched and can be inlined."
+
+[[checks]]
+prompt = "How does typestate turn 'send before login' from a runtime error into a compile error?"
+answer = "Each state is its own type parameter (Conn<Connected>, Conn<Authenticated>), send is implemented only for Conn<Authenticated>, and login consumes the Conn<Connected> and returns a Conn<Authenticated>. A Conn<Connected> simply has no send method, so calling it does not compile, and because login takes self by value the old state cannot be reused afterwards. PhantomData makes the state cost nothing at runtime."
+
+[[checks]]
+prompt = "A function begins a transaction, makes two writes, and has three early returns on errors. How do you guarantee the transaction is rolled back on every error path?"
+answer = "Make the transaction an RAII guard: Drop rolls back unless commit was called, and commit takes self by value and marks it done. Every early return, ? and panic drops the guard, so rollback happens without any code on the error paths, and a committed transaction cannot be touched again."
+
+[[checks]]
+prompt = "You need to change an enum held behind a &mut from Pending { file: String } to Done { file: String, url: String } without cloning the String. How?"
+answer = "Match on the &mut, and move the String out with mem::take(file) (which leaves an empty String behind, without allocating) while assigning the new variant: *u = Done { file: mem::take(file), url }. mem::replace does the same when the type has no Default or you want to leave a specific value."
+
+[[checks]]
+prompt = "Why is implementing Deref on a wrapper struct to reach the inner type's methods considered an anti-pattern?"
+answer = "It emulates inheritance with a trait meant for smart pointers: method calls silently fall through to the inner type, which surprises readers, and the wrapper still does not satisfy trait bounds the inner type meets, so it is not real subtyping. Implement the needed traits on the wrapper, or delegate the methods you want explicitly."
+
+[[terms]]
+term = "Newtype"
+means = "A one-field tuple struct that gives a value its own type."
+section = "Newtype"
+
+[[terms]]
+term = "Builder"
+means = "A separate type that collects optional settings and validates them in build()."
+section = "Builder"
+
+[[terms]]
+term = "Typestate"
+means = "Encoding an object's state in its type so invalid operations do not compile."
+section = "Typestate"
+
+[[terms]]
+term = "PhantomData"
+means = "A zero-sized marker that lets a type mention a type parameter it does not store."
+section = "Typestate"
+
+[[terms]]
+term = "RAII"
+means = "Resource acquisition is initialisation: release happens in the owner's destructor."
+section = "RAII guards"
+
+[[terms]]
+term = "Monomorphisation"
+means = "The compiler making a separate copy of generic code for each concrete type."
+section = "Strategy and command: traits or closures"
+
+[[terms]]
+term = "Trait object"
+means = "A value used through dyn Trait, with methods found through a vtable at runtime."
+section = "Strategy and command: traits or closures"
+
+[[terms]]
+term = "mem::take"
+means = "Move a value out of a mutable reference, leaving its Default behind."
+section = "Idioms worth knowing"
+
+[[terms]]
+term = "Extension trait"
+means = "A trait defined to add methods to a type you do not own."
+section = "Idioms worth knowing"
+
+[[sources]]
+title = "Rust Design Patterns (rust-unofficial/patterns)"
+kind = "book"
+url = "https://rust-unofficial.github.io/patterns/"
+note = "idioms, patterns and anti-patterns (MPL 2.0)"
+
+[[sources]]
+title = "The Rust Programming Language: using the newtype pattern"
+kind = "book"
+url = "https://doc.rust-lang.org/book/ch20-02-advanced-traits.html"
+note = "newtypes and the orphan rule"
+
+[[sources]]
+title = "The Rust Programming Language: trait objects"
+kind = "book"
+url = "https://doc.rust-lang.org/book/ch18-02-trait-objects.html"
+note = "dynamic dispatch and dyn compatibility"
+
+[[sources]]
+title = "Rust API Guidelines: type safety"
+kind = "guide"
+url = "https://rust-lang.github.io/api-guidelines/type-safety.html"
+note = "newtypes, builders, arguments that convey meaning"
+
+[[sources]]
+title = "Rust standard library: std::mem::take"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/mem/fn.take.html"
+
+[[sources]]
+title = "Rust standard library: PhantomData"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/marker/struct.PhantomData.html"
