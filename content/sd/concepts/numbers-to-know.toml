@@ -1,45 +1,401 @@
 title = "Numbers to know"
 group = "fundamentals"
 order = 2
-minutes = 6
-lede = "A handful of orders of magnitude, enough to say whether something fits on one machine, how long a request costs, and whether a cache is worth it."
+minutes = 16
+lede = "A handful of orders of magnitude, enough to say whether something fits on one machine, how long a request costs, and whether a cache is worth it. The classic table dates from 2009 hardware, so this page puts it next to numbers measured on a current machine: most ratios held, a few moved, and the slow things are still slow for the same physical reasons."
 say = "That's about 1,200 writes a second at peak, which one Postgres primary handles; the read side is 100 times that, so it needs a cache."
-related = ["estimation", "caching"]
+related = ["estimation", "caching", "storage-engines", "load-balancing"]
+credit = "The classic latency table and the powers of two table are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#latency-numbers-every-programmer-should-know) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), which collects Jeff Dean's and Peter Norvig's numbers. The measurements are anneal's own."
+
+summary = [
+  "Each step down the hierarchy is roughly **100× slower**: cache, memory, SSD, network across the world.",
+  "A round trip **inside a data centre** costs about as much as an SSD read (hundreds of µs); across a continent, tens of ms that no hardware removes.",
+  "A **durable commit** waits for the disk: from a fraction of a millisecond to several, which caps one connection's commit rate.",
+  "One machine does a lot: a single Redis served **83,000 requests a second** (700,000 pipelined) on a 4-core VM.",
+  "A day is about **100,000 seconds**; 1 million a day is about 12 a second.",
+]
 
 [[sections]]
-heading = "Latency"
+heading = "Why orders of magnitude"
 body = """
-| Operation | Roughly |
-|---|---|
-| Read from memory | 100 ns |
-| Read 1 MB from memory | 10 µs |
-| SSD random read | 100 µs |
-| Round trip inside a data centre | 0.5 ms |
-| Redis get, over the network | under 1 ms |
-| Indexed database query | 1 to 10 ms |
-| Round trip across a continent | 50 to 150 ms |
+Design decisions turn on ratios, not exact figures: is this 10 times or 1,000 times slower than that? Whether a read takes 80 or 120 nanoseconds never changes a design; whether it costs 100 nanoseconds or 100 microseconds always does.
 
-Memory is about a thousand times faster than SSD; the network inside a region costs about as much as an SSD read.
+Three ladders cover most decisions:
+
+- **Where data lives**: CPU cache, memory, local SSD, another machine's memory, another region.
+- **What a request waits for**: computation, a lock, a network round trip, a disk flush.
+- **How much one machine does**: requests a second, bytes a second, bytes stored.
+
+Learn the rungs as powers of ten and the ratios between them; derive the rest.
+"""
+
+[[sections]]
+heading = "The classic table"
+body = """
+Jeff Dean's latency numbers (popularised by Peter Norvig and in Dean's 2009 LADIS keynote) as the System Design Primer lists them:
+
+| Operation | Latency | Note |
+|---|---|---|
+| L1 cache reference | 0.5 ns | |
+| branch mispredict | 5 ns | |
+| L2 cache reference | 7 ns | 14× L1 |
+| mutex lock and unlock | 25 ns | |
+| main memory reference | 100 ns | 20× L2, 200× L1 |
+| compress 1 KB with Zippy (Snappy) | 10 µs | |
+| send 1 KB over a 1 Gbps network | 10 µs | |
+| read 4 KB at random from SSD | 150 µs | about 1 GB/s SSD |
+| read 1 MB sequentially from memory | 250 µs | |
+| round trip within the same data centre | 500 µs | |
+| read 1 MB sequentially from SSD | 1 ms | 4× memory |
+| disk seek | 10 ms | 20× a data centre round trip |
+| read 1 MB sequentially from a 1 Gbps network | 10 ms | |
+| read 1 MB sequentially from disk | 30 ms | |
+| send a packet California → Netherlands → California | 150 ms | |
+
+Handy rates from it: a disk reads sequentially at about 30 MB/s, a 1 Gbps link carries about 100 MB/s, an SSD about 1 GB/s, memory about 4 GB/s; about 2,000 round trips a second fit inside a data centre, and 6 or 7 around the world.
+
+These are **2009-era** figures. Colin Scott's interactive version extrapolates each one from hardware trends year by year (it is a model, not a measurement). What changed most since: SSDs and networks got much faster, spinning disks did not, and memory latency barely moved.
+"""
+
+[[sections]]
+heading = "Measured on a current machine"
+body = """
+The same operations, measured by a Rust program (below) on a **4-vCPU Intel Xeon cloud VM at 2.1 GHz with 15 GB of memory, Linux 6.18, Rust 1.97, a virtual disk**, shared with other workloads. Each figure is the median of five timed runs; the range spans four separate runs of the program.
+
+| Operation | Measured | Classic | |
+|---|---|---|---|
+| dependent random load, 16 KB array (in L1) | 1.6 to 2.6 ns | 0.5 ns | includes the loop |
+| dependent random load, 1 MB array (in L2) | 7 to 16 ns | 7 ns | |
+| dependent random load, 1 GB array | 305 to 500 ns | 100 ns | with 2 MB pages: 268 to 322 ns |
+| mutex lock and unlock, uncontended | 15 to 19 ns | 25 ns | |
+| compress 1 KB of English with Snappy | 1.0 to 1.5 µs | 10 µs | |
+| read 1 MB sequentially from memory | 88 to 138 µs | 250 µs | 7 to 11 GB/s |
+| message to another thread and back (channels) | 3.3 to 4.6 µs | | the OS wakes a sleeping thread twice |
+| TCP round trip over loopback | 5.6 to 8.7 µs | | no network, just the kernel |
+| spawn and await a Tokio task | 4.5 to 16 µs | | |
+| spawn and join an OS thread | 17 to 523 µs | | very noisy on a VM |
+| random 4 KB read from the disk, bypassing the page cache | 54 to 69 µs | 150 µs | |
+| read 1 MB sequentially from the disk | 0.54 to 0.66 ms | 1 ms | 1.5 to 1.9 GB/s |
+| append 8 KB and `fdatasync` | 2.4 to 4.6 ms | | a durable write |
+| `sleep(1 ms)` | 1.11 to 1.24 ms | | timers overshoot |
+
+What to take from it:
+
+- **Memory latency did not improve**: a random access into a large array still costs hundreds of nanoseconds here, more than the classic 100 ns, because this is a virtual machine (two levels of page tables to walk on a miss) and 4 KB pages mean a TLB miss on nearly every access; 2 MB pages cut it to about 270 to 320 ns. Bandwidth, by contrast, rose: sequential reads are 2 to 3 times faster than the table.
+- **Uncontended locks are cheap** (about 15 ns): what costs is contention and waiting, not taking the lock.
+- **Waking another thread costs microseconds**: a message to another thread and back took 3 to 5 µs, about as much as a loopback TCP round trip. Fine-grained hand-offs between threads are not free.
+- **Durability is the slow part**: reading the disk took 54 to 69 µs, but making an 8 KB write durable took milliseconds on this virtual disk (Postgres's own `pg_test_fsync` measured between 0.36 and 4.1 ms per synced 8 KB write depending on the method). A local NVMe drive with power-loss protection syncs far faster; a network-attached cloud disk is closer to this. Either way, **one connection committing one transaction at a time is capped by sync latency**, which is why databases batch commits (group commit).
+
+:::deeper The measurement program | 3 min
+Dependencies: `libc`, `snap` and `tokio` (with `full`). Run with `cargo run --release -- <scratch file> <a text file> [file size in MB]`; the disk tests use a 4 GB file by default (the runs above used 4 GB, and 256 MB for the last run).
+
+```rust title=lat.rs
+//! Latency numbers measured on this machine. Each test prints the median of several runs, per operation.
+use std::fs::OpenOptions;
+use std::hint::black_box;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v[v.len() / 2]
+}
+
+/// Runs `f` (which does `n` operations) `runs` times and returns the median ns per operation.
+fn per_op(runs: usize, n: u64, mut f: impl FnMut()) -> f64 {
+    f(); // warm up
+    median((0..runs).map(|_| {
+        let t = Instant::now();
+        f();
+        t.elapsed().as_nanos() as f64 / n as f64
+    }).collect())
+}
+
+fn show(name: &str, ns: f64) {
+    let s = if ns < 1_000.0 { format!("{ns:.1} ns") } else if ns < 1_000_000.0 { format!("{:.1} µs", ns / 1e3) } else { format!("{:.2} ms", ns / 1e6) };
+    println!("{name:<52} {s:>12}");
+}
+
+/// A random cycle through `len` slots (Sattolo's algorithm), so each load depends on the one before.
+fn chase(len: usize, hops: u64) -> f64 {
+    let mut next: Vec<u32> = (0..len as u32).collect();
+    let mut rng = Rng(0x9E3779B97F4A7C15);
+    for i in (1..len).rev() {
+        let j = rng.below(i as u64) as usize;
+        next.swap(i, j);
+    }
+    per_op(5, hops, || {
+        let mut p = 0u32;
+        for _ in 0..hops {
+            p = next[p as usize];
+        }
+        black_box(p);
+    })
+}
+
+fn main() {
+    // 1. memory: a dependent random load inside a cache-sized and a memory-sized array
+    show("random load, 16 KB array (L1)", chase(16 * 1024 / 4, 20_000_000));
+    show("random load, 1 MB array (L2)", chase(1024 * 1024 / 4, 20_000_000));
+    show("random load, 1 GB array (main memory)", chase(1024 * 1024 * 1024 / 4, 5_000_000));
+
+    // 2. read 1 MB sequentially from memory (sum it, from a buffer bigger than the caches)
+    let big: Vec<u64> = (0..(1u64 << 30) / 8).collect(); // 1 GB
+    let mib = (1 << 20) / 8;
+    let mut off = 0usize;
+    show("read 1 MB sequentially from memory", per_op(200, 1, || {
+        let s: u64 = big[off..off + mib].iter().sum();
+        black_box(s);
+        off = (off + mib * 7) % (big.len() - mib);
+    }));
+    drop(big);
+
+    // 3. an uncontended mutex lock and unlock
+    let m = Mutex::new(0u64);
+    show("mutex lock + unlock, uncontended", per_op(9, 10_000_000, || {
+        for _ in 0..10_000_000 {
+            *m.lock().unwrap() += 1;
+        }
+    }));
+
+    // 4. compress 1 KB with Snappy (Google's Zippy) of text-like data
+    // 1 KB of English prose (from the System Design Primer README), so the data compresses like real text
+    let prose = std::fs::read(std::env::args().nth(2).expect("a text file")).unwrap();
+    let text: Vec<u8> = prose[50_000..50_000 + 1024].to_vec();
+    let mut enc = snap::raw::Encoder::new();
+    let mut out = vec![0u8; snap::raw::max_compress_len(1024)];
+    show("compress 1 KB with Snappy", per_op(9, 100_000, || {
+        for _ in 0..100_000 {
+            black_box(enc.compress(black_box(&text), &mut out).unwrap());
+        }
+    }));
+
+    // 5. thread to thread: send a message and get a reply over std channels
+    let (to, rx) = mpsc::channel::<u64>();
+    let (back, from) = mpsc::channel::<u64>();
+    let echo = std::thread::spawn(move || {
+        for v in rx {
+            back.send(v).unwrap();
+        }
+    });
+    show("channel round trip between two threads", per_op(5, 100_000, || {
+        for i in 0..100_000 {
+            to.send(i).unwrap();
+            black_box(from.recv().unwrap());
+        }
+    }));
+    drop(to);
+    echo.join().unwrap();
+
+    // 6. start and join an OS thread
+    show("spawn + join an OS thread", per_op(5, 2_000, || {
+        for _ in 0..2_000 {
+            std::thread::spawn(|| black_box(1)).join().unwrap();
+        }
+    }));
+
+    // 7. spawn + await a Tokio task on a multi-thread runtime
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    show("spawn + await a Tokio task", per_op(5, 100_000, || {
+        rt.block_on(async {
+            for _ in 0..100_000 {
+                tokio::spawn(async { black_box(1) }).await.unwrap();
+            }
+        })
+    }));
+    drop(rt);
+
+    // 8. a TCP round trip over loopback (1 byte each way, Nagle off)
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        s.set_nodelay(true).unwrap();
+        let mut b = [0u8; 1];
+        while s.read_exact(&mut b).is_ok() {
+            s.write_all(&b).unwrap();
+        }
+    });
+    let mut c = TcpStream::connect(addr).unwrap();
+    c.set_nodelay(true).unwrap();
+    show("TCP round trip over loopback", per_op(5, 20_000, || {
+        let mut b = [7u8; 1];
+        for _ in 0..20_000 {
+            c.write_all(&b).unwrap();
+            c.read_exact(&mut b).unwrap();
+        }
+    }));
+    drop(c);
+
+    // 9. the disk: 4 KB random reads and 1 MB sequential reads, bypassing the page cache (O_DIRECT)
+    let path = std::env::args().nth(1).unwrap_or_else(|| "lat-test.bin".into());
+    let mb: u64 = std::env::args().nth(3).map_or(4096, |a| a.parse().unwrap()); // 4 GB unless told otherwise
+    let size: u64 = mb << 20;
+    {
+        let mut f = OpenOptions::new().create(true).write(true).truncate(true).open(&path).unwrap();
+        let chunk = vec![0xA5u8; 8 << 20];
+        for _ in 0..size / chunk.len() as u64 {
+            f.write_all(&chunk).unwrap();
+        }
+        f.sync_all().unwrap();
+    }
+    let f = OpenOptions::new().read(true).custom_flags(libc::O_DIRECT).open(&path).unwrap();
+    let mut buf = AlignedBuf::new(1 << 20);
+    let mut rng = Rng(42);
+    let blocks = size / 4096;
+    show("disk: random 4 KB read (O_DIRECT)", per_op(5, 2_000, || {
+        for _ in 0..2_000 {
+            let at = rng.below(blocks) * 4096;
+            f.read_exact_at(&mut buf.as_mut()[..4096], at).unwrap();
+        }
+    }));
+    let mut at = 0u64;
+    show("disk: read 1 MB sequentially (O_DIRECT)", per_op(5, 200, || {
+        for _ in 0..200 {
+            f.read_exact_at(buf.as_mut(), at).unwrap();
+            at = (at + (1 << 20)) % size;
+        }
+    }));
+
+    // 10. a durable write: 8 KB appended, then fdatasync
+    let mut w = OpenOptions::new().create(true).append(true).open(format!("{path}.wal")).unwrap();
+    let page = [1u8; 8192];
+    show("disk: append 8 KB + fdatasync", per_op(5, 200, || {
+        for _ in 0..200 {
+            w.write_all(&page).unwrap();
+            w.sync_data().unwrap();
+        }
+    }));
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(format!("{path}.wal")).ok();
+
+    // 11. sleep(1 ms): what a "1 ms" timer really costs
+    show("std::thread::sleep(1 ms), actual", per_op(5, 200, || {
+        for _ in 0..200 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }));
+}
+
+struct AlignedBuf {
+    ptr: *mut u8,
+    len: usize,
+}
+impl AlignedBuf {
+    fn new(len: usize) -> Self {
+        let layout = std::alloc::Layout::from_size_align(len, 4096).unwrap();
+        Self { ptr: unsafe { std::alloc::alloc_zeroed(layout) }, len }
+    }
+    fn as_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+```
+:::
+"""
+
+[[sections]]
+heading = "The network and the speed of light"
+body = """
+Inside one machine, a loopback round trip took 6 to 9 µs. Between two machines in one data centre, the classic figure is 500 µs; modern data-centre networks do better at the switch level, but a request through a load balancer, TLS and a busy server is commonly a few hundred microseconds to a millisecond. Plan on **about 0.5 to 1 ms per hop inside a region**.
+
+Between regions, physics sets a floor. Light in optical fibre travels at about two thirds of its speed in vacuum, roughly **200,000 km/s**, or 200 km per millisecond:
+
+| Route (great-circle distance) | Minimum round trip in fibre |
+|---|---|
+| same metro area (50 km) | 0.5 ms |
+| San Francisco – New York (4,130 km) | 41 ms |
+| New York – London (5,570 km) | 56 ms |
+| London – Sydney (16,990 km) | 170 ms |
+
+Real paths are longer than great circles and add routers, so measured round trips are higher. No hardware upgrade removes these; only **moving data closer** (CDNs, regional replicas, edge caches) or **making fewer round trips** (batching, pipelining, fewer sequential calls) does.
+
+> [!WARNING]
+> Sequential calls add up. A page that makes 20 calls one after another to a service 1 ms away has spent 20 ms before doing any work; 20 calls to another continent, over a second. Fan out in parallel, batch, or move the data.
 """
 
 [[sections]]
 heading = "What one machine does"
 body = """
-- A modern server: 64 cores, 256 GB to 1 TB memory, several TB of NVMe.
-- Postgres on such a box: thousands to tens of thousands of simple writes a second, many more reads, terabytes of data.
-- Redis: about 100k operations a second per node; data must fit in memory.
-- Kafka broker: hundreds of MB/s.
-- An application server: thousands of requests a second for simple work.
+Measured on the same 4-vCPU VM, client and server on the same machine (so they compete for the CPU):
 
-Most products do not need sharding as early as interviews assume; say the number and decide.
+| Workload | Measured |
+|---|---|
+| Redis 7.0 `GET`, 50 clients, one command at a time | 82,500 a second, median 0.34 ms |
+| Redis 7.0 `SET`, 50 clients | 82,900 a second |
+| Redis 7.0 `GET`, 50 clients, pipelining 16 commands | 702,000 a second |
+| Redis 7.0 `GET`, one client | 58,800 a second, median 15 µs |
+| Postgres 18 primary-key `SELECT` (pgbench `-S`), 8 clients, through Docker port forwarding, 16 MB of shared buffers | 10,000 a second, 0.8 ms average |
+| Postgres 18 primary-key `SELECT`, one client | 4,000 a second, 0.25 ms |
+| Postgres 18 pgbench's default read-write transaction, 8 clients | 800 a second: bound by commit flushes on this disk |
+| Snowflake-style id generator, one thread | 4.0 million ids a second (its 4,096-per-millisecond ceiling) |
+
+Pipelining multiplied Redis's throughput by 8.5 without changing the server: most of a simple command's cost is the round trip and the system calls around it, not the work. Production servers have many more cores than this VM and fast local disks, so treat these as floors.
+
+The habits these numbers support:
+
+- **One machine is a lot**: a single Redis or Postgres server handles tens of thousands of simple operations a second; many products never need more than one primary and a few replicas. Say the number and decide, rather than sharding by reflex.
+- **Writes that must be durable** are bounded by flush latency per connection; throughput comes from concurrency and batching.
+- **Memory is the limit for caches**: a Redis node holds what fits in RAM, so size it from the working set.
 """
 
 [[sections]]
 heading = "Time and size"
 body = """
-- A day is about 100,000 seconds (86,400). A month is about 2.5 million seconds.
-- 1 million requests a day is about 12 a second; 1 billion a day is about 12,000 a second.
-- A character is a byte; a tweet with metadata about 1 KB; a photo about 1 MB; a minute of HD video about 50 MB.
+**Time**:
+
+- A day is 86,400 seconds: call it **100,000** (10⁵). A month is about **2.5 million** seconds; a year about **30 million** (3 × 10⁷).
+- 1 million requests a day is about **12 a second**; 1 billion a day is about **12,000 a second**. Peak is usually 2 to 3 times the average.
+
+**Powers of two**:
+
+| Power | Exact value | Approximately | Bytes |
+|---|---|---|---|
+| 10 | 1,024 | a thousand | 1 KB |
+| 16 | 65,536 | | 64 KB |
+| 20 | 1,048,576 | a million | 1 MB |
+| 30 | 1,073,741,824 | a billion | 1 GB |
+| 32 | 4,294,967,296 | | 4 GB |
+| 40 | 1,099,511,627,776 | a trillion | 1 TB |
+
+**Sizes** to estimate with (round, and say them as assumptions):
+
+| Thing | Size |
+|---|---|
+| an id | 8 bytes (64 bit) or 16 (UUID) |
+| a short text post with metadata | about 1 KB |
+| a database row of a dozen columns | a few hundred bytes |
+| a compressed photo | a few hundred KB to a few MB |
+| a minute of compressed HD video | tens of MB |
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say numbers as orders of magnitude and say what they **mean**: "100,000 reads a second: one Redis node, or two to be safe".
+2. Count **round trips** on the critical path, and the regions they cross.
+3. Ask whether each write must be **durable before the reply**; if so, its latency includes a flush.
+4. Check whether the working set fits in **memory**: if it does, a cache or an in-memory store is the cheap answer.
+
+> [!INTERVIEW]
+> When you quote a number, name the resource it stresses (CPU, memory, disk, network) and whether one machine covers it. The decision is what gets marked, not the arithmetic.
 """
 
 [[checks]]
@@ -49,3 +405,100 @@ answer = "10 billion reads a day / 100,000 s is about 100,000 a second on averag
 [[checks]]
 prompt = "Is a 2 TB dataset with 3,000 writes a second a reason to shard?"
 answer = "Not by itself: one large Postgres server holds a few TB and takes thousands of writes a second. Replicas for reads and good indexes come first; shard when writes or size outgrow one primary with headroom."
+
+[[checks]]
+prompt = "A service in Frankfurt calls a database in Virginia ten times, one after another, for each request. Roughly what latency does that add, and what would you change?"
+answer = "A transatlantic round trip is at least 60 to 90 ms in practice (the speed of light in fibre alone gives tens of milliseconds), so ten sequential calls add close to a second. Make fewer round trips (batch the ten queries into one, or run them in parallel), or move the data or the service so they are in the same region, with a regional replica or cache for reads."
+
+[[checks]]
+prompt = "A worker inserts rows one transaction at a time on one connection and tops out near 300 commits a second, while the disk is mostly idle. Why, and how do you go faster?"
+answer = "Each commit waits for the write-ahead log to be flushed to the disk; at about 3 ms per flush, one connection can commit only about 300 times a second, however idle the disk's bandwidth is. Batch many rows per transaction, use several connections so the database can flush many commits together (group commit), or, where losing the last moment of writes on a crash is acceptable, relax synchronous commit."
+
+[[checks]]
+prompt = "Redis serves 80,000 GET requests a second from 50 clients, but 700,000 a second when the same clients pipeline 16 commands. What does that tell you about where the time goes?"
+answer = "Most of a simple command's cost is not the lookup itself but the round trip and the per-request system calls and scheduling. Pipelining sends many commands per round trip and per read and write call, so the same server does eight or nine times the work. Batching and pipelining are the cheapest throughput wins for chatty clients."
+
+[[checks]]
+prompt = "Roughly how many times slower is a random read from main memory than from the L1 cache, and a random 4 KB SSD read than a memory read? Why do the ratios matter more than the exact numbers?"
+answer = "Memory is about 100 to 200 times slower than L1 (around 100 ns or more against well under a nanosecond to a couple of nanoseconds), and an SSD read is several hundred to a thousand times slower than memory (tens to about a hundred microseconds against about 100 ns). The ratios decide designs (keep the working set in memory, avoid a disk read or a network hop on the hot path) and hold across hardware generations, while the absolute numbers vary by machine."
+
+[[terms]]
+term = "Order of magnitude"
+means = "A factor of ten; estimates are rounded to the nearest one."
+section = "Why orders of magnitude"
+
+[[terms]]
+term = "Latency"
+means = "How long one operation takes from start to finish."
+section = "The classic table"
+
+[[terms]]
+term = "TLB miss"
+means = "A memory access whose page address translation is not cached, adding page-table reads."
+section = "Measured on a current machine"
+
+[[terms]]
+term = "fdatasync"
+means = "A system call that returns once a file's data has reached stable storage."
+section = "Measured on a current machine"
+
+[[terms]]
+term = "Group commit"
+means = "Flushing many transactions' log records with one disk sync."
+section = "Measured on a current machine"
+
+[[terms]]
+term = "Round trip"
+means = "A request's journey to another machine and the reply's journey back."
+section = "The network and the speed of light"
+
+[[terms]]
+term = "Pipelining"
+means = "Sending many requests without waiting for each reply, to save round trips."
+section = "What one machine does"
+
+[[terms]]
+term = "Throughput"
+means = "How many operations complete per second."
+section = "What one machine does"
+
+[[sources]]
+title = "The System Design Primer: latency numbers, powers of two"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#latency-numbers-every-programmer-should-know"
+note = "the classic table (CC BY 4.0)"
+
+[[sources]]
+title = "Jeff Dean: Designs, lessons and advice from building large distributed systems (LADIS 2009)"
+kind = "article"
+url = "https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf"
+note = "the original numbers"
+
+[[sources]]
+title = "Peter Norvig: Teach yourself programming in ten years"
+kind = "article"
+url = "https://norvig.com/21-days.html"
+note = "the table of approximate timings"
+
+[[sources]]
+title = "Colin Scott: Latency numbers every programmer should know, by year"
+kind = "article"
+url = "https://people.eecs.berkeley.edu/~rcs/research/interactive_latency.html"
+note = "extrapolated from hardware trends, not measured"
+
+[[sources]]
+title = "PostgreSQL: pg_test_fsync"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgtestfsync.html"
+note = "measuring sync latency of the disk under a database"
+
+[[sources]]
+title = "Redis: benchmarks"
+kind = "docs"
+url = "https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/"
+note = "redis-benchmark, pipelining, what affects the numbers"
+
+[[sources]]
+title = "PostgreSQL: pgbench"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgbench.html"

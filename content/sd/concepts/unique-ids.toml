@@ -1,43 +1,255 @@
 title = "Unique ID generation"
 group = "core"
 order = 10
-minutes = 9
-lede = "Every design needs ids: for rows, messages, orders, short links. The choice decides whether ids leak counts, sort by time, fit in 64 bits, and can be made on many machines without coordination."
+minutes = 18
+lede = "Every design needs ids: for rows, messages, orders, short links. The choice decides whether ids leak counts, sort by time, fit in 64 bits, and can be made on many machines without coordination, and it shows up later as index size, write speed and how easily the data shards."
 say = "Message ids are Snowflake-style 64-bit ids: millisecond timestamp, machine id, sequence; they sort by time, so a chat page is a range scan, and no service is called to make one."
-related = ["sharding", "indexes", "clocks-and-ordering"]
+related = ["sharding", "indexes", "clocks-and-ordering", "data-modeling", "api-styles"]
+
+summary = [
+  "Decide what the id must do first: **sort by time**, fit **64 bits**, be made **without coordination**, **hide counts**.",
+  "**UUIDv7** (RFC 9562) is the default: 128 bits, time first, made anywhere, and it inserts like a sequence.",
+  "**Random UUIDv4 keys** scatter inserts over the whole index: measured 3.6 to 4.6 times slower to insert than v7, with an index a quarter larger.",
+  "**Snowflake** packs time, machine and sequence into 64 bits; it needs unique machine ids and must refuse when the **clock goes back**.",
+  "Short codes are **base62**: 7 characters hold 3.5 trillion values; random codes need a uniqueness check.",
+]
+
+[[sections]]
+heading = "What an id must do"
+body = """
+Before picking a scheme, decide which of these the id needs:
+
+- **Unique**, forever, across every machine that makes them. This one is not optional.
+- **Sortable by creation time**, so "newest first" and "everything since id X" are range scans on the primary key, with no separate timestamp index.
+- **Compact**: 64 bits fits a `bigint`; 128 bits doubles the size of every key and of every index entry and foreign key that refers to it. (Either way, send ids to browsers as **strings**: JavaScript numbers are exact only up to 2⁵³.)
+- **Made without coordination**: no round trip to a central service or database to get one, so creating ids never becomes a bottleneck or a single point of failure.
+- **Unguessable or not revealing**: sequential ids tell anyone how many orders you take a day and let them walk through `/orders/10041`, `/orders/10042`. Ids are not access control either way: always check that the caller may see the record.
+
+No scheme has all of these at once; the table below is the trade.
+"""
 
 [[sections]]
 heading = "The options"
 body = """
 | Scheme | Size | Sorted by time | Coordination | Notes |
 |---|---|---|---|---|
-| database auto-increment | 64 bit | yes | one database | simple; a bottleneck and leaks counts |
-| UUID v4 | 128 bit | no | none | random: B-tree inserts land everywhere, poor locality |
-| UUID v7 (RFC 9562) | 128 bit | yes | none | millisecond time then random bits; a good default |
-| ULID | 128 bit | yes | none | like v7, encoded as 26 readable characters |
-| Snowflake | 64 bit | yes | a machine id per node | compact, fast, needs machine ids |
-| ranges from a ticket server | 64 bit | roughly | rare | each server takes a block of 1,000 ids |
+| database auto-increment or sequence | 64 bit | yes | one database | simple; a bottleneck past one primary, and it leaks counts |
+| ranges from a ticket server | 64 bit | roughly | rare: one call per block | each server takes a block of ids (1,000 at a time) |
+| UUID v4 | 128 bit | no | none | 122 random bits: B-tree inserts land everywhere |
+| UUID v7 (RFC 9562) | 128 bit | yes (to the millisecond) | none | 48 bits of Unix milliseconds, then random bits; the default |
+| ULID | 128 bit | yes (to the millisecond) | none | same idea as v7, written as 26 Crockford base32 characters |
+| Snowflake | 64 bit | yes (to the millisecond) | a unique machine id per generator | compact and fast; machine ids must be managed |
+| Instagram-style (time, shard, sequence) | 64 bit | yes | the database shard makes it | the id carries its shard |
+
+**Database sequences** are the right answer for one database. Postgres sequences hand out values without locking the table, but a value taken by a transaction that rolls back is not reused, so expect **gaps**. When one primary is not enough, ids must come from somewhere that scales.
+
+**Ticket servers** (Flickr, 2010): a tiny MySQL database whose only job is `REPLACE INTO Tickets64 (stub) VALUES ('a'); SELECT LAST_INSERT_ID();`. Flickr ran two, one with `auto-increment-increment = 2` and offset 1 (odd ids) and one with offset 2 (even ids), round-robin between them, so either could fail. Handing out **blocks** instead (each app server reserves 1,000 ids at a time) makes the central call rare. Ids then sort only roughly by time: server A may be using block 5,000 while server B already uses 9,000.
+"""
+
+[[sections]]
+heading = "UUIDs: v4 and v7"
+body = """
+A UUID is 128 bits, shown as 36 characters (`8e03978e-40d5-43e8-bc93-6894a57f9324`). RFC 9562 (May 2024) replaced RFC 4122 and defines eight versions; two matter here:
+
+- **Version 4**: 122 random bits (6 bits are the version and variant). Unique without any coordination: the chance that any two of 2.7 × 10¹⁸ ids collide is about 50%, so in practice they never do, **provided** the random source is good (RFC 9562 says implementations should use a cryptographically secure generator, reseeded after a process forks).
+- **Version 7**: the first **48 bits are Unix time in milliseconds**, then the 4-bit version, 12 bits `rand_a`, the 2-bit variant and 62 bits `rand_b`. Ids made later sort later, so they behave like a sequence in an index, while still being made anywhere without coordination. RFC 9562 tells implementations to use v7 instead of v1 or v6 where possible.
+
+Within one millisecond, v7 ids from the same generator are ordered only if it chooses to: RFC 9562 allows a **counter** in `rand_a` (method 1), a random value **incremented** for each id in the same millisecond (method 2), or extra **sub-millisecond** timestamp bits (method 3). Postgres 18's built-in `uuidv7()` puts 12 bits of sub-millisecond time in `rand_a` (method 3), so ids made in one session are monotonic. Ids from different machines interleave within a millisecond, which is fine for "roughly by time".
+
+Store UUIDs as the native 16-byte type (`uuid` in Postgres, `BINARY(16)` in MySQL), never as 36-character text: RFC 9562 notes text takes 288 bits for a 128-bit value.
+
+> [!WARNING]
+> A UUID is not a secret. RFC 9562 says implementations should not assume UUIDs are hard to guess, and should not use them as security capabilities. A v7 id also reveals when the record was created. Use a separate random token (and an authorisation check) for anything like "anyone with the link can view".
+"""
+
+[[sections]]
+heading = "Random keys in a B-tree"
+body = """
+A B-tree index keeps keys in order. With **time-ordered** keys (a sequence, v7, Snowflake), every insert goes to the rightmost leaf page, which stays in memory; full pages are left 90% full and never touched again. With **random** keys (v4), each insert lands on a random leaf anywhere in the index. Once the index is larger than memory, most inserts read a page from disk, pages split in the middle and end up partly empty, and every page modified after a checkpoint writes a full page image to the write-ahead log.
+
+Measured on Postgres 18 (a 4-core cloud VM, `shared_buffers` 16 MB so that the indexes outgrow memory, as large tables do in production): 2 million rows inserted into a table of `(id, n int)`, each in one `INSERT … SELECT`, ids generated by the database.
+
+| Primary key | Insert time | Index size | Index leaf density | WAL written |
+|---|---|---|---|---|
+| `bigint` identity | 4.2 s | 43 MB | 90% | 270 MB |
+| `uuid` v7 (`uuidv7()`) | 6.1 to 6.5 s | 60 MB | 90% | 297 MB |
+| `uuid` v4 (`gen_random_uuid()`) | 23.7 to 27.9 s | 75 MB | 72% | 433 MB |
+
+v7 costs a little more than `bigint` because its keys are twice as wide; v4 is **3.6 to 4.6 times slower** than v7, its index is a quarter larger because random splits leave pages 72% full instead of 90%, and it writes 46% more WAL, which also means more replication traffic and bigger backups. The same effect hits any B-tree; MySQL's InnoDB stores the table itself in primary key order, so there random keys scatter the rows as well as the index.
+
+> [!TIP]
+> If you inherit v4 keys, the fix is not urgent at small scale; it matters once the index stops fitting in memory. New tables should start with v7 (or a sequence).
 """
 
 [[sections]]
 heading = "Snowflake"
 body = """
-Twitter's layout: **1 sign bit + 41 bits of milliseconds since a custom epoch + 10 bits of machine id + 12 bits of sequence**.
+Twitter built Snowflake in 2010, moving from MySQL to Cassandra, which has no sequences. Its stated requirements: at least 10,000 ids a second per process, no coordination between machines, ids under 64 bits, and **k-sorted**: roughly in time order (they promised within a second, aiming for tens of milliseconds).
 
-- 41 bits of milliseconds last about 69 years.
-- 10 bits allow 1,024 generators; 12 bits allow 4,096 ids per millisecond per generator (about 4 million a second each).
+The layout: **1 unused sign bit + 41 bits of milliseconds since a custom epoch + 10 bits of machine id + 12 bits of sequence**. Twitter's code split the machine id into 5 bits of data centre and 5 bits of worker, and its epoch is 1288834974657 (4 November 2010).
+
+- 41 bits of milliseconds last 2⁴¹ ms ≈ **69.7 years** from the epoch. Pick the epoch near your launch, not 1970.
+- 10 bits allow **1,024 generators**; 12 bits allow **4,096 ids per millisecond** per generator, so one generator tops out at 4.1 million ids a second.
 - If the sequence runs out within a millisecond, wait for the next one.
-- If the clock **moves backwards**, refuse to issue ids (or wait) until it catches up; otherwise ids could repeat.
-- Machine ids come from configuration, the pod's ordinal, or a lease in etcd or ZooKeeper.
+- If the clock **moves backwards** (an NTP step correction), the generator could reissue a millisecond it has already used with the same machine id and sequence numbers: duplicates. Twitter's generator throws an error and refuses until the clock passes the last timestamp it used.
+- Machine ids must be unique among generators running **at the same time**: from configuration, a Kubernetes StatefulSet's ordinal, or a lease in etcd or ZooKeeper that the generator must stop using when it loses it.
+
+```rust title=snowflake.rs hl=30-41
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Twitter's epoch: 2010-11-04 01:42:54.657 UTC, in Unix milliseconds.
+const EPOCH_MS: u64 = 1_288_834_974_657;
+const MACHINE_BITS: u64 = 10;
+const SEQUENCE_BITS: u64 = 12;
+const MAX_SEQUENCE: u64 = (1 << SEQUENCE_BITS) - 1; // 4095
+
+#[derive(Debug)]
+pub struct ClockWentBack {
+    pub by_ms: u64,
+}
+
+/// A Snowflake-style generator: 41 bits of milliseconds, 10 bits of machine id, 12 bits of sequence.
+pub struct Snowflake<C: FnMut() -> u64> {
+    machine: u64,
+    clock: C, // Unix milliseconds; a parameter so tests can move it
+    last_ms: u64,
+    sequence: u64,
+}
+
+impl<C: FnMut() -> u64> Snowflake<C> {
+    pub fn new(machine: u64, clock: C) -> Self {
+        assert!(machine < 1 << MACHINE_BITS, "machine id must fit in 10 bits");
+        Self { machine, clock, last_ms: 0, sequence: 0 }
+    }
+
+    pub fn next_id(&mut self) -> Result<u64, ClockWentBack> {
+        let mut now = (self.clock)();
+        if now < self.last_ms {
+            // never reuse a millisecond: ids from it may already exist
+            return Err(ClockWentBack { by_ms: self.last_ms - now });
+        }
+        if now == self.last_ms {
+            self.sequence = (self.sequence + 1) & MAX_SEQUENCE;
+            if self.sequence == 0 {
+                // 4,096 ids this millisecond already: wait for the next one
+                while now <= self.last_ms {
+                    now = (self.clock)();
+                }
+            }
+        } else {
+            self.sequence = 0;
+        }
+        self.last_ms = now;
+        Ok((now - EPOCH_MS) << (MACHINE_BITS + SEQUENCE_BITS) | self.machine << SEQUENCE_BITS | self.sequence)
+    }
+}
+
+/// Splits an id back into (Unix ms, machine, sequence).
+pub fn parts(id: u64) -> (u64, u64, u64) {
+    ((id >> (MACHINE_BITS + SEQUENCE_BITS)) + EPOCH_MS, (id >> SEQUENCE_BITS) & ((1 << MACHINE_BITS) - 1), id & MAX_SEQUENCE)
+}
+
+const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// A number as base62 digits: a counter or an id becomes a short code.
+pub fn base62(mut n: u64) -> String {
+    let mut out = Vec::new();
+    loop {
+        out.push(BASE62[(n % 62) as usize]);
+        n /= 62;
+        if n == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap()
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+}
+
+fn main() {
+    // 1. ids from the real clock: strictly increasing, and how fast one thread makes them
+    let mut ids = Snowflake::new(7, unix_ms);
+    let n = 5_000_000;
+    let start = Instant::now();
+    let mut last = 0;
+    for _ in 0..n {
+        let id = ids.next_id().unwrap();
+        assert!(id > last, "ids must increase");
+        last = id;
+    }
+    let secs = start.elapsed().as_secs_f64();
+    println!("{n} ids in {:.2} s: {:.2} million a second, every one larger than the last", secs, n as f64 / secs / 1e6);
+    let (ms, machine, seq) = parts(last);
+    println!("last id {last} = time {ms} ms, machine {machine}, sequence {seq}");
+    println!("as base62: {} ({} characters)", base62(last), base62(last).len());
+
+    // 2. a clock that jumps back 5 ms, as after an NTP step
+    let t = 1_800_000_000_000u64;
+    let times = [t, t, t + 1, t - 4];
+    let mut i = 0;
+    let mut ids = Snowflake::new(7, move || {
+        i += 1;
+        times[i - 1]
+    });
+    for _ in 0..4 {
+        match ids.next_id() {
+            Ok(id) => println!("ok   {id}"),
+            Err(e) => println!("refused: the clock went back {} ms", e.by_ms),
+        }
+    }
+}
+```
+
+```text title=output
+5000000 ids in 1.25 s: 4.02 million a second, every one larger than the last
+last id 2116955626885117648 = time 1793556527240 ms, machine 7, sequence 1744
+as base62: 2WNg6xclZkO (11 characters)
+ok   2143981510456274944
+ok   2143981510456274945
+ok   2143981510460469248
+refused: the clock went back 5 ms
+```
+
+One thread made 4.02 million ids a second (three runs: 3.76 to 4.10 million), against the ceiling of 4,096 per millisecond: the sequence limit, not the code, is the bottleneck. A service that needs more runs more generators, each with its own machine id.
+
+**Instagram's variant** (2011) moved the generator into Postgres: 41 bits of milliseconds since its own epoch, **13 bits of logical shard id**, and 10 bits from a per-shard sequence modulo 1,024, made by a PL/pgSQL function in each shard's schema. Since the id names its shard, any service can route a lookup by id without a directory.
 """
 
 [[sections]]
-heading = "What to consider"
+heading = "ULID"
 body = """
-- **Index locality**: time-ordered ids append to the end of a B-tree; random UUIDs scatter writes across pages and bloat the index.
-- **Exposure**: sequential ids reveal volume (order 10,042 today, 10,542 tomorrow) and are guessable; never let an id stand in for authorisation.
-- **Short codes** (URL shortener): encode a counter or id in base62 (7 characters ≈ 3.5 trillion values), or use random codes with a uniqueness check.
-- **Sharding**: ids that embed a shard number route without a lookup (Instagram put the shard id in its 64-bit ids).
+ULID predates UUIDv7 and has the same structure: **48 bits of Unix milliseconds + 80 random bits**, 128 bits in all. Its canonical form is **26 characters of Crockford's base32** (5 bits per character, no I, L, O or U to avoid misreading), which sorts lexicographically in time order, so ULIDs work as sortable keys even where they are stored as text. Its 48-bit timestamp lasts until the year 10889.
+
+Within one millisecond the specification increments the random part by one for each new ULID (monotonic mode), the same idea as RFC 9562's method 2. A ULID's 128 bits fit a `uuid` column, but its version and variant bits are not set, so prefer v7 where a database or library understands UUIDs, and ULID where readable, sortable strings matter (file names, logs, URLs).
+"""
+
+[[sections]]
+heading = "Short codes"
+body = """
+A URL shortener needs ids that are short in a URL. **Base62** (digits, upper and lower case) packs about 5.95 bits per character:
+
+| Length | Codes |
+|---|---|
+| 6 | 5.7 × 10¹⁰ (57 billion) |
+| 7 | 3.5 × 10¹² (3.5 trillion) |
+| 8 | 2.2 × 10¹⁴ |
+
+Two ways to make them:
+
+- **Encode a counter or an id**: unique by construction, no check needed. A plain counter makes codes guessable and reveals volume (`aB3x` then `aB3y`); shuffle it first with a reversible permutation (a block cipher over the counter's range) if that matters. A 64-bit Snowflake id is 11 base62 characters, too long for a shortener.
+- **Random codes**: unguessable, but they can collide, so insert with a uniqueness constraint and retry on conflict. With 7 characters, a new random code hits an existing one with probability (codes in use) / 3.5 × 10¹²: 0.0028% at 100 million links, 0.028% at a billion. Rare enough that one retry handles it; the constraint is what makes it correct.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say what the id must do: sortable, 64 bits, hidden counts, made where.
+2. Pick: a **sequence** while there is one database; **UUIDv7** by default once there are many writers; **Snowflake** when ids must be 64 bits and sortable at high rates; **base62** for short codes.
+3. Name the failure mode of your choice: v4 scatters index writes; Snowflake needs unique machine ids and a clock that never goes back; random codes need a unique constraint.
+4. If data is sharded, say whether the id carries the shard (Instagram) or is hashed to find it.
 
 > [!INTERVIEW]
 > Say whether ids need to sort by time, fit 64 bits, or hide counts, then pick: UUID v7 by default, Snowflake for compact sortable ids at scale.
@@ -49,4 +261,111 @@ answer = "Random keys insert at random places in the B-tree index, so every inse
 
 [[checks]]
 prompt = "A Snowflake generator's clock jumps back 5 ms after an NTP correction. What can go wrong and what should it do?"
-answer = "It could reissue timestamps it has already used with the same machine id and restart the sequence, producing duplicate ids. It must detect that the clock is behind the last timestamp used and wait (or refuse) until the clock passes it."
+answer = "It could reissue timestamps it has already used with the same machine id and restart the sequence, producing duplicates. It must detect that the clock is behind the last timestamp used and wait (or refuse) until the clock passes it."
+
+[[checks]]
+prompt = "Two Snowflake generators were accidentally given the same machine id. When do they produce duplicate ids, and how do you stop this happening?"
+answer = "Whenever both issue an id in the same millisecond with the same sequence number, which at any real rate is often: the ids are identical bit for bit. Machine ids must be unique among running generators: assign them from configuration or a StatefulSet ordinal, or take them as leases from etcd or ZooKeeper, and have a generator stop issuing ids if it cannot renew its lease."
+
+[[checks]]
+prompt = "Your API uses auto-increment order ids in URLs such as /orders/10042. Name two problems, and an id scheme that avoids them."
+answer = "They reveal business volume (a competitor can place two orders a day apart and subtract) and they are trivially enumerable, inviting scraping and exposing any missing authorisation check. Use non-sequential ids such as UUIDv7 or random tokens in public URLs (UUIDv7 still reveals creation time), and always check that the caller may see the order."
+
+[[checks]]
+prompt = "A URL shortener makes 7-character random base62 codes and already holds 500 million links. How likely is a new code to collide, and what must the write path do about it?"
+answer = "7 characters give 62⁷ ≈ 3.5 trillion codes, so a new random code hits an existing one with probability about 5 × 10⁸ / 3.5 × 10¹² ≈ 0.014%. Rare, but certain to happen over many inserts, so the code column needs a unique constraint and the insert retries with a new code on a conflict."
+
+[[checks]]
+prompt = "Why can't a browser client safely handle a 64-bit Snowflake id as a JSON number?"
+answer = "JavaScript numbers are 64-bit floats and represent integers exactly only up to 2⁵³; larger ids are rounded, so two different ids can become the same number. Send 64-bit ids as strings in JSON (Twitter's API added an id_str field for this reason)."
+
+[[terms]]
+term = "Coordination-free id"
+means = "An id any machine can make without asking a central service."
+section = "What an id must do"
+
+[[terms]]
+term = "Ticket server"
+means = "A small database whose only job is handing out unique numbers, often in blocks."
+section = "The options"
+
+[[terms]]
+term = "UUIDv7"
+means = "A 128-bit UUID that starts with 48 bits of Unix milliseconds, so it sorts by time."
+section = "UUIDs: v4 and v7"
+
+[[terms]]
+term = "Monotonic"
+means = "Each id is greater than the one before it."
+section = "UUIDs: v4 and v7"
+
+[[terms]]
+term = "Page split"
+means = "A full B-tree page divided in two to make room for a key that belongs in the middle."
+section = "Random keys in a B-tree"
+
+[[terms]]
+term = "Snowflake id"
+means = "64 bits: milliseconds since an epoch, a machine id and a per-millisecond sequence."
+section = "Snowflake"
+
+[[terms]]
+term = "K-sorted"
+means = "Roughly sorted: each id is at most a small distance from its place in true order."
+section = "Snowflake"
+
+[[terms]]
+term = "ULID"
+means = "48 bits of milliseconds and 80 random bits, written as 26 base32 characters."
+section = "ULID"
+
+[[terms]]
+term = "Base62"
+means = "Digits, upper and lower case letters: about 6 bits per character of a short code."
+section = "Short codes"
+
+[[sources]]
+title = "RFC 9562: Universally Unique IDentifiers (UUIDs)"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9562"
+note = "v4 and v7 layouts, monotonicity methods, database considerations, unguessability"
+
+[[sources]]
+title = "Twitter Snowflake (2010 release)"
+kind = "docs"
+url = "https://github.com/twitter-archive/snowflake/tree/snowflake-2010"
+note = "the requirements and IdWorker.scala: layout, epoch, refusing a clock that moves back"
+
+[[sources]]
+title = "ULID specification"
+kind = "standard"
+url = "https://github.com/ulid/spec"
+note = "layout, Crockford base32, monotonic mode"
+
+[[sources]]
+title = "Flickr: Ticket servers, distributed unique primary keys on the cheap (2010)"
+kind = "article"
+url = "https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-the-cheap/"
+
+[[sources]]
+title = "Instagram Engineering: Sharding and IDs at Instagram (2011)"
+kind = "article"
+url = "https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c"
+note = "41 bits of time, 13 of shard, 10 of sequence, made in PL/pgSQL"
+
+[[sources]]
+title = "PostgreSQL: UUID functions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-uuid.html"
+note = "gen_random_uuid and uuidv7 (Postgres 18)"
+
+[[sources]]
+title = "PostgreSQL: sequence manipulation functions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-sequence.html"
+note = "why sequences leave gaps"
+
+[[figures]]
+name = "snowflake-bits"
+after = "Snowflake"
+caption = "A Snowflake id is time, machine and sequence side by side: the sequence counts within a millisecond, and a clock that steps back is refused."

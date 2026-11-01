@@ -1,37 +1,419 @@
 title = "Concurrency primitives"
 group = "lld"
 order = 2
-minutes = 11
-lede = "The tools for correct shared state in a low-level design: mutexes, read-write locks, condition variables, semaphores, atomics and compare-and-swap, plus the classic patterns built from them and the bugs they prevent."
+minutes = 22
+lede = "The tools for correct shared state in a low-level design: mutexes, read-write locks, condition variables, semaphores, atomics and compare-and-swap, plus the classic patterns built from them and the bugs they prevent. Rust's type system rules out data races, but not the race conditions, deadlocks and contention that interviewers ask about; this page runs each of them."
 say = "The seat map is guarded per show by a Mutex; booking checks and marks seats under one lock so two threads cannot take the same seat, and locks are always taken in seat-id order to avoid deadlock."
-related = ["solid-and-patterns", "contention", "rust-async"]
+related = ["solid-and-patterns", "contention", "rust-async", "rust-design-patterns"]
+
+summary = [
+  "A **race condition** is a check and an act split across a gap another thread can use; do both **under one lock**.",
+  "**Deadlock** needs a cycle of waiting: take locks in **one global order** and the cycle cannot form.",
+  "**Condition variables** wait for a state; always re-check it in a loop (**spurious wakeups**).",
+  "**Semaphores** cap how many may proceed; **atomics** update one word without a lock.",
+  "A lock is cheap until it is **contended**: shard hot state, shrink critical sections, never block while holding one.",
+]
+
+[[sections]]
+heading = "Data races and race conditions"
+body = """
+Two different bugs share the word "race":
+
+- A **data race**: two threads access the same memory at the same time, at least one writes, and nothing orders them. The result is undefined behaviour in C, C++ and unsafe Rust. **Safe Rust rules data races out at compile time**: shared data must be `Sync` to be shared and `Send` to cross threads, and mutation of shared data has to go through a lock, an atomic or another type that synchronises.
+- A **race condition**: the program's result depends on timing, even though every individual access is synchronised. The classic form is **check-then-act**: look at the state, release the lock (or never hold one across both steps), then act on what you saw. Rust does not prevent this.
+
+Booking a seat with check-then-act, 4 threads racing for the same seat, 10,000 rounds:
+
+```rust title=race.rs hl=7-14
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::{Barrier, Mutex};
+use std::thread;
+
+/// Check, unlock, then act: each step is thread-safe, the pair is not.
+fn claim_racy(seats: &Mutex<HashMap<u32, u32>>, seat: u32, user: u32) -> bool {
+    let taken = seats.lock().unwrap().contains_key(&seat);
+    if taken {
+        return false;
+    }
+    seats.lock().unwrap().insert(seat, user);
+    true
+}
+
+/// Check and act under one lock.
+fn claim(seats: &Mutex<HashMap<u32, u32>>, seat: u32, user: u32) -> bool {
+    match seats.lock().unwrap().entry(seat) {
+        Entry::Occupied(_) => false,
+        Entry::Vacant(v) => {
+            v.insert(user);
+            true
+        }
+    }
+}
+
+/// 4 users try to book the same seat at the same moment, 10,000 times; counts the rounds with more than one winner.
+fn rounds_with_two_winners(claim: fn(&Mutex<HashMap<u32, u32>>, u32, u32) -> bool) -> usize {
+    (0..10_000)
+        .filter(|_| {
+            let seats = Mutex::new(HashMap::new());
+            let start = Barrier::new(4);
+            let winners: usize = thread::scope(|s| {
+                let hs: Vec<_> = (0..4)
+                    .map(|user| {
+                        let (seats, start) = (&seats, &start);
+                        s.spawn(move || {
+                            start.wait();
+                            claim(seats, 7, user)
+                        })
+                    })
+                    .collect();
+                hs.into_iter().map(|h| h.join().unwrap() as usize).sum()
+            });
+            winners > 1
+        })
+        .count()
+}
+
+fn main() {
+    println!("check, then insert:  {} of 10000 rounds sold the seat twice or more", rounds_with_two_winners(claim_racy));
+    println!("entry under one lock: {} of 10000 rounds sold the seat twice or more", rounds_with_two_winners(claim));
+}
+```
+
+```text title=output
+check, then insert:  19 of 10000 rounds sold the seat twice or more
+entry under one lock: 0 of 10000 rounds sold the seat twice or more
+
+check, then insert:  71 of 10000 rounds sold the seat twice or more
+entry under one lock: 0 of 10000 rounds sold the seat twice or more
+```
+
+A bug that shows up in 0.2% to 0.7% of attempts passes every test and double-books in production. The fix is structural, not a retry: make the check and the act **one atomic step**, under one lock (`entry`), as one atomic instruction (compare-and-swap), or as one database statement with a constraint.
+"""
 
 [[sections]]
 heading = "The primitives"
 body = """
 | Primitive | Gives you | Rust |
 |---|---|---|
-| Mutex | one thread at a time in a critical section | `Mutex<T>` (the data is inside it) |
-| Read-write lock | many readers or one writer | `RwLock<T>` |
-| Condition variable | wait until a condition holds, without spinning | `Condvar` with a `Mutex` |
-| Semaphore | at most N at once (a pool) | `tokio::sync::Semaphore` |
-| Atomics / CAS | lock-free counters and flags; compare-and-swap loops | `AtomicU64`, `compare_exchange` |
+| Mutex | one thread at a time in a critical section | `std::sync::Mutex<T>` (the data is inside it) |
+| Read-write lock | many readers or one writer | `std::sync::RwLock<T>` |
+| Condition variable | sleep until a condition on locked state holds | `std::sync::Condvar` with a `Mutex` |
+| Semaphore | at most N holders at once | `tokio::sync::Semaphore` (std has none) |
+| Atomics, compare-and-swap | lock-free updates of one word | `AtomicU64`, `AtomicBool`, `compare_exchange` |
+| Barrier | wait until N threads reach a point | `std::sync::Barrier` |
+| One-time initialisation | run once, every thread sees the result | `std::sync::OnceLock`, `LazyLock` |
+| Channel | hand values from thread to thread; ownership moves with the value | `std::sync::mpsc`, crossbeam, Tokio's channels |
+
+Rust's `Mutex<T>` **owns the data it protects**: the only way to reach the `T` is through the guard that `lock()` returns, and the lock is released when the guard is dropped (RAII). Forgetting to lock, or keeping a reference after unlocking, does not compile.
+"""
+
+[[sections]]
+heading = "Mutexes"
+body = """
+- **Critical sections short**: do the slow work (I/O, computation, logging) outside the lock and hold it only to read or update the shared state. Never block on I/O or another lock while holding one unless you must.
+- **Granularity**: one global lock is simplest and correct; contention then serialises everything. Finer options: a lock per object (per show, per account), or **lock striping** (N locks, key → lock by hash), as concurrent hash maps do.
+- **Not reentrant**: locking a `std::sync::Mutex` again on the thread that holds it is unspecified; the documentation says the call will not return (it may deadlock or panic). Java's `synchronized` and `ReentrantLock` allow it; designs that need it usually have a lock held too long.
+- **Poisoning**: if a thread panics while holding a std `Mutex`, the mutex is marked poisoned and later `lock()` calls return an error, because the data may be half-updated. Most code `unwrap()`s and lets the panic spread; `into_inner()` on the error recovers the data when you know it is consistent.
+- **Cost**: an uncontended lock and unlock measured about 15 ns (see "Numbers to know"). Contention is what costs: waiting threads sleep and must be woken.
+"""
+
+[[sections]]
+heading = "Read-write locks"
+body = """
+A read-write lock lets many readers in at once, or one writer alone. It pays off when reads are frequent, **long enough** to overlap, and writes are rare: a configuration or a routing table refreshed now and then. For tiny critical sections a plain mutex is often as fast, since a read-write lock does more bookkeeping on every acquire.
+
+The **priority policy** matters. Rust's documentation for `std::sync::RwLock` says the policy depends on the operating system and is not guaranteed; in particular a waiting writer may or may not block new readers. So this sequence **may deadlock** on one thread:
+
+```text title=rwlock-deadlock.txt
+// Thread 1                  // Thread 2
+let r1 = lock.read();
+                             let w = lock.write();   // waits for r1
+let r2 = lock.read();        // may wait behind w: neither can proceed
+```
+
+- **Reader-preferring** locks let readers keep coming while a writer waits: under steady reads, the writer **starves**.
+- **Writer-preferring** (fair) locks queue new readers behind a waiting writer: no starvation, but a thread that takes a read lock twice can deadlock as above. Tokio's `RwLock` is documented as fair (write-preferring) and queues waiters in order.
+
+Rule: never take the same read lock twice on one thread, and keep read sections short.
+"""
+
+[[sections]]
+heading = "Condition variables"
+body = """
+A condition variable lets a thread **sleep until some condition on shared state holds** ("the queue is not empty") without spinning. It is always used with the mutex that protects that state: `wait` atomically releases the mutex and sleeps, and re-acquires it before returning.
+
+Two rules:
+
+1. **Wait in a loop that re-checks the condition.** Rust's documentation warns that `wait` is susceptible to **spurious wakeups**: it can return when nobody notified. And even after a real notification, another thread may have taken the item first. `wait_while(guard, |state| condition)` writes the loop for you.
+2. **Change the state under the lock, then notify.** A notification sent when nobody is waiting is lost; that is fine only because waiters check the state before sleeping.
+
+The classic use is a **bounded blocking queue**, the heart of producer-consumer: producers wait while it is full, consumers while it is empty.
+
+```rust title=bounded_queue.rs hl=20,21,29
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+
+/// A bounded blocking queue: `push` waits while it is full, `pop` waits while it is empty.
+pub struct BoundedQueue<T> {
+    items: Mutex<VecDeque<T>>,
+    not_full: Condvar,
+    not_empty: Condvar,
+    capacity: usize,
+}
+
+impl<T> BoundedQueue<T> {
+    pub fn new(capacity: usize) -> Self {
+        Self { items: Mutex::new(VecDeque::new()), not_full: Condvar::new(), not_empty: Condvar::new(), capacity }
+    }
+
+    pub fn push(&self, item: T) {
+        let guard = self.items.lock().unwrap();
+        // wait_while re-checks the condition after every wake-up, spurious ones included
+        let mut items = self.not_full.wait_while(guard, |q| q.len() == self.capacity).unwrap();
+        items.push_back(item);
+        drop(items); // unlock before waking a consumer, so it does not wake into a held lock
+        self.not_empty.notify_one();
+    }
+
+    pub fn pop(&self) -> T {
+        let guard = self.items.lock().unwrap();
+        let mut items = self.not_empty.wait_while(guard, |q| q.is_empty()).unwrap();
+        let item = items.pop_front().unwrap();
+        drop(items);
+        self.not_full.notify_one();
+        item
+    }
+}
+
+fn main() {
+    let q = Arc::new(BoundedQueue::new(8));
+    let producers: Vec<_> = (0..4u64)
+        .map(|p| {
+            let q = Arc::clone(&q);
+            thread::spawn(move || (0..100_000).for_each(|i| q.push(p * 1_000_000 + i)))
+        })
+        .collect();
+    let consumers: Vec<_> = (0..4)
+        .map(|_| {
+            let q = Arc::clone(&q);
+            thread::spawn(move || (0..100_000).map(|_| q.pop()).collect::<Vec<u64>>())
+        })
+        .collect();
+    producers.into_iter().for_each(|h| h.join().unwrap());
+    let mut got: Vec<u64> = consumers.into_iter().flat_map(|h| h.join().unwrap()).collect();
+    got.sort_unstable();
+    got.dedup();
+    println!("400000 pushed through a queue of 8; {} distinct items received", got.len());
+}
+```
+
+```text title=output
+400000 pushed through a queue of 8; 400000 distinct items received
+```
+
+The bound is the point: when consumers fall behind, producers **block** instead of filling memory. That is **backpressure**, the same idea as a bounded channel.
+"""
+
+[[sections]]
+heading = "Semaphores"
+body = """
+A semaphore holds N **permits**: `acquire` takes one (waiting if none are left), `release` gives it back. It limits **how many** may proceed at once rather than protecting specific data:
+
+- at most 10 concurrent requests to a fragile downstream service;
+- at most 50 database connections in use (a pool is a semaphore plus the connections);
+- a bounded number of in-flight jobs in a worker.
+
+Rust's standard library has none; Tokio's `Semaphore` is fair (permits are handed out in the order they were requested) and returns a permit guard that releases on drop. A semaphore with one permit acts like a lock, with one difference: any thread may release a permit, while a mutex is unlocked by its holder.
+
+Unlike a rate limiter, a semaphore bounds **concurrency**, not requests per second; by Little's law (see "Back-of-envelope estimates"), throughput is then at most permits ÷ time per request.
+"""
+
+[[sections]]
+heading = "Atomics and compare-and-swap"
+body = """
+Atomic types update one machine word indivisibly, without a lock: `fetch_add` for counters, `swap` and `store` for flags, and **compare-and-swap** (`compare_exchange`) for anything else: "set it to new if it is still old; otherwise tell me what it is now". A CAS loop reads the value, computes the new one, and retries if another thread changed it in between.
+
+Four threads incrementing one shared counter 20 million times in total, measured on the 4-vCPU VM from "Numbers to know" while it was shared with other work (load average about 7; three runs):
+
+| Approach | ns per increment |
+|---|---|
+| `Mutex<u64>` | 20 to 39 |
+| `AtomicU64::fetch_add` | 14 to 15 |
+| compare-and-swap loop | 15 to 38 |
+| one atomic per thread (on its own cache line), summed at the end | 3.5 to 7.7 |
+| one atomic, one thread, no contention | 6.9 to 7.4 |
+
+```rust title=counters.rs
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::thread;
+use std::time::Instant;
+
+const THREADS: u64 = 4;
+const PER_THREAD: u64 = 5_000_000;
+
+/// Runs `work` on THREADS threads at once and returns nanoseconds per increment.
+fn time(work: impl Fn() + Sync) -> f64 {
+    let start = Instant::now();
+    thread::scope(|s| {
+        for _ in 0..THREADS {
+            s.spawn(&work);
+        }
+    });
+    start.elapsed().as_nanos() as f64 / (THREADS * PER_THREAD) as f64
+}
+
+#[repr(align(128))] // one counter per cache line pair, so threads never share a line
+struct Padded(AtomicU64);
+
+fn main() {
+    let m = Mutex::new(0u64);
+    let ns = time(|| (0..PER_THREAD).for_each(|_| *m.lock().unwrap() += 1));
+    println!("Mutex<u64>, 4 threads           {ns:>6.1} ns per increment, total {}", m.lock().unwrap());
+
+    let a = AtomicU64::new(0);
+    let ns = time(|| (0..PER_THREAD).for_each(|_| { a.fetch_add(1, Ordering::Relaxed); }));
+    println!("AtomicU64 fetch_add, 4 threads  {ns:>6.1} ns per increment, total {}", a.load(Ordering::Relaxed));
+
+    let c = AtomicU64::new(0);
+    let ns = time(|| {
+        for _ in 0..PER_THREAD {
+            let mut cur = c.load(Ordering::Relaxed);
+            // compare-and-swap loop: retry if another thread changed it in between
+            while let Err(seen) = c.compare_exchange_weak(cur, cur + 1, Ordering::Relaxed, Ordering::Relaxed) {
+                cur = seen;
+            }
+        }
+    });
+    println!("CAS loop, 4 threads             {ns:>6.1} ns per increment, total {}", c.load(Ordering::Relaxed));
+
+    let shards: Vec<Padded> = (0..THREADS).map(|_| Padded(AtomicU64::new(0))).collect();
+    let next = AtomicU64::new(0);
+    let ns = time(|| {
+        let mine = &shards[next.fetch_add(1, Ordering::Relaxed) as usize].0;
+        (0..PER_THREAD).for_each(|_| { mine.fetch_add(1, Ordering::Relaxed); });
+    });
+    let total: u64 = shards.iter().map(|p| p.0.load(Ordering::Relaxed)).sum();
+    println!("one counter per thread, summed  {ns:>6.1} ns per increment, total {total}");
+
+    let single = AtomicU64::new(0);
+    let start = Instant::now();
+    (0..THREADS * PER_THREAD).for_each(|_| { single.fetch_add(1, Ordering::Relaxed); });
+    let ns = start.elapsed().as_nanos() as f64 / (THREADS * PER_THREAD) as f64;
+    println!("AtomicU64, one thread alone     {ns:>6.1} ns per increment");
+}
+```
+
+What it shows: a single shared counter is a **serialisation point**, whatever primitive guards it, because every update must own the same cache line; giving each thread its own counter and summing when reading removes the contention. That is how high-rate metrics, sharded counters (likes, views) and striped locks scale. The `#[repr(align(128))]` keeps two threads' counters off the same cache line, which would otherwise ping-pong between cores (**false sharing**).
+
+Two more things to know:
+
+- **Memory ordering**: `Relaxed` is enough for a counter whose value nobody uses to reach other data. To publish data (write it, then set a flag another thread reads), write the flag with `Release` and read it with `Acquire`; the reader then sees everything written before the flag. When unsure, `SeqCst`.
+- **The ABA problem**: a CAS that checks a pointer can succeed although the structure changed, if the value went from A to B and back to A in between (memory freed and reused). Lock-free stacks and queues need tags, hazard pointers or epoch-based reclamation; in an interview, a lock is the right answer unless they ask for lock-free.
+"""
+
+[[sections]]
+heading = "Deadlock, livelock and starvation"
+body = """
+A **deadlock** needs four conditions at once (Coffman, Elphick and Shoshani, 1971): mutual exclusion (a resource is held by one thread), hold and wait (a thread holds one resource while waiting for another), no preemption (nothing takes a held resource away), and **circular wait** (a cycle of threads each waiting for the next). Remove any one and deadlock is impossible; the practical one to remove is the cycle.
+
+Two threads moving money between the same two accounts in opposite directions, run for two seconds:
+
+```rust title=transfer.rs hl=12-17,20-27
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+struct Account {
+    id: u32,
+    balance: Mutex<i64>,
+}
+
+/// Locks the two accounts in the order given: two opposite transfers can deadlock.
+fn transfer_naive(from: &Account, to: &Account, amount: i64) {
+    let mut a = from.balance.lock().unwrap();
+    let mut b = to.balance.lock().unwrap();
+    *a -= amount;
+    *b += amount;
+}
+
+/// Always locks the account with the smaller id first: no cycle of waiting is possible.
+fn transfer_ordered(from: &Account, to: &Account, amount: i64) {
+    let (first, second) = if from.id < to.id { (from, to) } else { (to, from) };
+    let mut f = first.balance.lock().unwrap();
+    let mut s = second.balance.lock().unwrap();
+    let (a, b) = if from.id < to.id { (&mut *f, &mut *s) } else { (&mut *s, &mut *f) };
+    *a -= amount;
+    *b += amount;
+}
+
+/// Two threads move money back and forth between accounts 1 and 2 for a second; returns how many transfers completed.
+fn run(transfer: fn(&Account, &Account, i64)) -> u64 {
+    let x = Arc::new(Account { id: 1, balance: Mutex::new(1_000) });
+    let y = Arc::new(Account { id: 2, balance: Mutex::new(1_000) });
+    let done = Arc::new(AtomicU64::new(0));
+    for (from, to) in [(Arc::clone(&x), Arc::clone(&y)), (Arc::clone(&y), Arc::clone(&x))] {
+        let done = Arc::clone(&done);
+        // detached: if they deadlock, they stay stuck and the process exits around them
+        thread::spawn(move || loop {
+            transfer(&from, &to, 1);
+            done.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+    thread::sleep(Duration::from_secs(1));
+    let a = done.load(Ordering::Relaxed);
+    thread::sleep(Duration::from_secs(1));
+    let b = done.load(Ordering::Relaxed);
+    if a == b { println!("  stuck at {b} transfers: deadlocked") } else { println!("  {b} transfers in 2 s, still running") }
+    b
+}
+
+fn main() {
+    println!("locks taken in argument order:");
+    run(transfer_naive);
+    println!("locks taken in id order:");
+    run(transfer_ordered);
+}
+```
+
+```text title=output
+locks taken in argument order:
+  stuck at 62793 transfers: deadlocked
+locks taken in id order:
+  27344046 transfers in 2 s, still running
+```
+
+The naive version deadlocked after 62,793 transfers (1,943 in another run): sooner or later each thread holds one account and waits for the other. Ordering the locks by id makes a cycle impossible. Other ways out:
+
+- **One lock** for everything both operations touch (simplest; less concurrency).
+- **`try_lock` with backoff**: on failure release everything, wait a random moment, retry. Removes hold-and-wait, but under contention threads can keep colliding: **livelock**, where everyone is busy and nobody progresses. Random backoff makes it unlikely.
+- **Never hold a lock while calling unknown code** (a callback, a trait method someone else implements): it may take locks you cannot see.
+
+**Starvation**: a thread that is never chosen, such as a writer behind an endless stream of readers. Fair (FIFO) locks prevent it at some cost in throughput. **Priority inversion**: a low-priority thread holds a lock a high-priority thread needs, while medium-priority threads keep the low one from running; real-time systems answer with priority inheritance.
 """
 
 [[sections]]
 heading = "Classic patterns"
 body = """
-- **Producer-consumer**: a bounded queue; producers wait when it is full, consumers when it is empty (Mutex + two Condvars, or a channel).
-- **Thread pool**: N workers take jobs from a shared queue; submit returns a handle to the result.
-- **Reader-writer**: a cache read by many, refreshed by one.
+- **Producer-consumer**: a bounded queue between stages (above), or a bounded channel. Each side runs at its own pace; the bound gives backpressure.
+- **Thread pool**: N workers take jobs from a shared queue (`mpsc` behind a `Mutex`, or crossbeam's multi-consumer channel); `submit` returns a handle or channel for the result. N near the core count for CPU work; more for blocking I/O.
+- **Reader-writer**: a cache read by many and refreshed by one. With a `RwLock`, or better for hot reads: keep the data in an `Arc` and **swap the whole `Arc`** when refreshing (readers clone the `Arc` and never wait on a writer; crates such as `arc-swap` do this without a lock).
+- **Per-key locking**: a lock per seat, per account or per user (or striped), so unrelated operations never wait for each other.
+- **Actor or single owner**: one thread owns the state and others send it messages; no locks at all around the state (see "Async Rust architecture").
 """
 
 [[sections]]
-heading = "The bugs"
+heading = "In the interview"
 body = """
-- **Race condition**: check-then-act across two steps (`if !map.contains(k) { map.insert(k, v) }` with another thread in between). Do both under one lock, or use an atomic entry API.
-- **Deadlock**: two threads take two locks in opposite orders. Always lock in one global order, or hold one lock at a time.
-- **Livelock / starvation**: threads keep yielding or a writer never gets the lock; use fair locks or backoff.
+1. Name **what is shared** and **which invariant** must hold ("a seat has at most one owner").
+2. Put each invariant under **one lock** (or one atomic step), and say which lock guards which data.
+3. Keep critical sections **small**; no I/O under a lock.
+4. If an operation takes **several locks**, state the order.
+5. Say how waiting works: condition variable, channel or semaphore, and what happens when a queue is **full**.
+6. If something is very hot, say how you would **shard** it.
 
 > [!INTERVIEW]
 > Say where each lock is and what it protects, and why the critical section is as small as possible.
@@ -44,3 +426,124 @@ answer = "A deadlock: each holds one lock and waits forever for the other. Alway
 [[checks]]
 prompt = "Why is `if !map.contains_key(k) { map.insert(k, v) }` wrong with several threads even if each call is thread-safe?"
 answer = "It is check-then-act: another thread can insert between the check and the insert. Do both inside one critical section, or use an atomic operation such as the entry API under one lock."
+
+[[checks]]
+prompt = "Why must a thread waiting on a condition variable re-check its condition in a loop after waking?"
+answer = "Waits can return spuriously, without any notification, and even after a real notification another thread may have changed the state first (taken the item, filled the slot). Only the condition, checked under the lock, says whether to proceed; wait_while writes that loop."
+
+[[checks]]
+prompt = "Eight threads increment one shared AtomicU64 for request metrics, and profiling shows the increments are a bottleneck although no lock is involved. Why, and what is the fix?"
+answer = "Every increment needs exclusive ownership of the same cache line, so the cores take turns and the line moves between them on each update: the counter serialises them like a lock would. Give each thread (or core) its own counter on its own cache line and sum them when reading, so updates never contend."
+
+[[checks]]
+prompt = "A thread holds a read lock on a std RwLock, a second thread asks for the write lock, then the first thread asks for the read lock again. What can happen?"
+answer = "It may deadlock: if the lock makes new readers wait behind a waiting writer, the first thread's second read waits for the writer, and the writer waits for the first thread's first read lock. Rust's std RwLock does not guarantee its priority policy, so never take the same read lock twice on one thread."
+
+[[checks]]
+prompt = "When would you use a semaphore rather than a mutex?"
+answer = "When the rule is about how many may proceed, not about protecting one piece of data: at most N concurrent calls to a downstream service, N connections in use, N jobs in flight. A semaphore hands out N permits; a mutex is the special case of one, with the extra rule that its holder unlocks it."
+
+[[terms]]
+term = "Data race"
+means = "Unsynchronised concurrent access to the same memory, at least one a write; safe Rust forbids it."
+section = "Data races and race conditions"
+
+[[terms]]
+term = "Race condition"
+means = "A result that depends on timing, such as a check and an act split by a gap."
+section = "Data races and race conditions"
+
+[[terms]]
+term = "Critical section"
+means = "The code that runs while holding a lock."
+section = "Mutexes"
+
+[[terms]]
+term = "Lock striping"
+means = "N locks shared by many keys, chosen by hashing the key."
+section = "Mutexes"
+
+[[terms]]
+term = "Poisoning"
+means = "A std Mutex marked broken because a thread panicked while holding it."
+section = "Mutexes"
+
+[[terms]]
+term = "Writer starvation"
+means = "A writer that never gets a read-write lock because readers keep arriving."
+section = "Read-write locks"
+
+[[terms]]
+term = "Spurious wakeup"
+means = "A condition variable wait that returns without a notification."
+section = "Condition variables"
+
+[[terms]]
+term = "Backpressure"
+means = "A full queue or channel making producers wait instead of piling up work."
+section = "Condition variables"
+
+[[terms]]
+term = "Semaphore"
+means = "A count of permits; acquire waits when none are left."
+section = "Semaphores"
+
+[[terms]]
+term = "Compare-and-swap"
+means = "Atomically set a value to new only if it still equals old."
+section = "Atomics and compare-and-swap"
+
+[[terms]]
+term = "False sharing"
+means = "Threads updating different variables that share a cache line, slowing each other down."
+section = "Atomics and compare-and-swap"
+
+[[terms]]
+term = "Deadlock"
+means = "Threads each waiting for a lock another holds, in a cycle, forever."
+section = "Deadlock, livelock and starvation"
+
+[[terms]]
+term = "Livelock"
+means = "Threads keep reacting to each other and retrying, but none makes progress."
+section = "Deadlock, livelock and starvation"
+
+[[terms]]
+term = "Thread pool"
+means = "A fixed set of worker threads taking jobs from a shared queue."
+section = "Classic patterns"
+
+[[sources]]
+title = "Rust standard library: std::sync"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/sync/index.html"
+note = "Mutex, RwLock (priority policy), Condvar (spurious wakeups), Barrier, OnceLock, mpsc"
+
+[[sources]]
+title = "Rust standard library: std::sync::atomic"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/sync/atomic/index.html"
+note = "atomic types and memory orderings"
+
+[[sources]]
+title = "Tokio: synchronization primitives"
+kind = "docs"
+url = "https://docs.rs/tokio/latest/tokio/sync/index.html"
+note = "fair Semaphore, fair RwLock, async Mutex"
+
+[[sources]]
+title = "Coffman, Elphick and Shoshani: System Deadlocks (ACM Computing Surveys, 1971)"
+kind = "paper"
+url = "https://dl.acm.org/doi/10.1145/356586.356588"
+note = "the four conditions for deadlock"
+
+[[sources]]
+title = "Mara Bos: Rust Atomics and Locks (O'Reilly, 2023)"
+kind = "book"
+url = "https://marabos.nl/atomics/"
+note = "free to read online: atomics, memory ordering, building locks"
+
+[[sources]]
+title = "The Rustonomicon: atomics"
+kind = "docs"
+url = "https://doc.rust-lang.org/nomicon/atomics.html"

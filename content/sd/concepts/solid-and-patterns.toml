@@ -1,14 +1,51 @@
 title = "SOLID and design patterns"
 group = "lld"
 order = 1
-minutes = 10
-lede = "The vocabulary of a low-level design round: the five SOLID principles as tests a design should pass, and the handful of patterns that come up again and again (strategy, observer, factory, state, decorator)."
+minutes = 20
+lede = "The vocabulary of a low-level design round: how classes relate, the five SOLID principles as tests a design should pass, the simplicity principles that keep it small, and the handful of patterns that come up again and again (strategy, observer, factory, state, decorator). Patterns are answers to recurring forces; name the force first and the pattern second."
 say = "Pricing is a strategy behind a trait, so adding surge pricing is a new type, not an edit to the parking lot; the lot only depends on the trait."
-related = ["concurrency-primitives", "rust-design-patterns"]
+related = ["concurrency-primitives", "rust-design-patterns", "delivery-framework"]
+
+summary = [
+  "Prefer **composition** to inheritance; know association, aggregation, composition and dependency.",
+  "SOLID as tests: one reason to change, **extend without editing**, substitutable implementations, small interfaces, **depend on abstractions**.",
+  "**DRY, KISS, YAGNI**: remove duplicated knowledge, keep it simple, build only what is asked.",
+  "The recurring patterns: **strategy, observer, factory, state, decorator** (plus builder, adapter, command); avoid **singletons**.",
+  "Run the round: requirements, entities, relationships, the core flows in code, then show it **absorbs a change**.",
+]
+
+[[sections]]
+heading = "What the round tests"
+body = """
+A low-level design (LLD or object-oriented design) round asks for the classes, interfaces and core code of a small system: a parking lot, an elevator, a vending machine, an LRU cache, a rate limiter, a booking system. Interviewers look for:
+
+- **a model that matches the domain**: the right entities, with clear responsibilities and relationships;
+- **extension points where change is likely**: a new vehicle type, pricing rule or payment method should be an addition, not an edit across the code;
+- **correct core logic**, often including concurrency (two people booking the same seat);
+- **restraint**: no pattern, layer or interface without a reason.
+"""
+
+[[sections]]
+heading = "Objects and their relationships"
+body = """
+The four ideas of object-oriented design, briefly: **encapsulation** (state is changed only through the object's methods, which keep its invariants), **abstraction** (callers see what an object does, not how), **polymorphism** (callers use one interface, many implementations answer), and **inheritance** (a type reuses and extends another's implementation).
+
+| Relationship | Meaning | Example | UML class diagram |
+|---|---|---|---|
+| dependency | uses another type briefly (a parameter, a local) | `Lot::pay` uses a `Clock` | dashed arrow |
+| association | holds a reference to another, each lives on its own | a `Ticket` refers to a `Spot` | solid line |
+| aggregation | a whole groups parts that can exist without it | a `Team` of `Player`s | hollow diamond |
+| composition | the whole owns its parts; they live and die with it | a `Lot` owns its `Floor`s | filled diamond |
+| inheritance / implementation | is-a: a subtype of a class or an implementation of an interface | `Hourly` implements `Pricing` | hollow triangle |
+
+**Prefer composition to inheritance.** Inheritance couples a subclass to its parent's implementation, so a change in the parent can break every child, and deep hierarchies force awkward "is-a" claims (is a `Van` a kind of `Car`?). Composing an object from parts behind interfaces gives the same reuse with looser coupling. Rust has no implementation inheritance at all: types compose structs and implement traits, which is the same advice made compulsory.
+"""
 
 [[sections]]
 heading = "SOLID, as questions"
 body = """
+Robert C. Martin collected these five principles of object-oriented class design; the acronym came later. Treat each as a question to ask of a design:
+
 | Principle | Ask of your design |
 |---|---|
 | Single responsibility | does each type have one reason to change? |
@@ -16,11 +53,29 @@ body = """
 | Liskov substitution | can every implementation stand in for the interface without surprises? |
 | Interface segregation | does any client depend on methods it never calls? |
 | Dependency inversion | do high-level types depend on traits, not concrete classes? |
+
+- **Single responsibility**: Martin phrases it as one *reason to change*, that is, one group of people whose requests change it. A `Ticket` that prices itself, prints itself and saves itself to the database changes when finance, design or the database team ask for something; split pricing, rendering and storage out.
+- **Open/closed** (Bertrand Meyer's phrase): open for extension, closed for modification. An `if kind == Car … else if kind == Van …` chain must be edited for every new kind; a `Pricing` trait with one implementation per rule is extended by adding a type.
+- **Liskov substitution** (Barbara Liskov; formalised with Jeannette Wing in 1994): a subtype must honour its parent's contract: accept every input the parent accepts, keep every promise it makes. A `Pricing` implementation that panics for motorcycles breaks every caller that trusted the trait. The textbook violation is `Square` extending `Rectangle`: setting a square's width also changes its height, which a caller of `Rectangle` does not expect.
+- **Interface segregation**: many small interfaces beat one large one. A `Printer` interface with `print`, `scan` and `fax` forces a simple printer to fake `fax`; split it into `Print`, `Scan`, `Fax`.
+- **Dependency inversion**: high-level policy (the lot) and low-level detail (a specific pricing, a specific database) both depend on an abstraction, owned by the high-level side. That is also what makes a type testable: pass a fake clock or an in-memory store.
+"""
+
+[[sections]]
+heading = "DRY, KISS, YAGNI"
+body = """
+- **DRY**, don't repeat yourself (Hunt and Thomas, *The Pragmatic Programmer*): every piece of **knowledge** has one authoritative place. It is about knowledge, not text: two functions that happen to look alike but encode different rules should stay separate, or a change to one rule silently changes the other.
+- **KISS**, keep it simple: the simplest design that meets the requirements is easiest to explain, test and change. In an interview, simple and correct beats clever and half-finished.
+- **YAGNI**, you aren't gonna need it (from Extreme Programming): do not build for features nobody has asked for. Martin Fowler's distinction is useful: build for a presumptive feature only if it costs little now and much later; an extension point you can justify by the requirements is not YAGNI, an abstraction for an imagined future is.
+
+These pull against SOLID taken too far: an interface for every class and a factory for every object is its own failure. Add an abstraction where the requirements show variation.
 """
 
 [[sections]]
 heading = "The patterns that recur"
 body = """
+The 1994 *Design Patterns* book by Gamma, Helm, Johnson and Vlissides catalogued 23 patterns in three groups: **creational** (how objects are made), **structural** (how they are composed) and **behavioural** (how they interact). A handful come up in nearly every LLD round:
+
 | Pattern | Use it when | Example |
 |---|---|---|
 | Strategy | behaviour varies and is chosen per case | pricing, eviction policy (LRU vs LFU) |
@@ -29,16 +84,229 @@ body = """
 | State | behaviour depends on a state machine | vending machine, order lifecycle |
 | Decorator | add responsibilities by wrapping | logging or retry around a client |
 | Singleton | one shared instance | **avoid**: pass dependencies explicitly instead |
+| Builder | many optional settings | an HTTP client, a query |
+| Adapter | an existing type has the wrong interface | wrapping a third-party payment SDK in your `PaymentGateway` trait |
+| Command | an action as an object: queued, logged, undone | an editor's undo stack, a job queue |
+
+One small parking lot, in Rust, using five of them:
+
+```rust title=parking_lot.rs
+//! A small parking lot showing the patterns an LLD round asks for: strategy, factory, decorator, observer, state.
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Kind {
+    Motorcycle,
+    Car,
+    Van,
+}
+
+// ---- strategy: how a stay is priced varies, and the lot depends only on this trait (dependency inversion) ----
+trait Pricing {
+    /// Fee in cents for a stay; must work for every kind (Liskov: no implementation may refuse one).
+    fn fee(&self, kind: Kind, minutes: u32) -> u32;
+}
+
+struct Hourly {
+    cents_per_hour: HashMap<Kind, u32>,
+}
+
+impl Pricing for Hourly {
+    fn fee(&self, kind: Kind, minutes: u32) -> u32 {
+        let hours = minutes.div_ceil(60).max(1);
+        hours * self.cents_per_hour[&kind]
+    }
+}
+
+struct Surge<P: Pricing> {
+    base: P,
+    percent: u32,
+}
+
+impl<P: Pricing> Pricing for Surge<P> {
+    fn fee(&self, kind: Kind, minutes: u32) -> u32 {
+        self.base.fee(kind, minutes) * self.percent / 100
+    }
+}
+
+// ---- decorator: adds behaviour around any Pricing without changing it ----
+struct Logged<P: Pricing>(P);
+
+impl<P: Pricing> Pricing for Logged<P> {
+    fn fee(&self, kind: Kind, minutes: u32) -> u32 {
+        let fee = self.0.fee(kind, minutes);
+        println!("  priced {kind:?} for {minutes} min: {fee} cents");
+        fee
+    }
+}
+
+// ---- factory: one place that knows how to build each pricing from configuration ----
+fn pricing_from_config(name: &str) -> Box<dyn Pricing> {
+    let base = Hourly { cents_per_hour: HashMap::from([(Kind::Motorcycle, 100), (Kind::Car, 300), (Kind::Van, 500)]) };
+    match name {
+        "surge" => Box::new(Logged(Surge { base, percent: 150 })),
+        _ => Box::new(Logged(base)),
+    }
+}
+
+// ---- observer: others react to lot events without the lot knowing who they are ----
+enum Event {
+    Entered { spot: usize },
+    Left { spot: usize, fee: u32 },
+}
+
+trait Observer {
+    fn notify(&mut self, event: &Event);
+}
+
+#[derive(Default)]
+struct DisplayBoard {
+    occupied: usize,
+}
+
+impl Observer for DisplayBoard {
+    fn notify(&mut self, event: &Event) {
+        match event {
+            Event::Entered { spot } => {
+                self.occupied += 1;
+                println!("  board: spot {spot} taken, {} in use", self.occupied);
+            }
+            Event::Left { spot, .. } => {
+                self.occupied -= 1;
+                println!("  board: spot {spot} free, {} in use", self.occupied);
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Revenue {
+    cents: u32,
+}
+
+impl Observer for Revenue {
+    fn notify(&mut self, event: &Event) {
+        if let Event::Left { fee, .. } = event {
+            self.cents += fee;
+            println!("  revenue so far: {} cents", self.cents);
+        }
+    }
+}
+
+// ---- state: a ticket moves Active -> Paid -> Closed; each state only offers the moves it allows ----
+#[derive(Debug)]
+enum Ticket {
+    Active { spot: usize, kind: Kind, entered_min: u32 },
+    Paid { spot: usize, fee: u32 },
+    Closed,
+}
+
+struct Lot {
+    spots: Vec<Option<Kind>>,
+    pricing: Box<dyn Pricing>,
+    observers: Vec<Box<dyn Observer>>,
+}
+
+impl Lot {
+    fn enter(&mut self, kind: Kind, now_min: u32) -> Option<Ticket> {
+        let spot = self.spots.iter().position(Option::is_none)?;
+        self.spots[spot] = Some(kind);
+        self.observers.iter_mut().for_each(|o| o.notify(&Event::Entered { spot }));
+        Some(Ticket::Active { spot, kind, entered_min: now_min })
+    }
+
+    fn pay(&self, ticket: Ticket, now_min: u32) -> Result<Ticket, String> {
+        match ticket {
+            Ticket::Active { spot, kind, entered_min } => Ok(Ticket::Paid { spot, fee: self.pricing.fee(kind, now_min - entered_min) }),
+            other => Err(format!("cannot pay a ticket that is {other:?}")),
+        }
+    }
+
+    fn exit(&mut self, ticket: Ticket) -> Result<Ticket, String> {
+        match ticket {
+            Ticket::Paid { spot, fee } => {
+                self.spots[spot] = None;
+                self.observers.iter_mut().for_each(|o| o.notify(&Event::Left { spot, fee }));
+                Ok(Ticket::Closed)
+            }
+            other => Err(format!("cannot exit with a ticket that is {other:?}")),
+        }
+    }
+}
+
+fn main() {
+    for config in ["hourly", "surge"] {
+        println!("{config}:");
+        let mut lot = Lot { spots: vec![None; 3], pricing: pricing_from_config(config), observers: vec![] };
+        lot.observers.push(Box::new(DisplayBoard::default()));
+        lot.observers.push(Box::new(Revenue::default()));
+        let car = lot.enter(Kind::Car, 0).unwrap();
+        let van = lot.enter(Kind::Van, 10).unwrap();
+        let bike = lot.enter(Kind::Motorcycle, 20).unwrap();
+        let car = lot.pay(car, 95).unwrap();
+        lot.exit(car).unwrap();
+        let bike = lot.pay(bike, 50).unwrap();
+        lot.exit(bike).unwrap();
+        println!("  exit without paying: {}", lot.exit(van).unwrap_err());
+    }
+}
+```
+
+```text title=output
+hourly:
+  board: spot 0 taken, 1 in use
+  board: spot 1 taken, 2 in use
+  board: spot 2 taken, 3 in use
+  priced Car for 95 min: 600 cents
+  board: spot 0 free, 2 in use
+  revenue so far: 600 cents
+  priced Motorcycle for 30 min: 100 cents
+  board: spot 2 free, 1 in use
+  revenue so far: 700 cents
+  exit without paying: cannot exit with a ticket that is Active { spot: 1, kind: Van, entered_min: 10 }
+surge:
+  board: spot 0 taken, 1 in use
+  board: spot 1 taken, 2 in use
+  board: spot 2 taken, 3 in use
+  priced Car for 95 min: 900 cents
+  board: spot 0 free, 2 in use
+  revenue so far: 900 cents
+  priced Motorcycle for 30 min: 150 cents
+  board: spot 2 free, 1 in use
+  revenue so far: 1050 cents
+  exit without paying: cannot exit with a ticket that is Active { spot: 1, kind: Van, entered_min: 10 }
+```
+
+Where each pattern sits:
+
+- **Strategy**: `Pricing` with `Hourly` and `Surge`; the lot holds a `Box<dyn Pricing>` and never names a concrete rule. Adding weekend pricing is a new type (open/closed), and the lot depends only on the trait (dependency inversion).
+- **Decorator**: `Logged<P>` wraps any `Pricing` and is itself a `Pricing`; `Surge<P>` is a decorator too, adjusting another pricing's result.
+- **Factory**: `pricing_from_config` is the one place that knows how to build a pricing from configuration.
+- **Observer**: the lot publishes `Event`s to whatever `Observer`s are registered; the display board and the revenue counter know nothing about each other, and the lot knows nothing about them.
+- **State**: a `Ticket` is `Active`, `Paid` or `Closed`, and each operation accepts only the states it allows: exiting with an unpaid ticket is an error, not a forgotten `if`. In Rust the states can even be separate types so invalid moves do not compile (typestate; see "Design patterns in Rust").
+"""
+
+[[sections]]
+heading = "Singletons, and what to do instead"
+body = """
+A singleton guarantees one instance and gives global access to it. The guarantee is rarely the problem; the **global access** is:
+
+- every user of the singleton depends on it invisibly: nothing in a function's signature says it reads the configuration or writes to the database;
+- tests cannot substitute a fake, and tests that share it leak state into each other;
+- it hides lifetime and initialisation order problems.
+
+Create the one instance at startup and **pass it in** (dependency injection by constructor): `Lot::new(pricing, clock, store)`. Where a true process-wide value is justified (a logger, a metrics registry), Rust's `std::sync::OnceLock` or `LazyLock` makes initialisation thread-safe; keep such globals few and read-mostly.
 """
 
 [[sections]]
 heading = "How to run the round"
 body = """
-1. Clarify requirements and the scope (what is out).
-2. Name the entities and their relationships; sketch the classes and the main methods.
-3. Walk through the key use cases against the sketch.
-4. Code the core paths; handle edge cases and concurrency if asked.
-5. Extend: show the design absorbs a new requirement with little change.
+1. **Clarify requirements and scope** (what is out): "one lot with several floors; cars, motorcycles and vans; pay on exit; no reservations".
+2. **Name the entities** and their relationships: `Lot` owns `Floor`s, which own `Spot`s; a `Ticket` refers to a `Spot`; pricing is a strategy.
+3. **Sketch the classes or traits** and the main methods, with who calls whom.
+4. **Walk through the key use cases** against the sketch: enter, pay, exit, lot full.
+5. **Code the core paths**; handle edge cases (no free spot, lost ticket, paying twice) and **concurrency** if asked (two cars taking the last spot: one lock per lot or per floor, or an atomic claim of the spot).
+6. **Extend**: show the design absorbs a new requirement with little change (a new vehicle type, surge pricing, a new notification channel).
 """
 
 [[checks]]
@@ -48,3 +316,108 @@ answer = "Open/closed: every new vehicle type means editing the chain. Put prici
 [[checks]]
 prompt = "Why do interviewers frown on singletons?"
 answer = "They are hidden global state: they couple everything to one instance, make tests hard to isolate, and hide dependencies; passing the dependency in (dependency injection) keeps it explicit and swappable."
+
+[[checks]]
+prompt = "Square extends Rectangle, overriding setWidth to also set the height. Which principle does this break, and what goes wrong for a caller?"
+answer = "Liskov substitution: code written for Rectangle may set the width to 5 and the height to 4 and expect an area of 20, but a Square passed in returns 16 or 25. The subtype changes the parent's contract, so it is not substitutable. Model them as separate types (or immutable shapes) sharing an interface for what they really have in common, such as area."
+
+[[checks]]
+prompt = "In a notification system, a new channel (push) means editing the service that sends emails and SMS. Which patterns would you use so that adding a channel is an addition, not an edit?"
+answer = "A Channel trait (strategy) with one implementation per channel (email, SMS, push), created by a factory from configuration or user preferences, with the service depending only on the trait. Cross-cutting behaviour such as retries or rate limiting can wrap any channel as a decorator, and the service can publish events to registered observers rather than calling each consumer directly."
+
+[[checks]]
+prompt = "What is the difference between composition and aggregation, and why is composition usually preferred to inheritance?"
+answer = "Both are has-a relationships: in composition the whole owns its parts and they live and die with it (a lot and its floors), in aggregation the parts exist independently (a team and its players). Composition is preferred to inheritance because it reuses behaviour through interfaces without tying a type to a parent's implementation, so parents can change without breaking children and hierarchies do not force false is-a claims."
+
+[[checks]]
+prompt = "A vending machine's methods are full of checks such as 'if state == NO_COIN then … else if state == HAS_COIN …'. How would the state pattern change it?"
+answer = "Each state becomes its own type (or enum variant) that handles the operations valid in that state and returns the next state: inserting a coin in NoCoin moves to HasCoin, selecting a product in HasCoin moves to Dispensing, and invalid operations are rejected in one place. The scattered conditionals disappear, and adding a state means adding a type rather than editing every method."
+
+[[terms]]
+term = "Encapsulation"
+means = "State changed only through an object's own methods, which keep its rules."
+section = "Objects and their relationships"
+
+[[terms]]
+term = "Composition"
+means = "A whole that owns its parts; they live and die with it."
+section = "Objects and their relationships"
+
+[[terms]]
+term = "Aggregation"
+means = "A whole that groups parts which also exist on their own."
+section = "Objects and their relationships"
+
+[[terms]]
+term = "Single responsibility"
+means = "A type should have one reason to change."
+section = "SOLID, as questions"
+
+[[terms]]
+term = "Open/closed"
+means = "Extend behaviour by adding code, not by editing what works."
+section = "SOLID, as questions"
+
+[[terms]]
+term = "Liskov substitution"
+means = "Any implementation must honour the contract of the interface it implements."
+section = "SOLID, as questions"
+
+[[terms]]
+term = "Dependency inversion"
+means = "High-level code and details both depend on an abstraction."
+section = "SOLID, as questions"
+
+[[terms]]
+term = "YAGNI"
+means = "Do not build what the requirements do not ask for."
+section = "DRY, KISS, YAGNI"
+
+[[terms]]
+term = "Strategy"
+means = "Interchangeable behaviour behind one interface, chosen per case."
+section = "The patterns that recur"
+
+[[terms]]
+term = "Observer"
+means = "Subscribers notified of events without the publisher knowing who they are."
+section = "The patterns that recur"
+
+[[terms]]
+term = "Decorator"
+means = "A wrapper with the same interface that adds behaviour around another object."
+section = "The patterns that recur"
+
+[[terms]]
+term = "Dependency injection"
+means = "Passing an object its collaborators instead of letting it find them."
+section = "Singletons, and what to do instead"
+
+[[sources]]
+title = "Gamma, Helm, Johnson and Vlissides: Design Patterns (Addison-Wesley, 1994)"
+kind = "book"
+url = "https://www.informit.com/store/design-patterns-elements-of-reusable-object-oriented-software-9780201633610"
+note = "the 23 patterns, creational, structural and behavioural"
+
+[[sources]]
+title = "Robert C. Martin: The Single Responsibility Principle (2014)"
+kind = "article"
+url = "https://blog.cleancoder.com/uncle-bob/2014/05/08/SingleReponsibilityPrinciple.html"
+note = "\"one reason to change\" explained by its author"
+
+[[sources]]
+title = "Liskov and Wing: A behavioral notion of subtyping (ACM TOPLAS, 1994)"
+kind = "paper"
+url = "https://dl.acm.org/doi/10.1145/197320.197383"
+
+[[sources]]
+title = "Martin Fowler: Yagni"
+kind = "article"
+url = "https://martinfowler.com/bliki/Yagni.html"
+note = "presumptive features and their costs"
+
+[[sources]]
+title = "Rust standard library: OnceLock"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/sync/struct.OnceLock.html"
+note = "thread-safe one-time initialisation"
