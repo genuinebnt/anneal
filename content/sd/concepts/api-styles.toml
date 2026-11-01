@@ -1,29 +1,370 @@
 title = "API styles"
 group = "core"
 order = 8
-minutes = 7
-lede = "How clients and services talk: REST for most product APIs, GraphQL when clients need flexible shapes, gRPC between services, plus the details every API needs: pagination, idempotency, errors."
+minutes = 20
+lede = "How clients and services talk: REST over HTTP for most product APIs, GraphQL when many clients need different shapes of the same data, gRPC between services. Whatever the style, the same details decide whether an API survives real traffic: what may be retried, how lists page, how errors and limits are reported, and how the contract changes without breaking old clients."
 say = "A REST API: POST /links returns the code, GET /{code} redirects with a 302; lists use a cursor, and creates take an idempotency key."
-related = ["delivery-framework", "realtime-updates"]
+related = ["delivery-framework", "realtime-updates", "load-balancing", "resilience", "unique-ids"]
+credit = "The REST and RPC comparison table and the list of REST's weaknesses are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#communication) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "**REST** for public and product APIs, **GraphQL** for many clients reading one graph, **gRPC** between services.",
+  "HTTP defines which methods are **safe** and **idempotent**: GET, PUT and DELETE may be retried; POST may not, unless it carries an **idempotency key**.",
+  "Page lists with a **cursor** (the last item's sort key), never an offset, when items arrive while users read.",
+  "Errors say what the client should do: the **status code**, a machine-readable body, and **Retry-After** on 429 and 503.",
+  "Evolve by **adding**: new optional fields and endpoints, never renamed or reused ones.",
+]
 
 [[sections]]
-heading = "REST, GraphQL, gRPC"
+heading = "Three styles"
 body = """
-| Style | Use it for |
-|---|---|
-| REST over HTTP | public and product APIs; resources and verbs; cacheable GETs |
-| GraphQL | many clients wanting different fields of a graph; one round trip |
-| gRPC | service to service; typed, fast binary, streaming |
+An API style is a choice about what the contract describes: resources (REST), a typed graph the client queries (GraphQL), or procedures (gRPC and other RPC).
+
+| | REST over HTTP | GraphQL | gRPC |
+|---|---|---|---|
+| the contract | resources (URLs) and HTTP methods | one schema of types; clients send queries | services and methods in a `.proto` file |
+| on the wire | HTTP/1.1, 2 or 3; usually JSON | usually HTTP POST to one URL, JSON | HTTP/2, Protocol Buffers (binary) |
+| who chooses the response shape | the server | the client, field by field | the server (the message type) |
+| caching | HTTP caches and CDNs work for GET | hard: one URL, usually POST | none built in |
+| streaming | server-sent events, WebSockets beside it | subscriptions (transport not fixed by the spec) | four call types, including both directions |
+| browsers | native | native | needs gRPC-Web and a proxy |
+| use it for | public and product APIs | many clients wanting different fields of one graph | service to service, typed and fast, streams |
+
+The same operations look like this as RPC calls and as REST resources:
+
+| Operation | RPC | REST |
+|---|---|---|
+| sign up | `POST /signup` | `POST /persons` |
+| resign | `POST /resign {"personid": "1234"}` | `DELETE /persons/1234` |
+| read a person | `GET /readPerson?personid=1234` | `GET /persons/1234` |
+| read a person's items | `GET /readUsersItemsList?personid=1234` | `GET /persons/1234/items` |
+| add an item | `POST /addItemToUsersItemsList {"personid": "1234", "itemid": "456"}` | `POST /persons/1234/items {"itemid": "456"}` |
+| update an item | `POST /modifyItem {"itemid": "456", "key": "value"}` | `PUT /items/456 {"key": "value"}` |
+| delete an item | `POST /removeItem {"itemid": "456"}` | `DELETE /items/456` |
+
+RPC exposes **behaviour**: a new operation is a new method, which fits internal calls tuned to one use. REST exposes **data**: a few uniform verbs on many resources, which keeps clients loosely coupled and lets the web's caches and tools work. REST's weak spots:
+
+- Operations that are not a resource and a verb ("move expired documents to the archive") end up as awkward paths, query parameters or bodies.
+- A screen built from nested data (a post, its comments, their authors) needs several round trips, which hurts on mobile networks.
+- Responses grow as fields are added, and every old client downloads them too.
+
+GraphQL answers the last two; gRPC answers the first with typed methods.
 """
 
 [[sections]]
-heading = "The details that get marked"
+heading = "REST: methods and what they promise"
 body = """
-- **Resources are nouns**, the method is the verb: `POST /tweets`, not `/createTweet`.
-- **The user comes from the auth token**, never from the request body.
-- **Pagination**: a **cursor** (the last item's sort key) for feeds that change; offsets skip or repeat items as new ones arrive.
-- **Idempotency key** on retried writes (payments, posts): the server stores the result for the key and returns it again on a retry.
-- **Status codes** that tell the client what to do: 201 created, 400 their fault, 404, 409 conflict, 429 slow down (with `Retry-After`), 5xx try later.
+**Resources are nouns, the method is the verb**: `POST /tweets`, not `POST /createTweet`; `GET /users/42/tweets` for a list owned by a user. **The caller comes from the auth token**, never from a `user_id` in the body that anyone could change.
+
+HTTP itself (RFC 9110) says what each method promises, and clients, proxies and load balancers act on it:
+
+| Method | Safe (no change intended) | Idempotent (repeat = once) | Response cacheable | Typical use |
+|---|---|---|---|---|
+| GET | yes | yes | yes | read a resource or a list |
+| HEAD | yes | yes | yes | headers only |
+| OPTIONS | yes | yes | no | capabilities, CORS preflight |
+| PUT | no | yes | no | create or replace at a known URL |
+| DELETE | no | yes | no | remove |
+| POST | no | no | only with explicit freshness | create in a collection, actions |
+| PATCH (RFC 5789) | no | no | only with explicit freshness | partial update |
+
+**Idempotent** means the intended effect of several identical requests is the effect of one. That is what makes a retry safe: RFC 9110 says a client may repeat an idempotent request automatically when the connection fails before the response arrives, a client should not retry a non-idempotent one unless it knows the request is idempotent anyway, and a proxy must not. A repeated DELETE may answer 404 instead of 204; the state is the same, so it is still idempotent.
+
+**Lost updates**: two clients read version 7, both edit, the second write silently erases the first. HTTP's answer is a conditional request: the server sends an `ETag`, the client writes with `If-Match: "7"`, and a write against a changed resource fails with `412 Precondition Failed` instead of overwriting.
+
+```http title=conditional-update.http
+GET /docs/42 HTTP/1.1
+
+HTTP/1.1 200 OK
+ETag: "7"
+
+PUT /docs/42 HTTP/1.1
+If-Match: "7"
+Content-Type: application/json
+
+{"title": "Q3 plan", "body": "..."}
+
+HTTP/1.1 412 Precondition Failed
+```
+"""
+
+[[sections]]
+heading = "Status codes and error bodies"
+body = """
+The status code tells the client **what to do next**; the body tells a person why.
+
+| Code | Meaning | The client should |
+|---|---|---|
+| 200, 201, 204 | done (201 with a `Location` of the new resource) | carry on |
+| 202 | accepted, not done yet | poll the status URL it was given, or wait for a webhook |
+| 301, 308 / 302, 307 | moved permanently / for now (308 and 307 keep the method) | follow; cache only the permanent ones |
+| 304 | not modified since your `ETag` | use its cached copy |
+| 400 | malformed request | fix it; retrying the same request fails again |
+| 401 / 403 | not authenticated / authenticated but not allowed | log in / give up |
+| 404 | no such resource | give up |
+| 409 | conflicts with the current state | re-read, then decide |
+| 412 | a precondition (`If-Match`) failed | re-read and merge |
+| 422 | well formed but invalid content | fix the content |
+| 429 | too many requests (RFC 6585) | wait `Retry-After`, then retry |
+| 500 | a bug on the server | maybe retry, with backoff |
+| 502, 503, 504 | an upstream failed, overloaded or timed out | retry with backoff and jitter; 503 may carry `Retry-After` |
+
+For the body, **problem details** (RFC 9457) is the standard shape, served as `application/problem+json`: `type` (a URI naming the kind of problem), `title`, `status`, `detail` and `instance`, plus any fields of your own.
+
+```json title=problem.json
+{
+  "type": "https://api.example.com/problems/insufficient-funds",
+  "title": "Not enough money in the account",
+  "status": 422,
+  "detail": "The balance is 30.00 EUR; the transfer needs 50.00 EUR.",
+  "instance": "/transfers/7f3c",
+  "balance": "30.00"
+}
+```
+
+**Rate limits**: answer `429` with `Retry-After`. An IETF draft (work in progress) standardises the quota itself in two fields, `RateLimit-Policy: "default";q=100;w=60` (100 requests per 60 seconds) and `RateLimit: "default";r=50;t=30` (50 left, the window resets in 30 seconds), so well-behaved clients slow down before they are refused.
+"""
+
+[[sections]]
+heading = "Pagination: offset or cursor"
+body = """
+A list endpoint never returns everything; it returns a page and a way to get the next one.
+
+**Offset pagination** (`?page=3`, `LIMIT 20 OFFSET 40`) is simple and lets a user jump to page 50, but it has two flaws:
+
+- **Items shift**: when new items arrive at the top while someone reads, every position moves down, and the next page repeats items from the last one (deletes make it skip items instead).
+- **Deep pages are slow**: the database still reads and throws away every row before the offset.
+
+**Cursor (keyset) pagination** returns the sort key of the last item, and the next page asks for items **after** it. The sort must be unique, so ties on the timestamp are broken by the id:
+
+```sql title=feed.sql
+CREATE INDEX posts_feed ON posts (created_at DESC, id DESC);
+
+-- page 1
+SELECT id, created_at, body FROM posts ORDER BY created_at DESC, id DESC LIMIT 20;
+
+-- next page: everything that sorts after the last row the client saw
+SELECT id, created_at, body FROM posts
+WHERE (created_at, id) < ($1, $2)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+The row comparison `(created_at, id) < ($1, $2)` compares column by column, so it matches the index order exactly and the database starts reading at the cursor. Measured on Postgres 18 with 1 million rows (a 4-core cloud VM): `OFFSET 500000` read 500,020 index entries and took 69 to 85 ms; the keyset query read 20 entries in under 1 ms, at any depth.
+
+The program below plays the scenario in the figure: page 1 is shown, two posts arrive, then page 2 is fetched both ways.
+
+```rust title=pagination.rs
+#[derive(Clone, Debug)]
+struct Post {
+    id: u64,
+    at: u64, // created at, seconds
+}
+
+/// Newest first, like a feed: by time, then by id so ties have one order.
+fn newest_first(posts: &mut [Post]) {
+    posts.sort_by(|a, b| (b.at, b.id).cmp(&(a.at, a.id)));
+}
+
+/// `LIMIT n OFFSET k`: the page is "whatever is at positions k..k+n now".
+fn page_by_offset(feed: &[Post], offset: usize, n: usize) -> Vec<u64> {
+    feed.iter().skip(offset).take(n).map(|p| p.id).collect()
+}
+
+/// Keyset: the page is "the n posts that sort after the last one I saw", whatever was added since.
+fn page_after(feed: &[Post], after: Option<(u64, u64)>, n: usize) -> Vec<Post> {
+    feed.iter()
+        .filter(|p| after.is_none_or(|(at, id)| (p.at, p.id) < (at, id)))
+        .take(n)
+        .cloned()
+        .collect()
+}
+```
+
+```text title=output
+page 1:                [10, 9, 8, 7]
+page 2 by offset:      [8, 7, 6, 5]  <- 8 and 7 again
+page 2 after (107, 7): [6, 5, 4, 3]
+```
+
+Send the cursor to clients as an **opaque** string (base64 of the key, or a signed token), not as raw fields: they cannot build cursors that bypass your rules, and you can change what is inside. Return it with the page (`"next": "eyJhdCI6MTA3LCJpZCI6N30"`), and an absent `next` means the end. A cursor cannot jump to page 50; feeds, timelines and infinite scroll never need to, and admin tables that do can keep offsets on small, filtered sets.
+"""
+
+[[sections]]
+heading = "Idempotency keys"
+body = """
+A client sends `POST /payments`, the connection drops, and it cannot tell whether the payment happened. Retrying risks charging twice; not retrying risks never charging. POST is not idempotent, so the API must make it so.
+
+The client generates a unique key (a UUID) for each **intended** operation and sends it with every attempt:
+
+```http title=create-payment.http
+POST /payments HTTP/1.1
+Idempotency-Key: "8e03978e-40d5-43e8-bc93-6894a57f9324"
+Content-Type: application/json
+
+{"amount": 2000, "currency": "EUR", "source": "card_42"}
+```
+
+The server records the key with a **fingerprint** of the request and, once done, the response; a retry gets the stored response instead of a second charge. The IETF draft for the `Idempotency-Key` header (work in progress) lists the cases:
+
+| Case | Answer |
+|---|---|
+| new key | process it, store the result |
+| same key, same request, finished | replay the stored response |
+| same key, same request, still running | `409 Conflict`: try again shortly |
+| same key, **different** request | `422 Unprocessable Content`: a client bug |
+| key missing where the API requires one | `400 Bad Request` |
+
+```rust title=idempotency.rs hl=17-20,23
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use sha2::{Digest, Sha256};
+
+#[derive(Clone, Debug, PartialEq)]
+struct Response {
+    status: u16,
+    body: String,
+}
+
+enum Entry {
+    InFlight { fingerprint: Vec<u8> },
+    Done { fingerprint: Vec<u8>, response: Response },
+}
+
+#[derive(Default)]
+struct Idempotency {
+    seen: Mutex<HashMap<String, Entry>>, // in production: a table with a unique key and an expiry
+}
+
+impl Idempotency {
+    /// Runs `charge` at most once per key; a retry gets the first response back.
+    fn handle(&self, key: &str, body: &str, charge: impl FnOnce() -> Response) -> Response {
+        let fingerprint = Sha256::digest(body.as_bytes()).to_vec(); // what the request asked for
+        {
+            let mut seen = self.seen.lock().unwrap();
+            match seen.get(key) {
+                Some(Entry::Done { fingerprint: f, response }) if *f == fingerprint => return response.clone(),
+                Some(Entry::InFlight { fingerprint: f }) if *f == fingerprint => {
+                    return Response { status: 409, body: "the first request with this key is still running".into() };
+                }
+                Some(_) => return Response { status: 422, body: "this key was used with a different request".into() },
+                None => {
+                    seen.insert(key.to_owned(), Entry::InFlight { fingerprint: fingerprint.clone() });
+                }
+            }
+        } // the lock is not held while the charge runs
+        let response = charge();
+        self.seen.lock().unwrap().insert(key.to_owned(), Entry::Done { fingerprint, response: response.clone() });
+        response
+    }
+}
+```
+
+```text title=output
+first:  201 ch_1, 20.00 EUR
+retry:  201 ch_1, 20.00 EUR
+reused: 422 this key was used with a different request
+cards charged: 1
+```
+
+In a real service the map is a table with the key as a **unique** column: the insert of the in-flight row is the atomic claim, so two servers racing on the same key cannot both run the charge. Where possible, write the key's row in the **same transaction** as the effect (the order row), so a crash cannot leave one without the other; an in-flight row whose worker died needs a timeout after which it may be retried. Keys expire: Stripe's v1 API, for example, accepts keys of up to 255 characters, replays the first response (errors included) and may prune a key once it is 24 hours old.
+
+> [!WARNING]
+> The key must be made **once per user intent** (when the user presses Pay), not once per attempt. A client that makes a new key for each retry has no idempotency at all.
+"""
+
+[[sections]]
+heading = "GraphQL"
+body = """
+A GraphQL server publishes one **schema** of types and fields; a client sends a query naming exactly the fields it wants, and the response has the same shape.
+
+```text title=query.graphql
+query {
+  post(id: "42") {
+    title
+    author { name }
+    comments(first: 3) { body author { name } }
+  }
+}
+```
+
+The specification (the September 2025 edition is current) defines three operation types: `query` (read), `mutation` (write; the top-level fields of one mutation run **one after another**, while query fields may run in parallel) and `subscription` (a stream of results, one per event). It deliberately fixes no transport; in practice queries go as HTTP POST to one URL. A response holds `data` and an `errors` list side by side, so **partial success** is normal: one failed field is `null` with an error entry while the rest of the page renders.
+
+What it costs:
+
+- **N+1 queries**: each field has a resolver, so `comments { author }` naively runs one author lookup per comment. Batch lookups per request (the DataLoader pattern: collect the ids requested in one tick, fetch them in one query).
+- **Caching**: one URL and POST bodies defeat HTTP caches and CDNs. **Persisted queries** (the client sends a hash of a query registered at build time, often as a GET) restore caching and stop arbitrary queries.
+- **Abuse**: a client can ask for a deeply nested, enormous query. Limit depth and compute a cost per query before running it; rate-limit by cost, not by request count.
+- **Authorisation** is per field, not per URL: every resolver must check access.
+
+Use it when many clients (web, iOS, Android, partners) read different slices of one rich graph and round trips matter. Do not use it to hide one service's simple CRUD.
+"""
+
+[[sections]]
+heading = "gRPC"
+body = """
+A service and its messages are written in a `.proto` file; code generators produce typed clients and servers in each language, and calls travel over HTTP/2 as Protocol Buffers.
+
+```text title=links.proto
+syntax = "proto3";
+
+service Links {
+  rpc Create (CreateRequest) returns (Link);                 // unary
+  rpc Clicks (ClicksRequest) returns (stream Click);         // server streaming
+}
+
+message CreateRequest {
+  string url = 1;
+  optional string custom_code = 2;
+  reserved 3;                                                // a removed field: its number is never reused
+}
+```
+
+- **Four call types**: unary (one request, one response), server streaming, client streaming, and bidirectional streaming.
+- **Deadlines**: the client says how long it will wait, and the deadline travels with the call so servers can stop work nobody is waiting for. By default gRPC sets **no** deadline, so a client can wait forever: always set one.
+- **Status codes** of its own (`OK`, `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `RESOURCE_EXHAUSTED`, `UNAVAILABLE`, `DEADLINE_EXCEEDED`, …); `UNAVAILABLE` is the one that means "retry".
+- **Evolution by field numbers**: the wire carries numbers, not names, so fields can be renamed freely and new optional fields added; old readers skip numbers they do not know. Never change a field's number or type, and `reserved` the number of a removed field.
+- **Load balancing**: a client keeps one long-lived HTTP/2 connection and sends many calls over it. An L4 (connection) balancer therefore pins **all** of a client's calls to one backend. Balance per call instead, with an L7 proxy that understands HTTP/2 (Envoy, a service mesh) or in the client (gRPC's client-side balancing over the resolved addresses).
+- **Browsers** cannot speak gRPC's HTTP/2 framing directly; they use gRPC-Web through a proxy, which is why public APIs stay REST.
+"""
+
+[[sections]]
+heading = "Versioning and evolution"
+body = """
+Clients upgrade slowly (mobile apps for years), so the contract changes without breaking them.
+
+- **Additive changes are free**: a new endpoint, a new optional field, a new enum value that old clients can ignore. Readers must ignore unknown fields.
+- **Breaking changes**: removing or renaming a field, changing a type or a meaning, making an optional input required. Make them a new version, and run both.
+- **Where the version lives**: in the path (`/v2/orders`: visible, easy to route and cache), in a header (`Accept: application/vnd.example.v2+json`), or as a dated version (Stripe sets an account's default version at its first request, and a `Stripe-Version` header overrides it per request). Path versions are the common interview answer.
+- **Retiring**: announce it in the responses themselves, with the `Deprecation` (RFC 9745) and `Sunset` (RFC 8594) header fields, and watch the traffic on the old version fall to zero before turning it off.
+"""
+
+[[sections]]
+heading = "Webhooks"
+body = """
+A webhook is the API calling the client: when something happens (a payment succeeds), the server POSTs an event to a URL the client registered. It replaces polling for events that are rare and slow.
+
+- **Sign every delivery**: an HMAC of the timestamp and the body with a per-endpoint secret, in a header. The receiver checks the signature and rejects old timestamps (a few minutes), so a captured request cannot be replayed.
+- **Deliver at least once**: retry failures with exponential backoff for hours or days, then disable the endpoint and tell its owner. So receivers will see duplicates: each event has an id, and the receiver records the ids it has processed.
+- **Answer fast**: the receiver returns 2xx as soon as the event is stored and does the work from a queue; slow handlers cause timeouts and redeliveries.
+- **Order is not guaranteed**: events can arrive out of order, so carry a timestamp or version, or treat the event as a hint and fetch the current state from the API.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+For the API step, one line per functional requirement, then the details that get marked:
+
+1. **Resources and methods**: `POST /links`, `GET /links/{code}`, `GET /users/me/links?cursor=…`.
+2. **Who is calling** comes from the token, not the body.
+3. **Lists page with a cursor**, with the sort key and tie-breaker named.
+4. **Retried writes carry an idempotency key**; say where the keys are stored and for how long.
+5. **Errors and limits**: the codes the client acts on, `429` with `Retry-After`.
+6. **The style, with a reason**: REST at the edge, gRPC inside if services call each other a lot, GraphQL only if many clients need different shapes.
+
+> [!INTERVIEW]
+> When you write an endpoint that creates something, add "with an idempotency key" before the interviewer asks what happens on a retry.
 """
 
 [[checks]]
@@ -33,3 +374,184 @@ answer = "New posts arrive while the user scrolls, so offset pages shift and ite
 [[checks]]
 prompt = "A mobile client retries POST /payments after a timeout. How does the API keep from charging twice?"
 answer = "The client sends an Idempotency-Key; the server records the key with the result of the first request and returns that same result for any retry with the key, without charging again."
+
+[[checks]]
+prompt = "A client's PUT /profiles/42 times out. May it simply send the request again? Would the answer change for POST /profiles?"
+answer = "Yes for PUT: HTTP defines PUT as idempotent, so repeating it has the same intended effect as sending it once (it replaces the resource with the same content). POST is not idempotent: repeating it may create a second profile, so a client should only retry it if the API makes it idempotent, for example with an idempotency key."
+
+[[checks]]
+prompt = "Twenty gRPC clients talk to ten servers through an L4 load balancer, yet two servers do all the work. Why, and what fixes it?"
+answer = "gRPC sends many calls over one long-lived HTTP/2 connection per client, and an L4 balancer only chooses a backend when a connection opens, so each client's calls all land on the server its connection reached, and an uneven spread of connections stays uneven. Balance per call instead: an L7 proxy that understands HTTP/2 (such as Envoy) or client-side load balancing across the server addresses."
+
+[[checks]]
+prompt = "A GraphQL query lists 50 posts with each author's name, and the database log shows 51 queries. What is happening and how do you fix it?"
+answer = "The N+1 problem: one query fetches the posts, then the author resolver runs once per post. Batch the lookups within the request (a DataLoader collects the 50 author ids and fetches them in one query, with a per-request cache), or join the authors in the posts query."
+
+[[checks]]
+prompt = "A server receives an idempotency key it has already finished, but the request body is different. What should it do, and why not just replay the stored response?"
+answer = "Reject it with 422: the same key with a different payload means a client bug (a key reused for a different intent), and replaying the old response would tell the client its new request succeeded when it never ran. The server detects it by storing a fingerprint of the request with the key."
+
+[[checks]]
+prompt = "Two editors load the same document, both change it and both save with PUT. How can HTTP stop the second save from silently erasing the first?"
+answer = "Conditional requests: the GET returns an ETag (a version), each PUT sends If-Match with the ETag it read, and the server applies the write only if the version is still current. The second save fails with 412 Precondition Failed, so that client re-reads and merges instead of overwriting."
+
+[[terms]]
+term = "REST"
+means = "An API of resources at URLs, acted on with HTTP's uniform methods."
+section = "Three styles"
+
+[[terms]]
+term = "RPC"
+means = "Calling a procedure on another machine as if it were local; the API is a set of methods."
+section = "Three styles"
+
+[[terms]]
+term = "Safe method"
+means = "A method that asks for no change on the server: GET, HEAD, OPTIONS, TRACE."
+section = "REST: methods and what they promise"
+
+[[terms]]
+term = "Idempotent"
+means = "Sending the request several times has the same intended effect as sending it once."
+section = "REST: methods and what they promise"
+
+[[terms]]
+term = "Conditional request"
+means = "A write sent with If-Match and an ETag; it fails with 412 if the resource changed."
+section = "REST: methods and what they promise"
+
+[[terms]]
+term = "Problem details"
+means = "RFC 9457's JSON error body: type, title, status, detail, instance."
+section = "Status codes and error bodies"
+
+[[terms]]
+term = "Retry-After"
+means = "A response header saying how long to wait before retrying, used with 429 and 503."
+section = "Status codes and error bodies"
+
+[[terms]]
+term = "Keyset pagination"
+means = "Asking for the items after the last one seen, by a unique sort key, instead of by position."
+section = "Pagination: offset or cursor"
+
+[[terms]]
+term = "Idempotency key"
+means = "A unique value the client sends with a write so the server runs it once and replays the result."
+section = "Idempotency keys"
+
+[[terms]]
+term = "N+1 queries"
+means = "One query for a list, then one more per item; fixed by batching."
+section = "GraphQL"
+
+[[terms]]
+term = "Persisted query"
+means = "A GraphQL query registered ahead of time and sent by its hash."
+section = "GraphQL"
+
+[[terms]]
+term = "Deadline"
+means = "How long a gRPC client will wait; it travels with the call to every server."
+section = "gRPC"
+
+[[terms]]
+term = "Field number"
+means = "The number that identifies a Protocol Buffers field on the wire; never reused."
+section = "gRPC"
+
+[[terms]]
+term = "Breaking change"
+means = "A change that makes an old client fail: removing, renaming or retyping a field."
+section = "Versioning and evolution"
+
+[[terms]]
+term = "Webhook"
+means = "An HTTP POST from the API to a URL the client registered, sent when an event happens."
+section = "Webhooks"
+
+[[sources]]
+title = "RFC 9110: HTTP Semantics"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9110"
+note = "safe and idempotent methods (9.2), status codes (15), conditional requests (13)"
+
+[[sources]]
+title = "RFC 5789: PATCH Method for HTTP"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc5789"
+
+[[sources]]
+title = "RFC 6585: Additional HTTP Status Codes"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc6585"
+note = "429 Too Many Requests"
+
+[[sources]]
+title = "RFC 9457: Problem Details for HTTP APIs"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9457"
+
+[[sources]]
+title = "The Idempotency-Key HTTP Header Field (IETF draft)"
+kind = "standard"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"
+note = "work in progress; the 400, 409 and 422 cases"
+
+[[sources]]
+title = "RateLimit header fields for HTTP (IETF draft)"
+kind = "standard"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/"
+note = "work in progress"
+
+[[sources]]
+title = "Stripe: idempotent requests"
+kind = "docs"
+url = "https://docs.stripe.com/api/idempotent_requests"
+note = "a production design: key length, replay, 24-hour pruning"
+
+[[sources]]
+title = "GraphQL specification, September 2025 edition"
+kind = "standard"
+url = "https://spec.graphql.org/September2025/"
+note = "operations, serial mutations, errors and partial results"
+
+[[sources]]
+title = "gRPC: core concepts"
+kind = "docs"
+url = "https://grpc.io/docs/what-is-grpc/core-concepts/"
+note = "the four call types, deadlines, cancellation"
+
+[[sources]]
+title = "gRPC: deadlines"
+kind = "docs"
+url = "https://grpc.io/docs/guides/deadlines/"
+
+[[sources]]
+title = "gRPC blog: load balancing"
+kind = "article"
+url = "https://grpc.io/blog/grpc-load-balancing/"
+note = "proxy (L4 and L7) versus client-side balancing"
+
+[[sources]]
+title = "Protocol Buffers: language guide (proto3)"
+kind = "docs"
+url = "https://protobuf.dev/programming-guides/proto3/"
+note = "field numbers, reserved, updating a message type"
+
+[[sources]]
+title = "PostgreSQL: row constructor comparison"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-comparisons.html"
+note = "how (a, b) < (x, y) compares"
+
+[[sources]]
+title = "The System Design Primer: communication"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#communication"
+note = "RPC and REST compared (CC BY 4.0)"
+
+[[figures]]
+name = "offset-vs-cursor"
+after = "Pagination: offset or cursor"
+caption = "Two posts arrive between page 1 and page 2: the offset page repeats two posts, the cursor page carries on after the last one seen."
