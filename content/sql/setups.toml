@@ -1,6 +1,7 @@
 # The indexes (and other changes) a captured plan runs with. tools/sqlperf/capture.py applies a plan's setups in order
 # before running it and undoes them in reverse afterwards, so the example schema (tools/sqlperf/schema.sql) is the same
-# for every plan and a page always says exactly which indexes existed.
+# for every plan and a page always says exactly which indexes existed. A setup with `session` instead (planner settings
+# such as `SET enable_seqscan = off`) runs in the session that takes the plan, since settings last only for a session.
 
 [[setup]]
 id = "orders-customer"
@@ -46,3 +47,32 @@ undo = "DROP INDEX customers_lower_email;"
 id = "orders-created-day"
 sql = "CREATE INDEX orders_created ON orders (created_at);"
 undo = "DROP INDEX orders_created;"
+
+[[setup]]
+id = "customers-email-unique"
+sql = "CREATE UNIQUE INDEX customers_email_key ON customers (email);"
+undo = "DROP INDEX customers_email_key;"
+
+[[setup]]
+id = "no-seqscan"
+session = "SET enable_seqscan = off;"
+
+[[setup]]
+id = "orders-status-customer"
+sql = "CREATE INDEX orders_status_customer ON orders (status, customer_id);"
+undo = "DROP INDEX orders_status_customer;"
+
+[[setup]]
+id = "orders-customer-status"
+sql = "CREATE INDEX orders_customer_status ON orders (customer_id, status);"
+undo = "DROP INDEX orders_customer_status;"
+
+[[setup]]
+id = "customers-lower-email-nostats"
+sql = "CREATE INDEX customers_lower_email ON customers (lower(email));"
+undo = "DROP INDEX customers_lower_email;"
+
+[[setup]]
+id = "orders-day-utc"
+sql = "CREATE INDEX orders_day_utc ON orders (((created_at AT TIME ZONE 'UTC')::date));"
+undo = "DROP INDEX orders_day_utc;"

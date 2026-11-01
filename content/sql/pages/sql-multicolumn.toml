@@ -1,0 +1,383 @@
+title = "Multi-column indexes and column order"
+group = "sql-indexes"
+order = 3
+minutes = 28
+lede = "An index can hold several columns, sorted by the first and then by the second within each value of the first, the way a phone book is sorted by surname and then by first name. The order of the columns decides which queries the index can serve and how much of it they read: on the example schema the same two columns cost a query 3,116 pages in one order and 23 in the other."
+say = "A composite index is sorted by its first column, then the next, so I put the columns tested with equality first and the range or ORDER BY column after them; in the wrong order a 23-page lookup becomes a 3,000-page walk, and Postgres 18's skip scan only rescues a missing leading column when it has few distinct values."
+related = ["indexes", "data-modeling"]
+
+summary = [
+  "A **multi-column index** is sorted by its first column, then by the second within each value of the first, and so on.",
+  "It narrows a scan only through a **leading prefix**: `(customer_id, created_at)` finds `customer_id = ?` directly, but not `created_at` alone.",
+  "Put **equality columns first**, then the one range or ORDER BY column: a customer's latest 20 orders read 23 pages in that order and 3,116 the other way round.",
+  "'Most selective column first' is not the rule: with equality on both columns either order reads 7 pages; the order decides which *other* queries the index serves.",
+  "Postgres 18's **skip scan** uses an index without a condition on its leading column when that column has few distinct values: 9 index searches instead of a table scan.",
+]
+
+[[sections]]
+heading = "One index, several columns"
+body = """
+`CREATE INDEX orders_customer_created ON orders (customer_id, created_at)` builds one B-tree whose keys are pairs. Entries are sorted by `customer_id`, and entries with the same `customer_id` are sorted by `created_at`; when both are equal, the row's TID breaks the tie. Here are six neighbouring entries, at the boundary where customer 4242's orders end and customer 4243's begin:
+
+```sql title=index_order.sql
+(SELECT customer_id, created_at FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 3)
+UNION ALL
+(SELECT customer_id, created_at FROM orders WHERE customer_id = 4243 ORDER BY created_at LIMIT 3)
+ORDER BY customer_id, created_at;
+--  customer_id |          created_at
+-- -------------+-------------------------------
+--         4242 | 2026-07-25 20:09:22.492353+00
+--         4242 | 2026-08-08 05:03:46.646609+00
+--         4242 | 2026-08-20 12:06:09.829917+00
+--         4243 | 2025-01-07 21:22:46.966003+00
+--         4243 | 2025-02-10 00:06:31.662692+00
+--         4243 | 2025-02-18 02:05:24.631344+00
+```
+
+`created_at` jumps back by a year and a half at the boundary: the second column is sorted only *within* each value of the first. Everything on this page follows from that one fact. All of one customer's orders sit together in the index, in date order; the orders of one day are scattered across the whole index, wherever their customers sit.
+
+The second column costs space. Measured on the example schema:
+
+| Index | Size | Why |
+|---|---|---|
+| `(customer_id)` | 14 MB | about 40 orders per customer, stored once each with a list of TIDs (deduplication, module 1) |
+| `(customer_id, created_at)` | 60 MB | every pair is distinct, so there is nothing to deduplicate |
+| `(created_at, customer_id)` | 60 MB | the same entries in another order |
+| `(status, customer_id)` | 19 MB | about 10 orders per pair, so deduplication helps again |
+
+Postgres allows up to 32 columns in an index, but its documentation advises using multi-column indexes sparingly: indexes with more than three columns are unlikely to help unless the table's queries are extremely stylised.
+"""
+
+[[sections]]
+heading = "The leftmost prefix"
+body = """
+The Postgres documentation gives the exact rule for a B-tree: **equality conditions on the leading columns, plus an inequality on the first column without an equality, limit the part of the index that is scanned.** Conditions on later columns are still checked inside the index, which saves visits to the table, but they do not shrink the part that has to be read.
+
+So `(customer_id, created_at)` serves a query on `customer_id` alone, its leading column, as well as a single-column index would:
+
+```plan id=m3-prefix setup=orders-customer-created
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+Three index pages to find the 44 entries, then 43 table pages. With the columns the other way round, `(created_at, customer_id)`, the same customer's 44 entries are spread through the whole index, wherever their dates fall. Postgres prefers to read the table:
+
+```plan id=m3-not-leading setup=orders-created-customer
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+A phone book sorted by surname and then first name finds every Smith, and the Smith called Anna; it does not find everyone called Anna, short of reading the whole book. One consequence is free: with `(customer_id, created_at)` in place, a separate index on `(customer_id)` is redundant (the query in *In real code* finds such pairs).
+"""
+
+[[sections]]
+heading = "Column order decides the pages read"
+body = """
+The question the example schema keeps asking: a customer's 20 most recent orders.
+
+```sql title=latest_orders.sql
+SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+With the index on `(created_at, customer_id)`:
+
+```plan id=m3-wrong-order setup=orders-created-customer
+SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+With the same two columns in the other order, `(customer_id, created_at)`:
+
+```plan id=m3-right-order setup=orders-customer-created
+SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+**3,116 pages against 23**, and both plans look alike at a glance: an `Index Scan Backward` under a `Limit`, with `customer_id = 4242` under `Index Cond`. The difference is in how much index each one walks.
+
+:::steps Two walks through the same two columns
+- (created_at, customer_id) | start at the newest order of all | The index is sorted by date, so the scan starts at its right end and walks backwards through every customer's orders.
+- (created_at, customer_id) | check customer_id in each entry | `customer_id = 4242` is checked inside the index, so non-matching entries cost no table visit, but each still has to be read.
+- (created_at, customer_id) | 3,094 leaf pages later, 20 matches | Customer 4242's 20th newest order is from 2025-12-24, and 807,428 entries are newer. At 261 entries per leaf page that is 3,094 leaf pages, plus 2 internal pages and 20 table pages: 3,116.
+- (customer_id, created_at) | descend to the last entry of customer 4242 | Equality on the leading column puts the scan straight at the customer's newest order.
+- (customer_id, created_at) | read 20 entries backwards | The customer's entries are adjacent and already in date order, so the first 20 are the answer: 3 index pages and 20 table pages, 23 in all.
+:::
+
+The rule that follows: **columns tested with equality first, then the one column used for a range or for ORDER BY.** Equality on the leading columns puts all the matching entries next to each other, and the next column orders them, so a range on it is a contiguous slice and ORDER BY on it needs no sort. Two details make it work. An index can be read backwards (the leaf pages are linked both ways, module 1), so `(customer_id, created_at)` serves `ORDER BY created_at DESC` as well as ascending. And nothing is gained by putting the range column first: a range on the leading column limits the scan, but then every later column is only checked, entry by entry.
+
+When the index also holds the columns the query returns, the 20 table pages go too:
+
+```plan id=m3-covering setup=orders-customer-created-cover
+SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+Four pages: an **index-only scan** on `(customer_id, created_at) INCLUDE (id, total_cents)`, with `Heap Fetches: 0` because the table was just vacuumed. The index is 95 MB instead of 60 MB, which is the trade Part IV (covering indexes and the visibility map) is about.
+"""
+
+[[sections]]
+heading = "Most selective first is not the rule"
+body = """
+A common rule of thumb says to put the most selective column first. For equality on every column it makes no difference. Customer 4242's pending orders, with the columns in either order:
+
+```plan id=m3-equal-status-first setup=orders-status-customer
+SELECT id, total_cents FROM orders WHERE status = 'pending' AND customer_id = 4242;
+```
+
+```plan id=m3-equal-customer-first setup=orders-customer-status
+SELECT id, total_cents FROM orders WHERE status = 'pending' AND customer_id = 4242;
+```
+
+Seven pages each, and both indexes are 19 MB. With both values fixed, the descent goes straight to the matching pairs whichever column comes first. What the order changes is **which other queries the index can serve**:
+
+- If queries also filter on one column alone, that column goes first, so it is a leading prefix.
+- A column used for a range or for ORDER BY goes after the equality columns, as the previous section measured.
+- Selectivity decides *whether* an index is worth having (module 2), not the order of its columns.
+
+Postgres 18 adds a twist. A leading column with few distinct values no longer locks the other queries out: with `(status, customer_id)`, a query on `customer_id` alone can **skip** through the four statuses.
+
+```plan id=m3-skip-status-customer setup=orders-status-customer
+SELECT id, total_cents FROM orders WHERE customer_id = 4242;
+```
+
+Nine index searches and 70 pages, against 46 for an index that starts with `customer_id` (the plan in *The leftmost prefix*). Slower, but an index scan rather than a 14,960-page table scan. The back matter's *myths* page tests the selectivity rule further.
+"""
+
+[[sections]]
+heading = "Postgres 18: skip scan"
+body = """
+Before Postgres 18 a B-tree could not jump past its leading column: with `(status, created_at)`, a query on `created_at` alone read the whole index or the whole table. Postgres 18 can generate the missing condition itself. It treats the query as `status = <every status> AND created_at in range` and runs one search per status, skipping the parts of the index in between. One day of orders:
+
+```plan id=m3-skip-scan setup=orders-status-created
+SELECT count(*) FROM orders WHERE created_at >= '2026-08-01' AND created_at < '2026-08-02';
+```
+
+An index-only scan with `Index Searches: 9` and 45 pages to count 3,371 orders, where reading the table takes 14,960. The documentation is explicit about when the planner takes this path: when the leading column has so few distinct values that most leaf pages can be skipped. With many distinct values, the whole index would have to be read and a table scan usually wins. The same day with `(customer_id, created_at)`, whose leading column has about 49,000 values:
+
+```plan id=m3-no-skip setup=orders-customer-created
+SELECT count(*) FROM orders WHERE created_at >= '2026-08-01' AND created_at < '2026-08-02';
+```
+
+A parallel Seq Scan of the whole table: 49,000 searches would cost more.
+
+:::deeper Why nine searches for four statuses | 2 min
+Postgres does not know in advance which values the leading column holds. For types with a way to compute the next value (integers, dates and others with *skip support*), the scan steps from one value to the next directly. `text` has no such function, so after finishing one status the scan searches for the first entry after it, finds the next status there, and then searches again for that status's first entry in the date range: about two searches per value. A scratch table shows the difference:
+
+```sql title=skip_support.sql
+CREATE TEMP TABLE sk AS SELECT (i % 4)::int AS a, (i % 4)::text AS b, i AS c FROM generate_series(1, 1000000) AS i;
+CREATE INDEX sk_a_c ON sk (a, c);   -- int leading column
+CREATE INDEX sk_b_c ON sk (b, c);   -- text leading column
+ANALYZE sk;
+SET enable_bitmapscan = off;
+DROP INDEX sk_b_c;
+EXPLAIN (ANALYZE, COSTS OFF) SELECT count(*) FROM sk WHERE c BETWEEN 500000 AND 501000;
+--    ->  Index Only Scan using sk_a_c on sk ...
+--          Index Searches: 6
+CREATE INDEX sk_b_c ON sk (b, c);
+DROP INDEX sk_a_c;
+EXPLAIN (ANALYZE, COSTS OFF) SELECT count(*) FROM sk WHERE c BETWEEN 500000 AND 501000;
+--    ->  Index Only Scan using sk_b_c on sk ...
+--          Index Searches: 9
+```
+:::
+
+Skip scan is a safety net, not a design tool: it makes a second query shape tolerable on an index built for the first. When a query on a later column alone matters, give it an index that starts with that column.
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+Measured on MySQL 8.4.13 (1 million orders), SQLite 3.53.1 (500,000 orders) and from the ClickHouse documentation:
+
+| Engine | Wrong order: `(created_at, customer_id)` for a customer's latest 20 | Right order: `(customer_id, created_at)` | A query on the second column alone |
+|---|---|---|---|
+| MySQL (InnoDB) | `Index scan on orders using orders_created_customer (reverse)` reading **715,244 rows** in about 2 s to keep 20 | `Index lookup ... (customer_id=4242) (reverse)`: 20 rows | with `(status, created_at)`: `Using index for skip scan` |
+| SQLite | `SCAN orders USING INDEX orders_created_customer` | `SEARCH orders USING INDEX orders_customer_created (customer_id=?)` | with `(status, created_at)`, only after `ANALYZE`: `SEARCH ... (ANY(status) AND created_at>? AND created_at<?)` |
+
+MySQL and SQLite follow the same leftmost-prefix rule as Postgres, and both have skip scans; SQLite took one only after `ANALYZE` had gathered statistics on the index, since it needs them to know the leading column has few values. One InnoDB detail changes the arithmetic: every secondary index entry carries the row's primary key, so `(customer_id, created_at)` already covers `SELECT id` (MySQL reports a `Covering index lookup`), where Postgres needs `INCLUDE (id)`.
+
+**ClickHouse** inverts the advice. A table's sorting key is also its primary index (sparse, one entry per granule of rows, module 1). Filtering on the first key column is a binary search over the index marks; filtering on a later column uses a *generic exclusion search*, which can skip granules only when the columns before it have low cardinality. The ClickHouse guide therefore recommends ordering key columns by **ascending cardinality** when their cardinalities differ a lot, which also helps compression. In a B-tree, cardinality is not what orders the columns; the shape of the queries is.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+The latest orders of a customer, with sqlx:
+
+```rust title=latest_orders.rs
+#[derive(Debug, sqlx::FromRow)]
+struct OrderRow {
+    id: i64,
+    total_cents: i32,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+let latest: Vec<OrderRow> = sqlx::query_as(
+    "SELECT id, total_cents, created_at FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT $2",
+)
+.bind(4242_i32)
+.bind(20_i64)
+.fetch_all(&pool)
+.await?;
+```
+
+The index it needs, as an sqlx migration. `CREATE INDEX CONCURRENTLY` builds the index without blocking writes, but it cannot run inside a transaction, and sqlx runs each migration in one unless the file's first line is `-- no-transaction`:
+
+```sql title=migrations/20261101120000_orders_customer_created.sql
+-- no-transaction
+CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_customer_created ON orders (customer_id, created_at);
+DROP INDEX CONCURRENTLY IF EXISTS orders_customer;
+```
+
+The second line drops an index the new one makes redundant. To find such pairs in a database, look for an index whose key columns are a leading prefix of another index on the same table, with the same operator classes:
+
+```sql title=redundant_indexes.sql
+SELECT a.indexrelid::regclass AS redundant, b.indexrelid::regclass AS covered_by,
+       pg_size_pretty(pg_relation_size(a.indexrelid)) AS redundant_size
+FROM pg_index a
+JOIN pg_index b ON b.indrelid = a.indrelid AND b.indexrelid <> a.indexrelid
+WHERE a.indnkeyatts <= b.indnkeyatts
+  AND (b.indkey::int2[])[0:a.indnkeyatts - 1] = (a.indkey::int2[])[0:a.indnkeyatts - 1]
+  AND (b.indclass::oid[])[0:a.indnkeyatts - 1] = (a.indclass::oid[])[0:a.indnkeyatts - 1]
+  AND NOT a.indisunique
+  AND a.indexprs IS NULL AND b.indexprs IS NULL
+  AND a.indpred IS NULL AND b.indpred IS NULL;
+--     redundant    |       covered_by        | redundant_size
+-- -----------------+-------------------------+----------------
+--  orders_customer | orders_customer_created | 14 MB
+```
+
+It leaves out unique indexes (they enforce a constraint), expression and partial indexes (modules 4 and 6), and it does not compare sort directions or collations, so read each pair before dropping one. The smaller index can still be worth keeping when it is much smaller and very hot: here `(customer_id)` is 14 MB against 60 MB, because deduplication only works on the single column.
+"""
+
+[[checks]]
+prompt = "With an index on `(customer_id, created_at)`, say for each condition whether the index narrows the scan, only checks the condition inside the index, or does not help: (a) `customer_id = 7`; (b) `created_at >= now() - interval '1 day'`; (c) `customer_id = 7 AND created_at >= now() - interval '1 day'`; (d) `customer_id > 40000 AND created_at >= now() - interval '1 day'`."
+answer = "(a) Narrows: equality on the leading column. (b) Does not help in practice: there is no condition on the leading column, and with about 49,000 customers a skip scan would need tens of thousands of searches, so Postgres reads the table (measured: a parallel Seq Scan). (c) Narrows on both: equality on the first column, then a range on the second, a contiguous slice. (d) The range on `customer_id` narrows the scan; the `created_at` condition comes after the first inequality, so it is only checked inside the index (Postgres 18 may skip within it, but the slice for customer_id > 40000 is still read)."
+
+[[checks]]
+prompt = "Write the index for `SELECT id FROM orders WHERE status = $1 AND created_at >= $2 ORDER BY created_at LIMIT 50`, and explain the column order."
+answer = "`CREATE INDEX ON orders (status, created_at)`. Status is tested with equality, so it goes first and gathers all entries of that status together; created_at is both the range and the sort column, so it comes second: the scan starts at (status, $2) and reads forward in created_at order, stopping after 50 entries with no Sort node. Measured for comparison: pending orders on one day with this index were an Index Scan with both conditions under Index Cond, one search and 196 pages for 192 rows."
+
+[[checks]]
+prompt = "Explain where the 3,116 pages of the wrong-order plan come from, using the numbers on this page."
+answer = "With `(created_at, customer_id)` the scan starts at the newest entry and walks backwards through all customers' orders, checking customer_id in each entry, until it has found 20 of customer 4242's. The 20th is from 2025-12-24, and 807,428 entries are newer. The index holds 2,000,000 entries in 7,663 leaf pages, 261 per page, so the walk reads about 3,094 leaf pages, plus the root and one internal page for the descent and the 20 table pages of the matching rows: 3,116."
+
+[[checks]]
+prompt = "A colleague insists that the most selective column must come first, so the index for `WHERE status = 'pending' AND customer_id = 4242` should be `(customer_id, status)`. Is that right? When does the order matter?"
+answer = "For this query the order does not matter: both orders read 7 pages and both indexes are 19 MB, because equality on both columns takes the descent straight to the matching entries. The order matters for other queries: a column also queried alone should lead, and range or ORDER BY columns go after the equality columns. Here `(customer_id, status)` also serves `customer_id = ?` alone, and in Postgres 18 `(status, customer_id)` can serve it too through a skip scan (9 searches, 70 pages), so the real question is which other queries exist."
+
+[[checks]]
+prompt = "In Postgres 18, why does `(status, created_at)` serve a query on `created_at` alone, while `(customer_id, created_at)` does not?"
+answer = "Skip scan runs one index search per distinct value of the leading column (about two per value for text). status has 4 values, so a day's orders take 9 searches and 45 pages. customer_id has about 49,000 values, so a skip scan would need tens of thousands of searches, more than reading the table, and the planner picks a parallel Seq Scan."
+
+[[checks]]
+prompt = "A table has indexes on `(customer_id)` and `(customer_id, created_at)`. Which one could go, and what do you check before dropping it?"
+answer = "`(customer_id)` is a leading prefix of `(customer_id, created_at)`, so the composite index serves every query the single-column one serves. Before dropping it: that it is not unique (enforcing a constraint), that it has no different sort order, collation or operator class, and how hot and small it is (14 MB thanks to deduplication against 60 MB, so lookups on it touch fewer pages); check `idx_scan` on every server, then `DROP INDEX CONCURRENTLY`."
+
+[[checks]]
+prompt = "Why does ClickHouse recommend ordering the sorting key by ascending cardinality, while for a Postgres B-tree the advice is equality columns first, whatever their cardinality?"
+answer = "ClickHouse has one sparse index, the sorting key, and filters on a later key column with a generic exclusion search over granule marks, which only skips granules when the earlier columns have few distinct values; low cardinality first also compresses better. A Postgres B-tree has an entry per row and can create as many indexes as needed, so each index is shaped for its queries: equality columns first gather the matching entries, and the range or sort column after them makes the answer one contiguous slice."
+
+[[terms]]
+term = "Multi-column index"
+means = "An index on several columns, sorted by the first, then by the next within ties."
+section = "One index, several columns"
+
+[[terms]]
+term = "Leading prefix"
+means = "The first column, or first few, of a multi-column index; only these narrow a scan."
+section = "The leftmost prefix"
+
+[[terms]]
+term = "Index Scan Backward"
+means = "An index read from right to left, which serves ORDER BY ... DESC."
+section = "Column order decides the pages read"
+
+[[terms]]
+term = "Index-only scan"
+means = "A scan answered from the index alone, without table pages."
+section = "Column order decides the pages read"
+
+[[terms]]
+term = "Redundant index"
+means = "An index whose columns are a leading prefix of another index on the table."
+section = "The leftmost prefix"
+
+[[terms]]
+term = "Skip scan"
+means = "Postgres 18: an index used without a condition on its leading column, one search per value."
+section = "Postgres 18: skip scan"
+
+[[terms]]
+term = "Skip support"
+means = "A type's way to compute the next value, which lets a skip scan step directly."
+section = "Postgres 18: skip scan"
+
+[[terms]]
+term = "Generic exclusion search"
+means = "ClickHouse's granule filter for a later sorting-key column."
+section = "The same idea in other engines"
+
+[[sources]]
+title = "PostgreSQL: multicolumn indexes (the prefix rule and skip scan)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+
+[[sources]]
+title = "PostgreSQL: indexes and ORDER BY"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-ordering.html"
+
+[[sources]]
+title = "PostgreSQL: index-only scans and covering indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+
+[[sources]]
+title = "PostgreSQL 18 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/18/release-18.html"
+note = "skip scans of B-tree indexes"
+
+[[sources]]
+title = "PostgreSQL source: nbtree skip arrays (nbtutils.c)"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/nbtutils.c"
+note = "how a skip array advances, with and without skip support"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX (CONCURRENTLY)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+[[sources]]
+title = "PostgreSQL: pg_index catalog"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/catalog-pg-index.html"
+
+[[sources]]
+title = "sqlx 0.8.6 source: migration files (the -- no-transaction directive)"
+kind = "docs"
+url = "https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-core/src/migrate/source.rs"
+
+[[sources]]
+title = "MySQL 8.4: multiple-column indexes"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/multiple-column-indexes.html"
+
+[[sources]]
+title = "MySQL 8.4: range optimization (skip scan range access)"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/range-optimization.html"
+
+[[sources]]
+title = "SQLite: the query optimizer overview (skip-scan)"
+kind = "docs"
+url = "https://www.sqlite.org/optoverview.html"
+
+[[sources]]
+title = "ClickHouse: a practical introduction to primary indexes"
+kind = "docs"
+url = "https://clickhouse.com/docs/guides/best-practices/sparse-primary-indexes"
+note = "generic exclusion search, key column order by cardinality"
+
+[[sources]]
+title = "Use The Index, Luke: concatenated indexes"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/the-equals-operator/concatenated-keys"
+note = "further reading"

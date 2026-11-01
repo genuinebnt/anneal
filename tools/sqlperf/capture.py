@@ -7,7 +7,8 @@ Pages declare a plan as a fenced block in their Markdown:
     SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
     ```
 
-`setup` names entries of content/sql/setups.toml (comma-separated, applied in order and undone in reverse). The tool
+`setup` names entries of content/sql/setups.toml (comma-separated, applied in order and undone in reverse; a setup's
+`session` SQL, such as `SET enable_seqscan = off`, runs in the session that takes the plan instead). The tool
 runs each query once to warm the caches, then takes the JSON and the text plan in the same session (so both show the
 steady-state work, not a cold first run), in UTC, and writes content/sql/plans/<id>.json with the plans, the query, the
 setups and the server version.
@@ -34,7 +35,8 @@ FENCE = re.compile(r"^```plan\s+(.*?)\n(.*?)^```\s*$", re.S | re.M)
 
 
 def psql(db: str, sql: str) -> str:
-    out = subprocess.run(["psql", db, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql], capture_output=True, text=True)
+    # on stdin, not with -c: -c runs several statements as one transaction, where VACUUM (in a setup) is refused
+    out = subprocess.run(["psql", db, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"], input=sql, capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"psql failed: {out.stderr.strip()}\n--- while running:\n{sql}")
     return out.stdout
@@ -69,13 +71,17 @@ def capture(db: str, plan: dict, setups: dict) -> dict:
     for name in plan["setup"]:
         if name not in setups:
             raise SystemExit(f"plan {plan['id']}: unknown setup {name!r}")
-    apply = "\n".join(setups[n]["sql"] for n in plan["setup"])
-    undo = "\n".join(setups[n]["undo"] for n in reversed(plan["setup"]))
+        if not ("sql" in setups[name] and "undo" in setups[name]) and "session" not in setups[name]:
+            raise SystemExit(f"setup {name!r} needs `sql` and `undo`, or `session`")
+    apply = "\n".join(setups[n]["sql"] for n in plan["setup"] if "sql" in setups[n])
+    undo = "\n".join(setups[n]["undo"] for n in reversed(plan["setup"]) if "undo" in setups[n])
+    # settings for the planner (enable_seqscan = off, ...) last only for a session, so they run in the one taking the plan
+    session = "".join(setups[n]["session"] + "\n" for n in plan["setup"] if "session" in setups[n])
     q = plan["query"].rstrip(";")
     # one session: a first run warms the buffer cache and the session's own caches (a cold session also reads the
     # index's metapage and catalog pages), then both plans are taken warm, so they show the steady-state work
     script = (
-        "SET TimeZone = 'UTC';\n\\o /dev/null\n"
+        f"SET TimeZone = 'UTC';\n{session}\\o /dev/null\n"
         f"{q};\n\\o\n\\echo @@JSON\n"
         f"EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT JSON) {q};\n\\echo @@TEXT\n"
         f"EXPLAIN (ANALYZE, BUFFERS) {q};\n"
@@ -97,7 +103,7 @@ def capture(db: str, plan: dict, setups: dict) -> dict:
         "engine": "postgres",
         "version": psql(db, "SHOW server_version").strip(),
         "query": plan["query"],
-        "setup": [{"id": n, "sql": setups[n]["sql"]} for n in plan["setup"]],
+        "setup": [{"id": n, "sql": setups[n].get("sql") or setups[n]["session"]} for n in plan["setup"]],
         "json": tree,
         "text": text.rstrip("\n"),
     }

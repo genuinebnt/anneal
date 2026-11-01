@@ -28,6 +28,15 @@ test("a parallel scan is the hottest node, and its time is not multiplied by the
     assert.ok(scan.flags.some((f) => f.tone === "bad"));
 });
 
+test("aggregates are named from JSON as the text format names them (partial mode and strategy)", () => {
+    const file = captured("m3-no-skip");
+    const j = fromPostgresJson(file.json);
+    const t = fromPostgresText(file.text);
+    assert.deepEqual(j.nodes.map((n) => n.op), ["Finalize Aggregate", "Gather", "Partial Aggregate", "Parallel Seq Scan"]);
+    assert.deepEqual(j.nodes.map((n) => n.op), t.nodes.map((n) => n.op));
+    assert.equal(fromPostgresJson([{ Plan: { "Node Type": "Aggregate", Strategy: "Hashed", "Partial Mode": "Simple" } }]).root.op, "HashAggregate");
+});
+
 test("MySQL EXPLAIN ANALYZE nests by indentation and keeps rows and loops", () => {
     const p = fromMysqlTree(`-> Limit: 20 row(s)  (cost=12.5 rows=20) (actual time=0.05..0.12 rows=20 loops=1)
     -> Index lookup on orders using orders_customer (customer_id=4242)  (cost=12.5 rows=44) (actual time=0.04..0.11 rows=20 loops=1)`);

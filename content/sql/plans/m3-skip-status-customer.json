@@ -1,0 +1,62 @@
+{
+ "id": "m3-skip-status-customer",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, total_cents FROM orders WHERE customer_id = 4242;",
+ "setup": [
+  {
+   "id": "orders-status-customer",
+   "sql": "CREATE INDEX orders_status_customer ON orders (status, customer_id);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Index Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Scan Direction": "Forward",
+   "Index Name": "orders_status_customer",
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 0.43,
+   "Total Cost": 169.82,
+   "Plan Rows": 41,
+   "Plan Width": 12,
+   "Actual Startup Time": 0.031,
+   "Actual Total Time": 0.15,
+   "Actual Rows": 44.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Index Cond": "(customer_id = 4242)",
+   "Rows Removed by Index Recheck": 0,
+   "Index Searches": 9,
+   "Shared Hit Blocks": 70,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.067,
+  "Triggers": [],
+  "Execution Time": 0.172
+ },
+ "text": "Index Scan using orders_status_customer on orders  (cost=0.43..169.82 rows=41 width=12) (actual time=0.023..0.144 rows=44.00 loops=1)\n  Index Cond: (customer_id = 4242)\n  Index Searches: 9\n  Buffers: shared hit=70\nPlanning Time: 0.047 ms\nExecution Time: 0.164 ms"
+}

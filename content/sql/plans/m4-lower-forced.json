@@ -1,0 +1,65 @@
+{
+ "id": "m4-lower-forced",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, name FROM customers WHERE lower(email) = 'user4242@example.com';",
+ "setup": [
+  {
+   "id": "customers-email",
+   "sql": "CREATE INDEX customers_email ON customers (email);"
+  },
+  {
+   "id": "no-seqscan",
+   "sql": "SET enable_seqscan = off;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Seq Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "customers",
+   "Alias": "customers",
+   "Startup Cost": 0.0,
+   "Total Cost": 1265.0,
+   "Plan Rows": 250,
+   "Plan Width": 18,
+   "Actual Startup Time": 1.14,
+   "Actual Total Time": 85.109,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": true,
+   "Filter": "(lower(email) = 'user4242@example.com'::text)",
+   "Rows Removed by Filter": 49999,
+   "Shared Hit Blocks": 515,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {
+   "enable_seqscan": "off"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.076,
+  "Triggers": [],
+  "Execution Time": 85.135
+ },
+ "text": "Seq Scan on customers  (cost=0.00..1265.00 rows=250 width=18) (actual time=1.076..72.510 rows=1.00 loops=1)\n  Disabled: true\n  Filter: (lower(email) = 'user4242@example.com'::text)\n  Rows Removed by Filter: 49999\n  Buffers: shared hit=515\nPlanning Time: 0.079 ms\nExecution Time: 72.537 ms"
+}

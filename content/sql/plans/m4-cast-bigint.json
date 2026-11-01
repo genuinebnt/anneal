@@ -1,0 +1,91 @@
+{
+ "id": "m4-cast-bigint",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE customer_id = 4242::bigint;",
+ "setup": [
+  {
+   "id": "orders-customer",
+   "sql": "CREATE INDEX orders_customer ON orders (customer_id);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Bitmap Heap Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 4.75,
+   "Total Cost": 162.82,
+   "Plan Rows": 41,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.044,
+   "Actual Total Time": 0.115,
+   "Actual Rows": 44.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Recheck Cond": "(customer_id = '4242'::bigint)",
+   "Rows Removed by Index Recheck": 0,
+   "Exact Heap Blocks": 43,
+   "Lossy Heap Blocks": 0,
+   "Shared Hit Blocks": 46,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Index Name": "orders_customer",
+     "Startup Cost": 0.0,
+     "Total Cost": 4.74,
+     "Plan Rows": 41,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.022,
+     "Actual Total Time": 0.022,
+     "Actual Rows": 44.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "(customer_id = '4242'::bigint)",
+     "Index Searches": 1,
+     "Shared Hit Blocks": 3,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.089,
+  "Triggers": [],
+  "Execution Time": 0.159
+ },
+ "text": "Bitmap Heap Scan on orders  (cost=4.75..162.82 rows=41 width=8) (actual time=0.036..0.091 rows=44.00 loops=1)\n  Recheck Cond: (customer_id = '4242'::bigint)\n  Heap Blocks: exact=43\n  Buffers: shared hit=46\n  ->  Bitmap Index Scan on orders_customer  (cost=0.00..4.74 rows=41 width=0) (actual time=0.019..0.019 rows=44.00 loops=1)\n        Index Cond: (customer_id = '4242'::bigint)\n        Index Searches: 1\n        Buffers: shared hit=3\nPlanning Time: 0.056 ms\nExecution Time: 0.141 ms"
+}

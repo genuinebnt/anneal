@@ -82,6 +82,17 @@ export const fmt = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 
 
 // ---------------------------------------------------------------- Postgres JSON
 
+const AGG_STRATEGY: Record<string, string> = { Sorted: "GroupAggregate", Hashed: "HashAggregate", Mixed: "MixedAggregate" };
+
+/** The node's name as EXPLAIN's text format prints it: JSON keeps an aggregate's strategy and partial mode in their own fields. */
+function jsonNodeName(p: Record<string, unknown>): string {
+    const type = String(p["Node Type"] ?? "?");
+    if (type !== "Aggregate") return type;
+    const name = AGG_STRATEGY[String(p["Strategy"])] ?? type;
+    const mode = p["Partial Mode"];
+    return mode === "Partial" || mode === "Finalize" ? `${mode} ${name}` : name;
+}
+
 /** EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON): the richest input; times are per loop, so totals multiply by loops. */
 export function fromPostgresJson(input: unknown): Plan {
     const top = (Array.isArray(input) ? input[0] : input) as Record<string, unknown>;
@@ -111,7 +122,7 @@ export function fromPostgresJson(input: unknown): Plan {
         const removed = (num(p["Rows Removed by Filter"]) ?? 0) + (num(p["Rows Removed by Join Filter"]) ?? 0) + (num(p["Rows Removed by Index Recheck"]) ?? 0);
         const children = ((p["Plans"] as Record<string, unknown>[] | undefined) ?? []).map((c) => conv(c, underGather));
         return {
-            op: (p["Parallel Aware"] ? "Parallel " : "") + String(p["Node Type"] ?? "?") + (p["Scan Direction"] === "Backward" ? " Backward" : ""),
+            op: (p["Parallel Aware"] ? "Parallel " : "") + jsonNodeName(p) + (p["Scan Direction"] === "Backward" ? " Backward" : ""),
             on: (p["Relation Name"] as string) ?? (p["CTE Name"] as string) ?? (p["Function Name"] as string),
             index: p["Index Name"] as string | undefined,
             details,

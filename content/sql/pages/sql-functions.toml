@@ -1,0 +1,457 @@
+title = "Functions, case-insensitive search and bind parameters"
+group = "sql-indexes"
+order = 4
+minutes = 27
+lede = "An index on `email` stores email values in email order. A condition on `lower(email)`, `created_at::date` or `customer_id::numeric` asks about a different expression, and the index cannot answer it, however selective the condition. This module shows how to index the expression instead, which functions may be indexed, the ways to search without regard to case, and how a bind parameter's type can quietly do the same damage as a function."
+say = "An index serves a condition only when the condition's left side is exactly the indexed column or expression, so a function or a cast on the column, including one Postgres adds because a bind parameter has the wrong type, turns a lookup into a table scan; the fix is to index the expression (which must be immutable) or to write the condition on the bare column."
+related = ["indexes", "postgres"]
+
+summary = [
+  "A function on the column hides it: with an index on `email`, `lower(email) = $1` reads the whole table, and even `enable_seqscan = off` cannot help.",
+  "An **expression index** on `lower(email)` makes it a 4-page lookup; run `ANALYZE` afterwards, or the planner guesses 250 rows instead of 1.",
+  "Only **immutable** functions can be indexed: `created_at::date` is refused because it depends on the session's time zone.",
+  "Case-insensitive search has four tools: `lower()` with an expression index, `citext`, a **nondeterministic collation**, or a stored generated column.",
+  "A **bind parameter** of the wrong type is a cast on the column: from sqlx, an `f64` for an `int` column turns the plan into a Seq Scan, an `i64` does not.",
+]
+
+[[sections]]
+heading = "A function on the column hides it from the index"
+body = """
+An index can serve a condition only when one side of the condition is exactly what the index stores (the column, or the indexed expression) and the operator belongs to the index's operator class. Everything else is evaluated row by row. With an index on `customers (email)`, a case-insensitive login:
+
+```plan id=m4-lower-plain-index setup=customers-email
+SELECT id, name FROM customers WHERE lower(email) = 'user4242@example.com';
+```
+
+A Seq Scan over 515 pages, `lower()` called 50,000 times, one row kept. The index holds `email` in sorted order; it knows nothing about `lower(email)`, even though for these addresses the two are the same string. Postgres does not reason about what a function does, so it has no way to tell that the index would help.
+
+Module 2 showed how to ask for the alternative plan. Here it gives the clearest answer there is:
+
+```plan id=m4-lower-forced setup=customers-email,no-seqscan
+SELECT id, name FROM customers WHERE lower(email) = 'user4242@example.com';
+```
+
+With sequential scans disabled the plan is still a Seq Scan, now marked `Disabled: true` (in the plan's Text tab; Postgres 18 shows disabled nodes in `EXPLAIN`): there was no other plan to choose. A condition an index can serve is often called **sargable** (from *search argument*); this one is not.
+"""
+
+[[sections]]
+heading = "Indexes on expressions"
+body = """
+Postgres can index the result of an expression instead of a column. The expression is computed once per row when the row is written, stored in the index, and never recomputed during a search:
+
+```plan id=m4-lower-expr setup=customers-lower-email
+SELECT id, name FROM customers WHERE lower(email) = 'user4242@example.com';
+```
+
+Four pages, as for a plain column. That plan ran after `ANALYZE customers`. Straight after `CREATE INDEX`, the same query used the index with a much worse estimate:
+
+```plan id=m4-lower-no-stats setup=customers-lower-email-nostats
+SELECT id, name FROM customers WHERE lower(email) = 'user4242@example.com';
+```
+
+`rows=250` against 1 actual. The table's statistics describe `email`, not `lower(email)`, so the planner falls back to a default selectivity of 0.5% (250 of 50,000). `ANALYZE` also collects statistics on each expression index, stored under the index's name:
+
+```sql title=expression_stats.sql
+CREATE INDEX customers_lower_email ON customers (lower(email));
+ANALYZE customers;
+SELECT tablename, attname, n_distinct FROM pg_stats WHERE tablename = 'customers_lower_email';
+--        tablename       | attname | n_distinct
+-- -----------------------+---------+------------
+--  customers_lower_email | lower   |         -1
+```
+
+Here the bad estimate did no harm, but in a join or with a less selective expression it can pick the wrong plan: **run `ANALYZE` after creating an expression index.**
+
+The planner matches expressions literally. `upper(email) = 'USER4242@EXAMPLE.COM'` does not use an index on `lower(email)` (a Seq Scan), while any expression on the *other* side is fine, since it is computed once before the scan:
+
+```sql title=expression_match.sql
+EXPLAIN SELECT id, name FROM customers WHERE lower(email) = lower('User4242@Example.com');
+--  Index Scan using customers_lower_email on customers  (cost=0.41..8.43 rows=1 width=18)
+--    Index Cond: (lower(email) = 'user4242@example.com'::text)
+```
+
+A unique expression index enforces a rule a plain constraint cannot: `CREATE UNIQUE INDEX ON customers (lower(email))` rejects `Ann@example.com` when `ann@example.com` exists. The price is the usual one for an index, plus the function call: every insert, and every update that is not a HOT update, computes the expression and maintains the index.
+"""
+
+[[sections]]
+heading = "Only immutable functions can be indexed"
+body = """
+Every function has a volatility: **immutable** (same arguments, same result, forever), **stable** (the same within one statement, but it may depend on settings or on the database), or **volatile** (may change at every call). An index stores results to compare against later, so Postgres accepts only immutable functions in an index definition. The catalog says which is which:
+
+```sql title=volatility.sql
+SELECT DISTINCT proname, provolatile FROM pg_proc
+WHERE proname IN ('lower', 'now', 'random', 'date_trunc') ORDER BY 1, 2;
+--   proname   | provolatile
+-- ------------+-------------
+--  date_trunc | i
+--  date_trunc | s
+--  lower      | i
+--  now        | s
+--  random     | v
+```
+
+`date_trunc` appears twice because it has four versions: truncating a `timestamp` or an `interval` is immutable, truncating a `timestamptz` is stable, because the start of a day depends on the session's `TimeZone` (the version that takes the zone as a third argument is immutable again). Casting a `timestamptz` to `date` has the same problem, which is why the most common index people try is refused:
+
+```sql title=not_immutable.sql
+CREATE INDEX orders_day ON orders ((created_at::date));
+-- ERROR:  functions in index expression must be marked IMMUTABLE
+CREATE INDEX orders_day ON orders (date_trunc('day', created_at));
+-- ERROR:  functions in index expression must be marked IMMUTABLE
+```
+
+With an ordinary index on `created_at`, a query on the day is not sargable:
+
+```plan id=m4-day-plain setup=orders-created-day
+SELECT count(*) FROM orders WHERE created_at::date = '2026-03-01';
+```
+
+Fixing the time zone makes the expression immutable, and an index on it is accepted and used, as long as the query writes the same expression:
+
+```plan id=m4-day-utc setup=orders-day-utc
+SELECT count(*) FROM orders WHERE (created_at AT TIME ZONE 'UTC')::date = '2026-03-01';
+```
+
+Note the estimate, 10,000 rows against 3,307: the default 0.5% again, since the setup did not analyze. Usually the better fix needs no new index at all: write the day as a range on the column, `created_at >= '2026-03-01' AND created_at < '2026-03-02'`, which the plain index serves (module 7 covers dates and the other conditions that hide a column).
+
+> [!WARNING]
+> You can declare your own function `IMMUTABLE` to get it into an index. If it is not (it reads a table, a setting or the clock), the index keeps the results computed when each row was written, and queries silently return wrong answers after the inputs change. Postgres trusts the label; it does not check it.
+"""
+
+[[sections]]
+heading = "Case-insensitive search, four ways"
+body = """
+| Approach | How queries look | Index | Notes |
+|---|---|---|---|
+| `lower()` and an expression index | `WHERE lower(email) = lower($1)` | `(lower(email))`, unique if needed | works everywhere; every query must say `lower()` |
+| `citext` column type (an extension) | `WHERE email = $1` | a plain index on the column | folds case with the database's `LC_CTYPE`, so not Unicode-aware; no B-tree deduplication; the documentation now recommends nondeterministic collations instead |
+| nondeterministic ICU collation | `WHERE email = $1` | a plain index on the column | Unicode-aware; equality uses the index; `LIKE` is allowed since Postgres 18, but the prefix search below did not use the index; no deduplication, and comparisons cost more |
+| stored generated column | `WHERE email_lower = $1` | a plain index on the generated column | the expression is computed on write and visible to every client; a *virtual* generated column (the default in Postgres 18) cannot be indexed |
+
+The collation and `citext` versions, measured on copies of `customers`:
+
+```sql title=case_insensitive.sql
+CREATE COLLATION IF NOT EXISTS case_insensitive (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+CREATE TEMP TABLE ci AS SELECT id, email COLLATE case_insensitive AS email FROM customers;
+CREATE INDEX ON ci (email);
+ANALYZE ci;
+EXPLAIN SELECT id FROM ci WHERE email = 'USER4242@example.com';
+--  Index Scan using ci_email_idx on ci  (cost=0.41..8.43 rows=1 width=4)
+--    Index Cond: (email = 'USER4242@example.com'::text)
+EXPLAIN SELECT id FROM ci WHERE email LIKE 'USER4242@%';
+--  Seq Scan on ci  (cost=0.00..1009.00 rows=5 width=4)
+--    Filter: (email ~~ 'USER4242@%'::text)
+
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE TEMP TABLE cx AS SELECT id, email::citext AS email FROM customers;
+CREATE INDEX ON cx (email);
+ANALYZE cx;
+EXPLAIN SELECT id FROM cx WHERE email = 'USER4242@example.com';
+--  Index Scan using cx_email_idx on cx  (cost=0.41..8.43 rows=1 width=4)
+--    Index Cond: (email = 'USER4242@example.com'::citext)
+
+ALTER TABLE customers ADD COLUMN email_lower text GENERATED ALWAYS AS (lower(email)) VIRTUAL;
+CREATE INDEX ON customers (email_lower);
+-- ERROR:  indexes on virtual generated columns are not supported
+ALTER TABLE customers DROP COLUMN email_lower;
+```
+
+*Case-insensitive* is harder than it looks outside ASCII. `lower()` converts each character to its lowercase form, and the German `ß` already is one, so it stays; Unicode case folding, which Postgres 18's `casefold()` performs under an ICU or `PG_UNICODE_FAST` collation, turns it into `ss` (under the database's default libc collation, `casefold()` left it alone too):
+
+```sql title=casefold.sql
+SELECT lower('Straße') AS lower, casefold('Straße' COLLATE pg_unicode_fast) AS casefold;
+--  lower  | casefold
+-- --------+----------
+--  straße | strasse
+```
+
+For email addresses, `lower()` is what most systems use and is fine. For names and free text in many languages, a nondeterministic collation or an index on `casefold(...)` matches what people expect.
+"""
+
+[[sections]]
+heading = "A cast is a function too"
+body = """
+When the two sides of `=` have different types, Postgres looks for an operator taking both. B-tree indexes group compatible types into an **operator family** with cross-type operators, so an `int` column compared with a `bigint` value still uses its index. When no such operator exists, Postgres converts the column to the other type, which is a function on every row:
+
+```plan id=m4-cast-bigint setup=orders-customer
+SELECT id FROM orders WHERE customer_id = 4242::bigint;
+```
+
+```plan id=m4-cast-numeric setup=orders-customer
+SELECT id FROM orders WHERE customer_id = 4242::numeric;
+```
+
+The second plan's filter reads `(customer_id)::numeric = '4242'::numeric`: the column was cast, and the index on it is useless. Measured with `EXPLAIN` against the same index:
+
+| Condition on the `int` column | Plan |
+|---|---|
+| `customer_id = 4242`, `= 4242::bigint`, `= 4242::smallint` | index |
+| `customer_id = '4242'` (an untyped literal takes the column's type) | index |
+| `customer_id = 4242.0`, `= 4242::numeric`, `= 4242::float8` | Seq Scan: the column is cast |
+| `customer_id::text = '4242'` | Seq Scan |
+
+The operator family behind the first row, from the catalog:
+
+```sql title=integer_ops.sql
+SELECT opf.opfname, format_type(o.amoplefttype, NULL) AS left_type, format_type(o.amoprighttype, NULL) AS right_type
+FROM pg_amop o
+JOIN pg_opfamily opf ON opf.oid = o.amopfamily
+JOIN pg_am am ON am.oid = opf.opfmethod
+WHERE am.amname = 'btree' AND o.amopstrategy = 3 AND o.amoplefttype = 'integer'::regtype
+ORDER BY 1, 3;
+--    opfname   | left_type | right_type
+-- -------------+-----------+------------
+--  integer_ops | integer   | bigint
+--  integer_ops | integer   | integer
+--  integer_ops | integer   | smallint
+```
+
+Strategy 3 is B-tree equality. `numeric` and `float8` are not in the integer family, so comparing with them cannot use an integer index.
+
+> [!NOTE]
+> **ANSI SQL.** `CAST(x AS integer)` is the standard spelling; `x::integer` is historical Postgres syntax, as the Postgres documentation puts it, and both do the same thing. `LOWER`, `UPPER` and `COLLATE` are standard, and so is `GENERATED ALWAYS AS (...)`; the `STORED` and `VIRTUAL` keywords are not (the standard does not say how generated columns are stored). Indexes on expressions, like all indexes, are outside the standard.
+"""
+
+[[sections]]
+heading = "Bind parameters"
+body = """
+A **bind parameter** is a placeholder (`$1`) whose value travels separately from the SQL text. Over the wire it is Postgres's extended query protocol: the client sends `Parse` with the query text (and, optionally, a type for each parameter), then `Bind` with the values, then `Execute`. Two things follow. Values never become SQL text, so they cannot inject SQL. And a parsed statement can be kept and executed again with new values, skipping parsing, and sometimes planning.
+
+**Planning.** For a prepared statement, Postgres plans the first five executions with the actual values (*custom plans*), then builds one *generic plan* with `$1` left open, and keeps using it if its estimated cost is not much worse than the custom plans' average (`plan_cache_mode` overrides this). `EXPLAIN (GENERIC_PLAN)` shows the generic plan. An expression index works in it, because `lower($1)` is computed once per execution, before the scan:
+
+```sql title=generic_plan.sql
+EXPLAIN (GENERIC_PLAN) SELECT id, name FROM customers WHERE lower(email) = lower($1);
+--  Index Scan using customers_lower_email on customers  (cost=0.42..8.44 rows=1 width=18)
+--    Index Cond: (lower(email) = lower($1))
+```
+
+A generic plan cannot see the value, which matters when values differ wildly (`status = 'pending'` against `'paid'` in module 2); module 11 covers generic and custom plans in depth.
+
+**Types.** A parameter has a type, chosen by the client or inferred by the server, and the previous section's rule applies to it exactly as to a literal. SQL's `PREPARE` shows it without a driver (it is a Postgres variant: the standard defines `PREPARE` only for embedded SQL, with another syntax):
+
+```sql title=param_types.sql
+PREPARE by_customer_int8 (int8) AS SELECT id FROM orders WHERE customer_id = $1;
+EXPLAIN EXECUTE by_customer_int8(4242);
+--  Bitmap Heap Scan on orders  (cost=4.75..162.82 rows=41 width=8)
+--    Recheck Cond: (customer_id = '4242'::bigint)
+--    ->  Bitmap Index Scan on orders_customer  (cost=0.00..4.74 rows=41 width=0)
+--          Index Cond: (customer_id = '4242'::bigint)
+PREPARE by_customer_numeric (numeric) AS SELECT id FROM orders WHERE customer_id = $1;
+EXPLAIN EXECUTE by_customer_numeric(4242);
+--  Gather  (cost=1000.00..29460.00 rows=10000 width=8)
+--    Workers Planned: 2
+--    ->  Parallel Seq Scan on orders  (cost=0.00..27460.00 rows=4167 width=8)
+--          Filter: ((customer_id)::numeric = '4242'::numeric)
+```
+
+sqlx sends the parameter types in `Parse`, taken from the Rust types you bind: `i32` becomes `int4`, `i64` becomes `int8`, `f64` becomes `float8`. So the type of a Rust variable decides whether an indexed lookup stays indexed (see *In real code*).
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+Measured on MySQL 8.4.13, SQLite 3.53.1 and DuckDB 2.0.0:
+
+| | MySQL (InnoDB) | SQLite | DuckDB |
+|---|---|---|---|
+| `lower(email) = ...` with an index on `email` | full index scan (`type: index`), not a lookup | `SCAN customers USING COVERING INDEX customers_email` | Seq Scan |
+| expression index | functional key part, `INDEX ((lower(email)))`: `type: ref` | index on expression: `SEARCH ... USING COVERING INDEX customers_lower_email (<expr>=?)` | `CREATE INDEX ... (lower(email))` is used: `Type: Index Scan` under `EXPLAIN ANALYZE` |
+| default comparison of text | **case-insensitive**: the default collation `utf8mb4_0900_ai_ci` finds `user4242@example.com` for `'USER4242@EXAMPLE.COM'` with no function at all | case-sensitive; `COLLATE NOCASE` folds ASCII letters only (`'É' = 'é' COLLATE NOCASE` is false) | case-sensitive; `COLLATE NOCASE` available |
+| number against the other type | an `int` column compared with `'4242'` or `4242.0` still uses the index (the constant is converted); a `varchar` column compared with a number cannot: `Cannot use ref access on index 'customers_email' due to type or collation conversion on field 'email'` | `customer_id = '4242'` uses the index (type affinity); `CAST(customer_id AS TEXT) = '4242'` scans | (not tested) |
+
+SQLite, like Postgres, refuses what could change in an index: `random()` gives `non-deterministic functions prohibited in index expressions`, and `date('now')` gives `non-deterministic use of date() in an index`.
+
+The MySQL default is the one to remember when moving between engines: a query that is correctly case-insensitive on MySQL with a plain index becomes case-sensitive on Postgres, and the first fix people reach for, `lower()` on the column, turns it into a table scan unless the expression index comes with it.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Normalise once, on the way in, when you can: store emails lowercased and compare with `=`, and keep the expression index only as the guarantee. When the column holds the user's original spelling, write the query and the index with the same expression:
+
+```sql title=migrations/20261101130000_customers_lower_email.sql
+-- no-transaction
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS customers_lower_email ON customers (lower(email));
+```
+
+```rust title=login.rs
+let customer: Option<(i32, String)> = sqlx::query_as("SELECT id, name FROM customers WHERE lower(email) = lower($1)")
+    .bind("User4242@Example.com")
+    .fetch_optional(&pool)
+    .await?;
+```
+
+And check bind types. The same query text, bound once with an integer and once with a float, gets two different plans:
+
+```rust title=bind_types.rs
+let explain = "EXPLAIN (FORMAT JSON) SELECT id FROM orders WHERE customer_id = $1";
+let with_i64: serde_json::Value = sqlx::query_scalar(explain).bind(4242_i64).fetch_one(&pool).await?;
+let with_f64: serde_json::Value = sqlx::query_scalar(explain).bind(4242.0_f64).fetch_one(&pool).await?;
+println!("i64: {}", with_i64[0]["Plan"]["Node Type"]); // i64: "Bitmap Heap Scan"
+println!("f64: {}", with_f64[0]["Plan"]["Node Type"]); // f64: "Gather" (a parallel Seq Scan below it)
+```
+
+Match the Rust type to the column (`i32` for `int`, `i64` for `bigint`), or cast the *parameter* in SQL (`customer_id = $1::int`), never the column. The `query!` and `query_as!` macros check parameter types against the database at compile time, which catches this class of mistake before it ships.
+"""
+
+[[checks]]
+prompt = "`customers` has an index on `email`, and the login query `WHERE lower(email) = $1` reads the whole table. Give two fixes and what each costs."
+answer = "Create an expression index on `lower(email)` (unique if emails must be unique regardless of case) and run ANALYZE: the query becomes a 4-page lookup, at the price of computing lower() on every write and a second index if the plain one is still needed. Or store emails already lowercased (or in a stored generated column) and compare with `=` against a plain index: no function in queries, but every writer must normalise, or the generated column costs storage. A nondeterministic collation or citext are the third option, changing the column's comparison rules for every query."
+
+[[checks]]
+prompt = "Why does `CREATE INDEX ON orders ((created_at::date))` fail, and what are your options for fast queries by day?"
+answer = "created_at is a timestamptz, and which date an instant falls on depends on the session's TimeZone, so the cast is only stable, and index expressions must be immutable. Options: fix the zone in the expression, `((created_at AT TIME ZONE 'UTC')::date)`, and write queries with exactly that expression; or, usually better, keep the plain index on created_at and query a range, `created_at >= '2026-03-01' AND created_at < '2026-03-02'`, which needs no extra index."
+
+[[checks]]
+prompt = "A Rust service binds a customer id as `f64` (it came from a JSON number) in `WHERE customer_id = $1`, where `customer_id` is `int` with an index. Predict the plan, explain it, and fix it."
+answer = "A Seq Scan (parallel on this table). sqlx sends the parameter as float8; there is no int = float8 operator in the B-tree integer family, so Postgres casts the column to double precision on every row and the index cannot be used. Bind an i32 (or i64, which is in the integer family), or cast the parameter in SQL, `$1::int`. Measured: the same query text gave a Bitmap Heap Scan with an i64 and a Gather over a Seq Scan with an f64."
+
+[[checks]]
+prompt = "Right after `CREATE INDEX ON customers (lower(email))`, the plan uses the index but estimates 250 rows for a lookup that returns one. Why, and what do you run?"
+answer = "The table's statistics describe email, not lower(email), so the planner uses its default 0.5% selectivity for an equality on an expression it knows nothing about (250 of 50,000 rows). ANALYZE gathers statistics for the expression index too (pg_stats shows them under the index's name), after which the estimate is 1. A wrong estimate here can mislead joins and plan choices built on this lookup."
+
+[[checks]]
+prompt = "The index is on `lower(email)`, and a new endpoint queries `WHERE upper(email) = upper($1)`. What happens, and how do you fix it without a second index?"
+answer = "The planner matches index expressions literally, so upper(email) does not match lower(email) and the query reads the whole table. Rewrite the condition with the indexed expression, `lower(email) = lower($1)`; the parameter side can be any expression, since it is computed once before the scan."
+
+[[checks]]
+prompt = "A login query is case-insensitive on MySQL with a plain index on `email` and no function. After moving to Postgres, logins with capital letters fail. Why, and what do you do?"
+answer = "MySQL's default collation, utf8mb4_0900_ai_ci, compares case-insensitively, so `email = 'USER@...'` matched through the ordinary index. Postgres's default collations are deterministic and case-sensitive. Choose one of the case-insensitive tools: an expression index on lower(email) with queries that say lower(), a nondeterministic ICU collation on the column, citext, or emails normalised on write. Adding lower() to the query without the expression index would fix the logins and turn each one into a table scan."
+
+[[checks]]
+prompt = "A teammate wants an index on a function that looks up a customer's region in a settings table, and marks the function IMMUTABLE so that CREATE INDEX accepts it. What goes wrong?"
+answer = "Postgres trusts the label. The index stores each row's result at write time; when the settings table changes, the stored results are stale, and queries through the index return rows by the old values while a Seq Scan would compute the new ones, so answers depend on the plan. The function is really stable at best. Store the region on the row (and update it when it changes), or join to the settings table at query time."
+
+[[terms]]
+term = "Sargable"
+means = "A condition an index can serve: the bare indexed column or expression, compared with an operator of its class."
+section = "A function on the column hides it from the index"
+
+[[terms]]
+term = "Expression index"
+means = "An index on the result of an expression, such as lower(email), computed when rows are written."
+section = "Indexes on expressions"
+
+[[terms]]
+term = "Volatility"
+means = "Whether a function is immutable, stable or volatile; only immutable ones can be indexed."
+section = "Only immutable functions can be indexed"
+
+[[terms]]
+term = "Nondeterministic collation"
+means = "A collation that can call different strings equal, such as one ignoring case."
+section = "Case-insensitive search, four ways"
+
+[[terms]]
+term = "citext"
+means = "An extension type that compares text without regard to case."
+section = "Case-insensitive search, four ways"
+
+[[terms]]
+term = "Case folding"
+means = "Mapping text to a form for case-insensitive comparison; ß folds to ss."
+section = "Case-insensitive search, four ways"
+
+[[terms]]
+term = "Operator family"
+means = "B-tree operator classes for compatible types, with cross-type operators such as int = bigint."
+section = "A cast is a function too"
+
+[[terms]]
+term = "Bind parameter"
+means = "A $1 placeholder whose value is sent separately from the SQL text."
+section = "Bind parameters"
+
+[[terms]]
+term = "Generic plan"
+means = "A plan made without the parameter values, reused for every execution of a prepared statement."
+section = "Bind parameters"
+
+[[terms]]
+term = "Custom plan"
+means = "A plan made for one execution with its actual parameter values."
+section = "Bind parameters"
+
+[[sources]]
+title = "PostgreSQL: indexes on expressions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-expressional.html"
+
+[[sources]]
+title = "PostgreSQL: function volatility categories"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/xfunc-volatility.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX (index expressions must be immutable)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+[[sources]]
+title = "PostgreSQL: citext"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/citext.html"
+note = "its limitations, and the advice to prefer nondeterministic collations"
+
+[[sources]]
+title = "PostgreSQL: collation support (nondeterministic collations)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/collation.html"
+
+[[sources]]
+title = "PostgreSQL: generated columns"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-generated-columns.html"
+
+[[sources]]
+title = "PostgreSQL: B-tree operator classes and families"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/btree-behavior.html"
+
+[[sources]]
+title = "PostgreSQL: PREPARE (custom and generic plans)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"
+
+[[sources]]
+title = "PostgreSQL: message flow, extended query"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/protocol-flow.html"
+
+[[sources]]
+title = "PostgreSQL 18 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/18/release-18.html"
+note = "casefold(), virtual generated columns, LIKE with nondeterministic collations, disabled nodes in EXPLAIN"
+
+[[sources]]
+title = "sqlx 0.8.6 source: Postgres integer types"
+kind = "docs"
+url = "https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-postgres/src/types/int.rs"
+note = "which Postgres type each Rust integer is sent as"
+
+[[sources]]
+title = "MySQL 8.4: CREATE INDEX (functional key parts)"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/create-index.html"
+
+[[sources]]
+title = "MySQL 8.4: case sensitivity in string searches"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/case-sensitivity.html"
+
+[[sources]]
+title = "SQLite: indexes on expressions"
+kind = "docs"
+url = "https://www.sqlite.org/expridx.html"
+
+[[sources]]
+title = "Use The Index, Luke: functions"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/functions"
+note = "further reading"
+
+[[sources]]
+title = "Use The Index, Luke: bind parameters"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/bind-parameters"
+note = "further reading"
