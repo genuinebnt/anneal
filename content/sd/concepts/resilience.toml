@@ -1,15 +1,57 @@
 title = "Resilience: timeouts, retries, circuit breakers"
 group = "pattern"
 order = 8
-minutes = 11
+minutes = 24
 lede = "In a system of many services, something is always slow or down. Timeouts bound the wait, retries with backoff and jitter recover from blips without a storm, circuit breakers stop calling a dependency that is failing, and bulkheads and load shedding keep one problem from sinking everything."
 say = "Calls to the payment provider have a 2-second timeout, three retries with exponential backoff and jitter using the same idempotency key, and a circuit breaker; when it opens we queue the payment and tell the user it is processing."
-related = ["multi-step-processes", "queues-and-streams", "api-styles"]
+related = ["multi-step-processes", "queues-and-streams", "api-styles", "load-balancing", "realtime-updates", "contention"]
+
+summary = [
+  "**Slow is worse than down**: a dependency without a timeout ties up threads and connections until the caller fails too.",
+  "Set every timeout from measured latency and pass a **deadline** down the chain.",
+  "Retry only transient failures of idempotent calls, at **one layer**, with **exponential backoff and jitter**, within a **budget**.",
+  "A **circuit breaker** fails fast while a dependency is unhealthy and probes it before trusting it again.",
+  "Under overload, **reject early** and keep queues short: serving fewer requests on time beats serving all of them late.",
+]
+
+[[sections]]
+heading = "Why failures spread"
+body = """
+A request that depends on many services is less available than any of them. Hystrix's documentation gives the arithmetic: an application that depends on 30 services, each up 99.99% of the time, is up at best
+
+$$0.9999^{30} \\approx 99.7\\%$$
+
+which is 3 million failures in a billion requests, or more than two hours a month, with every dependency behaving well.
+
+The worse problem is **latency**, not errors. A dependency that fails fast costs the caller almost nothing. A dependency that hangs holds the caller's thread, connection or task for as long as it hangs; requests keep arriving, so the caller's pools fill with waiting work, and soon the caller cannot serve requests that never needed the slow dependency. Its own callers then see it as slow, and the failure climbs the call graph. That is a **cascading failure**, and every technique on this page is a way to cut that chain:
+
+| Technique | Cuts the chain by |
+|---|---|
+| timeouts and deadlines | bounding how long any one call can hold resources |
+| retries with backoff and jitter | recovering from short blips without multiplying load |
+| circuit breakers | not calling a dependency that is known to be failing |
+| bulkheads | keeping one dependency's trouble inside its own pool |
+| load shedding and back pressure | refusing work early instead of queueing it until it is useless |
+| graceful degradation | keeping the core path alive without the extras |
+"""
 
 [[sections]]
 heading = "Timeouts first"
 body = """
 A call without a timeout can hold a thread or connection forever, and a slow dependency then exhausts the caller's pools: the failure spreads upstream. Set a timeout on every network call, based on the dependency's measured p99, and pass a **deadline** down the chain (a request with 800 ms left should not start a 2-second call).
+
+**Choosing the value.** Amazon's Builders' Library describes the method: pick the rate of false timeouts you can accept (say 0.1% of calls timing out that would have succeeded), then set the timeout at the dependency's latency at that percentile (here p99.9), measured, with headroom. Too low and you fail healthy calls and add retries; too high and a slow dependency ties up resources for that long.
+
+**Two timeouts, not one**: a short **connect** timeout (a few hundred milliseconds: a host that does not accept a connection quickly is probably gone) and a **request** timeout from the latency percentiles. Many client libraries have no timeout by default, and gRPC sets **no deadline by default**: its guide warns that a client can then wait "effectively forever".
+
+**Deadlines propagate.** The user's request has a budget, say 2 seconds. Every hop should know how much is left and pass that on, not start a fresh 2 seconds. gRPC does this for you in some languages (enabled by default in Java and Go, explicit in C++), and converts the deadline to a remaining timeout at each hop so clock skew between servers does not matter. A server that receives a call whose deadline has already passed should not start the work at all.
+
+:::steps A 2-second budget through three services
+- gateway | deadline: now + 2,000 ms | The user's request starts with the whole budget.
+- orders | 1,850 ms left | 150 ms spent; orders calls inventory with what remains, not a new 2 s.
+- inventory | 1,700 ms left | It calls the database with a statement timeout under 1,700 ms.
+- database | slow: 3 s | The call is cancelled at the deadline; nobody keeps working for an answer no one will read.
+:::
 """
 
 [[sections]]
@@ -20,7 +62,148 @@ Retry only what is **transient** (timeouts, 503, connection reset), never 400s, 
 - **Exponential backoff**: wait 100 ms, 200, 400, 800… up to a cap.
 - **Jitter**: randomise each wait (for example uniformly between 0 and the backoff). Without it, every client that failed at the same moment retries at the same moment, and the recovering service is hit by synchronised waves.
 - **Limit**: a few attempts, and a **retry budget** (retries at most 10% of requests) so that a struggling service is not handed three times its normal load.
-- Retry at one layer only: if the client, the gateway and the service each retry three times, one failure becomes 27 calls.
+- Retry at one layer only: if the client, the gateway and the service each make up to three attempts, one failure becomes 3 × 3 × 3 = 27 calls to the bottom service.
+
+**How much jitter matters, measured.** A simulation in plain Rust: 100 clients start within the same 10 ms and each needs one successful call to a server that can take one call per millisecond (two arriving in the same millisecond both fail, as optimistic writes to one row do). Each call takes 1 to 3 ms to arrive. Base wait 2 ms, cap 2 s, averaged over 20 runs:
+
+```rust title=backoff.rs
+use std::collections::BTreeMap;
+
+/// xorshift64*: deterministic, so every strategy sees the same kind of luck.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+    /// Uniform in lo..=hi.
+    fn range(&mut self, lo: u64, hi: u64) -> u64 {
+        lo + self.next() % (hi - lo + 1)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Strategy {
+    NoBackoff,
+    Exponential,
+    FullJitter,
+    EqualJitter,
+    Decorrelated,
+}
+
+const BASE: u64 = 2; // milliseconds
+const CAP: u64 = 2_000;
+
+/// How long to wait before retry number `attempt` (1, 2, …); `prev` is the last wait (for decorrelated jitter).
+fn wait(s: Strategy, attempt: u32, prev: u64, rng: &mut Rng) -> u64 {
+    let exp = CAP.min(BASE << attempt.min(20));
+    match s {
+        Strategy::NoBackoff => 0,
+        Strategy::Exponential => exp,
+        Strategy::FullJitter => rng.range(0, exp),
+        Strategy::EqualJitter => exp / 2 + rng.range(0, exp / 2),
+        Strategy::Decorrelated => CAP.min(rng.range(BASE, prev * 3)),
+    }
+}
+
+/// 100 clients start within the same 10 ms and each needs one successful call. The server can take one call per
+/// millisecond: if two or more arrive in the same millisecond, they all fail (as optimistic writes to one item do).
+/// Every call takes 1 to 3 ms to arrive. Returns (calls made, ms until the last client succeeded).
+fn simulate(s: Strategy, seed: u64) -> Option<(u64, u64)> {
+    let mut rng = Rng(seed);
+    let clients = 100;
+    let mut arrivals: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    let mut attempt = vec![0u32; clients];
+    let mut prev = vec![BASE; clients];
+    let mut calls = 0;
+    for c in 0..clients {
+        let at = rng.range(0, 9) + rng.range(1, 3);
+        arrivals.entry(at).or_default().push(c);
+        calls += 1;
+    }
+    let mut done = 0;
+    while let Some((now, here)) = arrivals.pop_first() {
+        if now > 1_000_000 {
+            return None; // gave up: still colliding after a thousand seconds
+        }
+        if here.len() == 1 {
+            done += 1;
+            if done == clients {
+                return Some((calls, now));
+            }
+            continue;
+        }
+        for c in here {
+            attempt[c] += 1;
+            let w = wait(s, attempt[c], prev[c], &mut rng);
+            prev[c] = w.max(BASE);
+            arrivals.entry(now + w + rng.range(1, 3)).or_default().push(c);
+            calls += 1;
+        }
+    }
+    unreachable!("every client either succeeds or is rescheduled")
+}
+
+fn main() {
+    let seeds = 20;
+    for s in [Strategy::NoBackoff, Strategy::Exponential, Strategy::EqualJitter, Strategy::FullJitter, Strategy::Decorrelated] {
+        let runs: Vec<_> = (1..=seeds).filter_map(|seed| simulate(s, seed * 7919)).collect();
+        if runs.is_empty() {
+            println!("{:<13} never finished", format!("{s:?}"));
+            continue;
+        }
+        let calls = runs.iter().map(|r| r.0).sum::<u64>() / runs.len() as u64;
+        let ms = runs.iter().map(|r| r.1).sum::<u64>() / runs.len() as u64;
+        println!("{:<13} {calls:>7} calls for 100 successes, last success after {ms:>6} ms ({} of {seeds} runs finished)", format!("{s:?}"), runs.len());
+    }
+}
+```
+
+```text title=output
+NoBackoff     never finished
+Exponential      3322 calls for 100 successes, last success after 100767 ms (20 of 20 runs finished)
+EqualJitter       731 calls for 100 successes, last success after   1085 ms (20 of 20 runs finished)
+FullJitter        752 calls for 100 successes, last success after    993 ms (20 of 20 runs finished)
+Decorrelated     1131 calls for 100 successes, last success after    824 ms (20 of 20 runs finished)
+```
+
+Retrying at once never got everyone through in a thousand simulated seconds. Exponential backoff without jitter finished, but needed four to five times the calls and **a hundred times longer**: clients that collided once kept colliding, because they waited exactly the same time, until the cap and the small differences in network delay finally pulled them apart. The three jittered strategies were close to each other; the exact ranking depends on the model. Marc Brooker's simulations on the AWS Architecture Blog reached the same conclusion: jitter cuts the work sharply, with "full jitter" (wait a random time between 0 and the exponential backoff) doing the least work.
+
+```text title=full_jitter
+backoff = min(cap, base × 2^attempt)
+wait    = a uniformly random time between 0 and backoff
+```
+
+**Budgets.** Even well-spaced retries add load at the worst moment, when the dependency is already failing. Cap the attempts per request (two or three), and cap retries across the client: allow retries only while they stay a small share of requests (a token bucket that a success refills and a retry drains does this), so that during an outage the client's load stays close to normal instead of tripling.
+
+> [!WARNING]
+> A retry is a bet that the failure was brief. If it is not, retries make it worse. When most calls are failing, stop retrying and let the circuit breaker take over.
+"""
+
+[[sections]]
+heading = "Idempotency keys"
+body = """
+A timeout does not tell you whether the operation happened. The request may have been lost on the way, or the server may have charged the card and the response was lost on the way back. Retrying `POST /charges` blindly can charge twice.
+
+The fix is an **idempotency key**: the client generates a unique key for the operation (a UUID), sends it with the first attempt and with every retry, and the server stores the key with the result. A repeat with the same key returns the stored result instead of acting again.
+
+```http title=charge_with_key
+POST /charges HTTP/1.1
+Idempotency-Key: "8e03978e-40d5-43e8-bc93-6894a57f9324"
+Content-Type: application/json
+
+{"order": 812, "amount": 4999, "currency": "eur"}
+```
+
+The IETF HTTP APIs working group's draft for an `Idempotency-Key` header writes down the edge cases a server must handle:
+
+- a retry **while the first attempt is still running**: answer `409 Conflict` (no correction needed; retry later);
+- the same key **with a different body**: answer `422 Unprocessable Content` (the client has a bug);
+- **expiry**: keys can be purged after a published period, after which a retry is treated as new.
+
+On the server, store the key, a fingerprint of the request and the outcome in the same transaction as the effect (a unique index on the key makes a concurrent duplicate fail instead of running twice). Payment providers accept such keys, and the key must be the **same** across your own retries of one payment.
 """
 
 [[sections]]
@@ -33,6 +216,25 @@ A breaker wraps calls to one dependency and tracks failures:
 3. **Half-open**: after the cool-off, a few trial calls go through; success closes the breaker, failure opens it again.
 
 The caller fails fast and can use a **fallback** (a cached value, a default, queue it for later) instead of piling up waiting requests, and the dependency gets room to recover.
+
+**Real defaults**, from the two libraries most designs borrow from:
+
+| | Hystrix (Netflix) | resilience4j |
+|---|---|---|
+| window | rolling 10 seconds | the last 100 calls (count-based by default) |
+| minimum calls before it can trip | 20 in the window | 100 |
+| trips at | 50% errors | 50% failures (and separately, 100% of calls slower than 60 s) |
+| stays open | 5 seconds, then one trial call | 60 seconds, then 10 trial calls |
+
+Hystrix itself has been **in maintenance mode** since its final release, 1.5.18. Its README says Netflix's focus moved to "adaptive implementations that react to an application's real time performance rather than pre-configured settings", such as **adaptive concurrency limits**, and recommends resilience4j for new Java projects. The breaker remains the standard idea; the lesson is that fixed thresholds need tuning per dependency.
+
+**What counts as a failure** decides whether the breaker helps:
+
+- **Count**: timeouts, connection errors, 5xx, and calls slower than an agreed threshold.
+- **Do not count**: 4xx client errors. A user sending a bad request says nothing about the dependency's health; counting them lets bad input open the breaker for everyone.
+- **Scope**: one breaker per dependency, and per host or per endpoint when one replica or one endpoint can fail alone. A breaker for "all of payments" opened by one bad host blocks the healthy ones.
+
+**Fallbacks**, from best to last resort: serve a cached or default value (recommendations: show the bestsellers); queue the work and tell the user it is processing (payments, emails); degrade the page (hide the reviews panel); fail fast with a clear error. A fallback that calls another service needs its own timeout and breaker.
 """
 
 [[sections]]
@@ -42,6 +244,90 @@ body = """
 - **Load shedding**: when overloaded, reject some work early and cheaply (429 or 503) rather than slowing every request until all time out. Shed low-priority traffic first; prefer dropping requests that have waited past their deadline.
 - **Backpressure**: bounded queues and channels make producers slow down instead of buffering without limit.
 - **Graceful degradation**: turn off non-essential features (recommendations, live counts) to keep the core path working.
+
+**Sizing a bulkhead** uses Little's law: concurrent calls = call rate × latency. A dependency called 200 times a second at 50 ms needs about 10 calls in flight. A pool of 20 gives headroom; if latency jumps to 2 s, the same rate would need 400, so the pool of 20 fills, further calls are rejected immediately, and only that dependency's features suffer.
+
+**Why shedding beats queueing, measured.** One server that takes 10 ms per request (100 a second) is offered 150 a second for a minute; clients give up after one second:
+
+```rust title=shed.rs
+use std::collections::VecDeque;
+
+/// One server that takes 10 ms per request (100 a second), offered 150 requests a second for 60 seconds.
+/// Each client gives up after 1,000 ms; an answer after that is wasted work.
+/// `max_queue` bounds the waiting line (None: unbounded); `skip_expired` drops requests whose client will have given up before they could be answered.
+fn run(max_queue: Option<usize>, skip_expired: bool) -> (u64, u64, u64, u64) {
+    let (service_ms, timeout_ms, seconds) = (10, 1_000, 60);
+    let mut queue: VecDeque<u64> = VecDeque::new(); // arrival time of each waiting request
+    let (mut busy_until, mut good, mut late, mut shed) = (0u64, 0u64, 0u64, 0u64);
+    let mut last_good_wait = 0;
+    for now in 0..seconds * 1_000 {
+        // three arrivals every 20 ms = 150 a second
+        if now % 20 < 3 {
+            if max_queue.is_some_and(|m| queue.len() >= m) {
+                shed += 1; // rejected at once with a 503: cheap, and the client can go elsewhere
+            } else {
+                queue.push_back(now);
+            }
+        }
+        while busy_until <= now {
+            let Some(arrived) = queue.pop_front() else { break };
+            if skip_expired && now + service_ms - arrived > timeout_ms {
+                late += 1; // the client will be gone before we finish: do not spend 10 ms on it
+                continue;
+            }
+            busy_until = now + service_ms;
+            if busy_until - arrived <= timeout_ms {
+                good += 1;
+                last_good_wait = busy_until - arrived;
+            } else {
+                late += 1; // finished, but after the client gave up
+            }
+        }
+    }
+    (good / seconds, late, shed, last_good_wait)
+}
+
+fn main() {
+    for (label, max_queue, skip) in [("no limit", None, false), ("bounded queue of 50", Some(50), false), ("no limit, skip expired", None, true)] {
+        let (goodput, late, shed, wait) = run(max_queue, skip);
+        println!("{label:<22} goodput {goodput:>3}/s  late {late:>5}  shed {shed:>5}  last good answer took {wait} ms");
+    }
+}
+```
+
+```text title=output
+no limit               goodput   4/s  late  5703  shed     0  last good answer took 1000 ms
+bounded queue of 50    goodput 100/s  late     0  shed  2951  last good answer took 500 ms
+no limit, skip expired goodput 100/s  late  2852  shed     0  last good answer took 999 ms
+```
+
+With no limit, the queue grows by 50 a second; after a few seconds every request waits longer than its client will, so the server works flat out answering people who have gone: **4 useful answers a second** averaged over the minute, from a server that can do 100. A queue capped at 50 (half a second of work) rejects the excess at once and serves 100 a second, each within half a second. Skipping requests that can no longer finish in time also restores 100 a second, but every answer arrives just inside the deadline. Capacity is the same in all three; only the queueing policy changed. The Builders' Library article on load shedding makes the same distinction between throughput and **goodput**, the work that arrives in time to matter.
+"""
+
+[[sections]]
+heading = "Putting it together"
+body = """
+One call from checkout to a payment provider, with every piece in place:
+
+1. **Deadline**: checkout has 1.5 s left of the user's budget; the payment call gets at most 1.2 s, the rest is kept for writing the order.
+2. **Bulkhead**: payment calls use their own pool of 30 connections; a slow provider cannot take checkout's other connections.
+3. **Breaker**: if more than half of the last 50 calls failed or timed out, fail fast for 10 seconds.
+4. **Retry**: one retry on a timeout or 503, after a jittered 100 to 300 ms, with the **same idempotency key**, only if the deadline still allows it.
+5. **Fallback**: when the breaker is open or the retry fails, put the payment on a queue, mark the order "payment pending", and tell the user; a worker charges it when the provider recovers.
+6. **Shedding**: in front of checkout, a bounded queue rejects excess requests with 503 and `Retry-After` rather than letting everyone wait.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Give each external call a **timeout from its latency percentiles**, and pass a **deadline** down.
+2. Say which calls are **retried**, how many times, with **backoff and jitter**, at which layer, and how a non-idempotent call is made safe (**idempotency key**).
+3. Put a **circuit breaker** on each dependency that can fail, say what counts as a failure, and give the **fallback**.
+4. Isolate dependencies with **bulkheads**, sized by rate × latency.
+5. Say what happens **under overload**: bounded queues, early rejection, what is shed first.
+
+> [!INTERVIEW]
+> "Every outbound call has a timeout from its p99.9 and inherits the request's deadline. We retry once, at the client library only, with full jitter, and payments carry an idempotency key. Each dependency has its own pool and breaker; when payments' breaker opens, orders go to 'payment pending' and a queue. Checkout sheds with 503 when its queue passes half a second of work."
 """
 
 [[checks]]
@@ -55,6 +341,140 @@ answer = "Closed: calls pass and failures are counted; too many failures in the 
 [[checks]]
 prompt = "Why is it dangerous to retry a POST /charge on timeout, and how do you make it safe?"
 answer = "The timeout does not tell you whether the charge happened; retrying may charge twice. Send an idempotency key with the request so the provider (or your service) recognises the retry and returns the first result instead of charging again."
+
+[[checks]]
+prompt = "A dependency's latency is 40 ms at p50, 300 ms at p99 and 900 ms at p99.9. How do you choose its timeout, and what goes wrong if you pick 100 ms or 30 seconds?"
+answer = "Decide how many false timeouts you accept (say 0.1%) and set the timeout near that percentile, here about 900 ms to 1 s, within the caller's remaining deadline. At 100 ms, a few percent of healthy calls time out and are retried, adding load and errors. At 30 seconds, a slow dependency holds the caller's threads and connections for 30 seconds each, which is how pools fill and failures cascade."
+
+[[checks]]
+prompt = "The mobile app, the API gateway and the orders service each make up to three attempts on failure. The inventory service goes down. What load does it see, and what should change?"
+answer = "Up to 3 × 3 × 3 = 27 calls for each user request, at exactly the moment it is failing, which can keep it down. Retry at one layer only (usually the one closest to the failing call), cap attempts, use backoff with jitter and a retry budget, and let a circuit breaker stop calls while it is unhealthy."
+
+[[checks]]
+prompt = "A server that can handle 100 requests a second gets 150 a second, and clients time out after one second. With an unbounded queue, almost no request succeeds. Why, and what do you change?"
+answer = "The queue grows by 50 a second, so within seconds every request waits longer than its client's timeout; the server stays busy answering requests nobody is waiting for, and goodput collapses (4 a second in the simulation above). Bound the queue to well under the timeout and reject the excess immediately (503 or 429), shed low-priority work first, and skip requests that can no longer finish before their deadline."
+
+[[checks]]
+prompt = "Should 400 Bad Request responses count as failures for a circuit breaker? Why?"
+answer = "No. A 4xx means the caller sent a bad request, not that the dependency is unhealthy; counting them lets one client's bad input open the breaker for everyone. Count timeouts, connection errors, 5xx and calls slower than the agreed threshold."
+
+[[checks]]
+prompt = "Recommendations are called 200 times a second with 50 ms latency. How big should their connection pool be, and what does the pool protect you from?"
+answer = "By Little's law about 200 × 0.05 = 10 calls are in flight, so a pool of around 20 gives headroom. If recommendations slow to 2 seconds, the pool fills and further calls are rejected at once (and the page shows a fallback), instead of every request thread waiting on recommendations and checkout running out of threads: a bulkhead."
+
+[[terms]]
+term = "Cascading failure"
+means = "One slow or failing service makes its callers fail, and the failure climbs the call graph."
+section = "Why failures spread"
+
+[[terms]]
+term = "Deadline"
+means = "The point in time by which a whole request must finish, passed down to every call it makes."
+section = "Timeouts first"
+
+[[terms]]
+term = "Exponential backoff"
+means = "Waiting twice as long after each failed attempt, up to a cap."
+section = "Retries without a storm"
+
+[[terms]]
+term = "Jitter"
+means = "Randomising each retry's wait so clients that failed together do not retry together."
+section = "Retries without a storm"
+
+[[terms]]
+term = "Retry budget"
+means = "A cap on retries as a share of requests, so retries cannot multiply load during an outage."
+section = "Retries without a storm"
+
+[[terms]]
+term = "Idempotency key"
+means = "A client-chosen key sent with an operation and its retries, so the server acts only once."
+section = "Idempotency keys"
+
+[[terms]]
+term = "Circuit breaker"
+means = "A wrapper that stops calling a failing dependency for a while, then lets trial calls test it."
+section = "Circuit breakers"
+
+[[terms]]
+term = "Fallback"
+means = "What the caller does instead when the call fails or the breaker is open."
+section = "Circuit breakers"
+
+[[terms]]
+term = "Bulkhead"
+means = "A separate pool per dependency so one slow dependency cannot exhaust shared resources."
+section = "Bulkheads, shedding and degradation"
+
+[[terms]]
+term = "Load shedding"
+means = "Rejecting excess work early and cheaply so the rest is served on time."
+section = "Bulkheads, shedding and degradation"
+
+[[terms]]
+term = "Goodput"
+means = "The work completed in time to be useful, as opposed to all work completed."
+section = "Bulkheads, shedding and degradation"
+
+[[sources]]
+title = "Timeouts, retries, and backoff with jitter (Amazon Builders' Library)"
+kind = "article"
+url = "https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/"
+note = "choosing timeouts from latency percentiles, retrying at one layer, backoff and jitter"
+
+[[sources]]
+title = "Exponential Backoff And Jitter (AWS Architecture Blog)"
+kind = "article"
+url = "https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/"
+note = "Marc Brooker's simulations of full, equal and decorrelated jitter"
+
+[[sources]]
+title = "Using load shedding to avoid overload (Amazon Builders' Library)"
+kind = "article"
+url = "https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/"
+note = "throughput against goodput, prioritising and dropping work that cannot finish in time"
+
+[[sources]]
+title = "Site Reliability Engineering: Addressing Cascading Failures"
+kind = "book"
+url = "https://sre.google/sre-book/addressing-cascading-failures/"
+note = "Google's chapter on overload, retries and deadlines"
+
+[[sources]]
+title = "Hystrix: How it Works and Configuration"
+kind = "docs"
+url = "https://github.com/Netflix/Hystrix/wiki/Configuration"
+note = "breaker defaults; the 30-dependencies arithmetic is on the wiki's home page"
+
+[[sources]]
+title = "Hystrix README: maintenance mode"
+kind = "docs"
+url = "https://github.com/Netflix/Hystrix#hystrix-status"
+note = "the final release and the move to adaptive concurrency limits and resilience4j"
+
+[[sources]]
+title = "resilience4j: CircuitBreaker"
+kind = "docs"
+url = "https://resilience4j.readme.io/docs/circuitbreaker"
+note = "count- and time-based windows, slow-call thresholds, half-open trials"
+
+[[sources]]
+title = "gRPC: deadlines"
+kind = "docs"
+url = "https://grpc.io/docs/guides/deadlines/"
+note = "no default deadline, server-side cancellation, deadline propagation"
+
+[[sources]]
+title = "The Idempotency-Key HTTP Header Field (IETF draft)"
+kind = "standard"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"
+note = "a work in progress: 409 for a concurrent retry, 422 for a reused key with a different body"
+
+[[figures]]
+name = "retry-jitter"
+after = "Retries without a storm"
+caption = "Twenty clients fail together. Without jitter their retries return in synchronised waves that overload the server each time; with full jitter they spread out and fit."
 
 [[figures]]
 name = "circuit-breaker"

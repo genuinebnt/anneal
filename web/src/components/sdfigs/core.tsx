@@ -1,5 +1,32 @@
 import { Arrow, Box, type Fig } from "./parts";
 
+/** Twenty clients fail at once and retry against a server that answers four calls per time slot (the rest fail and
+ *  retry): calls arriving in each slot, waiting 2, 4, 8… slots each time, or a random 1 to that many (full jitter). */
+function retryWaves(jitter: boolean): number[] {
+    let seed = 11;
+    const rnd = (n: number) => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return Math.floor((seed / 2147483648) * n);
+    };
+    const loads: number[] = Array(24).fill(0);
+    const clients = Array.from({ length: 20 }, () => ({ at: 0, tries: 0 }));
+    for (let slot = 0; slot < loads.length; slot++) {
+        const here = clients.filter((c) => c.at === slot);
+        loads[slot] = here.length;
+        here.forEach((c, i) => {
+            if (i < 4) {
+                c.at = -1; // served
+                return;
+            }
+            const w = 2 ** (c.tries + 1);
+            c.tries += 1;
+            c.at = slot + (jitter ? 1 + rnd(w) : w);
+        });
+    }
+    return loads;
+}
+const WAVES = { plain: retryWaves(false), jitter: retryWaves(true) };
+
 /** One step of a two-session race: what each session runs and shows, the row's state, and the narration. */
 type RaceStep = { a: [string, string, string]; b: [string, string, string]; row: [string, string, string]; say: string; on: "a" | "b" | "ab" | "" };
 
@@ -169,6 +196,31 @@ export const FIGS_CORE: Record<string, Fig> = {
                     ))}
                     <path className="sf-arrow on" d={`M${x(t)} 46 V190`} />
                     <text className="sf-lab" x={14} y={212}>{say}</text>
+                </>
+            );
+        },
+    },
+    "retry-jitter": {
+        steps: 12,
+        ms: 800,
+        draw: (t) => {
+            const upto = t * 2 + 1; // slots shown so far
+            const lanes = [
+                { label: "no jitter", loads: WAVES.plain, base: 104 },
+                { label: "full jitter", loads: WAVES.jitter, base: 186 },
+            ];
+            return (
+                <>
+                    <text className="sf-lab" x={14} y={20}>calls arriving per time slot · dashed: the 4 the server can take</text>
+                    {lanes.map((l) => (
+                        <g key={l.label}>
+                            <text className="sf-lab" x={14} y={l.base - 24}>exponential</text>
+                            <text className="sf-lab" x={14} y={l.base - 10}>{l.label}</text>
+                            <path className="sf-arrow" d={`M150 ${l.base - 12} H620`} strokeDasharray="3 4" />
+                            {l.loads.slice(0, upto).map((n, s) => (n > 0 ? <rect key={s} className={`sf-bar${n > 4 ? " hot" : ""}`} x={152 + s * 19.5} y={l.base - n * 3} width={14} height={n * 3} rx={3} /> : null))}
+                        </g>
+                    ))}
+                    <text className="sf-lab" x={14} y={212}>{t < 4 ? "20 clients fail together; without jitter they come back together" : t < 8 ? "each synchronised wave overloads the server again" : "with jitter the same retries spread out and fit under the limit"}</text>
                 </>
             );
         },
