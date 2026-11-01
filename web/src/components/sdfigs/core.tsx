@@ -129,4 +129,48 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    "realtime-ways": {
+        steps: 10,
+        ms: 1000,
+        draw: (t) => {
+            const x = (u: number) => 150 + u * 46; // time 0 to 10 across the lane
+            const rows: { name: string; y: number; got: number[]; polls?: number[]; held?: [number, number][]; open?: boolean; up?: number }[] = [
+                { name: "polling", y: 74, got: [4, 8], polls: [0, 4, 8] },
+                { name: "long polling", y: 108, got: [3, 7], held: [[0, 3], [3.2, 7], [7.2, 10]] },
+                { name: "SSE", y: 142, got: [3, 7], open: true },
+                { name: "WebSocket", y: 176, got: [3, 7], open: true, up: 5 },
+            ];
+            const say = [
+                "every client connects, or asks, at time 0",
+                "polling asks on a timer; the others wait on an open request or connection",
+                "nothing has happened yet: polling's first answer came back empty",
+                "an event: long polling, SSE and the WebSocket deliver it at once",
+                "polling learns of it only at its next request",
+                "a WebSocket client can also send on the same connection",
+                "long polling asked again straight after its answer",
+                "a second event: pushed at once wherever a connection is open",
+                "polling catches up only at its next request, up to an interval late",
+                "push costs an open connection per client; polling costs requests, mostly empty",
+            ][t]!;
+            return (
+                <>
+                    <text className="sf-lab" x={14} y={36}>events</text>
+                    {[3, 7].map((e) => <circle key={e} className={t >= e ? "sf-node" : "sf-ring"} cx={x(e)} cy={32} r={7} />)}
+                    {rows.map((r) => (
+                        <g key={r.name}>
+                            <text className="sf-lab" x={14} y={r.y + 4}>{r.name}</text>
+                            <path className="sf-arrow" d={`M${x(0)} ${r.y} H${x(10)}`} strokeDasharray="2 5" />
+                            {r.open && <rect className="sf-bar" x={x(0)} y={r.y - 5} width={x(Math.min(t, 9.6)) - x(0)} height={10} rx={5} />}
+                            {r.held?.filter(([a]) => t >= a).map(([a, b]) => <rect key={a} className="sf-bar" x={x(a)} y={r.y - 5} width={x(Math.min(t, b)) - x(a)} height={10} rx={5} />)}
+                            {r.polls?.filter((p) => t >= p).map((p) => <rect key={p} className="sf-cell full" x={x(p) - 5} y={r.y - 9} width={10} height={18} rx={3} />)}
+                            {r.got.filter((g) => t >= g).map((g) => <circle key={g} className="sf-key" cx={x(g)} cy={r.y} r={6} />)}
+                            {r.up !== undefined && t >= r.up && <circle className="sf-node" cx={x(r.up)} cy={r.y} r={6} />}
+                        </g>
+                    ))}
+                    <path className="sf-arrow on" d={`M${x(t)} 46 V190`} />
+                    <text className="sf-lab" x={14} y={212}>{say}</text>
+                </>
+            );
+        },
+    },
 };
