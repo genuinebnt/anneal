@@ -41,4 +41,50 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    "read-layers": {
+        steps: 8,
+        ms: 1300,
+        draw: (t) => {
+            // steps 0-4 follow a warm wave of reads layer by layer; 5-7 flush the cache
+            const cold = t >= 5;
+            const reached = cold ? 4 : t;
+            const layers: { name: string; load: number; sub: string; tone: string }[] = [
+                { name: "users", load: 100000, sub: "100,000 views/s", tone: "acc" },
+                { name: "CDN", load: 100000, sub: "answers 80,000", tone: "grn" },
+                { name: "Redis", load: 20000, sub: cold ? "flushed" : "answers 19,000", tone: cold ? "bad" : "grn" },
+                { name: "replica", load: cold && t >= 6 ? 20000 : 1000, sub: cold && t >= 6 ? "20,000/s" : "serves 1,000", tone: cold && t >= 6 ? "bad" : "grn" },
+                { name: "primary", load: 50, sub: "50 edits/s", tone: "warn" },
+            ];
+            const say = [
+                "100,000 profile views a second leave the users",
+                "the CDN answers 80% of them at the edge",
+                "Redis answers 95% of what is left",
+                "the replica sees 1,000 reads a second",
+                "edits go to the primary, which streams them to the replica",
+                "the cache is flushed: every miss goes straight through",
+                "the replica now gets twenty times its warm load",
+                "size for this, or warm the cache while the CDN serves stale pages",
+            ][t]!;
+            return (
+                <>
+                    {layers.map((l, i) => {
+                        const on = i <= reached || i === 4;
+                        const h = 4 + 96 * Math.sqrt(l.load / 100000);
+                        return (
+                            <g key={l.name}>
+                                <Box x={14 + i * 126} y={40} w={108} h={44} label={l.name} tone={on ? l.tone : "line"} sub={on ? l.sub : ""} />
+                                {on && <rect className={`sf-bar${l.tone === "bad" ? " hot" : ""}`} x={48 + i * 126} y={190 - h} width={40} height={h} rx={5} />}
+                            </g>
+                        );
+                    })}
+                    <Arrow d="M122 62 H138" on={reached >= 1} />
+                    <Arrow d="M248 62 H264" on={reached >= 2} />
+                    <Arrow d="M374 62 H390" on={reached >= 3} />
+                    <Arrow d="M518 62 H502" on={t === 4} dash />
+                    <text className="sf-lab" x={14} y={22}>reads arriving at each layer (bar: square-root scale)</text>
+                    <text className="sf-lab" x={14} y={212}>{say}</text>
+                </>
+            );
+        },
+    },
 };
