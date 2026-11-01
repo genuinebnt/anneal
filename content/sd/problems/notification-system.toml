@@ -16,11 +16,34 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
 reference = """
-**Functional**: send to a user over push (APNs, FCM), SMS and email; templates with variables; user preferences (opt-outs per channel and category, quiet hours); scheduled sends and campaigns; delivery status.
+**Functional**:
 
-**Non-functional**: transactional messages delivered in seconds; at-least-once with **no visible duplicates**; campaigns must not starve transactional traffic; respect provider rate limits; auditable.
+1. Other services send a notification to **a user** (or a **segment** for campaigns) over **push** (APNs for Apple devices, FCM for Android), **SMS** and **email**.
+2. **Templates** per channel and locale, filled with variables.
+3. **Preferences**: opt-outs per category and channel, quiet hours in the user's time zone; legally required ones (an unsubscribe link in marketing email) always honoured.
+4. **Scheduled** sends and **campaigns**; delivery **status** queryable.
 
-**Estimate**: 10M push, 1M SMS, 5M email a day ≈ 200 a second average; campaigns spike to 50,000 a second.
+Out of scope unless asked: the in-app inbox, A/B testing of copy, the campaign editor UI.
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Transactional latency | a password reset or one-time code reaches the provider in under ~5 s p99 |
+| Isolation | a campaign of millions never delays transactional messages |
+| Delivery | **at-least-once**, with deduplication so the user sees each message once; exactly-once across an external provider is not achievable, so say so |
+| Provider limits | never exceed a provider's send rate; survive a provider outage |
+| Audit | every attempt recorded (support needs "did the user get the code?") |
+
+**Estimate** (assumptions labelled):
+
+```text
+daily volume     10M push + 1M SMS + 5M email = 16M/day ≈ 185/s on average
+campaign spike   20M pushes released at 50,000/s → 400 s to drain
+delivery log     16M/day × ~300 B ≈ 4.8 GB/day; 90 days ≈ 430 GB
+```
+
+The average is tiny; the design is shaped by the **spike** (50,000 a second is 270 times the average, for minutes) and by **cost asymmetry** (a duplicate push is an annoyance, a duplicate SMS costs money and a duplicate one-time code confuses).
 """
 [[steps.points]]
 id = "req-priority"
@@ -39,7 +62,17 @@ level = "senior"
 name = "Core entities"
 minutes = 3
 prompt = "Name the things the system stores."
-reference = "`Notification` (id, user, category, template, data, priority, idempotency key), `Template` (per channel and locale), `Preference` (user × category × channel), `Device` (push tokens), `Delivery` (notification × channel: status, provider id, attempts)."
+reference = """
+| Entity | Fields | Notes |
+|---|---|---|
+| `Notification` | id, user_id or segment, category (`security`, `order`, `marketing`), template_id, data, priority, send_at, **idempotency_key**, created_by service | the request, written once |
+| `Template` | id, channel, locale, subject, body with variables, version | rendered per channel |
+| `Preference` | user × category × channel → on/off; quiet hours and time zone | read on every send: cached |
+| `Device` | user, platform, push token, app version, last seen | a user has several; tokens go stale |
+| `Delivery` | notification × channel × device: status (`queued`, `sending`, `sent`, `delivered`, `failed`, `suppressed`), provider message id, attempts, last error | **one notification fans out to several deliveries** |
+
+`Delivery` is separate from `Notification` because one request becomes several sends (push to two phones and an email), each with its own provider, retries and outcome. The state machine on `Delivery` is what deduplication and support both read.
+"""
 [[steps.points]]
 id = "ent-delivery"
 text = "Delivery attempts tracked per channel, separate from the notification"
@@ -50,7 +83,28 @@ name = "API"
 minutes = 4
 prompt = "How do other services call it?"
 reference = """
-`POST /notifications { user_id | segment, category, template_id, data, channels?, send_at?, idempotency_key }` → `202 { id }`. `GET /notifications/{id}` for status. Providers call back webhooks with delivery receipts.
+```http
+POST /v1/notifications
+Idempotency-Key: order-81723-shipped
+Content-Type: application/json
+
+{ "user_id": "u_42", "category": "order", "template_id": "order_shipped",
+  "data": { "order": "81723", "eta": "Tuesday" }, "priority": "high" }
+
+202 Accepted
+{ "id": "ntf_9f2c", "status": "queued" }
+```
+
+```http
+GET /v1/notifications/ntf_9f2c
+200 { "id": "ntf_9f2c", "deliveries": [ { "channel": "push", "device": "d_1", "status": "delivered" },
+                                        { "channel": "email", "status": "sent" } ] }
+```
+
+- **Idempotency key**: the caller's own retry (their request timed out) must not send twice. The API stores the key with the notification id; a repeat returns the same `202 { id }`. Key it per calling service, keep it for a day or two.
+- **202, not 200**: the request is accepted and queued; delivery happens later and can take minutes (quiet hours, a campaign's throttle). The status endpoint, or an optional callback, reports the outcome.
+- **Campaigns** use a separate endpoint (`POST /v1/campaigns { segment_id, template_id, send_window }`) so a segment of millions is never expanded inside a request.
+- **Provider webhooks** come in the other direction: delivery receipts and bounces update `Delivery`.
 """
 [[steps.points]]
 id = "api-idem"
@@ -66,12 +120,36 @@ name = "High-level design"
 minutes = 13
 prompt = "Draw the path from a request to a phone."
 reference = """
-1. **API** validates, dedups on the idempotency key, writes the notification, and publishes to a queue.
-2. **Router / fan-out**: loads preferences, quiet hours and devices (cached), renders the template per channel, drops opted-out channels, and enqueues one job per channel.
-3. **Separate queues per channel and priority** (`push.high`, `push.bulk`, `sms.high`…), so a campaign never sits in front of a password reset.
-4. **Channel workers** call providers (APNs, FCM, Twilio, SES) with per-provider rate limiting, retries with backoff and jitter, and circuit breakers; failover to a second SMS provider.
-5. **Delivery log** records each attempt; provider webhooks update status. Invalid push tokens are removed.
-6. **Campaigns**: a scheduler expands a segment in batches into the bulk queues at a controlled rate.
+**The diagram**:
+
+```text
+service ─► API ─► notifications DB
+            │
+            ▼
+         intake queue ─► router ─► push.high  ─► push workers ─► APNs / FCM
+                           │      push.bulk  ─┘
+                   prefs, devices sms.high   ─► sms workers  ─► SMS providers
+                   (cached)       sms.bulk   ─┘
+                                  email.*    ─► email workers ─► email provider
+                                                    │
+                                              delivery log ◄── provider webhooks
+```
+
+1. **API**: validates, checks the idempotency key, writes the `Notification`, publishes to an intake queue, returns 202.
+2. **Router**: loads the user's preferences, quiet hours and devices (from a cache in front of the database), drops channels the user turned off (recording `suppressed`, so support can see why), delays those inside quiet hours to the next allowed time in the user's zone, renders the template per channel and locale, and enqueues **one job per channel and device**.
+3. **Queues per channel and priority**: `push.high`, `push.bulk`, `sms.high`, ... Transactional and bulk never share a queue, and high-priority queues get their own workers (or strict priority), so 20M campaign jobs cannot sit in front of a password reset.
+4. **Channel workers** call the providers: per-provider **rate limits** (a token bucket at the provider's allowed rate), **retries** with exponential backoff and jitter for transient errors, a **circuit breaker** per provider, and failover to a second SMS provider.
+5. **Delivery log**: every attempt; provider webhooks update the final status. Permanent errors clean up data: Apple's 410 `Unregistered` means the token is no longer valid for the app, so the worker deletes that `Device`.
+6. **Campaign scheduler**: expands a segment page by page (10,000 users at a time) into the bulk queues at a controlled rate.
+
+:::steps A password reset during a campaign
+- auth service | POST /notifications (security, high) | 202 in a few ms; the job enters the intake queue.
+- router | prefs: security category cannot be disabled | Renders the push and email; enqueues to push.high and email.high.
+- push.high worker | APNs request, apns-priority 10 | Its queue is short: the 20M campaign jobs are in push.bulk.
+- APNs | 200 | The worker records sent; the user has the code in seconds.
+:::
+
+**Platform details worth naming**: push providers let you **collapse** notifications (APNs `apns-collapse-id`, FCM `collapse_key`): a newer message replaces an older undelivered one with the same key, which suits "your order status changed" updates. FCM keeps undeliverable messages for up to 28 days by default; a one-time code should set a short TTL instead, since a code that arrives tomorrow is useless.
 """
 [[steps.points]]
 id = "hld-queues"
@@ -85,16 +163,36 @@ level = "mid"
 id = "hld-workers"
 text = "Workers with provider rate limits, retries and circuit breakers"
 level = "senior"
+[[steps.points]]
+id = "hld-tokens"
+text = "Invalid device tokens and bounces fed back to clean up devices and addresses"
+level = "mid"
 
 [[steps]]
 name = "Deep dives"
 minutes = 10
 prompt = "Duplicates, provider failure, and campaign scale."
 reference = """
-- **Duplicates**: a worker may send and crash before recording it. Pass a deterministic id to the provider where supported, record "sending" before the call and "sent" after, and dedup on (notification, channel) within a window. A rare duplicate push is tolerated; a duplicate SMS charge is not.
-- **Provider outage**: breaker opens, messages wait in the queue (or go to the backup provider); priority queues drain first when it recovers.
-- **Campaign to 20M users**: expand the segment in pages, throttle to provider limits and the users' local time; precompute renders; a kill switch to stop a bad campaign.
-- **Rate per user**: cap notifications per user per hour to avoid spamming; collapse similar ones ("5 new likes").
+**1. Duplicates.** Queues deliver at least once, so a worker can get a job twice; and a worker can call the provider, crash before recording it, and have the job redelivered.
+
+:::steps The duplicate the state machine prevents
+- worker A | SET NX sending:{delivery_id} EX 600 | Claims the delivery; only one worker can hold it.
+- worker A | provider call → 200 | The message is out.
+- worker A | crashes before writing sent | The queue redelivers the job.
+- worker B | SET NX fails; reads Delivery | It sees sending with a recent claim, and checks the provider's status (by our reference) instead of resending.
+:::
+
+- Record `sending` before the call and `sent` after it; dedup on `(notification, channel, device)` in Redis for a day (16M keys × ~100 B ≈ 1.6 GB).
+- Pass our delivery id to the provider as its client reference where the API supports it, so status can be looked up after a timeout.
+- Decide by cost: a rare duplicate push is tolerated (retry on timeout); an SMS is not retried blindly after a timeout (check status or wait for the webhook first).
+
+**2. Provider outage.** The circuit breaker opens after a burst of errors, and workers stop calling: jobs stay in their queues (that is what the queues are for). Transactional SMS fails over to the backup provider; bulk waits. When the provider recovers, the breaker half-opens, and **high-priority queues drain first**. Messages with a deadline (a one-time code valid for 10 minutes) are dropped once expired rather than sent late.
+
+**3. Campaigns to 20M users.** Expand the segment in pages, never all at once. Release at a rate under the provider's limit and spread over the send window: 20M over an hour is 20,000,000 ÷ 3,600 ≈ 5,600 a second, well under the 50,000 peak. Send in each user's **local** morning (bucket the segment by time zone). Render once per template and locale, not per user, where the text does not vary. Keep a **kill switch** that stops the expansion and drains the campaign's queued jobs, for the campaign that goes out with a wrong link.
+
+**4. Per-user volume.** Many teams sending many notifications become spam even if each one is reasonable. Cap notifications per user per category per day, and collapse similar ones ("5 people liked your post"). LinkedIn describes routing almost all notifications through one gateway (its Air Traffic Controller) that drops duplicates, caps volume and decides per member what is worth sending.
+
+**5. Email rules.** Bulk email to Gmail users has requirements: Google's sender guidelines ask bulk senders for authenticated mail (SPF, DKIM, DMARC), one-click unsubscribe in marketing mail, and a low reported spam rate. Handle bounces and complaints from the provider's webhooks by suppressing those addresses.
 """
 [[steps.points]]
 id = "dd-dupes"
@@ -108,6 +206,10 @@ level = "senior"
 id = "dd-campaign"
 text = "Campaign expansion throttled, local-time aware, with a kill switch"
 level = "staff"
+[[steps.points]]
+id = "dd-cap"
+text = "Per-user caps and collapsing so many senders do not add up to spam"
+level = "senior"
 
 [[probes]]
 question = "A marketing campaign enqueues 20 million pushes at 9:00, and a user's password reset arrives at 9:01. How long does the reset wait in your design?"
@@ -120,3 +222,31 @@ answer = "It cannot know whether the SMS was sent. Retry with the same idempoten
 [[probes]]
 question = "Where do you check quiet hours and opt-outs, and why there?"
 answer = "In the router before enqueueing per channel, using cached preferences, so no work is done for channels the user disabled; quiet hours delay the job (schedule it for the morning in the user's time zone) rather than drop it, for categories that allow delay."
+
+[[probes]]
+question = "A one-time login code is stuck behind a provider outage for 20 minutes. Should it still be sent when the provider recovers?"
+answer = "No: the code expired after a few minutes, so sending it only confuses the user. Give time-bound messages a deadline (and a short push TTL); workers drop expired jobs and record them as expired, and the user simply asks for a new code."
+
+[[sources]]
+title = "Firebase Cloud Messaging: set the lifespan of a message"
+kind = "docs"
+url = "https://firebase.google.com/docs/cloud-messaging/customize-messages/setting-message-lifespan"
+note = "TTL up to 28 days by default; collapse keys replace pending messages"
+
+[[sources]]
+title = "Apple Developer Forums: what to do when APNs returns 410 Unregistered"
+kind = "article"
+url = "https://developer.apple.com/forums/thread/806522"
+note = "an Apple engineer: a final error, remove the token"
+
+[[sources]]
+title = "LinkedIn: Air Traffic Controller, member-first notifications"
+kind = "article"
+url = "https://engineering.linkedin.com/blog/2018/03/air-traffic-controller--member-first-notifications-at-linkedin"
+note = "one gateway that dedups, caps and chooses per member"
+
+[[sources]]
+title = "Google: Email sender guidelines"
+kind = "docs"
+url = "https://support.google.com/mail/answer/81126"
+note = "authentication, one-click unsubscribe and spam rate for bulk senders"
