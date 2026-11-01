@@ -16,11 +16,36 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones."
 reference = """
-**Functional**: create and edit documents; many concurrent editors; see others' cursors; version history.
+**Functional**:
 
-**Non-functional**: edits appear for others within ~100-300 ms; all editors **converge** to the same text; no edit lost; a document opens fast even after years of edits.
+1. Create, open and edit rich-text documents.
+2. **Many people edit at once** and see each other's changes and **cursors** live.
+3. **Version history**: see and restore earlier versions.
+4. Share with view, comment or edit permission.
 
-**Shape**: up to ~100 concurrent editors per document; millions of documents, most idle.
+Out of scope unless asked: comments and suggestions (they are anchored ranges, the same machinery), spreadsheets, offline-first mobile.
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Convergence | **every editor ends with the same document**, whatever order edits arrive in |
+| Intention | an edit means what its author meant: text typed at "after the word *cat*" stays after *cat* even if someone inserted text earlier |
+| Latency | your own typing is instant (applied locally first); others' edits appear within ~100-300 ms |
+| Durability | an acknowledged edit is never lost |
+| Open time | a document opens in about a second, even after years and millions of edits |
+
+**Shape** (assumptions labelled):
+
+```text
+documents   ~1B stored, most idle; ~5M open at peak
+editors     up to ~100 concurrent per document; ~3 on average → ~15M connections
+ops         ~0.2 ops/s per connected editor (keystrokes batched) → ~3M ops/s
+op log      3M/s × ~100 B ≈ 300 MB/s ≈ 26 TB/day before compaction
+in memory   5M open documents × ~100 KB ≈ 500 GB across the document servers
+```
+
+The shape says: the problem is not total volume but **ordering concurrent edits within one document**, millions of times over, independently. Each document is a small, hot, self-contained world.
 """
 [[steps.points]]
 id = "req-converge"
@@ -35,7 +60,17 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Document` (metadata, current snapshot), `Operation` (edit with a revision number), `Session` (who is editing, cursors), `Version` snapshots."
+reference = """
+| Entity | Fields | Notes |
+|---|---|---|
+| `Document` | id, owner, title, ACL, latest revision, latest snapshot pointer | metadata |
+| `Operation` | doc_id, **revision** (assigned by the server, 1, 2, 3...), author, client_op_id, base_revision, the op (insert "X" at 41, delete 3 at 17, set bold on 5..9) | the **op log**: append-only, the source of truth |
+| `Snapshot` | doc_id, revision, the full document at that revision | written every N ops; makes opening fast |
+| `Session` | user, doc, connection, cursor and selection | in memory only; never stored |
+| `Version` | doc_id, revision, name, created_at | a label on a revision, for history |
+
+The document **is** its op log; the text anyone sees is a replay of it, and a snapshot is a cached replay. History, undo and "who wrote this" all come from the log.
+"""
 [[steps.points]]
 id = "ent-oplog"
 text = "An operation log with revisions, plus snapshots"
@@ -46,26 +81,82 @@ name = "API"
 minutes = 5
 prompt = "Opening a document and exchanging edits."
 reference = """
+```http
+GET /v1/docs/d_8     -> { "snapshot": {...}, "revision": 18204, "ops_after": [ ... ] }
 ```
-GET /docs/{id} -> {snapshot, revision}
-WebSocket /docs/{id}:  → op {base_revision, op}   ← ack {revision}   ← op {revision, op, author}
-                       → cursor {pos}              ← cursor {user, pos}
+
+Then one **WebSocket per open document** (the server pushes others' edits as they happen):
+
+```text
+→ { "op": {"ins": "X", "at": 41}, "base": 18204, "client_op_id": "u3-551" }
+← { "ack": "u3-551", "revision": 18206 }
+← { "op": {"del": 2, "at": 10}, "revision": 18205, "author": "u7" }
+→ { "cursor": { "at": 42 } }
+← { "cursor": { "user": "u7", "at": 11 } }
 ```
+
+- Every op carries the **revision it was made against** (`base`): the server needs it to know which concurrent ops it must be transformed past.
+- `client_op_id` makes a resend after a dropped connection idempotent.
+- A client has **at most one op in flight** and buffers the rest until the ack, a common protocol design that keeps the transforms between one client and the server simple.
+- Cursors are separate, lossy, throttled messages (a few per second): losing one does not matter.
 """
 [[steps.points]]
 id = "api-ws"
 text = "A WebSocket per open document carrying operations with revisions and cursors"
 level = "mid"
+[[steps.points]]
+id = "api-base"
+text = "Every op names the revision it was based on, so the server knows what to transform it against"
+level = "senior"
 
 [[steps]]
 name = "High-level design"
 minutes = 15
 prompt = "Where edits meet, how they merge, how they are stored."
 reference = """
-- **Document servers**: all sessions of one document connect to the same server (route by document id: consistent hashing), which holds the document in memory.
-- **OT on the server**: an op arrives with the revision it was based on; the server transforms it against ops applied since, applies it, gives it the next revision, appends it to the **op log**, and broadcasts. Clients transform their pending ops likewise.
-- **Storage**: op log in a database partitioned by document; **snapshots** every N ops so opening = latest snapshot + the ops after it.
-- **Cursors** are broadcast but not stored.
+**The diagram**:
+
+```text
+editors ═══ WebSocket ═══ gateway ─► document server owning d_8
+                                      (doc in memory: transform,
+                                       assign revision, broadcast)
+                                          │ append        │ every N ops
+                                          ▼               ▼
+                                      op log (by doc)   snapshots
+```
+
+**1. One owner per active document.** All sessions of a document connect (through gateways) to the **document server that owns it**, chosen by consistent hashing of the document id plus a lease, so ownership is exclusive. The owner holds the document in memory. One owner means one place that puts concurrent operations in a single order.
+
+**2. Operational transformation (OT) on the server.** An op arrives saying "insert *Y* at 1, based on revision r". If other ops were applied since r, the server **transforms** the new op past each of them, applies it, gives it revision r + k, appends it to the op log, acks the author and broadcasts it. Clients do the mirror image for their own pending op.
+
+:::steps Alice and Bob both insert at position 1 of "abc"
+- alice | ins "X" at 1, base r | The server applies it first: "aXbc", revision r+1.
+- bob | ins "Y" at 1, base r | Concurrent: it was made without seeing Alice's op.
+- server | transform Bob's op past Alice's | Same position: the tie is broken by user id, so Bob's moves to 2.
+- server | apply → "aXYbc", revision r+2 | Broadcast both ops.
+- alice and bob | each transforms the other's op past its own | Both screens show "aXYbc": converged.
+:::
+
+```python title=ot.py
+def transform(op, against):
+    # shift `op` so it applies after `against`, which the server applied first
+    kind, pos, text, user = op
+    akind, apos, atext, auser = against
+    if akind == "ins":
+        if apos < pos or (apos == pos and auser < user):  # tie broken by user id
+            pos += len(atext)
+    elif apos < pos:  # `against` deleted atext before our position
+        pos = max(apos, pos - len(atext))
+    return (kind, pos, text, user)
+```
+
+This is a toy (inserts against inserts and deletes only); real editors also transform deletes against deletes and formatting ranges, which is where OT gets hard. Google described using OT for the editor it launched in 2010.
+
+**3. Storage.** The op log in a database partitioned by document id, ordered by revision (append-only, so it is cheap to write). Every N ops (say 1,000) or every few minutes, the owner writes a **snapshot**. Opening = the latest snapshot plus at most N ops, not a replay of millions.
+
+**4. Cursors and presence** are broadcast by the owner and never stored.
+
+**Alternatives**: a **CRDT** (Yjs, Automerge): every character gets a unique id and a position defined relative to its neighbours, so replicas merge in any order without a central transform; no single owner is needed for correctness, and offline edits merge naturally, at the cost of extra metadata per character. **Figma** chose neither for its design files: a central server keeps the latest value per property of each object (last writer wins per property), which suits shapes, not running text.
 """
 [[steps.points]]
 id = "hld-owner"
@@ -79,16 +170,27 @@ level = "senior"
 id = "hld-snap"
 text = "Op log plus periodic snapshots for fast opening"
 level = "senior"
+[[steps.points]]
+id = "hld-alternatives"
+text = "OT, CRDT and per-property last-writer-wins compared for the kind of document"
+level = "staff"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "Failures, offline, and scale."
 reference = """
-- **Server dies**: the op log is durable; another server loads the snapshot plus ops and clients reconnect, resending unacknowledged ops (idempotent by client op id).
-- **Offline editing**: OT struggles; a CRDT (Yjs/Automerge) merges offline edits naturally.
-- **Hot document** (a whole company in one doc): one owner still orders ops; viewers get a read-only stream.
-- **History**: versions are snapshots at intervals; restoring is a new op.
+**1. The owner dies.** The op log is durable: an op is acked only after it is appended. Another server takes the document's lease, loads the latest snapshot plus the ops after it, and starts accepting connections. Clients reconnect, say "I have revision 18206", receive the ops they missed, and **resend their unacknowledged op** with the same `client_op_id`; the new owner recognises a duplicate and acks it without applying it twice. The lease (with a fencing token on log appends) stops a slow old owner from appending after the new one has started.
+
+**2. Offline editing.** A user edits on a plane for two hours, making thousands of ops against a revision that is now thousands behind. Server-side OT can transform them, but it is expensive and the result can surprise. A **CRDT** merges offline work naturally: each replica's edits carry their own ids and positions, and merging is a set union. This is the case where CRDTs clearly beat OT; Yjs, for one, is built for it (offline editing and network-agnostic sync).
+
+**3. The hot document.** A company all-hands doc with 2,000 people open. Editors still go through one owner (order needs one place), but **viewers** do not need to send anything: give them a read-only fan-out stream (the owner publishes to a topic; edge servers fan out), and cap live cursors to those near your viewport.
+
+**4. Scale overall.** Documents are independent, so the system scales by **adding owners**: 5M open documents spread over document servers by consistent hashing, each server owning thousands. Idle documents cost only storage. When a document closes, the owner writes a final snapshot and drops it from memory.
+
+**5. Log growth and history.** 26 TB a day of raw ops is mostly typing. Compact: after a snapshot, older ops are merged into coarser history checkpoints (Version history needs "the document at 3pm", not every keystroke) and moved to cheaper storage. **Restoring** an old version is a new op (replace the content with the old snapshot), so history itself is never rewritten.
+
+**6. Permissions.** Check edit rights when the socket opens and on every op (a revoked editor's next op is rejected), since an op stream outlives the moment access was granted.
 """
 [[steps.points]]
 id = "dd-failover"
@@ -98,6 +200,10 @@ level = "senior"
 id = "dd-offline"
 text = "Offline edits named as the case where a CRDT beats OT"
 level = "staff"
+[[steps.points]]
+id = "dd-viewers"
+text = "Viewers of a hot document served from a read-only fan-out, apart from the editors' path"
+level = "senior"
 
 [[probes]]
 question = "Alice and Bob both type at position 10 at the same instant. Walk through what the server does."
@@ -110,3 +216,31 @@ answer = "OT needs one place that orders the operations; with the document in on
 [[probes]]
 question = "A document has had 5 million edits. How does it still open in under a second?"
 answer = "From the latest snapshot plus only the few ops after it, not by replaying 5 million operations; snapshots are written every N ops or minutes, and old ops can be archived."
+
+[[probes]]
+question = "The old owner of a document was only paused, not dead, and wakes up after a new owner took over. What stops it corrupting the log?"
+answer = "Ownership is a lease with a fencing token that increases on every takeover; each append to the op log carries the owner's token and the log rejects tokens older than the newest it has seen. The paused owner's appends fail, it learns it lost the lease, and it drops its connections so clients reconnect to the new owner."
+
+[[sources]]
+title = "Google Drive blog: What's different about the new Google Docs, conflict resolution (2010)"
+kind = "article"
+url = "https://drive.googleblog.com/2010/09/whats-different-about-new-google-docs_22.html"
+note = "operational transformation in the Google Docs editor"
+
+[[sources]]
+title = "Shapiro, Preguiça, Baquero and Zawirski: Conflict-free replicated data types (SSS 2011)"
+kind = "paper"
+url = "https://www.cs.tufts.edu/~nr/cs257/archive/marc-shapiro/CRDTs_SSS-2011.pdf"
+note = "the CRDT paper"
+
+[[sources]]
+title = "Yjs"
+kind = "guide"
+url = "https://github.com/yjs/yjs"
+note = "a CRDT for shared editing, network agnostic, with offline editing"
+
+[[sources]]
+title = "Figma: How Figma's multiplayer technology works"
+kind = "article"
+url = "https://www.figma.com/blog/how-figmas-multiplayer-technology-works/"
+note = "a central server, not OT: the latest value per property wins"
