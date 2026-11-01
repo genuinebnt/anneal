@@ -16,11 +16,35 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and an estimate."
 reference = """
-**Functional**: upload and download files; sync across a user's devices; share with others; files up to tens of GB.
+**Functional**:
 
-**Non-functional**: never lose a file; changes appear on other devices within seconds; uploads resume after a dropped connection; storage and bandwidth used efficiently.
+1. **Upload** and **download** files from any device; files up to tens of GB.
+2. **Sync**: a change on one device appears on the user's other devices.
+3. **Share** files and folders with other users (view or edit).
+4. **Versions**: restore an earlier version of a file.
 
-**Estimate**: 500M users, 2 GB each on average ≈ 1 EB stored: object storage, not a database.
+Out of scope unless asked: in-browser editing, search inside files, previews and thumbnails (name them as async jobs).
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Durability | a file acknowledged as saved is **never lost**: the blocks and the metadata that names them |
+| Sync latency | a change appears on other online devices within a few seconds |
+| Resumability | a dropped upload of a 10 GB file resumes, not restarts |
+| Efficiency | an edit uploads roughly what changed, not the whole file; identical content stored once |
+| Consistency | a user's view of a folder is consistent; concurrent edits never silently lose one |
+
+**Estimate** (assumptions labelled):
+
+```text
+storage      500M users × 2 GB average = 1 EB (before dedup and compression)
+blocks       1 EB ÷ 4 MB ≈ 250 billion blocks; index of hash → location ≈ 250B × 64 B = 16 TB
+metadata     500M users × 1,000 files × ~300 B ≈ 150 TB of file rows (sharded)
+ingress      100M files changed a day × 10 MB ≈ 1 PB/day ≈ 11.6 GB/s
+```
+
+What it decides: the bytes go to **object storage** (an exabyte is not a database's job), and they must **not pass through the API servers** (11.6 GB/s). The interesting system is the **metadata**: which blocks make up which version of which file, and who has seen what.
 """
 [[steps.points]]
 id = "req-durable"
@@ -35,7 +59,18 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`File` (metadata: owner, path, size, version, chunk list), `Chunk` (content hash, location), `Device`, `Share` (file, user, permission)."
+reference = """
+| Entity | Fields | Store |
+|---|---|---|
+| `File` | id, namespace (the user's or a shared folder's), path, latest version | metadata DB |
+| `FileVersion` | file_id, version, size, **blocklist** (ordered list of block hashes), base version, device, created_at | metadata DB, append-only |
+| `Block` | **SHA-256 of the content** (the key), size, storage location, reference count | object storage holds the bytes; an index holds hash → location |
+| `Namespace` change log | namespace, **cursor** (a sequence number), the change (file, version, path) | metadata DB, per namespace |
+| `Device` | user, last cursor seen per namespace | metadata DB |
+| `Share` | namespace, user, permission | metadata DB |
+
+A file is **metadata plus a list of content-addressed blocks**. That one decision gives dedup (the same block is stored once, whoever uploads it), cheap versions (a new version shares every unchanged block with the old one), and integrity (the hash checks the bytes). Dropbox described exactly this in 2014: every file split into 4 MB blocks, each hashed with SHA-256, and the list of hashes, a *blocklist*, identifies the file's contents.
+"""
 [[steps.points]]
 id = "ent-chunk"
 text = "Files described by metadata plus a list of content-addressed chunks"
@@ -46,12 +81,30 @@ name = "API"
 minutes = 5
 prompt = "Uploading, downloading, syncing."
 reference = """
+```http
+POST /v1/files/commit
+{ "namespace": "ns_42", "path": "/talks/keynote.mp4", "base_version": 6,
+  "blocklist": ["9f86d0…", "3a7bd3…", "…"], "size": 2147483648 }
+
+200 { "status": "need_blocks", "missing": ["3a7bd3…"],
+      "upload_urls": { "3a7bd3…": "https://storage…/blocks/3a7bd3…?X-Signature=…" } }
+
+PUT  https://storage…/blocks/3a7bd3…       (each missing block, straight to object storage)
+
+POST /v1/files/commit   (the same body again)
+200 { "status": "committed", "version": 7, "cursor": 98811 }
 ```
-POST /files {path, size, chunk_hashes[]} -> {file_id, missing_chunks[], upload_urls[]}
-PUT  <presigned url>                     (each missing chunk, straight to storage)
-POST /files/{id}/commit                  -> {version}
-GET  /files/{id} -> {download_urls[]}    GET /changes?cursor=  -> {changes[], cursor}
+
+```http
+GET  /v1/files/{id}/versions/7            -> { "blocklist": [...], "download_urls": {...} }
+GET  /v1/changes?namespace=ns_42&cursor=98790   -> { "changes": [...], "cursor": 98811, "has_more": false }
+GET  /v1/notify?cursors=ns_42:98811       (long-poll: returns when something changed, or after ~60 s)
 ```
+
+- **Presigned URLs**: the API servers hand out short-lived signed URLs, and the bytes go between the device and object storage directly. The servers only handle hashes and metadata.
+- **Commit is idempotent and two-phase**: the first commit answers "need blocks" for what the server lacks; once they are uploaded, the same commit succeeds. Dropbox's own protocol works this way (a commit that returns "need blocks").
+- **`base_version`** says which version the edit started from: the hook for conflict detection.
+- **The change feed** is read by cursor, so a device asks "what changed since 98790?" and gets exactly that, whether it was away for a minute or a month.
 """
 [[steps.points]]
 id = "api-presigned"
@@ -67,9 +120,37 @@ name = "High-level design"
 minutes = 15
 prompt = "Upload, sync, download."
 reference = """
-- **Client** splits a file into chunks (~4 MB) and hashes each; asks the **metadata service** which chunks are missing; uploads only those to **S3** with presigned URLs; commits the new version.
-- **Metadata DB** (Postgres, sharded by user) holds files, versions and chunk lists; chunks are stored once by hash (deduplication).
-- **Sync**: each commit appends to a per-user **change log**; devices hold a long-poll or WebSocket to a **notification service** that says "something changed", then fetch `/changes?cursor`.
+**The diagram**:
+
+```text
+device ─(hashes)─► metadata svc ─► metadata DB (by namespace)
+  │                     │          files, versions, change log
+  │ presigned PUT/GET   │ commit → notify
+  ▼                     ▼
+object storage      notification svc ═══ long-poll ═══ other devices
+(blocks by hash)
+```
+
+**Upload**:
+
+:::steps Saving an edit to a 1 GB file
+- laptop | split into 4 MB blocks, SHA-256 each | 1,024 MB ÷ 4 MB = 256 hashes; one block changed.
+- laptop | commit(blocklist, base 6) | The metadata service checks the block index.
+- metadata svc | need_blocks: 1 of 256 | Only the changed block is missing.
+- laptop | PUT 4 MB to the presigned URL | 4 MB uploaded, not 1 GB.
+- laptop | commit again → version 7, cursor 98811 | Version 7 shares 255 blocks with version 6.
+- notification svc | wake the user's other devices | They pull the change feed from their cursor.
+:::
+
+**Metadata service and DB**: Postgres (or MySQL), **sharded by namespace** (a user's root, or a shared folder), so a folder's files, versions and change log live together and a commit is one local transaction: insert the version, update the file's latest version **only if** it still equals `base_version`, append to the namespace change log. 150 TB of metadata is many shards; one namespace is small.
+
+**Block storage**: object storage keyed by hash (S3, or Dropbox's own Magic Pocket, which Dropbox built to hold its multi-exabyte store). A **block index** (hash → location, reference count) answers "do we have this?" for the commit.
+
+**Sync**: every commit appends to the namespace's change log with an increasing cursor. Idle devices hold a **long-poll** to the notification service (Dropbox's clients do the same: a long-poll connection to a notification server); a commit wakes them; they call `/changes?cursor=` and download any blocks they lack.
+
+**Download**: fetch the version's blocklist, skip blocks the device already has (from another file or an older version), fetch the rest by presigned GET, served through a CDN for popular shared files.
+
+**Alternatives rejected**: uploading whole files through the API (servers become a 11.6 GB/s proxy, and a dropped connection restarts the upload); storing files in the database (an exabyte of blobs in a database is cost and pain with no benefit); polling for changes every few seconds (millions of idle devices asking "anything new?" for nothing).
 """
 [[steps.points]]
 id = "hld-delta"
@@ -79,16 +160,27 @@ level = "mid"
 id = "hld-notify"
 text = "Devices are notified of changes and pull a change feed by cursor"
 level = "mid"
+[[steps.points]]
+id = "hld-namespace"
+text = "Metadata sharded by namespace so a commit is one local transaction with its change log"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "Conflicts, large files, and sharing."
 reference = """
-- **Conflicts**: two devices edit offline; the second commit is based on an older version, so the server keeps both ("file (conflicted copy)") rather than silently overwriting.
-- **Resumable uploads**: multipart uploads retry per chunk; the commit only happens when all chunks exist.
-- **Hot shared folders**: shares are metadata entries; change logs fan out to every member's feed.
-- **Cost**: cold files move to cheaper storage tiers; downloads go through a CDN.
+**1. Conflicts.** Two laptops edit `report.docx` offline, both based on version 6. The first to commit wins: the update `SET latest = 7 WHERE id = $f AND latest = 6` succeeds. The second commit also says `base_version = 6`, but `latest` is now 7, so the conditional update fails. The server does **not** overwrite: it saves the second edit as `report (Alice's conflicted copy).docx` and both appear everywhere. Merging is left to the user (or to the application, for formats it understands). Silent last-writer-wins would lose a person's work, which breaks the durability promise.
+
+**2. Resumable uploads of huge files.** Blocks are independent: a dropped connection loses at most the block in flight, and the next commit asks only for what is still missing. Object stores support the same for single large objects (S3 multipart upload: up to 10,000 parts of 5 MiB to 5 GiB each, each retried alone). The commit happens only when every block exists, so a half-uploaded file is never visible.
+
+**3. Edits that shift bytes.** Fixed 4 MB blocks have a weakness: insert one byte at the start of a file and every block boundary moves, so every hash changes. **Content-defined chunking** (boundaries chosen where a rolling hash of the content matches a pattern) keeps boundaries anchored to the content, so an insertion changes only the blocks around it. Fixed blocks are simpler and fine for most files (media is rarely edited in the middle); name the trade-off.
+
+**4. Dedup, and its privacy edge.** Cross-user dedup saves storage, but a commit that answers "I already have every block" tells the uploader that **someone** already stored that exact file. Dedupe within a user or a team only, or always ask for the upload and dedupe silently on the server side.
+
+**5. Sharing.** A shared folder is its own **namespace** with its own change log, mounted into each member's tree. A change in it is one append to one log; each member's devices follow that namespace's cursor too. Nothing is copied per member, so a folder shared with 1,000 people costs one write per change.
+
+**6. Durability and cost.** Store blocks with **erasure coding** rather than full replicas: a Reed-Solomon code with 6 data and 3 parity pieces stores 9 ÷ 6 = **1.5×** the data and survives any 3 lost pieces, against 3× for three full copies. Dropbox's posts on Magic Pocket describe a variant of Reed-Solomon erasure coding. Cold blocks move to cheaper tiers; garbage collection deletes a block only when no version references it, after a grace period (deleted files stay restorable for the retention window).
 """
 [[steps.points]]
 id = "dd-conflict"
@@ -98,6 +190,14 @@ level = "senior"
 id = "dd-resume"
 text = "Uploads resume per chunk; commit only after all chunks exist"
 level = "senior"
+[[steps.points]]
+id = "dd-cdc"
+text = "Fixed blocks versus content-defined chunking for insertions that shift bytes"
+level = "staff"
+[[steps.points]]
+id = "dd-erasure"
+text = "Erasure coding instead of full replicas for storage cost, with its overhead worked out"
+level = "staff"
 
 [[probes]]
 question = "Two of my laptops edit the same file offline and both come online. What does the server do?"
@@ -110,3 +210,31 @@ answer = "It keeps a long-poll or WebSocket open to a notification service; a co
 [[probes]]
 question = "Ten users upload the same 1 GB video. How much do you store?"
 answer = "One copy: chunks are named by content hash, so the second to tenth uploads find every chunk already present and only add metadata pointing at them."
+
+[[probes]]
+question = "A user deletes a file. When can its blocks be removed from storage?"
+answer = "Only when no version of any file still references them and the restore window has passed. Keep a reference count (or periodically mark from all live versions and sweep), and delete after a grace period, so a restore, another user's identical file or an in-flight commit never points at a block that is gone."
+
+[[sources]]
+title = "Dropbox: Streaming file synchronization"
+kind = "article"
+url = "https://dropbox.tech/infrastructure/streaming-file-synchronization"
+note = "4 MB blocks hashed with SHA-256, blocklists, commits that return need blocks, long-poll notification"
+
+[[sources]]
+title = "Dropbox: Inside the Magic Pocket"
+kind = "article"
+url = "https://dropbox.tech/infrastructure/inside-the-magic-pocket"
+note = "Dropbox's own multi-exabyte block store"
+
+[[sources]]
+title = "Dropbox: Improving storage efficiency in Magic Pocket"
+kind = "article"
+url = "https://dropbox.tech/infrastructure/improving-storage-efficiency-in-magic-pocket-our-immutable-blob-store"
+note = "an immutable blob store; erasure coding"
+
+[[sources]]
+title = "Amazon S3: multipart upload limits"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html"
+note = "up to 10,000 parts of 5 MiB to 5 GiB"
