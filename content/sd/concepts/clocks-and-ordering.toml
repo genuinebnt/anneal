@@ -1,29 +1,74 @@
 title = "Clocks and ordering"
 group = "distributed"
 order = 5
-minutes = 11
+minutes = 20
 lede = "Machines' clocks drift and jump, so a timestamp cannot safely say which of two events happened first. Logical clocks capture cause and effect, hybrid clocks add real time back, and Spanner waits out its clock uncertainty to give a true order."
 say = "I would not order edits by wall-clock timestamps from different servers; each document's edits get a sequence number from its single writer, and across services I'd carry a hybrid logical clock."
-related = ["consensus-raft", "replication", "crdts", "quorums"]
+related = ["consensus-raft", "replication", "crdts", "quorums", "consistency-cap", "unique-ids"]
+
+summary = [
+  "Wall clocks **drift and jump**; measure durations with a **monotonic** clock and never order writes from different machines by their wall clocks.",
+  "**Happened-before** is the order that matters: a event before b if b could have known about a.",
+  "**Lamport clocks** give a total order consistent with causality, but cannot tell concurrent events apart; **vector clocks** can.",
+  "**Hybrid logical clocks** stay within the clock skew of wall time and still respect causality; CockroachDB and YugabyteDB use them.",
+  "**Spanner** knows its clock uncertainty (about 4 ms) and **waits it out** before a commit is visible, so timestamps match real time.",
+]
 
 [[sections]]
 heading = "Why wall clocks lie"
 body = """
-- Quartz clocks drift (tens of parts per million: about a second a day without correction).
+- Quartz clocks drift with temperature and age: Spanner assumes a worst case of **200 µs per second** between synchronisations, which is 17 seconds a day if nothing corrected it.
 - **NTP** corrects them, but only to within milliseconds on a good network, and corrections can make the clock **jump backwards**.
 - Virtual machines pause; leap seconds happen.
 
 Two consequences:
 1. **Measure durations with a monotonic clock** (`Instant` in Rust, `CLOCK_MONOTONIC`), never the time of day.
 2. **Last write wins** by timestamp silently drops a write when the writer's clock is behind: node A writes at 10:00:00.005 by its clock, node B writes later in reality but its clock says 10:00:00.003, so A's older value wins.
+
+:::steps Last write wins loses the later write
+- A | writes x = 1, stamped 1000 ms | A's clock is right.
+- B | receives A's write | B now knows x = 1; B's clock runs 50 ms slow.
+- B | writes x = 2, stamped 960 ms | Ten milliseconds after A in real time, but its stamp is earlier.
+- any replica | compares 1000 with 960 | The larger stamp wins: x = 1. B's write, which came after and depended on A's, is silently dropped.
+:::
+
+That scenario was run with the code below: on wall clocks A's write wins; with a hybrid logical clock, B's write is stamped after A's and wins. Cassandra resolves every conflicting write this way, by its timestamp (from the client or the coordinator's clock), so its clocks must be kept tightly synchronised.
+
+> [!NOTE]
+> Rust's `std::time::Instant` is monotonic (it never goes backwards) and means nothing outside the process; `SystemTime` is the wall clock and can jump. Timeouts, rate limits and latency measurements use `Instant`.
 """
 
 [[sections]]
 heading = "Lamport clocks"
 body = """
+Leslie Lamport (1978) defined the order that actually matters. Event a **happened before** b (a → b) if they are on the same node and a came first, or a is the sending of a message and b its receipt, or there is a chain of such steps. If neither a → b nor b → a, the events are **concurrent**: neither could have known about the other, whatever the wall clocks say.
+
 Each node keeps a counter. It increments it for every event, sends it with every message, and on receiving sets `counter = max(own, received) + 1`. If event a caused b (happened before it), then `L(a) < L(b)`. Ties are broken by node id, giving a **total order consistent with causality**.
 
+```rust title=lamport.rs
+/// A Lamport clock: one counter per node.
+#[derive(Default)]
+pub struct Lamport(u64);
+
+impl Lamport {
+    /// A local event or a send: tick, and stamp the event (or message) with the new value.
+    pub fn tick(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+    /// A receive: jump past the sender's stamp.
+    pub fn recv(&mut self, stamp: u64) -> u64 {
+        self.0 = self.0.max(stamp) + 1;
+        self.0
+    }
+}
+```
+
+Run: A sends at 1; B, whose counter is already 5, receives at 6.
+
 The reverse does not hold: `L(a) < L(b)` does not mean a caused b. Lamport clocks cannot tell concurrent events apart.
+
+That total order is still useful: it lets every node process the same events in the same order (Lamport's paper builds a mutual exclusion algorithm on it), as long as nobody needs to know *which* events were concurrent.
 """
 
 [[sections]]
@@ -32,6 +77,46 @@ body = """
 Each node keeps one counter **per node**. Compare two vectors: if every entry of A is ≤ B's, A happened before B; if each has an entry larger than the other's, they are **concurrent**, a real conflict to resolve (keep both versions, merge, or ask the user).
 
 Used for conflict detection in Dynamo-style stores. The cost: the vector grows with the number of writers, so systems prune it or use version vectors per replica.
+
+```rust title=vector_clock.rs hl=19-27
+use std::cmp::Ordering;
+
+/// A vector clock: one counter per node, indexed by node id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Vector(pub Vec<u64>);
+
+impl Vector {
+    pub fn tick(&mut self, node: usize) {
+        self.0[node] += 1;
+    }
+    /// A receive: the entry-wise maximum, then tick our own entry.
+    pub fn recv(&mut self, other: &Vector, node: usize) {
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a = (*a).max(*b);
+        }
+        self.tick(node);
+    }
+    /// Some(Less): self happened before other. None: concurrent, a real conflict.
+    pub fn compare(&self, other: &Vector) -> Option<Ordering> {
+        let le = self.0.iter().zip(&other.0).all(|(a, b)| a <= b);
+        let ge = self.0.iter().zip(&other.0).all(|(a, b)| a >= b);
+        match (le, ge) {
+            (true, true) => Some(Ordering::Equal),
+            (true, false) => Some(Ordering::Less),
+            (false, true) => Some(Ordering::Greater),
+            (false, false) => None,
+        }
+    }
+}
+```
+
+Run on the two clocks from the checks below: `[2, 1, 0]` against `[1, 2, 0]` compares as `None`, concurrent. A third node that receives the first becomes `[2, 2, 1]`, and `[2, 1, 0]` compares as `Less`: it happened before.
+
+**In practice**:
+
+- Amazon's **Dynamo** tagged every version with a vector clock of (node, counter) pairs. Concurrent versions were all kept and returned to the client on a read, which merged them (the shopping cart that unions both carts) and wrote back the result.
+- The vector grows with every node that coordinates a write. Dynamo bounded it by dropping the oldest pair once there were more than a threshold (10 in the paper), accepting that a dropped pair can make a descendant look concurrent.
+- **Version vectors** apply the same idea per replica rather than per client or event, which keeps them as small as the replica set.
 """
 
 [[sections]]
@@ -40,8 +125,87 @@ body = """
 - **Hybrid logical clock** (HLC): physical time plus a logical counter. It stays close to wall time (readable, usable for "as of 10:00" snapshots) and still respects causality when clocks are skewed. CockroachDB and YugabyteDB use it.
 - **TrueTime** (Google Spanner): GPS and atomic clocks give each server a time interval `[earliest, latest]` with a known small error (a few ms). A transaction picks a timestamp and **waits out the uncertainty** before committing (commit wait), so timestamps order transactions exactly as they happened in real time: external consistency.
 
+The HLC rules (Kulkarni, Demirbas and colleagues, 2014) are Lamport's, applied to the pair (largest physical time seen, counter):
+
+```rust title=hlc.rs hl=12-14,19-29
+/// A hybrid logical clock (Kulkarni et al., 2014): the largest physical time seen, plus a counter for events
+/// that happen within the same physical tick. Timestamps compare as (l, c).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hlc {
+    pub l: u64, // milliseconds
+    pub c: u32,
+}
+
+impl Hlc {
+    /// A local event or a send, at physical time `pt`.
+    pub fn now(&mut self, pt: u64) -> Hlc {
+        let old = self.l;
+        self.l = old.max(pt);
+        self.c = if self.l == old { self.c + 1 } else { 0 };
+        *self
+    }
+    /// A receive of a message stamped `m`, at physical time `pt`.
+    pub fn recv(&mut self, m: Hlc, pt: u64) -> Hlc {
+        let old = self.l;
+        self.l = old.max(m.l).max(pt);
+        self.c = if self.l == old && self.l == m.l {
+            self.c.max(m.c) + 1
+        } else if self.l == old {
+            self.c + 1
+        } else if self.l == m.l {
+            m.c + 1
+        } else {
+            0
+        };
+        *self
+    }
+}
+```
+
+**Measured** with three simulated nodes whose clocks are off by 0, −50 and +20 ms, each sending to the others every millisecond or two with 1-5 ms of network delay, for 60 simulated seconds (179,565 sends and receives):
+
+| | Result |
+|---|---|
+| receives stamped at or before their send | 0 |
+| most the HLC ran ahead of the node's own clock | 69 ms (the clocks span 70 ms) |
+| largest counter | 20 |
+| the last-write-wins scenario above | B's write stamped (1000, 2) after A's (1000, 0): x = 2 wins |
+
+So an HLC never runs further from a node's clock than the real skew in the cluster, can be packed into a 64-bit timestamp like a wall clock, and orders every message after its cause. It does **not** make concurrent writes from unconnected clients ordered by real time; that needs a bound on the skew. CockroachDB asks the operator for a **maximum clock offset**, uses it to treat recent values as uncertain (a read that finds a value just above its timestamp, within the offset, restarts at a higher one), and makes a node shut itself down when its measured offset from the others gets too close to that bound.
+
+**TrueTime in numbers** (Spanner paper, OSDI 2012): each data centre has time masters with GPS receivers and some with atomic clocks; every machine's daemon polls several masters every **30 seconds** and assumes **200 µs/s** of drift in between, so the uncertainty ε is a sawtooth from about **1 to 7 ms**, about **4 ms** on average. A commit takes a timestamp no smaller than `TT.now().latest` and then waits until `TT.after(s)` is true before anyone can see it; measured commit wait was about **5 ms**. The smaller the uncertainty, the shorter the wait: that is why Google invested in the clocks.
+"""
+
+[[sections]]
+heading = "Who assigns the order"
+body = """
+Most designs never need a clock to order events, because one place already orders them:
+
+| Source of order | Ordered within | Example |
+|---|---|---|
+| a single writer's sequence number | one entity | a document's edits numbered by the server that owns it |
+| a log offset | one partition | Kafka orders messages per partition, not across partitions |
+| a database's commit order | one database | a transaction id, Postgres's log sequence number, a `serial` column |
+| a consensus log index | one replicated group | etcd's revision, Raft's log index |
+| a hybrid logical clock | the whole system, causally | CockroachDB's transaction timestamps |
+| TrueTime | the whole system, in real time | Spanner's commit timestamps |
+
+Time-ordered ids (Snowflake ids, UUID version 7, ULIDs) sort roughly by creation time and are good primary keys, but they come from each machine's clock: two ids from different machines are **not** reliably ordered, and they say nothing about causality.
+
 > [!INTERVIEW]
 > When a design orders events, say who assigns the order: one leader's sequence number, a log offset (Kafka partition), a logical clock, or a database's commit timestamp, never raw client clocks.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Find the scope of the order you need.** Per user, per document, per account? Then give that scope one writer or one partition and use its sequence numbers.
+2. **For conflicts between replicas**, say how they are detected (version vectors) and resolved (merge, CRDT, or last write wins with the loss accepted).
+3. **For timestamps across machines**, say what bounds the skew and what happens beyond it.
+4. **For "as of" reads and snapshots across a cluster**, a hybrid logical clock or a TrueTime-like service.
+
+> [!TIP]
+> "Last write wins" is an honest answer only when you add "and we accept losing a concurrent write"; say which data can take that (a profile picture) and which cannot (a cart, a counter).
 """
 
 [[checks]]
@@ -55,3 +219,110 @@ answer = "Neither is ≤ the other in every entry (A is ahead in the first, B in
 [[checks]]
 prompt = "Why should a request timeout be measured with a monotonic clock rather than the time of day?"
 answer = "The time of day can jump forwards or backwards when NTP corrects it, making the measured duration negative or wildly long; a monotonic clock only moves forward at a steady rate, so durations are correct."
+
+[[checks]]
+prompt = "Event a has Lamport timestamp 5 and event b has 9. Did a cause b? What would you need to know?"
+answer = "Not necessarily. Lamport clocks guarantee that if a happened before b then L(a) < L(b), but not the reverse: a and b may be concurrent. To tell, you need vector clocks (or version vectors): a happened before b only if every entry of a's vector is ≤ b's."
+
+[[checks]]
+prompt = "What does a hybrid logical clock give you that a Lamport clock does not, and what does it still not give you?"
+answer = "Its timestamps stay within the cluster's clock skew of real time, so they can be read as times and used for 'as of' snapshot reads, while still ordering every receive after its send. It does not order unrelated concurrent events by real time: for that the skew must be bounded (CockroachDB's maximum offset with uncertainty restarts) or measured (Spanner's TrueTime with commit wait)."
+
+[[checks]]
+prompt = "Spanner's clock uncertainty is about 4 ms on average. Why does every read-write commit wait, and what would happen to commit latency if the uncertainty grew to 100 ms?"
+answer = "A commit takes a timestamp at the top of the uncertainty interval and waits until that time has certainly passed everywhere before anyone sees it, so any transaction that starts later gets a larger timestamp: timestamps match real-time order. The wait grows with the uncertainty: measured at about 5 ms with ε near 4 ms, it would grow to the order of a hundred milliseconds or more per commit at 100 ms of uncertainty."
+
+[[terms]]
+term = "Clock drift"
+means = "A clock running fast or slow; Spanner assumes up to 200 µs per second between synchronisations."
+section = "Why wall clocks lie"
+
+[[terms]]
+term = "Monotonic clock"
+means = "A clock that only moves forward, for measuring durations; Instant in Rust."
+section = "Why wall clocks lie"
+
+[[terms]]
+term = "Last write wins"
+means = "Keep the version with the largest timestamp and drop the others."
+section = "Why wall clocks lie"
+
+[[terms]]
+term = "Happened before"
+means = "a → b if b could have known about a: same node and later, or linked by messages."
+section = "Lamport clocks"
+
+[[terms]]
+term = "Concurrent events"
+means = "Neither happened before the other."
+section = "Lamport clocks"
+
+[[terms]]
+term = "Vector clock"
+means = "One counter per node; comparing two shows before, after or concurrent."
+section = "Vector clocks"
+
+[[terms]]
+term = "Version vector"
+means = "A vector clock kept per replica for a value's versions, to detect conflicting writes."
+section = "Vector clocks"
+
+[[terms]]
+term = "Hybrid logical clock"
+means = "The largest physical time seen plus a counter: close to wall time, consistent with causality."
+section = "Hybrid logical clocks and TrueTime"
+
+[[terms]]
+term = "TrueTime"
+means = "Spanner's clock API, returning an interval [earliest, latest] that contains the true time."
+section = "Hybrid logical clocks and TrueTime"
+
+[[terms]]
+term = "Commit wait"
+means = "Waiting until a commit's timestamp is certainly in the past before making it visible."
+section = "Hybrid logical clocks and TrueTime"
+
+[[sources]]
+title = "Lamport: Time, clocks, and the ordering of events in a distributed system (CACM, 1978)"
+kind = "paper"
+url = "https://lamport.azurewebsites.net/pubs/time-clocks.pdf"
+
+[[sources]]
+title = "Mattern: Virtual time and global states of distributed systems (1989)"
+kind = "paper"
+url = "https://www.vs.inf.ethz.ch/publ/papers/VirtTimeGlobStates.pdf"
+note = "vector clocks"
+
+[[sources]]
+title = "Kulkarni, Demirbas, Madappa, Avva and Leone: Logical physical clocks (OPODIS 2014)"
+kind = "paper"
+url = "https://cse.buffalo.edu/tech-reports/2014-04.pdf"
+note = "hybrid logical clocks"
+
+[[sources]]
+title = "Corbett et al.: Spanner: Google's globally-distributed database (OSDI 2012)"
+kind = "paper"
+url = "https://www.usenix.org/conference/osdi12/technical-sessions/presentation/corbett"
+note = "TrueTime, its uncertainty, commit wait"
+
+[[sources]]
+title = "DeCandia et al.: Dynamo: Amazon's highly available key-value store (SOSP 2007)"
+kind = "paper"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+note = "vector clocks on versions, truncation"
+
+[[sources]]
+title = "CockroachDB source: the hybrid logical clock"
+kind = "docs"
+url = "https://github.com/cockroachdb/cockroach/blob/master/pkg/util/hlc/hlc.go"
+note = "maximum offset, self-termination"
+
+[[sources]]
+title = "Rust standard library: std::time::Instant"
+kind = "docs"
+url = "https://doc.rust-lang.org/std/time/struct.Instant.html"
+
+[[figures]]
+name = "vector-clocks"
+after = "Vector clocks"
+caption = "Each node ticks its own entry and takes the entry-wise maximum on a receive; comparing two vectors shows before or concurrent."

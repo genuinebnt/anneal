@@ -1,15 +1,33 @@
 title = "Proximity search"
 group = "advanced"
 order = 1
-minutes = 9
+minutes = 18
 lede = "Finding what is near a point, fast: drivers within 2 km, restaurants in view. An ordinary index on latitude and longitude cannot do it, so space is cut into cells that an index can."
 say = "Drivers report their location every few seconds into Redis GEO keyed by city; a rider's request queries the nearby cells, and the matcher ranks the few hundred candidates."
-related = ["redis", "sharding", "indexes"]
+related = ["redis", "sharding", "indexes", "postgres", "elasticsearch"]
+
+summary = [
+  "A B-tree on `(lat, lng)` narrows only by latitude: measured, it read **144 pages** for a 2 km box where a spatial index read **30**.",
+  "Cell systems turn two dimensions into **one key** that keeps neighbours close: geohash strings, S2's Hilbert curve ids, H3's hexagons.",
+  "Always search the cell **and its 8 neighbours**: searching one cell missed **37%** of the points within 2 km.",
+  "Choose the cell size from the **search radius**, then filter candidates by exact distance.",
+  "For moving objects, keep **current positions in memory**, sharded by region, and write history asynchronously.",
+]
 
 [[sections]]
 heading = "Why a normal index fails"
 body = """
 An index on `(lat, lng)` sorts by latitude first, so "within 2 km" becomes a range on latitude that still scans every longitude in that band. Two ranges cannot use one B-tree well. The fix is to turn two dimensions into one key that keeps nearby points near each other.
+
+**Measured** on Postgres 18 with a million random places in a 1° × 1° square around 38.5° N, finding the 1,588 places in a box about 2 km across:
+
+| Index | Pages read | What it did |
+|---|---|---|
+| B-tree on `(lat, lng)` | 144 | walked every entry in the latitude band (about 36,000 places) and discarded those outside the longitude range |
+| B-tree, then fetching the rows | 1,592 | the same, plus one table page per matching row |
+| GiST on a `point` column | **30** | descended only into index pages whose bounding boxes overlap the query box |
+
+The B-tree's cost grows with the width of the whole latitude band, not with the answer; the spatial index's cost grows with the answer. The same GiST index also answers **nearest neighbours**: `ORDER BY p <-> point(-122.0, 38.5) LIMIT 10` read 19 pages.
 """
 
 [[sections]]
@@ -19,6 +37,96 @@ Split the world into a grid, then each cell into 32, again and again; each level
 
 > [!WARNING]
 > Two points can be a metre apart on either side of a cell edge and share no prefix. Always search the cell **and its 8 neighbours**.
+
+Gustavo Niemeyer's geohash (2008) alternates bits: the first halves the longitude range, the next the latitude range, and so on; every five bits become one character.
+
+```rust title=geohash.rs hl=10-19
+const BASE32: &[u8] = b"0123456789bcdefghjkmnpqrstuvwxyz";
+
+/// Geohash: halve the longitude range, then the latitude range, alternately; each choice is one bit,
+/// and every 5 bits become one base-32 character. Nearby points usually share a prefix.
+pub fn geohash(lat: f64, lng: f64, chars: usize) -> String {
+    let (mut lat_lo, mut lat_hi, mut lng_lo, mut lng_hi) = (-90.0, 90.0, -180.0, 180.0);
+    let mut out = String::with_capacity(chars);
+    let (mut bits, mut n, mut even) = (0u8, 0, true);
+    while out.len() < chars {
+        let (lo, hi, v) = if even { (&mut lng_lo, &mut lng_hi, lng) } else { (&mut lat_lo, &mut lat_hi, lat) };
+        let mid = (*lo + *hi) / 2.0;
+        bits <<= 1;
+        if v >= mid {
+            bits |= 1;
+            *lo = mid;
+        } else {
+            *hi = mid;
+        }
+        even = !even;
+        n += 1;
+        if n == 5 {
+            out.push(BASE32[bits as usize] as char);
+            (bits, n) = (0, 0);
+        }
+    }
+    out
+}
+```
+
+San Francisco (37.7749, −122.4194) encodes as `9q8yyk8yt`. Cell sizes, computed from the bit counts on a 6,371 km sphere:
+
+| Characters | Height | Width at the equator | Width at 60° |
+|---|---|---|---|
+| 4 | 19.5 km | 39.1 km | 19.5 km |
+| 5 | 4.9 km | 4.9 km | 2.4 km |
+| 6 | 611 m | 1.2 km | 611 m |
+| 7 | 153 m | 153 m | 76 m |
+| 8 | 19 m | 38 m | 19 m |
+
+Cells shrink in width towards the poles, because a degree of longitude does; pick the precision for the latitudes you serve.
+
+**The edge problem, measured.** Two points 1.11 m apart on either side of the equator encode as `7zzxux` and `ebp8h8`: not one shared character. With a million points indexed by 5-character cell, 1,000 searches of 2 km:
+
+```rust title=nearby.rs
+use std::collections::HashMap;
+
+/// Great-circle distance in metres (haversine, on a sphere of radius 6,371 km).
+pub fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (la1, lo1, la2, lo2) = (a.0.to_radians(), a.1.to_radians(), b.0.to_radians(), b.1.to_radians());
+    let h = ((la2 - la1) / 2.0).sin().powi(2) + la1.cos() * la2.cos() * ((lo2 - lo1) / 2.0).sin().powi(2);
+    2.0 * 6_371_000.0 * h.sqrt().asin()
+}
+
+/// The size of a cell with `chars` characters: bits alternate, longitude first.
+fn cell_degrees(chars: usize) -> (f64, f64) {
+    let bits = 5 * chars;
+    let lng_bits = bits.div_ceil(2);
+    let lat_bits = bits / 2;
+    (180.0 / 2f64.powi(lat_bits as i32), 360.0 / 2f64.powi(lng_bits as i32))
+}
+
+/// Points within `radius` metres: look up the cell holding the centre and its 8 neighbours, then filter by distance.
+/// The cell must be at least as wide and as tall as the radius.
+pub fn nearby(index: &HashMap<String, Vec<(f64, f64)>>, chars: usize, centre: (f64, f64), radius: f64) -> (Vec<(f64, f64)>, usize) {
+    let (dlat, dlng) = cell_degrees(chars);
+    let mut cells = Vec::with_capacity(9);
+    for i in -1..=1 {
+        for j in -1..=1 {
+            let cell = geohash(centre.0 + i as f64 * dlat, centre.1 + j as f64 * dlng, chars);
+            if !cells.contains(&cell) {
+                cells.push(cell);
+            }
+        }
+    }
+    let candidates: Vec<(f64, f64)> = cells.iter().filter_map(|c| index.get(c)).flatten().copied().collect();
+    let found = candidates.iter().copied().filter(|&p| distance_m(centre, p) <= radius).collect();
+    (found, candidates.len())
+}
+```
+
+| Search | Result |
+|---|---|
+| own cell and its 8 neighbours, filtered by distance | matched a full scan every time; about **17,400 candidates** checked to find about 1,300 points, against 1,000,000 |
+| own cell only | **missed 37%** of the points within 2 km |
+
+The cell must be at least as large as the radius in both directions, so the nine cells always cover the circle; then the exact distance filter removes the corners.
 """
 
 [[sections]]
@@ -30,12 +138,63 @@ body = """
 | S2 (Google) | cells on a cube projected onto the sphere, as 64-bit ids | precise coverings of any shape |
 | H3 (Uber) | hexagons at many resolutions | equal-distance neighbours, ride-hailing |
 | Geohash | base-32 string per grid cell | simple, works in any database or Redis |
+
+**Quadtrees** (Finkel and Bentley, 1974) split only where the points are: a cell over a city centre divides many times, a cell over the ocean never does, so every leaf holds about the same number of points. They live in memory and need rebalancing as points move.
+
+**R-trees** (Guttman, 1984) group nearby objects under bounding rectangles, level by level, like a B-tree of boxes. They index shapes as well as points (roads, delivery zones), and they are what spatial databases build on: the Postgres GiST index measured above, and PostGIS's indexes on top of it.
+
+**S2** projects the sphere onto the **six faces of a cube**, divides each face into a quadtree of cells up to **level 30**, and numbers the cells along a **Hilbert curve**, so a cell is one 64-bit integer and nearby cells usually have nearby numbers. Each cell splits exactly into four children (aperture 4), so a region can be covered by a handful of cells of mixed sizes, each one integer range to scan.
+
+**H3** tiles the sphere with **hexagons** on the faces of an icosahedron. Each resolution has about seven times as many cells as the one above (aperture 7); its documentation lists 16 resolutions, 0 to 15, with exactly 12 pentagons at each:
+
+| H3 resolution | Cells | Average hexagon area |
+|---|---|---|
+| 5 | 2,016,842 | 252.9 km² |
+| 7 | 98,825,162 | 5.16 km² |
+| 9 | 4,842,432,842 | 0.105 km² |
+
+A hexagon has **one kind of neighbour**, six of them at the same distance; a square has four edge neighbours and four corner neighbours further away. That makes hexagons better for "rings of cells around a point" and for smoothing values over neighbours (demand, prices). The cost: a hexagon does not split exactly into seven children, so H3's hierarchy is approximate, where S2's and geohash's are exact.
+"""
+
+[[sections]]
+heading = "In the database you already have"
+body = """
+| Store | Index | Query |
+|---|---|---|
+| Postgres | GiST on `point` (built in), or PostGIS `geography` with GiST | `p <@ box(...)`, `ORDER BY p <-> point LIMIT k`; PostGIS adds `ST_DWithin` in metres |
+| Redis | GEO commands: a 52-bit geohash as the score of a **sorted set** | `GEOADD`, `GEOSEARCH key FROMLONLAT lng lat BYRADIUS 2 km` |
+| any key-value store | a cell id (geohash, S2, H3) as part of the key | range scans per cell, then filter |
+
+Redis documents its own design: latitude and longitude bits are interleaved into a 52-bit integer, which a sorted set's double score holds exactly; a radius query checks the **1 + 8 areas** covering the shape and discards what falls outside. Distances use the haversine formula on a sphere, which Redis says can be off by up to 0.5%; the poles beyond ±85.05° cannot be indexed.
+
+> [!TIP]
+> For points of interest that rarely move (restaurants, stores), a spatial index in the main database is usually enough. Reach for an in-memory structure when positions change every few seconds.
 """
 
 [[sections]]
 heading = "Moving objects"
 body = """
 Drivers update every few seconds: millions of writes a second. Keep current locations in memory (Redis GEO, sharded by region), not in a durable database; write the trip history asynchronously. Query the candidate cells, then compute exact distances and filter.
+
+The numbers decide the design. Five million active drivers reporting every four seconds is 1.25 million position updates a second. Each update **overwrites** one driver's position; nothing needs a transaction, and a lost update is replaced four seconds later.
+
+- **Shard by region** (a city, or a coarse cell id), so a rider's search touches one shard, and pick shards so a dense city is split across several.
+- **Expire** positions that stop updating (a driver who went offline) with a TTL or by timestamp, so searches never return stale drivers.
+- **Index cells, not coordinates**: re-file a driver only when its cell changes, not on every update.
+- **Rank after the search**: the cell query returns a few hundred candidates; the matcher then scores them by estimated time of arrival on the road network, not straight-line distance.
+- **History** goes to a log (Kafka) and on to cheap storage for analytics and billing, in batches.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Say why a plain index fails** (one dimension at a time) and name the cell scheme you use.
+2. **Pick the cell size from the radius**, search the cell and its neighbours, filter by exact distance.
+3. **Static or moving?** Static: a spatial index in the database. Moving: in memory, sharded by region, history written asynchronously.
+4. **Density**: say what happens in Manhattan versus the countryside (adaptive cells, or more shards for dense regions).
+
+> [!INTERVIEW]
+> "Restaurants live in Postgres with a GiST index and are cached by geohash-6 cell. Drivers are in Redis GEO per city; a rider's request runs GEOSEARCH for 3 km, gets a few hundred drivers, and the matcher ranks them by ETA from the routing service."
 """
 
 [[checks]]
@@ -45,3 +204,110 @@ answer = "A nearby point can sit just across a cell boundary and share no prefix
 [[checks]]
 prompt = "Five million drivers report their location every four seconds. Where do those writes go?"
 answer = "About 1.25M writes a second: into an in-memory geospatial index (Redis GEO or a custom grid) sharded by region, overwriting each driver's last position; durable history is written asynchronously in batches."
+
+[[checks]]
+prompt = "Which geohash precision would you use to find places within 2 km, and why not a finer one?"
+answer = "One whose cells are at least 2 km in both directions at your latitudes, so the cell and its 8 neighbours always cover the circle: 5 characters (about 4.9 km tall, 3.8 km wide at 38° N). A finer precision such as 6 (about 611 m by 1 km) would need many more than nine cells to cover a 2 km circle; a coarser one checks many more candidates. Either way, filter the candidates by exact distance."
+
+[[checks]]
+prompt = "A B-tree index on (lat, lng) makes a 2 km box query read 144 index pages, a GiST index 30. Explain the difference."
+answer = "The B-tree is sorted by latitude first, so it can only use the latitude range: it walks every entry in that band across the full longitude span (about 36,000 places for 1,588 answers) and filters the rest. The GiST index groups points under bounding boxes in both dimensions and only descends into boxes that overlap the query, so its work tracks the size of the answer."
+
+[[checks]]
+prompt = "Why does Uber's H3 use hexagons rather than squares?"
+answer = "A hexagon's six neighbours all share an edge and sit at the same distance from its centre, while a square has edge neighbours and corner neighbours at different distances. That makes rings of cells around a point and smoothing values over neighbours (demand, prices) simpler and more even. The cost is that hexagons do not divide exactly into smaller hexagons, so H3's parent-child hierarchy is approximate."
+
+[[terms]]
+term = "Spatial index"
+means = "An index that narrows by both dimensions at once, such as an R-tree or GiST."
+section = "Why a normal index fails"
+
+[[terms]]
+term = "Geohash"
+means = "A base-32 string from interleaved longitude and latitude bits; a shared prefix means the same cell."
+section = "Geohash"
+
+[[terms]]
+term = "Cell precision"
+means = "How many characters or which level: it sets the cell size, chosen from the search radius."
+section = "Geohash"
+
+[[terms]]
+term = "Quadtree"
+means = "Squares split into four only where there are many points."
+section = "Quadtree, S2 and H3"
+
+[[terms]]
+term = "R-tree"
+means = "Objects grouped under bounding rectangles, level by level."
+section = "Quadtree, S2 and H3"
+
+[[terms]]
+term = "Hilbert curve"
+means = "A path through a grid that keeps nearby cells mostly close in the order; S2 numbers its cells along it."
+section = "Quadtree, S2 and H3"
+
+[[terms]]
+term = "H3 resolution"
+means = "One of H3's 16 levels of hexagons, each about seven times finer than the last."
+section = "Quadtree, S2 and H3"
+
+[[terms]]
+term = "K nearest neighbours"
+means = "The k closest points, answered directly by a spatial index ordered by distance."
+section = "In the database you already have"
+
+[[sources]]
+title = "PostgreSQL: GiST indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/gist.html"
+note = "the built-in point operator class and nearest-neighbour search"
+
+[[sources]]
+title = "Redis: GEOADD (how the geospatial index works)"
+kind = "docs"
+url = "https://redis.io/docs/latest/commands/geoadd/"
+note = "52-bit interleaved geohash in a sorted set, 1 + 8 areas, 0.5% error"
+
+[[sources]]
+title = "Redis: GEOSEARCH"
+kind = "docs"
+url = "https://redis.io/docs/latest/commands/geosearch/"
+
+[[sources]]
+title = "H3: overview of the indexing system"
+kind = "docs"
+url = "https://h3geo.org/docs/core-library/overview"
+note = "icosahedron, aperture 7, pentagons"
+
+[[sources]]
+title = "H3: tables of cell statistics across resolutions"
+kind = "docs"
+url = "https://h3geo.org/docs/core-library/restable"
+
+[[sources]]
+title = "H3: comparison with S2"
+kind = "docs"
+url = "https://h3geo.org/docs/comparisons/s2"
+note = "neighbours and subdivision"
+
+[[sources]]
+title = "S2 Geometry"
+kind = "docs"
+url = "https://s2geometry.io/"
+note = "cube faces, Hilbert curve, cell ids"
+
+[[sources]]
+title = "Guttman: R-trees: a dynamic index structure for spatial searching (SIGMOD 1984)"
+kind = "paper"
+url = "https://doi.org/10.1145/602259.602266"
+
+[[sources]]
+title = "Finkel and Bentley: Quad trees: a data structure for retrieval on composite keys (Acta Informatica, 1974)"
+kind = "paper"
+url = "https://doi.org/10.1007/BF00288933"
+
+[[figures]]
+name = "geohash-cells"
+after = "Geohash"
+caption = "A point near a cell edge: its own cell misses most of the circle; the cell and its eight neighbours, filtered by distance, find everything."

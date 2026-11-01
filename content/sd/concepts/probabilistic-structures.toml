@@ -1,46 +1,277 @@
 title = "Probabilistic data structures"
 group = "advanced"
 order = 4
-minutes = 11
+minutes = 20
 lede = "When exact answers need too much memory, a small structure can give a nearly right one with a known error: a Bloom filter for 'have I seen this?', HyperLogLog for 'how many distinct?', a count-min sketch for 'how often?', and heavy-hitter sketches for top-k."
 say = "The crawler keeps a Bloom filter of seen URLs, about 1.2 GB for a billion at a 1% false-positive rate; a false positive only skips a page, which is acceptable."
-related = ["storage-engines", "redis", "stream-processing", "typeahead-tries"]
+related = ["storage-engines", "redis", "stream-processing", "typeahead-tries", "caching"]
+
+summary = [
+  "Sketches trade a **bounded, one-sided error** for memory that does not grow with the data: kilobytes or megabytes instead of gigabytes.",
+  "A **Bloom filter** never says no to something it holds; about **9.6 bits per item** buy 1% false positives.",
+  "**HyperLogLog** counts distinct items in **12 KB** at about **0.8%** standard error, and two counters **merge** into the count of the union.",
+  "A **count-min sketch** never undercounts; its error is a share of the **whole stream**, so it is trustworthy for heavy items only.",
+  "Pick the structure by the question, then say **which direction it errs** and why the product can live with that.",
+]
+
+[[sections]]
+heading = "Why approximate"
+body = """
+Exact answers to three common questions need memory that grows with the data:
+
+| Question | Exact answer | For a billion items |
+|---|---|---|
+| have I seen x? | a hash set of every item | at least 8 GB for 8-byte fingerprints alone, before the set's overhead |
+| how many distinct? | the same hash set, then its size | the same 8 GB, per counter |
+| how often has x appeared? | a hash map of item to count | 16 GB or more |
+
+A **sketch** answers the same question from a small, fixed summary. What makes sketches usable in production is that their error is **known in advance and one-sided**:
+
+- a Bloom filter can say "maybe" when the answer is no, never "no" when it is yes;
+- a count-min sketch can overcount, never undercount;
+- HyperLogLog's estimate has a standard error you choose with its size.
+
+Most sketches also **merge**: two summaries built on different machines combine into the summary of both streams, so they can be built per shard or per minute and rolled up. That property matters as much in a design as the memory saving.
+
+> [!NOTE]
+> A sketch does not store the items. It can say *whether* or *how many*, never *which*. If the product needs the list (the actual user ids), a sketch is not the answer.
+"""
 
 [[sections]]
 heading = "Bloom filter: have I seen it?"
-body = """
-A bit array of m bits and k hash functions. To **add** an item, set the k bits its hashes point to. To **check**, look at those k bits: if any is 0 the item was **definitely never added**; if all are 1 it was **probably** added.
+body = '''
+Burton Bloom's 1970 structure is a bit array of \(m\) bits and \(k\) hash functions.
 
-- No false negatives; false positives at a rate you choose: about **10 bits per item for 1%**, 15 bits for 0.1%.
-- Items cannot be removed (a counting Bloom filter can, at four times the memory) and the filter does not store the items.
-- Uses: skip disk reads for absent keys (LSM SSTables), "already crawled this URL?", "has this user seen this post?", weak-password checks.
-"""
+- **Add**: set the \(k\) bits the item's hashes point to.
+- **Check**: look at those \(k\) bits. If any is 0, the item was **definitely never added**. If all are 1, it was **probably** added: other items may have set those same bits.
+
+There are **no false negatives** and a false-positive rate you choose when sizing it. The \(k\) positions do not need \(k\) independent hash functions: Kirsch and Mitzenmacher showed that two hashes combined as \(h_1 + i \cdot h_2\) give the same false-positive rate, which is what most implementations do.
+
+```rust title=bloom.rs hl=20-21,27-29
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+/// A real system uses a fast, stable hash (xxHash, Murmur3); `DefaultHasher` may change between Rust releases.
+fn h(x: impl Hash) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+pub struct Bloom {
+    bits: Vec<u64>,
+    m: u64,
+    k: u32,
+}
+
+impl Bloom {
+    /// Sized for `n` items at false-positive rate `p`: m = -n ln p / (ln 2)^2 bits, k = (m / n) ln 2 hashes.
+    pub fn new(n: usize, p: f64) -> Self {
+        let ln2 = std::f64::consts::LN_2;
+        let m = (-(n as f64) * p.ln() / (ln2 * ln2)).ceil() as u64;
+        let k = ((m as f64 / n as f64) * ln2).round().max(1.0) as u32;
+        Bloom { bits: vec![0; m.div_ceil(64) as usize], m, k }
+    }
+
+    /// k positions from two hashes (Kirsch and Mitzenmacher): h1 + i * h2.
+    fn positions<T: Hash>(&self, item: T) -> impl Iterator<Item = u64> + use<T> {
+        let (h1, h2) = (h((0u8, &item)), h((1u8, &item)) | 1);
+        let m = self.m;
+        (0..self.k as u64).map(move |i| h1.wrapping_add(i.wrapping_mul(h2)) % m)
+    }
+
+    pub fn add(&mut self, item: impl Hash) {
+        for b in self.positions(item) {
+            self.bits[(b / 64) as usize] |= 1 << (b % 64);
+        }
+    }
+
+    /// false: never added. true: probably added.
+    pub fn contains(&self, item: impl Hash) -> bool {
+        self.positions(item).all(|b| self.bits[(b / 64) as usize] & (1 << (b % 64)) != 0)
+    }
+}
+```
+
+Run with a million URLs added and a million different URLs checked (rustc 1.97, release build):
+
+| Target rate | Bits per item | Memory | k | False negatives | False positives measured |
+|---|---|---|---|---|---|
+| 1% | 9.59 | 1.20 MB | 7 | 0 | 10,034 of 1,000,000 (1.003%) |
+| 0.1% | 14.38 | 1.80 MB | 10 | 0 | 1,017 of 1,000,000 (0.102%) |
+
+**Items cannot be removed**: clearing an item's bits could clear bits another item needs, creating a false negative. And the filter does not store the items, so it cannot list them or be resized; it must be rebuilt from the source.
+
+**Where they are used**: LSM storage engines keep one per SSTable so a read skips files that cannot hold the key (RocksDB, Cassandra); a crawler's "already fetched this URL?"; "has this user already seen this post?" in a feed; a check in front of a cache so lookups for ids that do not exist never reach the database (cache penetration).
+'''
+
+[[sections]]
+heading = "Sizing a Bloom filter, and its relatives"
+body = '''
+After \(n\) items, the chance that one bit is still 0 is about \(e^{-kn/m}\), so a check of an item never added finds all \(k\) bits set with probability
+
+$$p \approx \left(1 - e^{-\htmlClass{tx-a}{k}\,\htmlClass{tx-b}{n}/\htmlClass{tx-c}{m}}\right)^{\htmlClass{tx-a}{k}}$$
+
+It is smallest at \(k = (m/n)\ln 2\), which gives the sizing rule: **bits per item** \(m/n = -\ln p / (\ln 2)^2 \approx 1.44 \log_2(1/p)\). Every tenfold cut in the false-positive rate costs about 4.8 more bits per item, whatever the item's size.
+
+| False-positive rate | Bits per item | Best k | For a billion items |
+|---|---|---|---|
+| 10% | 4.79 | 3.3 | 0.6 GB |
+| 1% | 9.59 | 6.6 | 1.2 GB |
+| 0.1% | 14.38 | 10.0 | 1.8 GB |
+| 0.01% | 19.17 | 13.3 | 2.4 GB |
+
+(Redis rounds k up: 7, 10 and 14 hash functions for 1%, 0.1% and 0.01%.)
+
+**Overfilling is the classic mistake.** The rate is set for \(n\) items; past \(n\) it climbs fast. Measured with the filter above, sized for a million items at 1%:
+
+| Items added | False positives |
+|---|---|
+| 1 million (as sized) | 1.0% |
+| 2 million | 15.8% |
+| 3 million | 43.6% |
+
+Size for the peak, or use a **scalable Bloom filter**: when one fills, add a larger one with a tighter rate and check all of them. Redis's Bloom filter does this (`BF.RESERVE key error_rate capacity EXPANSION 2`); adds stay as fast, but checks slow down with each stacked sub-filter.
+
+**Relatives**:
+
+| Structure | Adds over a Bloom filter | Cost |
+|---|---|---|
+| counting Bloom filter (Fan et al., 2000) | deletes: a small counter per position instead of a bit | about four times the memory with 4-bit counters |
+| cuckoo filter (Fan et al., 2014) | deletes, by storing short fingerprints in a cuckoo hash table | inserts can fail when the table is nearly full; for moderately low rates it uses less space than a Bloom filter |
+| blocked (cache-line) Bloom filter | all \(k\) probes in one 64-byte cache line: one memory miss per check | a slightly higher rate for the same bits; RocksDB's default |
+| Ribbon filter (RocksDB 6.15+) | about 30% less memory than Bloom for the same rate (about 7 bits per key for 1%) | three to four times the CPU to build |
+
+> [!TIP]
+> RocksDB's own guidance is a good default for storage engines: around 10 bits per key gives about 1% false positives and almost all of the benefit; going far beyond that buys little.
+'''
 
 [[sections]]
 heading = "HyperLogLog: how many distinct?"
-body = """
-Hash every item; in a random hash, a run of k leading zeros happens about once per 2^k distinct items, so the longest run seen estimates the count. HyperLogLog splits items into many buckets by their first bits and averages the estimates.
+body = '''
+**The intuition**: hash every item to a random-looking 64-bit number. Half of all hashes start with a 1, a quarter with 01, one in \(2^r\) with \(r-1\) zeros and then a 1. If the longest run of leading zeros you have seen is 20, you have probably seen around a million distinct items. Duplicates hash to the same value, so they change nothing: the structure counts **distinct** items for free.
 
-- Redis's HyperLogLog uses **12 KB** per counter for any cardinality with about **0.81%** standard error (`PFADD`, `PFCOUNT`, `PFMERGE`).
-- Counters **merge**: daily unique visitors per page can be unioned into weekly ones without the raw data.
-- Uses: unique visitors, distinct search queries, unique viewers of a video.
-"""
+One such estimate is very noisy. Flajolet, Fusy, Gandouet and Meunier's **HyperLogLog** (2007) splits the hashes into \(m\) buckets by their first bits, keeps the longest run (the *rank*) per bucket in a small **register**, and combines the registers with a harmonic mean, which damps outliers. Its standard error is
+
+$$\sigma \approx \frac{1.04}{\sqrt{\htmlClass{tx-a}{m}}}$$
+
+With \(m = 2^{14} = 16{,}384\) registers of 6 bits that is **12 KB** and **0.81%**, exactly Redis's figures. Four times the memory halves the error.
+
+```rust title=hll.rs hl=12-15,29-31
+pub struct Hll {
+    regs: Vec<u8>, // 2^p registers, each the longest run of zeros seen + 1
+    p: u32,
+}
+
+impl Hll {
+    pub fn new(p: u32) -> Self {
+        Hll { regs: vec![0; 1 << p], p }
+    }
+
+    pub fn add(&mut self, item: impl Hash) {
+        let x = h(item);
+        let j = (x >> (64 - self.p)) as usize; // the first p bits pick a register
+        let rest = (x << self.p) | (1 << (self.p - 1)); // the guard bit caps the run
+        let rank = rest.leading_zeros() as u8 + 1;
+        self.regs[j] = self.regs[j].max(rank);
+    }
+
+    pub fn count(&self) -> f64 {
+        let m = self.regs.len() as f64;
+        let alpha = 0.7213 / (1.0 + 1.079 / m);
+        let sum: f64 = self.regs.iter().map(|&r| 2f64.powi(-(r as i32))).sum();
+        let raw = alpha * m * m / sum;
+        let zeros = self.regs.iter().filter(|&&r| r == 0).count() as f64;
+        if raw <= 2.5 * m && zeros > 0.0 { m * (m / zeros).ln() } else { raw } // small counts: linear counting
+    }
+
+    /// The union of two sets: the larger register wins, so a merged sketch equals one built from both streams.
+    pub fn merge(&mut self, other: &Hll) {
+        for (a, b) in self.regs.iter_mut().zip(&other.regs) {
+            *a = (*a).max(*b);
+        }
+    }
+}
+```
+
+Measured with \(p = 14\) (the same `h` as the Bloom filter):
+
+| Distinct items | Estimate | Error |
+|---|---|---|
+| 1,000 | 997 | −0.33% |
+| 100,000 | 99,085 | −0.91% |
+| 10,000,000 | 10,143,015 | +1.43% |
+| 1,000,000, fifty runs | | 0.84% root-mean-square (theory 0.81%), worst 1.89% |
+
+A single estimate can be off by two standard errors; that is the deal.
+
+**Merging** is where HyperLogLog earns its place in designs. Two sketches of 600,000 visitors each, overlapping by 200,000, estimated 598,622 and 598,298 (adding them says 1.2 million). Merged register by register they estimated **1,001,227** for the true union of 1,000,000, and the merged registers were *identical* to a sketch fed both streams. So unique visitors per page per day can be stored once and rolled up into any week, month, or set of pages without the raw ids. The intersection is not supported directly; estimating it as \(|A| + |B| - |A \cup B|\) has an error relative to the union, which is useless when the overlap is small.
+
+In Redis: `PFADD visits:2026-11-01 user42`, `PFCOUNT visits:2026-11-01`, `PFMERGE visits:week visits:2026-10-26 …`. Small counters use a compact sparse encoding and grow to the full 12 KB only as they fill. Google's **HyperLogLog++** (Heule et al., 2013) is the variant most systems use: a 64-bit hash, an empirical bias correction for small and medium counts, and a sparse representation.
+'''
 
 [[sections]]
 heading = "Count-min sketch: how often?"
-body = """
-A grid of d rows × w counters, one hash function per row. Adding an item increments one counter per row; its estimated count is the **minimum** of its d counters. Collisions only add, so the estimate **never undercounts** and overcounts by at most a small fraction of the total with high probability.
+body = '''
+Cormode and Muthukrishnan's **count-min sketch** (2005) is a grid of \(d\) rows of \(w\) counters, with one hash function per row.
 
-- Fixed memory regardless of how many distinct items.
-- Uses: frequency of queries or hashtags in a stream, rate limiting by approximate counts.
-"""
+- **Add** x: increment one counter in each row, at that row's hash of x.
+- **Estimate** x: read its \(d\) counters and take the **minimum**.
+
+Every counter holds x's true count plus whatever else hashed into it, so every row overcounts and the smallest is closest. With \(w = \lceil e/\varepsilon \rceil\) and \(d = \lceil \ln(1/\delta) \rceil\), the estimate exceeds the true count by more than \(\varepsilon N\), where \(N\) is the **total** of all counts, with probability at most \(\delta\).
+
+```rust title=count_min.rs
+pub struct CountMin {
+    rows: Vec<Vec<u64>>,
+    w: usize,
+}
+
+impl CountMin {
+    /// Overcounts by at most eps * total with probability 1 - delta: w = ceil(e / eps), d = ceil(ln(1 / delta)).
+    pub fn new(eps: f64, delta: f64) -> Self {
+        let w = (std::f64::consts::E / eps).ceil() as usize;
+        let d = (1.0 / delta).ln().ceil() as usize;
+        CountMin { rows: vec![vec![0; w]; d], w }
+    }
+
+    pub fn add(&mut self, item: impl Hash + Copy, n: u64) {
+        for (i, row) in self.rows.iter_mut().enumerate() {
+            row[(h((i, item)) % self.w as u64) as usize] += n;
+        }
+    }
+
+    pub fn estimate(&self, item: impl Hash + Copy) -> u64 {
+        self.rows.iter().enumerate().map(|(i, row)| row[(h((i, item)) % self.w as u64) as usize]).min().unwrap_or(0)
+    }
+}
+```
+
+Measured: \(\varepsilon = 0.001\), \(\delta = 0.01\) gives \(w = 2{,}719\), \(d = 5\): 13,595 counters, about 109 KB as `u64`. Fed **10 million** events drawn from a Zipf distribution over a million items (763,431 distinct items actually appeared):
+
+| | Overcount |
+|---|---|
+| bound \(\varepsilon N\) | 10,000 |
+| median item | 1,392 |
+| 99th percentile | 2,186 |
+| worst item | 5,778 |
+| items over the bound | 0 |
+
+Read that table carefully. An overcount of about 1,400 is nothing for the top item (seen 694,630 times) and meaningless for the hundreds of thousands of items seen fewer than ten times. **A count-min sketch is accurate for heavy items and noise for rare ones**: the error is a share of the whole stream, not of the item. Redis's documentation says the same: ignore estimates below the error threshold.
+
+Uses: how often each query, hashtag or IP appears in a stream; approximate per-key rate limits; frequency counts inside caches (Caffeine's admission filter uses a small frequency sketch of this family); the counting half of a top-k pipeline.
+'''
 
 [[sections]]
 heading = "Top-k and heavy hitters"
-body = """
-To find the k most frequent items in a stream: count each item in a count-min sketch and keep a min-heap of the k items with the highest estimates; when an item's estimate beats the heap's smallest, swap it in. Algorithms such as **Space-Saving** or Misra-Gries keep k counters directly with error bounds.
+body = '''
+"The 100 most played songs this hour" over billions of plays cannot keep a counter per song on one machine. Three families of answers:
 
-For "top 100 songs this hour" at huge scale: sketches per shard per minute, merged into a heap per window; exact counts are rebuilt offline from the log if precision matters (the Lambda pattern).
+- **Sketch plus heap**: count every item in a count-min sketch and keep a min-heap of the k items with the highest estimates; when an item's estimate beats the heap's smallest, swap it in. Simple, and it inherits count-min's bias toward overcounting.
+- **Counter-based**: keep exactly k counters. **Misra-Gries** (1982) decrements all counters when a new item finds none free; **Space-Saving** (Metwally, Agrawal and El Abbadi, 2005) instead replaces the smallest counter and lets the newcomer inherit its count, remembering that inherited amount as the item's maximum overestimate. Any item more frequent than \(N/k\) is guaranteed to be held.
+- **HeavyKeeper** (Gong et al., 2018): count-min-like buckets that decay the count of the item occupying a bucket when others collide with it, so small items cannot accumulate. Redis's `TOPK.*` commands are built on it.
+
+Space-Saving with 1,000 counters on the same 10-million-event Zipf stream found the **true top 10 in the right order, with exact counts** (each with an error bound of 0): heavy items arrive early, are never evicted, and so are counted from their first appearance. The 1,000 counters are the memory of 1,000 items, against 763,431 for exact counting.
+
+At scale this is per shard and per window: each stream partition keeps a sketch or a Space-Saving summary per minute, a merger combines the summaries for the hour, and a heap picks the top k. If billing needs exact counts, recompute them later from the raw log in a batch job; the sketch serves the live leaderboard.
 
 | Question | Structure | Memory | Error |
 |---|---|---|---|
@@ -48,6 +279,22 @@ For "top 100 songs this hour" at huge scale: sketches per shard per minute, merg
 | distinct count | HyperLogLog | 12 KB | ~0.8% |
 | frequency of x | count-min sketch | d × w counters | overcounts only |
 | most frequent | sketch + heap, Space-Saving | O(k) | approximate ranks |
+'''
+
+[[sections]]
+heading = "In the interview"
+body = """
+Reach for a sketch when the exact structure would not fit, and say three things:
+
+1. **The question and the structure**: membership is a Bloom filter, distinct counts are HyperLogLog, frequencies are count-min, top-k is Space-Saving or a sketch with a heap.
+2. **The size, from the error**: "a billion URLs at 1% is 9.6 bits each, 1.2 GB"; "one HyperLogLog per page per day is 12 KB".
+3. **Which way it errs and why that is acceptable**: a crawler that wrongly skips 1% of new URLs loses little; a payment deduplicator that wrongly rejects 1% of payments is not acceptable, so the Bloom filter there is only a fast path in front of an exact check.
+
+> [!INTERVIEW]
+> "The filter only answers 'definitely new' or 'maybe seen'. 'Definitely new' is the common case and costs one memory lookup; 'maybe seen' falls through to the exact check in the database, so a false positive costs a query, never a wrong answer."
+
+> [!WARNING]
+> Sketches built on different machines merge only if they were built with the **same size and the same hash functions**. Fix the parameters and the hash seed in configuration, not per process.
 """
 
 [[checks]]
@@ -62,7 +309,154 @@ answer = "Each row's counter is the item's true count plus whatever other items 
 prompt = "You must report unique daily visitors for 10 million pages and also weekly totals. Why is HyperLogLog a good fit?"
 answer = "Each page's daily counter is 12 KB regardless of visitors, with under 1% error, instead of storing every visitor id; and HyperLogLog counters merge, so a week's unique count is the union of seven daily counters without double counting returning visitors."
 
+[[checks]]
+prompt = "Size a Bloom filter for 100 million items at a 0.1% false-positive rate. How many bits, how many hash functions, and what happens if 300 million items end up in it?"
+answer = "About 14.4 bits per item (−ln 0.001 / (ln 2)² ≈ 14.38), so 1.44 billion bits, about 180 MB, with k ≈ 10 hash functions. Filled to three times its design size the false-positive rate climbs to tens of percent (a filter sized for one million at 1% measured 43.6% at three million), so size for the peak or use a scalable filter that adds sub-filters as it fills."
+
+[[checks]]
+prompt = "Two HyperLogLog counters estimate 600,000 and 600,000 visitors. Why can you not add them to get the visitors of both days, and what do you do instead?"
+answer = "Visitors who came on both days would be counted twice; the sum is only an upper bound. Merge the sketches instead, taking the larger value in each register: the result is exactly the sketch of the union of both streams, so its estimate counts each visitor once (two overlapping sets of 600,000 merged to an estimate of 1,001,227 for a true union of 1,000,000)."
+
+[[checks]]
+prompt = "A count-min sketch over ten million events reports 1,400 for a search query that was typed five times. Is the sketch broken?"
+answer = "No. Its error is a share of the whole stream (at most ε·N with high probability, here 0.001 × 10 million = 10,000), not of the item, so rare items are swamped by collisions. Count-min is trustworthy for heavy items; estimates below the error threshold should be treated as 'small' or zero, and an exact counter is needed if rare items' counts matter."
+
+[[terms]]
+term = "Sketch"
+means = "A small, fixed-size summary of a stream that answers one question with a known error."
+section = "Why approximate"
+
+[[terms]]
+term = "Mergeable"
+means = "Two summaries combine into the summary of both streams, so they can be built per shard and rolled up."
+section = "Why approximate"
+
+[[terms]]
+term = "Bloom filter"
+means = "Bits set by k hashes per item; any 0 means never added, all 1s means probably added."
+section = "Bloom filter: have I seen it?"
+
+[[terms]]
+term = "False positive"
+means = "The structure says yes for an item that was never added."
+section = "Bloom filter: have I seen it?"
+
+[[terms]]
+term = "Bits per item"
+means = "A Bloom filter's size per item: −ln p / (ln 2)², about 9.6 for 1%."
+section = "Sizing a Bloom filter, and its relatives"
+
+[[terms]]
+term = "Cuckoo filter"
+means = "Short fingerprints in a cuckoo hash table: like a Bloom filter, but items can be deleted."
+section = "Sizing a Bloom filter, and its relatives"
+
+[[terms]]
+term = "Register"
+means = "One of HyperLogLog's small counters, holding the longest run of leading zeros seen in its bucket."
+section = "HyperLogLog: how many distinct?"
+
+[[terms]]
+term = "Standard error"
+means = "HyperLogLog's typical relative error, 1.04 / √m for m registers."
+section = "HyperLogLog: how many distinct?"
+
+[[terms]]
+term = "Count-min sketch"
+means = "d rows of w counters; an item's estimate is the minimum of its d counters, never below the truth."
+section = "Count-min sketch: how often?"
+
+[[terms]]
+term = "Heavy hitter"
+means = "An item whose share of a stream is above a threshold, such as 1 in k."
+section = "Top-k and heavy hitters"
+
+[[terms]]
+term = "Space-Saving"
+means = "k counters; a new item replaces the smallest and inherits its count as an error bound."
+section = "Top-k and heavy hitters"
+
+[[sources]]
+title = "Bloom: Space/time trade-offs in hash coding with allowable errors (CACM, 1970)"
+kind = "paper"
+url = "https://dl.acm.org/doi/10.1145/362686.362692"
+note = "the original Bloom filter"
+
+[[sources]]
+title = "Kirsch and Mitzenmacher: Less hashing, same performance: building a better Bloom filter"
+kind = "paper"
+url = "https://www.eecs.harvard.edu/~michaelm/postscripts/rsa2008.pdf"
+note = "two hashes are enough"
+
+[[sources]]
+title = "Fan, Cao, Almeida and Broder: Summary cache (IEEE/ACM ToN, 2000)"
+kind = "paper"
+url = "https://doi.org/10.1109/90.851975"
+note = "counting Bloom filters"
+
+[[sources]]
+title = "Fan, Andersen, Kaminsky and Mitzenmacher: Cuckoo filter: practically better than Bloom (CoNEXT 2014)"
+kind = "paper"
+url = "https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf"
+
+[[sources]]
+title = "Flajolet, Fusy, Gandouet and Meunier: HyperLogLog (AofA 2007)"
+kind = "paper"
+url = "https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"
+note = "the algorithm and its 1.04/√m error"
+
+[[sources]]
+title = "Heule, Nunkesser and Hall: HyperLogLog in practice (EDBT 2013)"
+kind = "paper"
+url = "https://research.google/pubs/hyperloglog-in-practice-algorithmic-engineering-of-a-state-of-the-art-cardinality-estimation-algorithm/"
+note = "HyperLogLog++: 64-bit hash, bias correction, sparse form"
+
+[[sources]]
+title = "Cormode and Muthukrishnan: An improved data stream summary: the count-min sketch and its applications (2005)"
+kind = "paper"
+url = "https://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf"
+
+[[sources]]
+title = "Metwally, Agrawal and El Abbadi: Efficient computation of frequent and top-k elements in data streams (ICDT 2005)"
+kind = "paper"
+url = "https://doi.org/10.1007/978-3-540-30570-5_27"
+note = "Space-Saving"
+
+[[sources]]
+title = "Misra and Gries: Finding repeated elements (1982)"
+kind = "paper"
+url = "https://doi.org/10.1016/0167-6423(82)90012-0"
+
+[[sources]]
+title = "Gong et al.: HeavyKeeper (USENIX ATC 2018)"
+kind = "paper"
+url = "https://www.usenix.org/conference/atc18/presentation/gong"
+note = "the top-k algorithm behind Redis TOPK"
+
+[[sources]]
+title = "Redis: probabilistic data types"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/data-types/probabilistic/"
+note = "Bloom, cuckoo, count-min, top-k and HyperLogLog, with sizing rules"
+
+[[sources]]
+title = "Redis: HyperLogLog"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/data-types/probabilistic/hyperloglogs/"
+note = "12 KB, 0.81% standard error, PFADD, PFCOUNT, PFMERGE"
+
+[[sources]]
+title = "RocksDB wiki: RocksDB Bloom filter"
+kind = "docs"
+url = "https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter"
+note = "bits per key against false-positive rate, cache-local filters, Ribbon filters"
+
 [[figures]]
 name = "bloom-filter"
 after = "Bloom filter: have I seen it?"
 caption = "Adding sets three bits; a check with any zero bit is a sure no, all ones only a maybe."
+
+[[figures]]
+name = "count-min"
+after = "Count-min sketch: how often?"
+caption = "Each word adds one to a counter in every row; its estimate is the smallest of its counters, never below the true count."

@@ -1,15 +1,33 @@
 title = "CRDTs and OT"
 group = "advanced"
 order = 2
-minutes = 10
+minutes = 20
 lede = "How several people edit the same document at once and end up with the same text: operational transformation rewrites concurrent edits against each other on a server; CRDTs make edits that commute, so any order gives the same result, even offline."
 say = "Edits go to a document server that orders them and transforms concurrent ones (OT), so every client converges; for offline-first I'd use a CRDT like Yjs instead."
-related = ["realtime-updates", "consistency-cap"]
+related = ["realtime-updates", "consistency-cap", "clocks-and-ordering", "quorums"]
+
+summary = [
+  "Concurrent edits by **position** diverge: an insert at 3 means a different place once someone deleted at 1.",
+  "**OT** rewrites each edit against the concurrent ones it missed; a **central server** orders them, as in Google Docs.",
+  "A **CRDT** gives every element a unique id and makes operations **commute**, so replicas that saw the same edits hold the same state, in any order, offline or peer to peer.",
+  "State-based CRDTs merge with a function that is **commutative, associative and idempotent**; text CRDTs pay with **ids and tombstones**.",
+  "Use a library (**Yjs**, **Automerge**) and spend the design on transport, presence, storage and compaction.",
+]
 
 [[sections]]
 heading = "The problem"
 body = """
 Alice inserts "x" at position 3 while Bob deletes position 1. If each applies the other's edit as sent, Alice's insert lands one place off on Bob's screen. Positions shift under concurrent edits, so naive replay diverges.
+
+:::steps Two edits by position, replayed as sent
+- start | both see "abcdef" | The same text on two screens.
+- Alice | inserts x at 3: "abcxdef" | Her edit is "insert x at index 3".
+- Bob | deletes index 1: "acdef" | His edit is "delete index 1", made at the same time.
+- Alice receives | deletes index 1: "acxdef" | Bob's delete lands where he meant it.
+- Bob receives | inserts x at 3: "acdxef" | Index 3 now means a different place: the screens disagree for good.
+:::
+
+That is exactly what the code below printed for naive replay. Two families of fixes exist: rewrite the positions (OT), or stop using positions (CRDTs).
 """
 
 [[sections]]
@@ -19,6 +37,33 @@ A server receives edits in some order and **transforms** each against the concur
 
 - Needs a central server to order operations.
 - The transform functions are subtle to get right for every pair of operation types.
+
+The transform for inserts and deletes of single characters:
+
+```rust title=ot.rs hl=12-16
+/// Operational transformation for the same two kinds of edit, by position.
+#[derive(Clone, Copy, Debug)]
+pub enum Edit {
+    Ins(usize, char),
+    Del(usize),
+}
+
+/// Rewrite `a` so it can be applied after `b`, which was made concurrently on the same text.
+/// (Two inserts at the same position need a tie-break, here by replica id; omitted for brevity.)
+pub fn transform(a: Edit, b: Edit) -> Edit {
+    match (a, b) {
+        (Edit::Ins(p, c), Edit::Ins(q, _)) if q <= p => Edit::Ins(p + 1, c),
+        (Edit::Ins(p, c), Edit::Del(q)) if q < p => Edit::Ins(p - 1, c),
+        (Edit::Del(p), Edit::Ins(q, _)) if q <= p => Edit::Del(p + 1),
+        (Edit::Del(p), Edit::Del(q)) if q < p => Edit::Del(p - 1),
+        _ => a,
+    }
+}
+```
+
+Run on the example: Alice applies her insert, then Bob's delete transformed against it; Bob applies his delete, then Alice's insert transformed against it (3 becomes 2). Both screens read **"acxdef"**.
+
+OT dates from Ellis and Gibbs (1989). Transforming correctly when every peer may see edits in a different order is the hard case; the Jupiter system (1995) avoided it by having **one server** decide the order, so each client only transforms its own pending edits against the server's sequence. Server-ordered OT is the design behind production editors such as Google Docs. The cost is that server: editing needs a connection to it, and each document's edits flow through one place.
 """
 
 [[sections]]
@@ -32,6 +77,163 @@ A **conflict-free replicated data type** designs the data so concurrent changes 
 | Offline | hard | natural: merge when back |
 | Cost | small operations | ids and tombstones grow the document |
 | Examples | Google Docs | Figma (custom), Yjs, Automerge |
+
+Shapiro, Preguiça, Baquero and Zawirski (2011) formalised two styles, which are equivalent in power:
+
+- **State-based**: replicas send their whole state (or a delta), and a **merge** combines two states. Convergence needs the merge to be **commutative** (order does not matter), **associative** (grouping does not matter) and **idempotent** (merging the same state twice changes nothing): a join in a semilattice. Messages can then be lost, repeated and reordered.
+- **Operation-based**: replicas send operations, which must **commute** when concurrent; the network must deliver each operation once and in causal order (an operation after those it depends on).
+
+The smallest example, a grow-only counter, keeps one slot per replica and merges by taking the larger value of each slot:
+
+```rust title=g_counter.rs
+/// A grow-only counter: one slot per replica; merge takes the larger of each slot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GCounter(Vec<u64>);
+
+impl GCounter {
+    pub fn incr(&mut self, replica: usize) {
+        self.0[replica] += 1;
+    }
+    pub fn value(&self) -> u64 {
+        self.0.iter().sum()
+    }
+    pub fn merge(&mut self, other: &GCounter) {
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a = (*a).max(*b);
+        }
+    }
+}
+```
+
+Run: replica A counts 3, replica B counts 2; merging A into B, B into A, or merging twice all give **5**.
+
+| Type | State | Merge or rule | Use |
+|---|---|---|---|
+| G-Counter | a count per replica | max per slot; value is the sum | views, likes |
+| PN-Counter | two G-Counters | increments minus decrements | stock that goes up and down |
+| LWW-Register | value with a timestamp | keep the larger timestamp | a profile field, accepting lost concurrent writes |
+| MV-Register | values with version vectors | keep all concurrent values | a field where conflicts are shown to the user |
+| OR-Set (add-wins) | elements with unique add tags | a remove deletes only the tags it saw | a shopping cart, tags, members |
+| Sequence (RGA, YATA) | elements with unique ids and tombstones | order by ids | text, lists |
+"""
+
+[[sections]]
+heading = "A text CRDT in code"
+body = """
+Replicated Growable Arrays (RGA; Roh and colleagues, 2011) insert each character **after** the id of the character to its left. Concurrent inserts after the same character are ordered by their ids, larger first, and every replica applies the same rule:
+
+```rust title=text_crdt.rs hl=67-83
+use std::collections::{BTreeMap, BTreeSet};
+
+/// A unique id for every inserted character: (counter, replica). Larger ids sort first among siblings.
+pub type Id = (u64, u32);
+
+/// A text CRDT in the style of RGA: each character is inserted *after* another character's id (or the start),
+/// and a delete only marks the character as a tombstone. Replicas exchange operations; applying the same set of
+/// operations in any order gives the same text.
+#[derive(Clone, Default)]
+pub struct Text {
+    after: BTreeMap<Option<Id>, BTreeSet<std::cmp::Reverse<Id>>>, // parent -> children, newest first
+    chars: BTreeMap<Id, (char, bool)>,                             // id -> (character, deleted)
+    early_deletes: BTreeSet<Id>,                                   // deletes that arrived before their insert
+    counter: u64,
+    replica: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum Op {
+    Insert { id: Id, after: Option<Id>, ch: char },
+    Delete { id: Id },
+}
+
+impl Text {
+    pub fn new(replica: u32) -> Self {
+        Text { replica, ..Default::default() }
+    }
+
+    /// The visible characters with their ids, in document order.
+    fn visible(&self) -> Vec<(Id, char)> {
+        let mut out = Vec::new();
+        let mut stack = vec![None];
+        while let Some(node) = stack.pop() {
+            if let Some(id) = node {
+                let (ch, deleted) = self.chars[&id];
+                if !deleted {
+                    out.push((id, ch));
+                }
+            }
+            if let Some(kids) = self.after.get(&node) {
+                stack.extend(kids.iter().rev().map(|k| Some(k.0))); // visit the newest child first
+            }
+        }
+        out
+    }
+
+    pub fn text(&self) -> String {
+        self.visible().into_iter().map(|(_, c)| c).collect()
+    }
+
+    /// Insert `ch` at visible position `pos`: it goes after the character currently at `pos - 1`.
+    pub fn insert(&mut self, pos: usize, ch: char) -> Op {
+        let after = if pos == 0 { None } else { Some(self.visible()[pos - 1].0) };
+        self.counter = self.counter.max(self.chars.keys().map(|k| k.0).max().unwrap_or(0)) + 1;
+        let op = Op::Insert { id: (self.counter, self.replica), after, ch };
+        self.apply(&op);
+        op
+    }
+
+    pub fn delete(&mut self, pos: usize) -> Op {
+        let op = Op::Delete { id: self.visible()[pos].0 };
+        self.apply(&op);
+        op
+    }
+
+    /// Operations commute and applying one twice changes nothing, so replicas can receive them in any order.
+    pub fn apply(&mut self, op: &Op) {
+        match *op {
+            Op::Insert { id, after, ch } => {
+                if !self.chars.contains_key(&id) {
+                    let deleted = self.early_deletes.remove(&id);
+                    self.chars.insert(id, (ch, deleted));
+                    self.after.entry(after).or_default().insert(std::cmp::Reverse(id));
+                }
+            }
+            Op::Delete { id } => match self.chars.get_mut(&id) {
+                Some(c) => c.1 = true,
+                None => {
+                    self.early_deletes.insert(id); // its insert has not arrived yet
+                }
+            },
+        }
+    }
+}
+```
+
+What it did when run:
+
+| Test | Result |
+|---|---|
+| the example: Alice inserts x at 3, Bob deletes index 1 | both replicas read **"acxdef"** |
+| Alice types "123" and Bob types "XYZ" at the same spot | both read "abXYZ123cdef": each run stays together |
+| 200 rounds of 50 random edits on 3 replicas, then every operation delivered to each replica in a shuffled order | all replicas equal in every round |
+| characters stored against characters visible after those rounds | 6,777 stored, 3,775 visible: **44% tombstones** |
+
+The fuzz test earned its place: the first version of `apply` failed it. A second delivery of an insert overwrote its character's tombstone and brought a deleted letter back on one replica only. Idempotence is a property to test, not to assume.
+
+**Interleaving.** Keeping each person's run together is not automatic. Kleppmann and colleagues (2019) showed that some text CRDTs (Logoot and LSEQ among them) can interleave two users' concurrently typed words character by character; RGA-style "insert after" keeps a forward-typed run contiguous, as the test above shows.
+
+**Tombstones** are the price: a deleted character must stay as long as some replica might still send an operation that refers to it. Systems compact them once every replica has seen the delete, or keep a compact form: Yjs replaces deleted content with a small record of its length.
+"""
+
+[[sections]]
+heading = "Real libraries"
+body = """
+| Library | Algorithm | Notes |
+|---|---|---|
+| Yjs | YATA (Nicolaescu and colleagues, 2016), with an extra `originRight` reference | every insert gets an id `(clientID, clock)`, a Lamport-style pair; a run of characters typed by one client is one item; deletions are kept in a compact delete set; text, arrays and maps are all built on its list |
+| Automerge | a JSON document of CRDTs (maps, lists, text, counters), after Kleppmann and Beresford (2017) | core written in Rust and compiled to WebAssembly; a compressed storage format and a sync protocol; aimed at local-first applications |
+
+Not every collaborative product needs a text CRDT. A design tool whose objects have properties (position, colour, name) can give each property last-writer-wins semantics and let a server order the changes; text needs a sequence CRDT or OT because characters are merged, not replaced.
 """
 
 [[sections]]
@@ -40,6 +242,25 @@ body = """
 - **Transport**: a WebSocket per open document; a document server (or shard) owns each document's session.
 - **Presence**: cursors and selections are ephemeral; send them separately and do not persist them.
 - **Storage**: periodic snapshots plus the operation log since; compact old tombstones.
+
+A few more decisions make or break the design:
+
+- **One owner per document.** Route every connection for a document to the same server (consistent hashing on the document id), so ordering and fan-out happen in one process; with a CRDT that server is a relay and a store, not an authority.
+- **Load on open.** Load the latest snapshot and the operations after it; compute a fresh snapshot in the background when the tail gets long.
+- **Undo** is per user: undo *my* last edit, expressed as a new operation, not a rollback of the shared state.
+- **Permissions** are still checked on the server for every operation, CRDT or not; a peer cannot be trusted to merge only what it may edit.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Name the problem**: concurrent edits by position diverge.
+2. **Pick by connectivity**: always online with a server, OT or a server-ordered CRDT; offline or peer to peer, a CRDT.
+3. **Use a library** (Yjs, Automerge) and say so; the design work is the session server, persistence, compaction and presence.
+4. **Say the costs**: OT needs the server for every edit; CRDTs carry ids and tombstones that need compaction.
+
+> [!INTERVIEW]
+> "Each document's editors connect to the server that owns the document; it relays Yjs updates, appends them to a log and snapshots every few thousand updates. Clients edit offline and merge on reconnect; cursors go over a separate presence channel and are never stored."
 """
 
 [[checks]]
@@ -49,3 +270,114 @@ answer = "Edits refer to positions, and concurrent edits shift positions: an ins
 [[checks]]
 prompt = "When would you pick a CRDT over OT?"
 answer = "When editing must work offline or peer to peer without a central server ordering operations, since CRDT merges converge in any order; OT suits a central server with always-online clients and keeps operations small."
+
+[[checks]]
+prompt = "What three properties must a state-based CRDT's merge function have, and what does each buy?"
+answer = "Commutative (merging A into B equals B into A, so the order of messages does not matter), associative (how merges are grouped does not matter, so states can be combined through any path), and idempotent (merging the same state twice changes nothing, so repeated messages are harmless). Together replicas converge however states are lost, repeated or reordered."
+
+[[checks]]
+prompt = "Why does a text CRDT keep deleted characters as tombstones, and what does that cost?"
+answer = "Other replicas may still send inserts positioned relative to the deleted character's id, or the delete itself may arrive before the insert; without the element the operation could not be placed. The cost is size: after random editing a test document stored 6,777 elements for 3,775 visible characters, so tombstones are compacted once every replica has seen the delete, or replaced with compact markers."
+
+[[checks]]
+prompt = "Two users edit a document's title at the same time. Compare an LWW-Register and an MV-Register for that field."
+answer = "An LWW-Register keeps the value with the larger timestamp and silently drops the other edit; simple, and fine when losing a concurrent edit is acceptable. An MV-Register keeps both concurrent values (detected with version vectors) and lets the application or the user choose or merge, so nothing is lost but the UI must handle a conflict."
+
+[[checks]]
+prompt = "Your CRDT passes unit tests but replicas occasionally diverge in production. What property would you test first, and how?"
+answer = "That applying operations is order-independent and idempotent: fuzz test by generating random concurrent edits on several replicas, delivering every operation to each replica in a shuffled order and sometimes twice, and checking all replicas end equal. Duplicated delivery is a common culprit: a re-delivered insert overwriting its tombstone brought a deleted character back in one test."
+
+[[terms]]
+term = "Operational transformation"
+means = "Rewriting an edit's positions against the concurrent edits applied before it."
+section = "Operational transformation (OT)"
+
+[[terms]]
+term = "CRDT"
+means = "A data type whose replicas converge when they have seen the same updates, in any order."
+section = "CRDTs"
+
+[[terms]]
+term = "State-based CRDT"
+means = "Replicas exchange states and combine them with a commutative, associative, idempotent merge."
+section = "CRDTs"
+
+[[terms]]
+term = "Operation-based CRDT"
+means = "Replicas exchange operations that commute, delivered once each and in causal order."
+section = "CRDTs"
+
+[[terms]]
+term = "OR-Set"
+means = "A set where a remove deletes only the adds it has seen, so a concurrent add wins."
+section = "CRDTs"
+
+[[terms]]
+term = "Tombstone"
+means = "A deleted element kept so later operations can still refer to it."
+section = "A text CRDT in code"
+
+[[terms]]
+term = "Interleaving"
+means = "Two users' concurrently typed words mixed character by character, which some text CRDTs allow."
+section = "A text CRDT in code"
+
+[[terms]]
+term = "Presence"
+means = "Cursors and selections: sent live, never stored with the document."
+section = "Around the algorithm"
+
+[[sources]]
+title = "Shapiro, Preguiça, Baquero and Zawirski: Conflict-free replicated data types (SSS 2011)"
+kind = "paper"
+url = "https://doi.org/10.1007/978-3-642-24550-3_29"
+
+[[sources]]
+title = "Shapiro et al.: A comprehensive study of convergent and commutative replicated data types (INRIA RR-7506, 2011)"
+kind = "paper"
+url = "https://inria.hal.science/inria-00555588"
+note = "the catalogue: counters, registers, sets, sequences"
+
+[[sources]]
+title = "Ellis and Gibbs: Concurrency control in groupware systems (SIGMOD 1989)"
+kind = "paper"
+url = "https://doi.org/10.1145/67544.66963"
+note = "operational transformation"
+
+[[sources]]
+title = "Nichols, Curtis, Dixon and Lamping: High-latency, low-bandwidth windowing in the Jupiter collaboration system (UIST 1995)"
+kind = "paper"
+url = "https://doi.org/10.1145/215585.215706"
+note = "server-ordered OT"
+
+[[sources]]
+title = "Roh, Jeon, Kim and Lee: Replicated abstract data types (JPDC, 2011)"
+kind = "paper"
+url = "https://doi.org/10.1016/j.jpdc.2010.12.006"
+note = "RGA"
+
+[[sources]]
+title = "Kleppmann, Gomes, Mulligan and Beresford: Interleaving anomalies in collaborative text editors (PaPoC 2019)"
+kind = "paper"
+url = "https://doi.org/10.1145/3301419.3323972"
+
+[[sources]]
+title = "Yjs: internals"
+kind = "docs"
+url = "https://github.com/yjs/yjs/blob/main/INTERNALS.md"
+note = "YATA, item ids, the delete set"
+
+[[sources]]
+title = "Kleppmann and Beresford: A conflict-free replicated JSON datatype (IEEE TPDS, 2017)"
+kind = "paper"
+url = "https://arxiv.org/abs/1608.03960"
+
+[[sources]]
+title = "Automerge"
+kind = "docs"
+url = "https://automerge.org/"
+
+[[sources]]
+title = "Kleppmann et al.: Local-first software (Ink & Switch, 2019)"
+kind = "article"
+url = "https://www.inkandswitch.com/local-first/"

@@ -1,15 +1,30 @@
 title = "Storage engines: B-tree and LSM tree"
 group = "distributed"
 order = 3
-minutes = 12
+minutes = 22
 lede = "The two ways databases lay data out on disk. A B-tree updates sorted pages in place and reads fast; a log-structured merge tree appends everything and sorts later, so it writes fast. Knowing which one sits under a database explains most of its behaviour."
 say = "This workload is ninety percent writes of new events, so an LSM engine such as Cassandra or RocksDB fits: writes are sequential appends, and time-window compaction drops old files whole."
-related = ["indexes", "cassandra", "postgres", "probabilistic-structures"]
+related = ["indexes", "cassandra", "postgres", "probabilistic-structures", "replication"]
+
+summary = [
+  "Both engines make a write durable by appending it to a **write-ahead log** first; they differ in where the data goes next.",
+  "A **B-tree** keeps sorted pages and changes them in place: 10 million keys fit in **3 levels**, so a lookup reads three pages, most of them cached.",
+  "An **LSM tree** buffers writes in memory, flushes sorted immutable files and **merges them later**; writes are sequential, reads may check several files.",
+  "Every engine trades **read, write and space amplification**; compaction strategy is where an LSM chooses its point.",
+  "Pick by the workload: transactional and read-heavy suits a B-tree; ingest-heavy events, logs and metrics suit an LSM.",
+]
 
 [[sections]]
 heading = "The write-ahead log"
 body = """
 Both engines first append each change to a **write-ahead log** (WAL) and flush it to disk before acknowledging. If the process crashes, replaying the log rebuilds what was in memory. The log is sequential, so it is cheap even on slow disks. Replication often ships this same log to followers.
+
+The details that matter in a design:
+
+- **The flush is the cost of a commit.** An `fsync` waits for the device; on a durable setup that is the floor under commit latency. Engines batch the commits that arrive together into one flush (**group commit**), so throughput grows with concurrency while each commit still waits for one flush.
+- **Torn pages.** A crash halfway through writing an 8 KB page can leave half old and half new bytes. Postgres writes the **whole page** into the WAL the first time it changes after each checkpoint (`full_page_writes`), so recovery can restore it; InnoDB writes pages to a **doublewrite buffer** before their real place. Either way a small change can cost a full page of log after a checkpoint: one reason checkpoints are not run too often.
+- **Checkpoints bound recovery.** Periodically the engine writes the changed pages (B-tree) or flushes the memtable (LSM) and notes how far the log is applied; recovery replays only the log after that point, and older log can be recycled.
+- **The log is the replication stream.** Postgres streaming replication ships WAL; MySQL ships its binlog; Raft-based stores replicate a log and apply it to an engine on each node.
 """
 
 [[sections]]
@@ -17,11 +32,27 @@ heading = "B-tree: sorted pages, changed in place"
 body = """
 Data lives in fixed-size **pages** (8 KB in Postgres, 16 KB in InnoDB) forming a balanced tree: a few levels of index pages point to leaf pages holding sorted keys. A lookup reads one page per level, 3 or 4 for billions of rows, most of them cached.
 
+**Measured** on Postgres 18 with `pageinspect`: a B-tree index on a `bigint` column with 10 million rows.
+
+| | |
+|---|---|
+| levels | 3 (root, one internal level, leaves) |
+| keys on a leaf page | 367 (built by `CREATE INDEX`, which leaves 10% free) |
+| children of the root | 97 |
+| size | 214 MB, 27,422 pages |
+
+Each internal page points to a few hundred children, so every extra level multiplies capacity by a few hundred: three levels hold tens of millions of keys and four hold billions. The root and the internal level here are 98 pages (under 1 MB), small enough to stay in memory, so a lookup usually costs **one** leaf read from disk.
+
 - **Write**: find the leaf, change it in place (writing the page back), split it when full.
 - **Strengths**: fast point and range reads, predictable latency, each key in one place (easy locking and transactions).
 - **Costs**: random writes, and a whole page rewritten for a small change (**write amplification**); half-empty pages after splits.
 
+**Splits and key order.** A full page splits in two. When keys arrive in ascending order, Postgres splits the rightmost page unevenly and leaves the left page nearly full; random keys split pages in the middle and leave them half full until later inserts fill them. Measured: 2 million `bigint` keys inserted one by one made a **43 MB** index in ascending order and a **59 MB** index in random order, 37% larger, with the extra pages read and cached for every lookup. That is why random UUIDs (version 4) as a primary key cost more than sequential ids or time-ordered UUIDs (version 7).
+
 Postgres, MySQL InnoDB, SQL Server, Oracle and most relational databases use B-trees.
+
+> [!NOTE]
+> In InnoDB the **table itself** is a B-tree ordered by the primary key (a clustered index), and secondary indexes store the primary key. In Postgres the table is a **heap** of row versions (an `UPDATE` writes a new version and `VACUUM` reclaims the old one), and every index, including the primary key's, is a separate B-tree pointing into it.
 """
 
 [[sections]]
@@ -35,7 +66,137 @@ body = """
 - **Strengths**: writes are sequential, very high write throughput, good compression.
 - **Costs**: a read may touch several files (**read amplification**), compaction uses disk and CPU and can cause latency spikes, old versions use space until compacted (**space amplification**).
 
-RocksDB, LevelDB, Cassandra, ScyllaDB, HBase, and the storage under many newer databases (CockroachDB's Pebble, TiKV) use LSM trees.
+The design comes from O'Neil, Cheng, Gawlick and O'Neil's LSM-tree paper (1996); Google's Bigtable (2006) named the memtable and the SSTable, LevelDB (2011) made it a library, and RocksDB grew from LevelDB.
+
+A whole LSM engine, without the files, fits on a page:
+
+```rust title=lsm.rs hl=29-37,56-60
+use std::collections::BTreeMap;
+
+/// `None` is a tombstone: "this key was deleted".
+type Entry = (String, Option<String>);
+
+pub struct Lsm {
+    memtable: BTreeMap<String, Option<String>>,
+    runs: Vec<Vec<Entry>>, // immutable sorted runs on "disk", oldest first
+    memtable_limit: usize,
+    max_runs: usize,
+    pub written: usize, // entries written by flushes and compactions
+}
+
+impl Lsm {
+    pub fn new(memtable_limit: usize, max_runs: usize) -> Self {
+        Lsm { memtable: BTreeMap::new(), runs: Vec::new(), memtable_limit, max_runs, written: 0 }
+    }
+
+    pub fn put(&mut self, key: &str, value: &str) {
+        self.write(key, Some(value.to_owned()));
+    }
+
+    pub fn delete(&mut self, key: &str) {
+        self.write(key, None); // a delete is a write too
+    }
+
+    fn write(&mut self, key: &str, value: Option<String>) {
+        // a real engine appends to the write-ahead log first
+        self.memtable.insert(key.to_owned(), value);
+        if self.memtable.len() >= self.memtable_limit {
+            let run: Vec<Entry> = std::mem::take(&mut self.memtable).into_iter().collect();
+            self.written += run.len();
+            self.runs.push(run);
+            if self.runs.len() > self.max_runs {
+                self.compact();
+            }
+        }
+    }
+
+    /// Newest first: the memtable, then each run from newest to oldest. Returns the value and how many runs were searched.
+    pub fn get(&self, key: &str) -> (Option<&str>, usize) {
+        if let Some(v) = self.memtable.get(key) {
+            return (v.as_deref(), 0);
+        }
+        for (searched, run) in self.runs.iter().rev().enumerate() {
+            if let Ok(i) = run.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
+                return (run[i].1.as_deref(), searched + 1);
+            }
+        }
+        (None, self.runs.len())
+    }
+
+    /// Merge every run into one, keeping the newest version of each key. Tombstones can be dropped only because
+    /// this merge includes the oldest run: nothing older is left for the deleted value to reappear from.
+    fn compact(&mut self) {
+        let mut merged: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for run in self.runs.drain(..) {
+            merged.extend(run); // later (newer) runs overwrite older versions
+        }
+        let run: Vec<Entry> = merged.into_iter().filter(|(_, v)| v.is_some()).collect();
+        self.written += run.len();
+        self.runs.push(run);
+    }
+
+    pub fn on_disk(&self) -> usize {
+        self.runs.iter().map(Vec::len).sum()
+    }
+}
+```
+
+Run with 200,000 writes over 50,000 keys (one in ten a delete), a memtable of 1,000 entries, and a full compaction whenever the number of runs passes a limit. The results always matched a plain set; what changes with the limit is the cost:
+
+| Runs allowed before compacting | Write amplification | Runs searched for a missing key | Space amplification |
+|---|---|---|---|
+| 2 | 17.8 | 1.5 | 1.00 |
+| 4 | 9.4 | 2.5 | 1.02 |
+| 8 | 5.2 | 4.4 | 1.07 |
+| 16 | 3.1 | 8.3 | 1.15 |
+| 32 | 2.1 | 16.1 | 1.30 |
+
+(Averages sampled every hundred writes; write amplification is entries written to "disk" per user write.) Compacting eagerly rewrites the same data again and again but keeps reads to one run; compacting lazily writes little but leaves reads checking many runs and old versions taking space. **No setting wins all three**: that is the whole design space of LSM engines, and real ones move through it with smarter compaction rather than one big merge.
+
+:::steps Reading one key from an LSM tree
+- memtable | not here | The newest data is in memory; a hit here ends the read at once.
+- SSTable 4 (newest) | Bloom filter says no | One memory lookup rules the file out; no disk read.
+- SSTable 3 | Bloom filter says maybe, index points to one block | The sparse index narrows it to one block, read from disk or the block cache.
+- SSTable 3 | key found: value v7 | The newest version wins; older files are never checked.
+:::
+"""
+
+[[sections]]
+heading = "Compaction strategies"
+body = """
+Compaction decides which files merge and when, and with it where the engine sits on the read, write and space trade.
+
+| Strategy | How files merge | Good at | Costs |
+|---|---|---|---|
+| **leveled** (RocksDB's default; Cassandra LCS) | L0 holds flushed files; each level below is one sorted run about 10 times the size of the one above; a file merges into the overlapping files of the next level | reads touch about one file per level; little space wasted | more rewriting: data is merged again at every level |
+| **size-tiered** (Cassandra STCS, its default; RocksDB universal is in this family) | wait until several files of similar size exist (Cassandra: 4 by default), merge them into one larger file | low write amplification, high ingest rate | more files to check per read; a full merge can briefly need space for the old and new copies |
+| **time-window** (Cassandra TWCS) | size-tiered inside each time window; once a window closes its files are never merged with others | TTL'd, append-only time series: a whole window expires by dropping its files | data that is updated or written out of order lands in the wrong window |
+| **unified** (Cassandra UCS, recommended for new tables in Cassandra 5) | one parameterised strategy that can behave like leveled or tiered | one knob instead of a migration between strategies | newer |
+
+With leveled sizing, the last level holds about 90% of the data (each level is a tenth of the next: 1 + 0.1 + 0.01 + … of it), so the space wasted by old versions in upper levels stays near 10%.
+
+**Deletes are writes.** A delete writes a **tombstone**, which hides older versions during reads and merges. It cannot be dropped until compaction has merged it with every older file that may still hold the value, or the value would come back. Distributed stores add a second condition: every replica must have the tombstone, or a replica that missed the delete would copy the old value back during repair. Cassandra keeps tombstones for `gc_grace_seconds`, **ten days by default**, and a node that was down longer than that must not rejoin without repair, or deleted data reappears ("zombies").
+
+> [!WARNING]
+> Workloads that delete or overwrite heavily (queues stored in a table, sessions with short TTLs) fill an LSM with tombstones that every read must skip until compaction removes them. Reads slow down long before the disk is full.
+"""
+
+[[sections]]
+heading = "The three amplifications"
+body = """
+Every storage engine can be described by three ratios:
+
+- **Write amplification**: bytes written to disk per byte the application wrote. Wears SSDs and uses disk bandwidth that reads need.
+- **Read amplification**: pages or files read per lookup.
+- **Space amplification**: disk used per byte of live data.
+
+Athanassoulis and colleagues called the trade the **RUM conjecture** (read, update, memory): an access method can be optimised for two of the three, at the expense of the third. The table above is that conjecture in miniature. A B-tree spends space (half-empty pages after splits) and writes (a page per change, a full page in the WAL after a checkpoint) to keep reads at one path down the tree; an LSM spends reads and background work to make writes sequential.
+
+| | B-tree | LSM tree |
+|---|---|---|
+| write amplification | a whole page per small change | every byte rewritten at each compaction level |
+| read amplification | one page per level, upper levels cached | one probe per run, cut by Bloom filters |
+| space amplification | free space in pages after splits | old versions and tombstones until compaction |
 """
 
 [[sections]]
@@ -57,6 +218,18 @@ body = """
 > When you pick a database, say which engine is under it and why that matches the read/write mix.
 """
 
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Name the engine under the database you pick**: Postgres and MySQL are B-trees; Cassandra, ScyllaDB, HBase, RocksDB-based stores (and CockroachDB's Pebble, TiKV) are LSM trees.
+2. **Match it to the mix**: "ninety percent appends of new events" is an LSM; "read-heavy with transactions and range queries" is a B-tree.
+3. **Say what the engine makes expensive**: random primary keys bloat a B-tree; deletes and overwrites fill an LSM with tombstones; compaction needs spare disk and bandwidth.
+4. **For time series**, say how old data leaves: time-window compaction or dropping a time partition removes files whole instead of deleting rows one by one.
+
+> [!INTERVIEW]
+> "Events are written once and expire after 30 days, so Cassandra with time-window compaction by day: each day's files are dropped whole when their TTL passes, and no tombstones pile up."
+"""
+
 [[checks]]
 prompt = "Why does an LSM tree need Bloom filters, and what would reads look like without them?"
 answer = "A key may be in the memtable or any of many SSTables, so a read for a missing or old key would have to search every file on disk. A Bloom filter per SSTable says 'definitely not here' for most files from memory, so the read touches only the files that may hold the key."
@@ -68,6 +241,129 @@ answer = "The delete writes a tombstone, which is newer than the old value; read
 [[checks]]
 prompt = "Name the three amplifications and which engine suffers more from each."
 answer = "Write amplification (bytes written to disk per byte of data): B-trees rewrite whole pages, LSM trees rewrite during compaction; both pay, leveled LSM often most. Read amplification (files or pages read per lookup): worse in LSM trees. Space amplification (disk used per live byte): LSM trees keep old versions until compaction; B-trees lose space to half-empty pages."
+
+[[checks]]
+prompt = "A team uses random UUIDs (version 4) as the primary key of a large Postgres table and sees the index grow faster than expected. Why, and what would you change?"
+answer = "Random keys land on random leaf pages, so pages split in the middle and sit half empty, and every insert touches a different page (more pages to cache and write). Ascending keys fill the rightmost page and split it unevenly, leaving full pages: 2 million random bigint keys made a 59 MB index against 43 MB in ascending order. Use a sequential id or a time-ordered UUID (version 7) as the key."
+
+[[checks]]
+prompt = "A Cassandra node is down for two weeks, then rejoins without a repair. Rows deleted while it was away start reappearing. Why?"
+answer = "The deletes were tombstones on the other replicas, and tombstones are dropped by compaction after gc_grace_seconds (ten days by default). The returning node still holds the old values and no tombstone exists any more to hide them, so repair or read repair copies them back to the others. A node down longer than gc_grace_seconds must be repaired or rebuilt before it rejoins."
+
+[[checks]]
+prompt = "When would you choose leveled compaction over size-tiered for an LSM table?"
+answer = "When reads matter more than write throughput, or data is overwritten and deleted often: leveled keeps about one sorted run per level, so a read checks few files and old versions are cleaned up quickly, at the price of rewriting data at every level. Size-tiered suits write-heavy, mostly-append workloads where extra files per read and temporary disk space for big merges are acceptable."
+
+[[terms]]
+term = "Write-ahead log"
+means = "An append-only file of changes, flushed before a write is acknowledged, replayed after a crash."
+section = "The write-ahead log"
+
+[[terms]]
+term = "Group commit"
+means = "Several commits that arrive together share one flush of the log."
+section = "The write-ahead log"
+
+[[terms]]
+term = "Page"
+means = "The fixed-size unit a B-tree reads and writes: 8 KB in Postgres, 16 KB in InnoDB."
+section = "B-tree: sorted pages, changed in place"
+
+[[terms]]
+term = "Page split"
+means = "A full B-tree page divided in two, with a new pointer added to its parent."
+section = "B-tree: sorted pages, changed in place"
+
+[[terms]]
+term = "Memtable"
+means = "An LSM's in-memory sorted buffer of recent writes."
+section = "LSM tree: append now, sort later"
+
+[[terms]]
+term = "SSTable"
+means = "An immutable sorted file written when a memtable is flushed."
+section = "LSM tree: append now, sort later"
+
+[[terms]]
+term = "Compaction"
+means = "Merging sorted files into fewer, keeping the newest version of each key."
+section = "Compaction strategies"
+
+[[terms]]
+term = "Tombstone"
+means = "A record that a key was deleted, kept until no older copy can resurface."
+section = "Compaction strategies"
+
+[[terms]]
+term = "Write amplification"
+means = "Bytes written to disk per byte the application wrote."
+section = "The three amplifications"
+
+[[terms]]
+term = "RUM conjecture"
+means = "An access method can optimise two of read, update and memory cost, at the expense of the third."
+section = "The three amplifications"
+
+[[sources]]
+title = "O'Neil, Cheng, Gawlick and O'Neil: The log-structured merge-tree (Acta Informatica, 1996)"
+kind = "paper"
+url = "https://www.cs.umb.edu/~poneil/lsmtree.pdf"
+
+[[sources]]
+title = "Bayer and McCreight: Organization and maintenance of large ordered indexes (Acta Informatica, 1972)"
+kind = "paper"
+url = "https://doi.org/10.1007/BF00288683"
+note = "the B-tree"
+
+[[sources]]
+title = "Chang et al.: Bigtable (OSDI 2006)"
+kind = "paper"
+url = "https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/"
+note = "memtables, SSTables, compactions, Bloom filters"
+
+[[sources]]
+title = "Athanassoulis et al.: Designing access methods: the RUM conjecture (EDBT 2016)"
+kind = "paper"
+url = "https://stratos.seas.harvard.edu/publications/designing-access-methods-rum-conjecture"
+
+[[sources]]
+title = "PostgreSQL: Write-Ahead Logging and full_page_writes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-intro.html"
+
+[[sources]]
+title = "PostgreSQL: pageinspect"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pageinspect.html"
+note = "bt_metap and bt_page_stats, used for the measurements"
+
+[[sources]]
+title = "MySQL 8.4: InnoDB doublewrite buffer"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-doublewrite-buffer.html"
+
+[[sources]]
+title = "RocksDB wiki: Leveled compaction"
+kind = "docs"
+url = "https://github.com/facebook/rocksdb/wiki/Leveled-Compaction"
+
+[[sources]]
+title = "RocksDB wiki: Universal compaction"
+kind = "docs"
+url = "https://github.com/facebook/rocksdb/wiki/Universal-Compaction"
+note = "leveled against tiered, and space amplification"
+
+[[sources]]
+title = "Apache Cassandra: compaction overview"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html"
+note = "STCS, LCS, TWCS and UCS"
+
+[[sources]]
+title = "Apache Cassandra: tombstones"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html"
+note = "gc_grace_seconds and zombies"
 
 [[figures]]
 name = "lsm-tree"

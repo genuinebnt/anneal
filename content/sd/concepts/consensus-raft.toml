@@ -1,15 +1,30 @@
 title = "Consensus and Raft"
 group = "distributed"
 order = 1
-minutes = 11
+minutes = 22
 lede = "How a few machines agree on one sequence of decisions even when some crash: elect a leader, replicate a log, and commit an entry once a majority has it. Raft is the version built to be understood; etcd, Consul and Kafka's KRaft run it."
 say = "The lock service is three etcd nodes running Raft, so it survives one failure; a write commits once two of three have it in their log, and clients use the lease's revision as a fencing token."
-related = ["replication", "consistency-cap", "kafka", "coordination-services", "leases-and-fencing"]
+related = ["replication", "consistency-cap", "kafka", "coordination-services", "leases-and-fencing", "quorums", "clocks-and-ordering"]
+
+summary = [
+  "Consensus lets a group agree on **one ordered log** of commands; every replica applies the same log and reaches the same state.",
+  "Raft elects **one leader per term** with randomised timeouts; the leader replicates entries, and an entry **commits once a majority** holds it.",
+  "A cluster of **2f + 1** survives **f** failures: 3 survive 1, 5 survive 2; an even size adds cost, not tolerance.",
+  "Safety never depends on timing: votes go only to candidates with **up-to-date logs**, and a leader commits only entries of **its own term** by counting.",
+  "Use it for **small, critical state** (locks, leaders, configuration, metadata) through a system that already runs it, not for bulk data.",
+]
 
 [[sections]]
 heading = "Why it is needed"
 body = """
 Leader election, distributed locks, configuration, "which broker leads partition 7": all need several machines to **agree on one answer** despite crashes and lost messages. Majority **quorums** make that possible: any two majorities of 5 overlap, so two different answers can never both be accepted.
+
+The general tool is **state machine replication**: if every replica starts in the same state and applies the same commands in the same order, they all end in the same state. The hard part is agreeing on the order, one log slot at a time, when servers crash and messages are delayed or lost. That is **consensus**.
+
+Two facts frame every algorithm:
+
+- **Fischer, Lynch and Paterson (1985)**: in a fully asynchronous network, no deterministic algorithm can guarantee to reach agreement if even one process may crash, because a slow process cannot be told apart from a dead one. Practical algorithms therefore keep **safety** (never two different decisions) unconditionally and rely on timeouts only for **liveness** (eventually deciding).
+- **Crash faults, not lies**: Raft and Paxos assume servers stop or restart but never send false messages. Tolerating malicious servers (Byzantine faults) needs 3f + 1 servers and different protocols, used in blockchains, rarely in data centres.
 """
 
 [[sections]]
@@ -22,6 +37,106 @@ body = """
 
 > [!NOTE]
 > A cluster of 2f+1 nodes tolerates f failures: 3 nodes survive 1, 5 survive 2. An even number adds cost without tolerance.
+
+Ongaro and Ousterhout designed Raft (2014) for understandability: the whole protocol is two RPCs. **RequestVote** carries the candidate's term and the index and term of its last log entry. **AppendEntries** carries new entries plus the index and term of the entry just before them, and doubles as the heartbeat when empty. A follower accepts entries only if its log has that previous entry; if not, the leader steps back one entry and retries until the logs match, then overwrites the follower's conflicting tail. That consistency check gives the **log matching property**: if two logs have an entry with the same index and term, the logs are identical up to that entry.
+
+Any server that sees a higher term in a message adopts it and becomes a follower, which is how a deposed leader learns it has been replaced.
+"""
+
+[[sections]]
+heading = "Elections and timing"
+body = """
+If several followers time out together, they split the vote, nobody gets a majority, and a new term starts. Raft avoids this by drawing each election timeout **at random** from an interval, so one server usually times out first, wins, and sends heartbeats before the others time out.
+
+The paper measured how long a five-server cluster (broadcast time about 15 ms) took to detect and replace a crashed leader, over 1,000 trials per setting:
+
+| Election timeout | Result |
+|---|---|
+| 150-150 ms (no randomness) | consistently **more than 10 seconds**: repeated split votes |
+| 150-155 ms | median **287 ms** |
+| 150-200 ms | worst case **513 ms** |
+| 12-24 ms | **35 ms** on average, worst 152 ms, but too close to the heartbeat time: needless leader changes |
+
+The paper recommends a conservative **150-300 ms**, and states the timing requirement as
+
+$$\\text{broadcastTime} \\ll \\text{electionTimeout} \\ll \\text{MTBF}$$
+
+where broadcast time (an RPC to every server and back, including writing to disk) is typically 0.5 to 20 ms and a server's mean time between failures is months. Across regions, where a round trip alone is 100 ms or more, timeouts are set far higher.
+
+> [!TIP]
+> Elections cost availability: no writes commit between the old leader's death and the new leader's first heartbeat. A cluster that re-elects often (overloaded leader, slow disk delaying heartbeats, flapping network) looks like an outage. Raft's thesis adds a **pre-vote** round, in which a would-be candidate first checks it could win before raising the term, so a server that was cut off cannot disrupt a healthy leader when it rejoins.
+"""
+
+[[sections]]
+heading = "The safety rules, in code"
+body = """
+Two small rules carry Raft's safety. Both are run below as written:
+
+```rust title=raft_rules.rs hl=5,15-16
+/// A voter grants its vote only to a candidate whose log is at least as up to date as its own
+/// (Raft section 5.4.1): a later last term wins; with equal last terms, the longer log wins.
+pub fn candidate_is_up_to_date(my_last: (u64, u64), candidate_last: (u64, u64)) -> bool {
+    let ((my_term, my_index), (c_term, c_index)) = (my_last, candidate_last);
+    c_term > my_term || (c_term == my_term && c_index >= my_index)
+}
+
+/// The leader's commit rule (section 5.3 and 5.4.2): the highest index stored on a majority of servers,
+/// and only if the entry at that index is from the leader's current term.
+/// `match_index` holds, for every server including the leader, the last index known to be in its log.
+/// `terms[i - 1]` is the term of the entry at log index i.
+pub fn new_commit_index(match_index: &[u64], terms: &[u64], current_term: u64, commit: u64) -> u64 {
+    let mut m = match_index.to_vec();
+    m.sort_unstable_by(|a, b| b.cmp(a));
+    let on_majority = m[m.len() / 2]; // sorted high to low: n/2 + 1 servers hold at least this
+    if on_majority > commit && terms[on_majority as usize - 1] == current_term {
+        on_majority
+    } else {
+        commit
+    }
+}
+```
+
+With five servers whose logs end at indexes 7, 7, 5, 3 and 2, the third largest is 5: three servers hold index 5, so it commits (if it is from the current term). The vote rule means a candidate missing a committed entry cannot collect a majority: every majority includes a server that has the entry and refuses its vote.
+
+**Why only the current term's entries are committed by counting.** Raft's paper shows a history (its figure 8) in which an entry from an old term reaches a majority and is still overwritten later:
+
+:::steps An old entry on a majority is not yet safe
+- term 2 | S1 leads, writes entry 2 to S1 and S2, crashes | The entry is on 2 of 5 servers.
+- term 3 | S5 wins with votes from S3, S4, S5, writes its own entry 2, crashes | S5 never saw S1's entry, and its log is as up to date as theirs.
+- term 4 | S1 leads again and copies its old entry 2 to S3 | Now 3 of 5 servers hold it: a majority.
+- if it counted | S1 marks it committed, then crashes | Counting replicas alone would say it is safe.
+- term 5 | S5 can still win (its last term, 3, beats their 2) and overwrites entry 2 everywhere | A "committed" entry disappears.
+- Raft's rule | S1 commits only after an entry of term 4 is on a majority | Then S5's log is behind a majority and it cannot win; the old entry commits along with the new one.
+:::
+
+The run above checks exactly that: the term-2 entry on a majority leaves the commit index at 2; once a term-4 entry is on a majority, the commit index jumps to 5. This is also why a new leader appends a **no-op entry** at the start of its term: it commits everything before it.
+"""
+
+[[sections]]
+heading = "Reads, membership and snapshots"
+body = """
+**Reads.** Writes go through the log; reads need care. A leader that has just been partitioned away still believes it leads, and if it answered reads from its own state it could return stale data while a new leader accepts writes. For **linearizable** reads the paper gives two options: the leader confirms it is still leader by exchanging a heartbeat with a majority before answering (the thesis calls this ReadIndex), or it relies on a **lease** (no other leader can be elected for a while after a heartbeat), which is faster but depends on bounded clock drift. etcd makes reads linearizable by default and offers `serializable` reads that a single member answers, faster and possibly stale.
+
+**Duplicate commands.** If a leader crashes after committing a command but before replying, the client retries and the command could run twice. Raft's answer is the usual one: clients give each command a unique serial number, and the state machine remembers the last one per client and returns the stored response for a repeat.
+
+**Membership changes.** Switching straight from an old set of servers to a new one could, during the switch, let one majority of the old set and a different majority of the new set each elect a leader. The paper's **joint consensus** passes through a configuration that needs majorities of both; the thesis's simpler alternative changes **one server at a time**, where any old and new majorities always overlap. etcd adds new members as non-voting **learners** that catch up on the log before they count towards the quorum, so a slow new member cannot stall commits.
+
+**Snapshots.** The log cannot grow forever: each server periodically writes its state machine to a snapshot and discards the log before it. A follower too far behind receives the snapshot (InstallSnapshot) instead of the missing entries.
+"""
+
+[[sections]]
+heading = "Paxos and the family"
+body = """
+Raft is one member of a family that solves the same problem with the same majority-quorum idea:
+
+| Protocol | Where | Notes |
+|---|---|---|
+| Paxos (Lamport) | Chubby, Spanner (a Paxos group per split) | proposers, acceptors, learners; a value is chosen when a majority of acceptors accept it; *Paxos Made Simple* (2001) is the readable version |
+| Multi-Paxos | most Paxos deployments | a stable leader skips the first phase for every slot after the first, which makes it close to Raft |
+| ZAB | ZooKeeper | an atomic broadcast protocol with a leader and epochs, like Raft's terms |
+| Raft | etcd, Consul, CockroachDB and TiKV (a group per range), Kafka's KRaft controller | one leader, strong log matching, designed to be taught |
+
+Google's Chubby (2006) ran Paxos on **five replicas per cell, three of which must be up**, and its authors noted that every working asynchronous consensus protocol they had met had Paxos at its core. In an interview, "Paxos or Raft" are interchangeable; what matters is the majority, the single leader and the log.
 """
 
 [[sections]]
@@ -30,12 +145,30 @@ body = """
 - **Coordination services** (etcd, ZooKeeper, Consul): locks, leader election, config, service discovery.
 - **Metadata of data systems**: Kafka's KRaft controller, CockroachDB and TiKV (Raft per range), Spanner (Paxos per split).
 - You rarely implement it; you **choose a system that uses it** for the small, critical state, and keep bulk data elsewhere.
+
+**Placement.** Five voters across three availability zones as 2, 2 and 1 survive the loss of any one zone; three voters in three zones survive one zone. Spreading voters across regions makes every commit pay a cross-region round trip, so global systems keep each consensus group within a region or accept the latency for the data that needs it.
+
+**Throughput.** Every write goes through one leader and waits for a majority to write it to disk, so one group's write rate is bounded by one machine and a quorum round trip. Systems that need more run **many groups**, one per shard or range (CockroachDB, TiKV, Spanner).
 """
 
 [[sections]]
 heading = "Leases and fencing tokens"
 body = """
 A lock holder can pause (GC, network) past its lease while another node takes the lock. Give each grant an increasing **fencing token** (etcd's revision, ZooKeeper's zxid) and make the protected resource reject writes with an older token.
+
+The full story, including why Redis-based locks differ, is on the leases and fencing page.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Say what needs consensus**: usually a small piece of state (who leads, who holds the lock, the shard map), not the bulk data.
+2. **Name the system** that provides it (etcd, ZooKeeper, a database's built-in replication) and its **size**: three or five voters.
+3. **Say what happens on failure**: the cluster keeps committing while a majority is up; a minority side stops accepting writes; an election takes a few hundred milliseconds of write unavailability.
+4. **Say how reads stay correct**: through the leader with a quorum check, or knowingly stale from a follower.
+
+> [!INTERVIEW]
+> "Leader election goes through etcd: each scheduler instance campaigns with a lease; the winner's lease revision is its fencing token, and the job store rejects writes with an older revision, so a paused ex-leader cannot double-run jobs."
 """
 
 [[checks]]
@@ -45,3 +178,117 @@ answer = "Committing and electing need a majority (3 of 5). With 2 down, 3 remai
 [[checks]]
 prompt = "A client holds a lock, pauses for 30 seconds in garbage collection, then writes to storage after its lease expired and another client got the lock. How do you stop the stale write?"
 answer = "Fencing: each lock grant comes with an increasing token, every write carries it, and the storage rejects a write whose token is lower than the highest it has seen."
+
+[[checks]]
+prompt = "Why is a 4-node cluster no more fault tolerant than a 3-node one?"
+answer = "A majority of 4 is 3, so it tolerates only 1 failure, the same as 3 nodes (majority 2). The fourth node adds a replica to write to and a vote to wait for, without letting the cluster survive a second failure; 5 nodes are needed for that."
+
+[[checks]]
+prompt = "Why does each server draw its election timeout at random, and what did the Raft paper measure without that randomness?"
+answer = "If followers time out together they all become candidates, split the votes, and no one gets a majority; the next round can repeat the split. Random timeouts let one server usually time out first and win. With no randomness (150-150 ms) elections consistently took more than 10 seconds in the paper's tests; with just 5 ms of randomness the median was 287 ms."
+
+[[checks]]
+prompt = "A Raft leader is partitioned away from the other four servers but still receives client reads. What can go wrong, and how do Raft systems prevent it?"
+answer = "The other four elect a new leader and accept writes; the old leader, unaware, would answer reads from stale state. For linearizable reads the leader first confirms it still leads by exchanging a heartbeat with a majority (ReadIndex), which fails on the minority side; or it relies on a lease bounded by clock drift. etcd does this by default; its serializable reads skip the check and may be stale."
+
+[[checks]]
+prompt = "A new Raft leader finds an entry from an earlier term stored on a majority of servers. Why may it not mark that entry committed yet?"
+answer = "A server that never saw the entry may still win a later election if its last entry has a higher term, and would overwrite it (the paper's figure 8). The leader commits only entries from its own term by counting replicas; once one of those is on a majority, it and every earlier entry are committed. A new leader appends a no-op entry at the start of its term to get there quickly."
+
+[[terms]]
+term = "State machine replication"
+means = "Replicas apply the same commands in the same order, so they reach the same state."
+section = "Why it is needed"
+
+[[terms]]
+term = "FLP impossibility"
+means = "With fully asynchronous messages, no deterministic algorithm can guarantee agreement if one process may crash."
+section = "Why it is needed"
+
+[[terms]]
+term = "Term"
+means = "Raft's numbered period with at most one leader; a higher term always wins."
+section = "Raft in four moves"
+
+[[terms]]
+term = "Log matching"
+means = "If two logs share an entry's index and term, they are identical up to it."
+section = "Raft in four moves"
+
+[[terms]]
+term = "Split vote"
+means = "Several candidates divide the votes so none has a majority; a new term follows."
+section = "Elections and timing"
+
+[[terms]]
+term = "Commit index"
+means = "The highest log index known to be stored on a majority; entries up to it are applied."
+section = "The safety rules, in code"
+
+[[terms]]
+term = "ReadIndex"
+means = "A leader confirms with a majority that it still leads before answering a read."
+section = "Reads, membership and snapshots"
+
+[[terms]]
+term = "Joint consensus"
+means = "A membership change through a configuration that needs majorities of both the old and new sets."
+section = "Reads, membership and snapshots"
+
+[[terms]]
+term = "Learner"
+means = "A non-voting member that catches up on the log before it joins the quorum (etcd)."
+section = "Reads, membership and snapshots"
+
+[[terms]]
+term = "Multi-Paxos"
+means = "Paxos with a stable leader that runs one round per log slot."
+section = "Paxos and the family"
+
+[[sources]]
+title = "Ongaro and Ousterhout: In search of an understandable consensus algorithm (USENIX ATC 2014)"
+kind = "paper"
+url = "https://raft.github.io/raft.pdf"
+note = "the Raft paper: rules, figure 8, election measurements"
+
+[[sources]]
+title = "Ongaro: Consensus: bridging theory and practice (PhD thesis, Stanford, 2014)"
+kind = "paper"
+url = "https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf"
+note = "single-server membership changes, pre-vote, ReadIndex"
+
+[[sources]]
+title = "The Raft consensus algorithm (site and visualisation)"
+kind = "guide"
+url = "https://raft.github.io/"
+
+[[sources]]
+title = "Lamport: Paxos made simple (2001)"
+kind = "paper"
+url = "https://lamport.azurewebsites.net/pubs/paxos-simple.pdf"
+
+[[sources]]
+title = "Fischer, Lynch and Paterson: Impossibility of distributed consensus with one faulty process (JACM, 1985)"
+kind = "paper"
+url = "https://doi.org/10.1145/3149.214121"
+
+[[sources]]
+title = "Burrows: The Chubby lock service for loosely-coupled distributed systems (OSDI 2006)"
+kind = "paper"
+url = "https://www.usenix.org/legacy/event/osdi06/tech/full_papers/burrows/burrows.pdf"
+
+[[sources]]
+title = "etcd: API guarantees"
+kind = "docs"
+url = "https://etcd.io/docs/v3.5/learning/api_guarantees/"
+note = "linearizable and serializable reads"
+
+[[sources]]
+title = "etcd: learner design"
+kind = "docs"
+url = "https://etcd.io/docs/v3.5/learning/design-learner/"
+
+[[figures]]
+name = "raft-log"
+after = "Raft in four moves"
+caption = "The leader appends; followers catch up at their own pace; the commit index moves when three of five logs hold an entry."

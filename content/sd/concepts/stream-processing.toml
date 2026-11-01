@@ -1,10 +1,18 @@
 title = "Stream processing"
 group = "advanced"
 order = 5
-minutes = 12
+minutes = 20
 lede = "Computing over events as they arrive: counts per minute, joins, alerts. The hard parts are time (events arrive late and out of order), state (kept across millions of keys and restored after failures) and exactly-once results."
 say = "Clicks go to Kafka; a Flink job counts per ad in one-minute tumbling windows on event time with a watermark two minutes behind, and writes to the OLAP store idempotently keyed by ad and window."
-related = ["kafka", "queues-and-streams", "probabilistic-structures", "clocks-and-ordering"]
+related = ["kafka", "queues-and-streams", "probabilistic-structures", "clocks-and-ordering", "multi-step-processes"]
+
+summary = [
+  "Window on **event time**, not processing time: after a 10-minute outage, processing-time counts showed **zero** for ten minutes and **11 times** the normal count in one.",
+  "A **watermark** says \"events up to time T have probably arrived\"; how far it trails is a trade of **latency against completeness**.",
+  "Late events are **dropped, sent to a side output, or used to correct** a result already emitted; decide which per use.",
+  "State lives in the job and is **checkpointed together with the input offsets**, so a restart resumes exactly where the snapshot was taken.",
+  "End to end, **exactly once** means each event affects the output once: a **transactional or idempotent sink** finishes the job.",
+]
 
 [[sections]]
 heading = "Event time and processing time"
@@ -13,6 +21,15 @@ body = """
 - **Processing time**: when the job sees it.
 
 A phone offline for ten minutes sends its clicks late; a consumer that restarts reprocesses an hour in a minute. Results computed on processing time change with every delay and replay. Results on **event time** are the same however the events arrive, so analytics and billing use event time.
+
+**Measured** with a simulated hour of a million clicks (most arriving within a second or two; 2% from phones up to ten minutes late), counted per minute:
+
+| Scenario | Processing-time windows | Event-time windows |
+|---|---|---|
+| normal running | mean error 0.32% a minute, worst 3.54% | exact once complete |
+| the job is down from minute 20 to 30, then catches up in 30 seconds | minutes 20-29: **0** clicks each; minute 30: **183,940** (a normal minute is about 16,700) | minutes 20-29 all within 5% of the truth, the rest arriving late |
+
+On a good day the two look alike, which is why the difference is easy to miss; the first outage or replay shows it.
 """
 
 [[sections]]
@@ -23,6 +40,15 @@ body = """
 | tumbling | fixed, non-overlapping | clicks per ad per minute |
 | sliding (hopping) | fixed length, starting every step | requests in the last 5 minutes, every 10 seconds |
 | session | ends after a gap of inactivity | a user's visit, closed after 30 idle minutes |
+
+Google's **Dataflow model** (Akidau and colleagues, 2015), the basis of Apache Beam and much of Flink's API, splits every streaming computation into four questions:
+
+1. **What** is computed: the transformation (count, sum, join).
+2. **Where** in event time: the windows.
+3. **When** in processing time results are emitted: **triggers**, such as "when the watermark passes the end of the window", "every 10 seconds with what we have so far", "again for each late event".
+4. **How** later results relate to earlier ones: **discarding** (each emission is just the new part), **accumulating** (each emission is the total so far, replacing the last), or accumulating and **retracting** (send "remove the old value" before the new one, so downstream sums stay right).
+
+Sliding windows of length L every step S put each event in L / S windows (5 minutes every 10 seconds: 30 windows), which multiplies state and output; session windows merge as events arrive and can grow without bound if a user never goes idle, so cap them.
 """
 
 [[sections]]
@@ -31,6 +57,68 @@ body = """
 When is the 10:00–10:01 window complete? Events can always arrive late. A **watermark** is the job's assertion "I believe all events up to time T have arrived", typically the largest event time seen minus an allowed lateness. When the watermark passes 10:01, the window fires.
 
 Events behind the watermark are **late**: drop them, send them to a side output, or update the result (allowed lateness: fire again with a correction). The trade-off is latency against completeness.
+
+The whole mechanism for tumbling windows:
+
+```rust title=windows.rs hl=25-28,31-38
+use std::collections::BTreeMap;
+
+/// One-minute tumbling windows on event time, closed by a watermark that trails the largest event time seen.
+pub struct Windows {
+    size_ms: u64,
+    lateness_ms: u64,                 // how far the watermark trails the newest event
+    max_event_ms: u64,                // the largest event time seen so far
+    open: BTreeMap<u64, u64>,         // window start -> count
+    pub fired: Vec<(u64, u64, u64)>, // (window start, count, processing time when it fired)
+    pub late: u64,                    // events for windows that had already fired
+}
+
+impl Windows {
+    pub fn new(size_ms: u64, lateness_ms: u64) -> Self {
+        Windows { size_ms, lateness_ms, max_event_ms: 0, open: BTreeMap::new(), fired: vec![], late: 0 }
+    }
+
+    fn watermark(&self) -> u64 {
+        self.max_event_ms.saturating_sub(self.lateness_ms)
+    }
+
+    /// An event with its event time arrives at processing time `now_ms`.
+    pub fn on_event(&mut self, event_ms: u64, now_ms: u64) {
+        let start = event_ms - event_ms % self.size_ms;
+        if start + self.size_ms <= self.watermark() {
+            self.late += 1; // its window already fired: drop it, or send it to a side output
+            return;
+        }
+        *self.open.entry(start).or_default() += 1;
+        self.max_event_ms = self.max_event_ms.max(event_ms);
+        // fire every window whose end the watermark has passed: "all events up to here have arrived"
+        while let Some((&s, &n)) = self.open.first_key_value() {
+            if s + self.size_ms > self.watermark() {
+                break;
+            }
+            self.open.remove(&s);
+            self.fired.push((s, n, now_ms));
+        }
+    }
+}
+```
+
+Run over the simulated hour, with the watermark trailing the newest event time by different amounts:
+
+| Watermark trails by | Late events dropped | Windows exactly right | Result waits after the window ends |
+|---|---|---|---|
+| 0 s | 33,447 (3.34%) | 0 of 59 | 0.1 s |
+| 2 s | 20,437 (2.04%) | 0 of 59 | 2.1 s |
+| 10 s | 18,166 (1.82%) | 0 of 59 | 10.1 s |
+| 60 s | 16,274 (1.63%) | 0 of 58 | 60.1 s |
+| 600 s | 0 | 49 of 49 | 600.1 s |
+
+Two lessons. A short delay catches the ordinary jitter cheaply (3.3% late at zero, 2% at two seconds); after that, the **long tail** of offline devices dominates, and only waiting as long as the tail (ten minutes here) makes every window exact. No single number is right: pick the watermark for the latency the result needs, and handle what is still late explicitly.
+
+In Flink this is `WatermarkStrategy.forBoundedOutOfOrderness(Duration.ofSeconds(20))` on the source, with `allowedLateness(...)` (zero by default) and `sideOutputLateData(...)` on the window. Two details bite in production:
+
+- **Parallel inputs**: an operator's event time is the **minimum** of its inputs' watermarks, so one slow Kafka partition holds back every window.
+- **Idle inputs**: a partition with no events produces no watermark and stalls the job; Flink's `withIdleness(...)` marks such an input idle so the others can advance.
 """
 
 [[sections]]
@@ -43,6 +131,18 @@ Counting per ad means state per key, kept in the job (Flink keeps it in RocksDB 
 
 > [!NOTE]
 > End-to-end exactly once is really "effectively once": events may be processed twice, but the results reflect each exactly once.
+
+How the snapshot stays consistent without stopping the stream (Flink's design, after Chandy and Lamport's 1985 snapshot algorithm):
+
+:::steps A checkpoint barrier flows through the job
+- source | records the Kafka offsets, injects barrier n | Everything before the barrier belongs to snapshot n, everything after to n + 1.
+- operator | receives barrier n on one input | It holds back that input until barrier n arrives on all its inputs (aligned checkpoint).
+- operator | has barrier n on every input | It snapshots its state, asynchronously, to durable storage and passes the barrier on.
+- sink | receives barrier n | It pre-commits its output (for example, flushes a Kafka transaction without committing).
+- job manager | every task acknowledged n | Snapshot n is complete; transactional sinks now commit. On a crash, everything restarts from snapshot n.
+:::
+
+**Unaligned checkpoints** let barriers overtake buffered records and store those records in the snapshot instead, so a backed-up job can still checkpoint quickly. **State backends**: a heap backend keeps state as objects in memory (fast, limited by memory); the RocksDB backend keeps it on local disk (state far larger than memory, slower per access) and can take incremental checkpoints.
 """
 
 [[sections]]
@@ -56,6 +156,22 @@ body = """
 > Say event time, the window type, the watermark and what happens to late events, where state lives, and how the sink makes replays harmless.
 """
 
+[[sections]]
+heading = "In the interview"
+body = """
+For an ad click aggregator, a metrics pipeline or a leaderboard, say in order:
+
+1. **The log**: events land in Kafka, partitioned by the key you aggregate on (ad id), with enough retention to replay.
+2. **Time**: event time from the client, a watermark with a stated lateness, and what happens to late events (a side output reconciled hourly).
+3. **Windows and triggers**: tumbling one-minute windows that fire at the watermark, and maybe early results every few seconds for a live dashboard.
+4. **State and recovery**: per-key state in RocksDB, checkpoints every minute, restart from the last checkpoint.
+5. **The sink**: idempotent upserts keyed by (ad, window) or a transactional sink, so a replay cannot double count.
+6. **Hot keys**: a viral ad sends one key to one task; pre-aggregate with a random suffix, then combine.
+
+> [!TIP]
+> If the numbers bill money, also keep the raw events and run a batch job that recomputes the exact totals; the stream serves the live view, the batch settles the bill.
+"""
+
 [[checks]]
 prompt = "Why do billing counts use event time rather than processing time?"
 answer = "Processing time depends on when events happen to reach the job: delays, offline devices and replays after a failure would move clicks into different windows and change the counts. Event time assigns each click to the window it happened in, so results are reproducible."
@@ -67,3 +183,121 @@ answer = "It is late: the 10:00–10:01 window has already fired. The job can dr
 [[checks]]
 prompt = "A Flink job restores from a checkpoint and reprocesses five minutes of clicks. How do you keep the counts in the database from being doubled?"
 answer = "Make the sink idempotent: write each window's count as an upsert keyed by (ad, window start), so a replay overwrites with the same value; or use a transactional sink committed together with the checkpoint."
+
+[[checks]]
+prompt = "One of a job's 32 Kafka partitions stops receiving events. Every window stops firing. Why, and what is the fix?"
+answer = "An operator's event time is the minimum of the watermarks of its inputs, and an input with no events never advances its watermark, so it holds the minimum back for all windows. Mark idle inputs (Flink's withIdleness) so they are ignored until events return, or make sure every partition receives regular events."
+
+[[checks]]
+prompt = "Making the watermark trail by 10 seconds instead of 0 cut late events from 3.3% to 1.8%, but 60 seconds still left 1.6% late. What does that tell you, and how do you design around it?"
+answer = "Most lateness is ordinary jitter that a few seconds absorb; the rest is a long tail (offline devices) that only a very long wait would cover, at the cost of delaying every result. Pick the watermark for the latency the result needs, and handle the tail explicitly: a side output reconciled later, allowed lateness that emits corrections, or a batch job that recomputes exact totals."
+
+[[checks]]
+prompt = "How does a Flink checkpoint get a consistent snapshot of state across many operators without pausing the whole stream?"
+answer = "Sources record their input offsets and inject a numbered barrier into the stream. Each operator, once the barrier has arrived on all its inputs, snapshots its state asynchronously and forwards the barrier; when every task has acknowledged, the checkpoint is complete. Records before the barrier are in the snapshot and records after are not, so restoring the snapshot and rereading from the recorded offsets processes every record's effect on state exactly once."
+
+[[terms]]
+term = "Event time"
+means = "When the event happened, from its own timestamp."
+section = "Event time and processing time"
+
+[[terms]]
+term = "Processing time"
+means = "When the job happens to see the event."
+section = "Event time and processing time"
+
+[[terms]]
+term = "Tumbling window"
+means = "Fixed-size, non-overlapping intervals of event time."
+section = "Windows"
+
+[[terms]]
+term = "Trigger"
+means = "The rule for when a window's result is emitted, and how often."
+section = "Windows"
+
+[[terms]]
+term = "Watermark"
+means = "The job's estimate that all events up to a time have arrived."
+section = "Watermarks and late data"
+
+[[terms]]
+term = "Allowed lateness"
+means = "How long after firing a window still accepts late events and re-emits its result."
+section = "Watermarks and late data"
+
+[[terms]]
+term = "Side output"
+means = "A separate stream that receives late events instead of dropping them."
+section = "Watermarks and late data"
+
+[[terms]]
+term = "Checkpoint barrier"
+means = "A marker in the stream that divides records between two consecutive snapshots."
+section = "State and exactly once"
+
+[[terms]]
+term = "Idempotent sink"
+means = "Writing the same result twice leaves the same state, so replays are harmless."
+section = "State and exactly once"
+
+[[terms]]
+term = "Kappa architecture"
+means = "One streaming path; changes are made by replaying the log through a new job."
+section = "Architectures"
+
+[[sources]]
+title = "Akidau et al.: The Dataflow model (VLDB 2015)"
+kind = "paper"
+url = "https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/"
+note = "what, where, when, how; triggers and accumulation"
+
+[[sources]]
+title = "Akidau et al.: MillWheel: fault-tolerant stream processing at internet scale (VLDB 2013)"
+kind = "paper"
+url = "https://research.google/pubs/millwheel-fault-tolerant-stream-processing-at-internet-scale/"
+note = "low watermarks"
+
+[[sources]]
+title = "Carbone et al.: Lightweight asynchronous snapshots for distributed dataflows (2015)"
+kind = "paper"
+url = "https://arxiv.org/abs/1506.08603"
+note = "Flink's checkpoint barriers"
+
+[[sources]]
+title = "Chandy and Lamport: Distributed snapshots: determining global states of distributed systems (1985)"
+kind = "paper"
+url = "https://lamport.azurewebsites.net/pubs/chandy.pdf"
+
+[[sources]]
+title = "Apache Flink: timely stream processing (event time and watermarks)"
+kind = "docs"
+url = "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/"
+
+[[sources]]
+title = "Apache Flink: generating watermarks"
+kind = "docs"
+url = "https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/event-time/generating_watermarks/"
+note = "bounded out-of-orderness, idle sources"
+
+[[sources]]
+title = "Apache Flink: windows"
+kind = "docs"
+url = "https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/operators/windows/"
+note = "window assigners, allowed lateness, side outputs"
+
+[[sources]]
+title = "Apache Flink: stateful stream processing"
+kind = "docs"
+url = "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/"
+note = "barriers, aligned and unaligned checkpoints, state backends"
+
+[[sources]]
+title = "Kreps: Questioning the Lambda architecture (2014)"
+kind = "article"
+url = "https://www.oreilly.com/radar/questioning-the-lambda-architecture/"
+
+[[figures]]
+name = "watermark"
+after = "Watermarks and late data"
+caption = "Events arrive out of order; a window fires when the watermark passes its end, and an event behind the watermark is late."

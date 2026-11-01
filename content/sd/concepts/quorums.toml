@@ -1,10 +1,18 @@
 title = "Quorums, repair and gossip"
 group = "distributed"
 order = 4
-minutes = 11
+minutes = 20
 lede = "How leaderless, Dynamo-style stores stay available and still converge: write to W of N replicas, read from R, make the sets overlap, and repair the differences in the background. Gossip spreads who is alive."
 say = "With N = 3, W = 2 and R = 2 every read overlaps the latest acknowledged write; during a partition the store uses a sloppy quorum with hinted handoff, so writes stay available and are repaired later."
-related = ["replication", "cassandra", "consistency-cap", "consistent-hashing"]
+related = ["replication", "cassandra", "consistency-cap", "consistent-hashing", "clocks-and-ordering", "dynamodb"]
+
+summary = [
+  "Each key lives on **N** replicas; a write waits for **W** acknowledgements and a read for **R** replies. **R + W > N** makes every read overlap the latest acknowledged write.",
+  "Smaller R and W are faster and more available but read stale data: measured, **N = 3, R = 1, W = 1** returned the old value in **25%** of reads issued right after a write.",
+  "A quorum is **not linearizability**: partial failed writes, concurrent writes and sloppy quorums all leave gaps.",
+  "Replicas converge through **hinted handoff**, **read repair** and **anti-entropy** with Merkle trees, which find 10 differing keys among a million by comparing a few hundred hashes.",
+  "**Gossip** spreads membership in about log n rounds; a **phi accrual** detector decides who is down.",
+]
 
 [[sections]]
 heading = "N, W and R"
@@ -17,12 +25,85 @@ Each key is stored on **N** replicas. A write is acknowledged after **W** of the
 
 > [!WARNING]
 > R + W > N is not linearizability. Concurrent writes, a write that failed on some replicas but succeeded on others, and last-write-wins with skewed clocks can all still return surprising values.
+
+This is the scheme of Amazon's Dynamo (2007), whose common configuration was (N, R, W) = (3, 2, 2). The paper notes that an operation's latency is set by the **slowest** of the R or W replicas it waits for, which is why R and W are usually kept below N.
+
+**How stale is "not a quorum"?** A small simulation: one write, then one read, Dynamo style (the write is sent to all N replicas and acknowledged after W replies; the read is sent to all N and takes the first R replies), each network leg taking an exponentially distributed time with a 5 ms mean. Share of reads that returned the **old** value, over 200,000 trials each:
+
+| N | R | W | Read right after the write | 5 ms later | 20 ms later |
+|---|---|---|---|---|---|
+| 3 | 1 | 1 | 24.95% | 9.20% | 0.46% |
+| 3 | 1 | 2 | 8.64% | 3.24% | 0.16% |
+| 3 | 2 | 1 | 3.82% | 0.50% | 0.00% |
+| 3 | 2 | 2 | 0 | 0 | 0 |
+| 3 | 1 | 3 | 0 | 0 | 0 |
+| 5 | 2 | 2 | 3.32% | 0.45% | 0.00% |
+| 5 | 3 | 3 | 0 | 0 | 0 |
+
+With R + W > N no read was stale, as the overlap argument promises (when nothing fails). Below it, staleness is a probability that falls quickly with time: the idea Bailis and colleagues measured on real clusters as *probabilistically bounded staleness*. Real delays have longer tails than this model, so treat the numbers as the shape, not a prediction.
+
+```rust title=stale_read.rs
+/// One write then one read, Dynamo style: the write goes to all n replicas and is acknowledged after w replies;
+/// the read starts `gap` ms after that, goes to all n, and takes the first r replies. Network legs are exponential
+/// with a mean of 5 ms. Returns whether the read saw only the old value.
+fn stale_read(rng: &mut Rng, n: usize, r: usize, w: usize, gap: f64) -> bool {
+    let applied: Vec<f64> = (0..n).map(|_| rng.exp(5.0)).collect(); // when each replica has the write
+    let mut acks: Vec<f64> = applied.iter().map(|a| a + rng.exp(5.0)).collect();
+    acks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let read_start = acks[w - 1] + gap;
+    let mut replies: Vec<(f64, bool)> = applied
+        .iter()
+        .map(|&a| {
+            let arrives = read_start + rng.exp(5.0);
+            (arrives + rng.exp(5.0), a <= arrives) // (reply time, has the new value)
+        })
+        .collect();
+    replies.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    !replies[..r].iter().any(|&(_, new)| new)
+}
+```
+"""
+
+[[sections]]
+heading = "What a quorum does not promise"
+body = """
+The overlap argument assumes a write either reached W replicas or was rejected. In practice:
+
+- **A failed write is not rolled back.** If a write reaches one replica and then the coordinator gives up, the client sees an error, but that replica keeps the new value. Later reads may or may not see it, and read repair may spread it: an "unsuccessful" write can win.
+- **Concurrent writes** to the same key reach replicas in different orders. With last write wins, the one with the larger timestamp survives on all replicas eventually, and the other is silently dropped.
+- **Clock skew** decides last write wins (see the clocks page): a later write from a slow clock loses.
+- **Sloppy quorums** (below) let W acknowledgements come from nodes outside the key's N home replicas, so a read of the home replicas need not overlap them.
+- **Reads that race a write** can see the new value from one replica and then, on the next read, the old one from another, unless read repair finishes first. Cassandra's default **blocking** read repair writes the newest value back to the replicas it read before it answers, which gives **monotonic quorum reads**.
+
+Getting linearizable reads and writes out of a leaderless store takes more: Cassandra offers lightweight transactions (compare-and-set through a Paxos round) for the operations that need it.
+"""
+
+[[sections]]
+heading = "Consistency levels in Cassandra"
+body = """
+Cassandra takes N per keyspace (the replication factor) and R and W per query (the consistency level). Writes are **always sent to all replicas**; the level only says how many replies the coordinator waits for. Reads are sent to just enough replicas, plus a speculative extra request if one is slow.
+
+| Level | Waits for | Typical use |
+|---|---|---|
+| `ONE`, `TWO`, `THREE` | that many replicas | low latency, stale reads acceptable |
+| `QUORUM` | a majority of all replicas, across data centres | strong reads and writes in one region |
+| `LOCAL_QUORUM` | a majority in the coordinator's data centre | strong within a region without a cross-region wait |
+| `EACH_QUORUM` | a majority in every data centre (writes) | every region must hold the write before success |
+| `ALL` | every replica | rarely: one dead replica fails the request |
+| `LOCAL_ONE` | one replica in the local data centre | never crosses a region |
+| `ANY` | one replica, or a stored hint (writes only) | maximum write availability, weakest durability |
+
+With N = 3, `QUORUM` writes and `QUORUM` reads overlap; with two data centres of three replicas each, `LOCAL_QUORUM` on both sides keeps each region consistent with itself, and the regions converge asynchronously.
 """
 
 [[sections]]
 heading = "Sloppy quorums and hinted handoff"
 body = """
 If some of a key's N home replicas are unreachable, a **sloppy quorum** lets the write land on other healthy nodes, which keep a **hint**: "this belongs to node C". When C comes back the hints are handed off to it. Writes stay available during a partition, at the cost that a read from the home replicas may not see them until handoff finishes.
+
+Dynamo used sloppy quorums: reads and writes went to the first N **healthy** nodes on the ring, not necessarily the home ones. Cassandra keeps hints too, but they do **not** count towards the consistency level (only `ANY` accepts a hint as success), so its quorums stay strict.
+
+Hints are a short-term fix. Cassandra stores hints for a node only while it has been down less than `max_hint_window`, **three hours by default**; a node down longer misses writes that no hint will deliver, and only anti-entropy **repair** brings it back in line. Replaying hints also costs: Cassandra's documentation works an example of 7.5 GiB of hints taking about two hours to replay at 1 MiB/s.
 """
 
 [[sections]]
@@ -31,6 +112,66 @@ body = """
 - **Read repair**: a read that sees replicas disagree writes the newest version back to the stale ones. Cheap, but only fixes keys that are read.
 - **Anti-entropy**: replicas periodically compare their data using **Merkle trees** (a hash tree over key ranges). Equal root hashes mean equal data; otherwise walk down only the subtrees that differ and stream those keys. Comparing two replicas of millions of keys costs a few hashes when they mostly agree.
 - **Conflicts**: last write wins by timestamp (simple, loses concurrent updates), version vectors that keep siblings for the application to merge (the original Dynamo, Riak), or CRDTs that merge automatically.
+
+A Merkle tree over key buckets, and the walk that finds where two replicas differ:
+
+```rust title=merkle.rs hl=35,39
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+fn h(x: impl Hash) -> u64 {
+    let mut s = DefaultHasher::new();
+    x.hash(&mut s);
+    s.finish()
+}
+
+/// A Merkle tree over 2^depth buckets of keys: leaves hash their bucket, each parent hashes its two children.
+/// `levels[0]` is the root level, `levels[depth]` the leaves.
+pub struct Merkle {
+    levels: Vec<Vec<u64>>,
+}
+
+impl Merkle {
+    pub fn build(data: &[(u64, u64)], depth: u32) -> Merkle {
+        let mut leaves = vec![0u64; 1 << depth];
+        for &(key, version) in data {
+            let bucket = (h(key) >> (64 - depth)) as usize;
+            leaves[bucket] ^= h((key, version)); // order-independent within a bucket
+        }
+        let mut levels = vec![leaves];
+        while levels[0].len() > 1 {
+            let up = levels[0].chunks(2).map(|c| h((c[0], c[1]))).collect();
+            levels.insert(0, up);
+        }
+        Merkle { levels }
+    }
+
+    /// Walk down only where the hashes differ. Returns the differing buckets and how many hashes were compared.
+    pub fn diff(&self, other: &Merkle) -> (Vec<usize>, usize) {
+        let (mut frontier, mut compared) = (vec![0usize], 0);
+        for level in 0..self.levels.len() {
+            compared += frontier.len();
+            let differing: Vec<usize> = frontier.into_iter().filter(|&i| self.levels[level][i] != other.levels[level][i]).collect();
+            if level + 1 == self.levels.len() {
+                return (differing, compared);
+            }
+            frontier = differing.iter().flat_map(|&i| [2 * i, 2 * i + 1]).collect();
+        }
+        unreachable!()
+    }
+}
+```
+
+Run on two replicas of **1,000,000 keys** that differ in **10**:
+
+| Leaves in the tree | Hashes compared | Buckets that differ | Keys left to compare |
+|---|---|---|---|
+| 1,024 | 147 | 10 | 9,830 |
+| 65,536 | 267 | 10 | 175 |
+
+A deeper tree costs a little more to compare and to keep, and narrows the repair to almost exactly the keys that differ. Dynamo kept one tree per key range a node holds; Cassandra builds trees during `nodetool repair`, and **incremental** repair marks data already repaired so later runs only compare new data.
+
+> [!TIP]
+> Run anti-entropy repair on every node more often than the tombstone grace period (`gc_grace_seconds`, ten days by default in Cassandra), or a replica that missed a delete can bring the deleted data back.
 """
 
 [[sections]]
@@ -39,6 +180,32 @@ body = """
 Without a leader, nodes learn about each other by **gossip**: every second each node exchanges its view (members, heartbeat counters, status) with a few random peers. News reaches all n nodes in about log n rounds, and no single node is a bottleneck.
 
 A node is suspected dead when its heartbeat stops increasing. Fixed timeouts misfire under load, so systems such as Cassandra use a **phi accrual detector**: a suspicion level that grows with how unusual the silence is given past heartbeat intervals.
+
+**Measured**: with every node exchanging state with one random peer per round (push and pull), a fact known by one node reached every node in
+
+| Nodes | Rounds, average of 20 runs | Worst |
+|---|---|---|
+| 100 | 6.7 | 7 |
+| 1,000 | 9.2 | 10 |
+| 10,000 | 11.7 | 12 |
+| 100,000 | 14.0 | 15 |
+
+Each tenfold growth adds about two and a half rounds: logarithmic, as Demers and colleagues' epidemic algorithms (1987) predicted. In Cassandra, every second each node bumps its own heartbeat, gossips with one random node, sometimes tries an unreachable one, and talks to a **seed** node if it has not already; seeds are simply well-known nodes that new members contact first. Gossip carries membership, token ownership and schema versions.
+
+The **phi accrual** detector (Hayashibara and colleagues, 2004) does not answer "up or down" from a fixed timeout. It keeps the recent distribution of heartbeat intervals from each peer and turns the current silence into a suspicion level, phi, that grows the more unusual the silence is for that peer; the node is convicted when phi passes a threshold. A peer that is usually prompt is suspected quickly; one on a noisy link is given more time.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Give the numbers**: N = 3, and the R and W for each operation; say which operations need R + W > N.
+2. **Say what you lose** at lower levels: "the like count reads at ONE, so a fresh like may be missing for a few milliseconds".
+3. **Say how replicas converge**: hints for short outages, read repair for hot keys, scheduled anti-entropy for everything.
+4. **Say how conflicts resolve**: last write wins (and what it drops), siblings with a merge, or CRDTs.
+5. **Across regions**, `LOCAL_QUORUM` keeps requests out of the cross-region round trip.
+
+> [!INTERVIEW]
+> "Messages are written at LOCAL_QUORUM with N = 3 per region, so a write survives one replica down and reads in the same region always see it; the other region catches up asynchronously, and nightly incremental repair cleans up anything hints missed."
 """
 
 [[checks]]
@@ -48,6 +215,123 @@ answer = "For example W = 4 and R = 2 (4 + 2 > 5): reads are cheap and overlap e
 [[checks]]
 prompt = "Why do replicas compare Merkle trees instead of sending each other all their keys?"
 answer = "A Merkle tree summarises key ranges by hashes; if the roots match the replicas agree and nothing more is sent, and when they differ only the subtrees with different hashes are explored. Repair then transfers just the differing ranges instead of every key."
+
+[[checks]]
+prompt = "With N = 3, R = 1 and W = 1, how likely is a read right after a write to be stale, and what changes it?"
+answer = "Quite likely: in a simulation with 5 ms average network legs, about a quarter of reads issued immediately after the write saw the old value, falling to about 9% after 5 ms and under 1% after 20 ms. Raising R or W lowers it, and with R + W > N (for example R = 2, W = 2) no read was stale while nothing failed."
+
+[[checks]]
+prompt = "A write at QUORUM (N = 3) reaches one replica, then the coordinator times out and the client gets an error. Can later reads still see the value?"
+answer = "Yes. Nothing rolls the write back: the replica that applied it keeps it, a later read that includes that replica may return it, and read repair or anti-entropy may copy it to the others. A failed quorum write means 'not known to be durable', not 'did not happen', so clients retry idempotently."
+
+[[checks]]
+prompt = "A Cassandra node was down for five hours. Hints were stored for it. Is it fully up to date when it returns?"
+answer = "No. Hints are kept only while a node has been down less than max_hint_window, three hours by default, so writes from the last two hours of the outage have no hints. Run repair (anti-entropy) on it; until then reads at ONE from that node may be stale, while QUORUM reads still overlap an up-to-date replica."
+
+[[checks]]
+prompt = "Why does a phi accrual failure detector misfire less than a fixed timeout?"
+answer = "It learns each peer's normal heartbeat intervals and measures how unusual the current silence is for that peer, giving a suspicion level rather than a yes or no. A peer on a noisy or loaded link gets more time before it is convicted, while a normally prompt peer is suspected quickly; a single fixed timeout is either too eager for the first or too slow for the second."
+
+[[terms]]
+term = "Replication factor (N)"
+means = "How many replicas hold each key."
+section = "N, W and R"
+
+[[terms]]
+term = "Quorum"
+means = "Enough replicas that any read set and write set overlap: R + W > N."
+section = "N, W and R"
+
+[[terms]]
+term = "Probabilistically bounded staleness"
+means = "Measuring how likely and how stale a read is when R + W ≤ N."
+section = "N, W and R"
+
+[[terms]]
+term = "Monotonic quorum reads"
+means = "Once a quorum read returns a value, later quorum reads do not go back to an older one."
+section = "What a quorum does not promise"
+
+[[terms]]
+term = "Consistency level"
+means = "Cassandra's per-query choice of how many replicas to wait for."
+section = "Consistency levels in Cassandra"
+
+[[terms]]
+term = "Sloppy quorum"
+means = "Counting acknowledgements from healthy nodes outside the key's home replicas."
+section = "Sloppy quorums and hinted handoff"
+
+[[terms]]
+term = "Hinted handoff"
+means = "A stand-in node keeps a missed write and hands it over when the replica returns."
+section = "Sloppy quorums and hinted handoff"
+
+[[terms]]
+term = "Read repair"
+means = "A read that finds replicas disagreeing writes the newest value back to the stale ones."
+section = "Repairing differences"
+
+[[terms]]
+term = "Merkle tree"
+means = "A tree of hashes over key ranges; equal hashes mean equal data below them."
+section = "Repairing differences"
+
+[[terms]]
+term = "Gossip"
+means = "Each node periodically swaps state with random peers, so news spreads in about log n rounds."
+section = "Gossip and failure detection"
+
+[[terms]]
+term = "Phi accrual detector"
+means = "A failure detector that turns silence into a suspicion level from each peer's usual heartbeat timing."
+section = "Gossip and failure detection"
+
+[[sources]]
+title = "DeCandia et al.: Dynamo: Amazon's highly available key-value store (SOSP 2007)"
+kind = "paper"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+note = "N, R, W; sloppy quorums, hinted handoff, Merkle trees, gossip"
+
+[[sources]]
+title = "Bailis, Venkataraman, Franklin, Hellerstein and Stoica: Probabilistically bounded staleness for practical partial quorums (VLDB 2012)"
+kind = "paper"
+url = "https://arxiv.org/abs/1204.6082"
+
+[[sources]]
+title = "Demers et al.: Epidemic algorithms for replicated database maintenance (PODC 1987)"
+kind = "paper"
+url = "https://doi.org/10.1145/41840.41841"
+note = "anti-entropy and rumour mongering"
+
+[[sources]]
+title = "Hayashibara, Défago, Yared and Katayama: The φ accrual failure detector (SRDS 2004)"
+kind = "paper"
+url = "https://doi.org/10.1109/RELDIS.2004.1353004"
+
+[[sources]]
+title = "Apache Cassandra: Dynamo (architecture)"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html"
+note = "consistency levels, gossip every second, seeds, failure detection"
+
+[[sources]]
+title = "Apache Cassandra: hints"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html"
+note = "max_hint_window and replay"
+
+[[sources]]
+title = "Apache Cassandra: read repair"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/read_repair.html"
+note = "blocking read repair and monotonic quorum reads"
+
+[[sources]]
+title = "Apache Cassandra: repair"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html"
+note = "full and incremental anti-entropy repair"
 
 [[figures]]
 name = "quorum"
