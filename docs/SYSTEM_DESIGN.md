@@ -60,6 +60,21 @@ Both are in the backup (`backup.rs` TABLES). Nothing deletes rows.
 - `POST /api/sd/checks`: a concept check marked; a miss adds a card.
 - `GET /api/sd/review`, `POST /api/sd/review/{card}`: the due cards and a grade.
 
+## Research standard (owner, 2026-11-01: content must be researched, not written from memory)
+
+Applies to every concept page, drill and SQL course page (see also SQL_COURSE.md):
+
+1. **Read the primary source first**: official docs for the version named, the original paper, or the source/README when docs are thin.
+   Cite it in the page's `sources`; every URL is opened and checked (`curl -sL -o /dev/null -w '%{http_code}'`) before commit.
+2. **Numbers are measured or quoted, never invented.** A figure on a page is either from a source it links, a calculation shown on
+   the page, or output of a command you ran (SQL plans come from `tools/sqlperf/capture.py`). Version-specific facts say the version.
+3. **Run what you print**: code snippets are executed or `cargo check`ed.
+4. **Unconfirmed facts are left out**, not softened.
+5. **Licences**: adapt only open-licence text (CC BY, MPL), with `credit` and an entry in `content/sd/NOTICE.md`; link-only for
+   all-rights-reserved or non-derivative sources.
+6. Keep existing checks in their order (review cards are keyed by check index) and rubric point ids.
+7. The commit message lists the sources consulted; PROGRESS.md records what could not be verified.
+
 ## The catalogue (researched 2026-10-31)
 
 Built from the topics these cover, written in anneal's own words: Hello Interview's public lists (delivery framework, core
