@@ -1,36 +1,164 @@
 title = "Back-of-envelope estimates"
 group = "fundamentals"
 order = 3
-minutes = 7
-lede = "Rough arithmetic that answers one question at a time: requests a second, storage over years, bandwidth. The aim is a decision, not a precise figure."
+minutes = 14
+lede = "Rough arithmetic that answers one question at a time: requests a second, storage over years, bandwidth, cache size, servers. The aim is a decision, not a precise figure: each number should end in a sentence that says what it changes in the design."
 say = "Writes are about 1,000 a second and reads 100,000, so the read path gets a cache and replicas; storage is 5 TB over five years, so one database holds it."
-related = ["numbers-to-know"]
+related = ["numbers-to-know", "delivery-framework", "caching", "sharding"]
+
+summary = [
+  "Users × actions a day ÷ **100,000** = requests a second; × **2 to 3** for the peak.",
+  "Storage = items × size × retention × **replicas**; add indexes and headroom.",
+  "**Little's law**: requests in flight = arrival rate × time each takes; it sizes threads, connections and servers.",
+  "Round to **one significant figure** and powers of ten; state every assumption.",
+  "End each number with **what it means**: fits one machine, needs a cache, needs sharding.",
+]
+
+[[sections]]
+heading = "What an estimate is for"
+body = """
+An estimate exists to make a decision. Before computing anything, ask which decision the number would change:
+
+- Does the data **fit on one machine**, or must it be sharded?
+- Is the system **read-heavy** (cache and replicas) or **write-heavy** (log, batching, partitioned writes)?
+- Does the **hot set fit in memory**?
+- Is **bandwidth** a cost or a bottleneck (video, images, backups)?
+- How many **servers or connections** does the peak need?
+
+If no answer could change the design ("about 50 requests a second" for an internal tool), say so in one sentence and move on.
+"""
 
 [[sections]]
 heading = "The method"
 body = """
-1. Start from users: daily active users × actions per user per day.
-2. Divide by 100,000 to get a second; multiply by 2 or 3 for the peak.
-3. Storage: items a day × size × 365 × years, plus replication (×3).
-4. Round hard: powers of ten, one significant figure.
-5. **Say what the number means** before moving on: fits on one box, needs a cache, needs sharding.
+1. **Start from users**: daily active users × actions per user per day = actions a day.
+2. **Per second**: divide by 100,000 (a day is 86,400 seconds; rounding up makes the arithmetic trivial and errs a little high). Multiply by **2 to 3** for the daily peak; more for events (a launch, a ticket sale, New Year's midnight).
+3. **Split reads and writes**, with a ratio: social feeds and URL shorteners read 100 times more than they write; logging and metrics are almost all writes.
+4. **Size each item** from its fields, and round up.
+5. **Round hard**: one significant figure, powers of ten. 86,400 is 10⁵; 2.6 million seconds is a month; 3 × 10⁷ is a year.
+6. **Say what it means** before moving on.
+
+Write the assumptions on the board as you go ("100 million daily users, 10 views each, 1 KB per post"). An interviewer can then correct an assumption without redoing your arithmetic, and a wrong assumption is a conversation, not a wrong answer.
+"""
+
+[[sections]]
+heading = "Traffic, storage and bandwidth"
+body = """
+**Traffic**:
+
+$$\\text{requests/s} \\approx \\frac{\\htmlClass{tx-a}{\\text{users}} \\times \\htmlClass{tx-b}{\\text{actions per user per day}}}{10^5} \\times \\htmlClass{tx-c}{\\text{peak factor}}$$
+
+| Per day | Per second (average) |
+|---|---|
+| 1 million | about 12 |
+| 100 million | about 1,200 |
+| 1 billion | about 12,000 |
+| 10 billion | about 120,000 |
+
+**Storage**: items per day × bytes per item × days kept × replicas. Add room for indexes (often 20 to 100% of the data for a heavily indexed table) and for growth. Then compare with one machine: a few terabytes fit on one database server; hundreds of terabytes do not.
+
+**Bandwidth**: requests a second × bytes per response. It matters for media: 10,000 video streams at 5 Mbit/s each is 50 Gbit/s, which is a CDN's job, not your servers'. For APIs returning a few KB, bandwidth rarely decides anything.
+
+**Memory for a cache**: if a small share of items gets most reads (it usually does), cache the hot share. 20% of 100 million items at 500 bytes is 10 GB: one cache node.
+"""
+
+[[sections]]
+heading = "Little's law: how many in flight"
+body = """
+For any stable system, the average number of requests **in progress** equals the arrival rate times the average time each spends inside:
+
+$$\\htmlClass{tx-a}{L} = \\htmlClass{tx-b}{\\lambda} \\times \\htmlClass{tx-c}{W}$$
+
+It holds whatever the arrival pattern or the order of service (John Little proved it in 1961), and it turns latency into concurrency:
+
+- 10,000 requests a second, each taking 200 ms end to end, means about **2,000 in flight**: 2,000 threads in a thread-per-request server, 2,000 open connections at the load balancer.
+- A service handling 3,000 requests a second that each hold a database connection for 5 ms needs about **15 connections busy** on average; size the pool above that (peaks, variance) but nowhere near 3,000.
+- If a dependency slows from 50 ms to 2 s, the same traffic holds **40 times as many** requests in flight, and thread pools, connection pools and memory run out: the reason for timeouts and circuit breakers.
+
+Little's law sizes servers too: if one server can work on 200 requests at once (cores × concurrency per core, or a pool size), the fleet needs L / 200 servers, plus headroom.
 """
 
 [[sections]]
 heading = "A worked example"
 body = """
-A URL shortener with 100 million new links a month and 100 redirects per link:
+A URL shortener with 100 million new links a month and 100 redirects per link. The estimate as a program, so every result is derived from named assumptions:
 
-- Writes: 100M / 2.5M s ≈ **40 a second** (peak ~100). Trivial for one database.
-- Reads: 100× writes ≈ **4,000 a second** (peak ~10k). A cache absorbs most of it.
-- Storage: 100M links × 500 bytes = 50 GB a month, **3 TB over five years**. One database, or a few shards for headroom.
-- Codes: 6 base62 characters give 62⁶ ≈ 57 billion codes, enough for decades at this rate.
+```rust title=estimate.rs
+/// A back-of-envelope estimate as code: every assumption is a named number, every result is derived from them.
+fn main() {
+    // assumptions (say them out loud)
+    let new_links_per_month = 100e6;
+    let reads_per_write = 100.0;
+    let peak_factor = 3.0;
+    let bytes_per_link = 500.0; // code, URL, owner, timestamps, plus index overhead
+    let years = 5.0;
+    let replicas = 3.0;
+    let response_bytes = 500.0; // a 302 with its headers
+    let hot_share = 0.2; // the share of a month's links that gets most reads
+    let ms_per_request = 5.0; // time a server spends on one redirect, including the cache call
+
+    let seconds_per_month = 30.0 * 86_400.0;
+    let writes = new_links_per_month / seconds_per_month;
+    let reads = writes * reads_per_write;
+    let stored = new_links_per_month * 12.0 * years * bytes_per_link;
+    let bandwidth = reads * peak_factor * response_bytes;
+    let cache = new_links_per_month * hot_share * bytes_per_link;
+    // Little's law: requests in progress = arrival rate x time each spends in the system
+    let in_flight = reads * peak_factor * ms_per_request / 1000.0;
+
+    println!("writes      {:>8.0} /s average, {:>6.0} /s peak", writes, writes * peak_factor);
+    println!("reads       {:>8.0} /s average, {:>6.0} /s peak", reads, reads * peak_factor);
+    println!("storage     {:>8.1} TB over {years} years, {:.1} TB with {replicas} replicas", stored / 1e12, stored * replicas / 1e12);
+    println!("bandwidth   {:>8.1} MB/s out at peak", bandwidth / 1e6);
+    println!("cache       {:>8.0} GB for the hot 20% of a month's links", cache / 1e9);
+    println!("in flight   {:>8.0} requests at peak (Little's law)", in_flight);
+    for len in [6, 7] {
+        let codes = 62f64.powi(len);
+        println!("{len} base62 chars: {:.1e} codes, {:.0} years at this rate", codes, codes / (new_links_per_month * 12.0));
+    }
+}
+```
+
+```text title=output
+writes            39 /s average,    116 /s peak
+reads           3858 /s average,  11574 /s peak
+storage          3.0 TB over 5 years, 9.0 TB with 3 replicas
+bandwidth        5.8 MB/s out at peak
+cache             10 GB for the hot 20% of a month's links
+in flight         58 requests at peak (Little's law)
+6 base62 chars: 5.7e10 codes, 47 years at this rate
+7 base62 chars: 3.5e12 codes, 2935 years at this rate
+```
+
+What each line means:
+
+- **Writes, about 40 a second (peak about 120)**: trivial for one database primary.
+- **Reads, about 4,000 a second (peak about 12,000)**: one Postgres could serve it, but a cache in front makes redirects sub-millisecond and protects the database.
+- **Storage, 3 TB over five years (9 TB with replicas)**: one database, or a few shards for headroom; no exotic store needed.
+- **Bandwidth, about 6 MB/s**: not a concern.
+- **Cache, 10 GB**: one Redis node, with a replica.
+- **58 requests in flight at peak**: two or three application servers for redundancy, not for capacity.
+- **Codes**: 6 base62 characters last decades at this rate; 7 leave room for a much bigger product.
+"""
+
+[[sections]]
+heading = "Common slips"
+body = """
+- **Forgetting the peak**: averages hide the evening spike; design for the peak, and say the factor.
+- **Forgetting replicas and indexes**: stored bytes are often 3 to 5 times the raw data.
+- **Mixing bits and bytes**: network links are quoted in bits a second (1 Gbit/s ≈ 125 MB/s).
+- **Mixing units of time**: per day, per second and per month differ by 10⁵ and 3 × 10⁶; write the unit next to every number.
+- **False precision**: "38,580 a second" invites the question of where the 580 came from; "about 40,000" does not.
+- **Estimating what does not matter**: ten minutes of arithmetic that ends in "so it fits on one machine", which was obvious, is ten minutes not spent on the hard part.
 """
 
 [[sections]]
 heading = "When to skip it"
 body = """
 Estimate when a number changes the design. If the answer is obviously "small", say so in one sentence and move on; interviewers value the decision more than the arithmetic.
+
+> [!INTERVIEW]
+> Lead with the conclusion and show the arithmetic briefly: "About 12,000 reads a second at peak, so one cache node and a couple of replicas; storage is a few terabytes, so no sharding yet."
 """
 
 [[checks]]
@@ -40,3 +168,57 @@ answer = "2 billion messages a day / 100k s = 20,000 a second, so peak about 50,
 [[checks]]
 prompt = "How many base62 characters does a short code need for 1 trillion links?"
 answer = "62⁷ is about 3.5 trillion, so 7 characters; 6 give only about 57 billion."
+
+[[checks]]
+prompt = "An API serves 5,000 requests a second and each request takes 100 ms. How many requests are in progress at once, and what happens to that number if a dependency makes requests take 1 second?"
+answer = "By Little's law, in progress = arrival rate × time in system = 5,000 × 0.1 s = 500. At 1 second each it becomes 5,000: ten times as many threads, connections and memory held at once, which is how a slow dependency exhausts pools and takes a healthy service down. Timeouts, bounded pools and circuit breakers cap it."
+
+[[checks]]
+prompt = "A video service streams to 200,000 concurrent viewers at an average of 4 Mbit/s. What egress bandwidth is that, and what does the number tell you about the design?"
+answer = "200,000 × 4 Mbit/s = 800 Gbit/s, about 100 GB/s. No origin server or single data centre link serves that economically; the design needs a CDN (or several) to serve segments from edge caches, with the origin serving only cache misses."
+
+[[checks]]
+prompt = "A photo app stores 10 million new photos a day at 2 MB each, kept forever with 3 copies. How much storage does a year add, and where should the photos live?"
+answer = "10 million × 2 MB = 20 TB a day, × 365 ≈ 7.3 PB a year, × 3 copies ≈ 22 PB. Far beyond a database: photos go to object storage (which handles the replication or erasure coding), with only metadata (id, owner, key, size, time) in a database and a CDN in front for reads."
+
+[[terms]]
+term = "Peak factor"
+means = "How much busier the busiest hour is than the daily average, often 2 to 3."
+section = "The method"
+
+[[terms]]
+term = "Read-to-write ratio"
+means = "Reads per write; decides whether caching or write scaling matters."
+section = "The method"
+
+[[terms]]
+term = "Working set"
+means = "The share of data read often enough that it should be in memory."
+section = "Traffic, storage and bandwidth"
+
+[[terms]]
+term = "Little's law"
+means = "Requests in progress = arrival rate × average time each spends in the system."
+section = "Little's law: how many in flight"
+
+[[sources]]
+title = "John D. C. Little: A proof for the queuing formula L = λW (Operations Research, 1961)"
+kind = "paper"
+url = "https://pubsonline.informs.org/doi/10.1287/opre.9.3.383"
+
+[[sources]]
+title = "John D. C. Little: Little's Law as viewed on its 50th anniversary (Operations Research, 2011)"
+kind = "paper"
+url = "https://pubsonline.informs.org/doi/10.1287/opre.1110.0940"
+note = "the law, its assumptions and its uses, by its author"
+
+[[sources]]
+title = "Jeff Dean: Designs, lessons and advice from building large distributed systems (LADIS 2009)"
+kind = "article"
+url = "https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf"
+note = "back-of-the-envelope calculations as a design tool"
+
+[[sources]]
+title = "The System Design Primer: back-of-the-envelope calculations"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#back-of-the-envelope-calculations"
