@@ -225,4 +225,37 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    "multipart-upload": {
+        steps: 10,
+        ms: 1200,
+        draw: (t) => {
+            // parts 1-4 upload in parallel from t3; part 3 fails at t4 and is retried at t5
+            const part = (i: number) => (t < 3 ? "line" : i === 2 && t === 4 ? "bad" : (i === 2 ? t >= 6 : t >= 4) ? "grn" : "acc");
+            const say = [
+                "the client asks the API to upload a 2 GB video",
+                "the API checks the user, creates the multipart upload and a row: uploading",
+                "it returns one presigned URL per part; no bytes pass through the API",
+                "the client PUTs parts straight to storage, several at once",
+                "part 3 fails on a flaky network…",
+                "…and only part 3 is sent again",
+                "every part is stored, each with its ETag",
+                "the client asks storage to complete the upload with the list of ETags",
+                "storage emits an object-created event",
+                "the API checks size and checksum, marks the row uploaded, queues processing",
+            ][t]!;
+            return (
+                <>
+                    <Box x={14} y={84} w={100} label="Client" tone="acc" />
+                    <Box x={250} y={14} w={140} label="API" tone={t === 1 || t === 2 || t === 9 ? "warn" : "line"} sub={t >= 9 ? "row: uploaded" : t >= 1 ? "row: uploading" : ""} />
+                    <Box x={470} y={84} w={150} h={44} label="Object storage" tone={t >= 7 ? "grn" : "line"} sub={t >= 7 ? "video.mp4 complete" : t >= 3 ? "receiving parts" : ""} />
+                    {[0, 1, 2, 3].map((i) => <Box key={i} x={160 + i * 72} y={156} w={64} h={30} r={6} label={part(i) === "bad" ? "failed" : `part ${i + 1}`} tone={part(i)} />)}
+                    <Arrow d="M114 92 L248 36" on={t === 0} />
+                    <Arrow d="M248 46 L114 100" on={t === 2} dash />
+                    <Arrow d="M114 112 L468 112" on={t >= 3 && t <= 7} />
+                    <Arrow d="M545 84 L392 40" on={t >= 8} dash={t === 8} />
+                    <text className="sf-lab" x={14} y={212}>{say}</text>
+                </>
+            );
+        },
+    },
 };

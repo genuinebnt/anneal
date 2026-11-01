@@ -1,21 +1,224 @@
 title = "Large blobs"
 group = "pattern"
 order = 6
-minutes = 7
-lede = "Files, photos and videos do not belong in your database or flowing through your app servers. Clients upload straight to object storage with a presigned URL, in chunks, and you keep only metadata."
+minutes = 20
+lede = "Files, photos and videos do not belong in your database or flowing through your app servers. Clients upload straight to object storage with a presigned URL, in parts that can be retried and resumed, and you keep only metadata, marked ready when storage confirms the bytes arrived."
 say = "The client asks the API for a presigned S3 URL, uploads the file in 5 MB parts directly, and an event on completion marks the file ready and starts processing."
-related = ["data-modeling", "queues-and-streams", "object-storage"]
+related = ["object-storage", "data-modeling", "queues-and-streams", "resilience", "scaling-reads"]
+
+summary = [
+  "Bytes go **client to object storage**; the API only **authorises**, signs a URL and records **metadata**.",
+  "A **presigned URL** grants one operation on one key for minutes; the server picks the key and checks the user first.",
+  "Big files go in **parts** (S3: 5 MiB to 5 GiB, up to 10,000), each retried alone; abandoned uploads need a **cleanup rule**.",
+  "**Content-defined chunks** let an edited file upload only what changed, and identical chunks be stored once.",
+  "Mark a file ready from **storage's event and a check**, never from the client's word; process it from a queue.",
+]
+
+[[sections]]
+heading = "Why the bytes go around your servers"
+body = """
+An API server that receives a 2 GB upload holds a connection and a worker for the whole transfer, minutes on a slow phone link, and pays for the bandwidth twice (in from the user, out to storage). A database that stores the same file in a column makes every backup, replica and restore carry it. Object storage (S3, Google Cloud Storage, Azure Blob Storage) is built for exactly this: cheap per gigabyte, effectively unlimited, durable, and able to take uploads from millions of clients at once.
+
+So large files are split into two parts that live in different places:
+
+| | Where | Holds |
+|---|---|---|
+| the bytes | object storage, under a key such as `u/42/7f3c.mp4` | the file itself, immutable once written |
+| the metadata | your database | owner, name, size, type, checksum, key, status, processing results |
+
+The API's job shrinks to: check that the user may upload, choose the key, hand out permission to write that one key, and record what arrives. The object storage page covers how stores like S3 keep data durable; this page is about getting bytes in and out.
+"""
 
 [[sections]]
 heading = "Presigned URLs"
 body = """
 The API checks the user may upload, then signs a URL that lets the client `PUT` one object to S3 (or GCS) for a few minutes. The bytes go client → storage; your servers never carry them. Downloads work the same way, or through a CDN in front of the bucket.
+
+**What a presigned URL is.** The API, which holds credentials for the bucket, computes a signature over the request it is willing to allow (the method, the bucket and key, an expiry, the signed headers) and puts it in the URL's query string. Storage recomputes the signature when the request arrives and rejects anything different: another key, another method, or after the expiry. No credentials leave your servers.
+
+Signature Version 4, in the standard library only. The first call reproduces the query-string case `get-vanilla` from AWS's SigV4 test suite (its expected signature is in the comment); the second makes the kind of URL an upload API returns:
+
+```python title=presign.py
+import hashlib
+import hmac
+from urllib.parse import quote
+
+
+def presign(method, host, path, service, region, access_key, secret, amz_date, expires, payload_hash):
+    \"\"\"A presigned URL: AWS Signature Version 4 in query-string form, standard library only.\"\"\"
+    day = amz_date[:8]
+    scope = f"{day}/{region}/{service}/aws4_request"
+    query = {
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Credential": f"{access_key}/{scope}",
+        "X-Amz-Date": amz_date,
+        "X-Amz-Expires": str(expires),
+        "X-Amz-SignedHeaders": "host",
+    }
+    qs = "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in sorted(query.items()))
+    canonical = f"{method}\\n{quote(path)}\\n{qs}\\nhost:{host}\\n\\nhost\\n{payload_hash}"
+    to_sign = f"AWS4-HMAC-SHA256\\n{amz_date}\\n{scope}\\n{hashlib.sha256(canonical.encode()).hexdigest()}"
+    k = ("AWS4" + secret).encode()
+    for part in (day, region, service, "aws4_request"):
+        k = hmac.new(k, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(k, to_sign.encode(), hashlib.sha256).hexdigest()
+    return f"https://{host}{quote(path)}?{qs}&X-Amz-Signature={signature}"
+
+
+# 1. The official SigV4 test suite's get-vanilla case, query form; its expected signature is
+#    e93c787ed7f371d5c6b165c1b38ede9550f4dce4144713e844b25b7192d3865d
+url = presign("GET", "example.amazonaws.com", "/", "service", "us-east-1", "AKIDEXAMPLE",
+              "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20150830T123600Z", 3600, hashlib.sha256(b"").hexdigest())
+print(url.split("X-Amz-Signature=")[1])
+
+# 2. What the API hands a client: PUT one object into S3 within 15 minutes; the body is not signed
+print(presign("PUT", "uploads-example.s3.amazonaws.com", "/u/42/7f3c.mp4", "s3", "eu-west-1", "AKIDEXAMPLE",
+              "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "20261101T120000Z", 900, "UNSIGNED-PAYLOAD"))
+```
+
+```text title=output
+e93c787ed7f371d5c6b165c1b38ede9550f4dce4144713e844b25b7192d3865d
+https://uploads-example.s3.amazonaws.com/u/42/7f3c.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20261101%2Feu-west-1%2Fs3%2Faws4_request&X-Amz-Date=20261101T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=8e5220c0a6c1922c41cb651ecdb4e3b1344c247f5bc32b0f28bc61a7389174e9
+```
+
+In practice the SDK does this in one call; seeing it once explains what a URL can and cannot be used for.
+
+**Rules that keep it safe**:
+
+- **The server chooses the key** (`u/{user}/{random id}`), never the client's file name, so users cannot overwrite each other's files or write outside their prefix.
+- **Short expiry**: minutes for an upload. S3 caps a Signature Version 4 URL at **7 days** (`X-Amz-Expires` up to 604,800 seconds), and a URL signed with temporary credentials stops working when those credentials expire, whichever comes first.
+- **Bound the size**: a presigned `PUT` will accept whatever body the client sends. A **presigned POST** with a policy can require a `content-length-range` and a content type; or sign the `Content-Length` header so only that size is accepted; and check the size again when the upload completes.
+- **Private buckets**: downloads also go through short-lived signed URLs (or a CDN with signed URLs or cookies), so a leaked link expires.
 """
 
 [[sections]]
 heading = "Chunks and resume"
 body = """
 Big files upload in **parts** (multipart upload: 5 MB to 5 GB each, in parallel, retried one by one). A dropped connection resumes from the last part instead of starting over. For sync products (Dropbox), files are split into chunks by **content hash**, so an edited file uploads only the chunks that changed, and identical chunks are stored once.
+
+**S3 multipart upload** in three calls:
+
+1. `CreateMultipartUpload` returns an **upload id**. The API calls it and records the id.
+2. `UploadPart` for each part number, with the upload id. The API presigns one URL per part; the client sends several parts at once and retries any that fail. Each successful part returns an **ETag**.
+3. `CompleteMultipartUpload` with the list of part numbers and ETags. Storage stitches the parts into one object, which only now becomes visible.
+
+| S3 limit (2026) | Value |
+|---|---|
+| part size | 5 MiB to 5 GiB; the last part may be smaller |
+| parts per upload | 10,000, numbered 1 to 10,000 |
+| largest object | 48.8 TiB (10,000 parts of 5 GiB) |
+| largest single `PUT` | 5 GiB |
+
+**Choosing a part size**: the part count caps how big a file can be at a given part size. With 8 MiB parts the limit is about 78 GiB; a 1 TiB file needs parts of at least 1 TiB ÷ 10,000 ≈ 105 MiB, so round up to 128 MiB. Smaller parts mean less to resend after a failure; larger parts mean fewer requests.
+
+**Abandoned uploads cost money.** Parts of an upload that is never completed or aborted are stored, and billed, but do not appear as an object. Add a bucket lifecycle rule with `AbortIncompleteMultipartUpload` (for example `DaysAfterInitiation: 7`) so they are deleted automatically.
+
+**Resumable uploads over plain HTTP.** For browsers and mobile apps on flaky networks, the **tus** protocol (version 1.0.0) standardises resume: the client creates an upload, then sends bytes with `PATCH` and an `Upload-Offset` header. After a drop it asks `HEAD` for the server's current `Upload-Offset` and continues from there; a `PATCH` whose offset does not match the server's gets **409 Conflict**, so no byte is written twice or skipped. The IETF HTTP working group is standardising the same idea as "Resumable Uploads for HTTP", a draft that grew out of tus.
+
+```http title=tus_resume
+HEAD /files/7f3c HTTP/1.1
+Tus-Resumable: 1.0.0
+
+HTTP/1.1 200 OK
+Upload-Offset: 734003200
+Tus-Resumable: 1.0.0
+
+PATCH /files/7f3c HTTP/1.1
+Tus-Resumable: 1.0.0
+Upload-Offset: 734003200
+Content-Type: application/offset+octet-stream
+Content-Length: 1413496832
+
+[the remaining bytes]
+
+HTTP/1.1 204 No Content
+Tus-Resumable: 1.0.0
+Upload-Offset: 2147500032
+```
+"""
+
+[[sections]]
+heading = "Syncing edits: chunk by content"
+body = """
+A sync client (Dropbox, a backup tool) uploads a file as **chunks named by their hash**. The server keeps one copy of each chunk; a file is a list of chunk hashes. Re-uploading a file only sends the chunks the server does not have, and the same chunk in two files, or two users' copies of the same video, is stored once.
+
+How the file is cut matters. Dropbox's documented API content hash, for example, uses **fixed 4 MiB blocks** (a SHA-256 of each block, then a SHA-256 of those). Fixed blocks are simple, but inserting a byte near the start shifts every later block boundary, so every later block changes. **Content-defined chunking** chooses boundaries from the bytes themselves, with a rolling hash over a small window: cut wherever the hash matches a pattern. An insertion changes the chunk it lands in, and the boundaries after it fall in the same places as before.
+
+Measured on an 8 MiB file with 100 bytes inserted 3 MiB in, in plain Rust:
+
+```rust title=chunking.rs
+use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+/// xorshift64*, for test data and the gear table.
+fn rng(state: &mut u64) -> u64 {
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}
+
+/// Fixed-size blocks: cut every `size` bytes.
+fn fixed(data: &[u8], size: usize) -> Vec<&[u8]> {
+    data.chunks(size).collect()
+}
+
+/// Content-defined chunks with a gear rolling hash: cut where the hash's low 16 bits are zero (about every 64 KiB),
+/// never under 16 KiB or over 256 KiB. The cut points depend on the bytes nearby, not on their position in the file.
+fn content_defined<'a>(data: &'a [u8], gear: &[u64; 256]) -> Vec<&'a [u8]> {
+    let (min, max, mask) = (16 * 1024, 256 * 1024, (1u64 << 16) - 1);
+    let (mut chunks, mut start, mut h) = (Vec::new(), 0, 0u64);
+    for (i, &b) in data.iter().enumerate() {
+        h = (h << 1).wrapping_add(gear[b as usize]);
+        let len = i + 1 - start;
+        if (len >= min && h & mask == 0) || len >= max {
+            chunks.push(&data[start..=i]);
+            (start, h) = (i + 1, 0);
+        }
+    }
+    if start < data.len() {
+        chunks.push(&data[start..]);
+    }
+    chunks
+}
+
+/// A chunk's name. Real systems use SHA-256; std's SipHash is enough to tell chunks apart here.
+fn name(chunk: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    chunk.hash(&mut h);
+    h.finish()
+}
+
+/// How many chunks of `new` the server does not already have, and their total size.
+fn to_upload(old: &[&[u8]], new: &[&[u8]]) -> (usize, usize, usize) {
+    let have: HashSet<u64> = old.iter().map(|c| name(c)).collect();
+    let missing: Vec<_> = new.iter().filter(|c| !have.contains(&name(c))).collect();
+    (new.len(), missing.len(), missing.iter().map(|c| c.len()).sum())
+}
+
+fn main() {
+    let mut s = 7;
+    let gear: [u64; 256] = std::array::from_fn(|_| rng(&mut s));
+    let old: Vec<u8> = (0..8 << 20).map(|_| rng(&mut s) as u8).collect(); // an 8 MiB file
+    let mut new = old.clone();
+    new.splice(3 << 20..3 << 20, *b"one sentence inserted near the start of chapter two, 100 bytes long................................."); // the edit
+
+    for (label, a, b) in [
+        ("fixed 64 KiB blocks", fixed(&old, 64 * 1024), fixed(&new, 64 * 1024)),
+        ("content-defined", content_defined(&old, &gear), content_defined(&new, &gear)),
+    ] {
+        let (chunks, missing, bytes) = to_upload(&a, &b);
+        println!("{label:<20} {chunks} chunks, {missing} new, {:.1} KiB to upload", bytes as f64 / 1024.0);
+    }
+}
+```
+
+```text title=output
+fixed 64 KiB blocks  129 chunks, 81 new, 5120.1 KiB to upload
+content-defined      106 chunks, 1 new, 185.9 KiB to upload
+```
+
+With fixed blocks, everything after the edit moved by 100 bytes, so 81 of 129 blocks were new and 5 MiB had to be sent for a 100-byte change. With content-defined chunks, one chunk changed and 186 KiB was sent. The idea comes from the Low-Bandwidth File System (2001), which cut chunks with Rabin fingerprints; the gear hash used here is the cheaper rolling hash of FastCDC (2016).
 """
 
 [[sections]]
@@ -25,6 +228,58 @@ The database holds what the product needs: owner, name, size, content hash, chun
 
 > [!TIP]
 > Processing (thumbnails, transcoding, virus scans) starts from the upload-complete event through a queue, never inside the upload request.
+
+A status that moves only forward makes every step safe to retry:
+
+| Status | Set when | By |
+|---|---|---|
+| `uploading` | the API signs the URLs; the row has the key and the upload id | the API |
+| `uploaded` | storage reports the object created, and a check of its size and checksum passed | the event handler |
+| `processing` | a worker takes the processing job | the worker |
+| `ready` | renditions, thumbnails and scans are done | the worker |
+| `failed` | a check or a job failed for good | whoever found it |
+
+**Why not trust the client?** A client that says "done" may have crashed mid-upload, uploaded something else, or be lying. Storage knows what it holds: subscribe to its object-created events (S3 event notifications to a queue), then `HEAD` the object to read its size and checksum and compare them with what the client declared. Events can arrive more than once and late, so the handler must be idempotent ("set `uploaded` where status is `uploading`").
+
+**Clean up both directions**: rows stuck in `uploading` for a day are expired (and their multipart uploads aborted); objects with no row (a crash between upload and record) are found by a periodic sweep and deleted.
+"""
+
+[[sections]]
+heading = "Serving downloads"
+body = """
+- **A CDN in front** of the bucket for anything read often: the CDN caches near users, and the bucket serves only misses (see scaling reads).
+- **Signed URLs or signed cookies** for private files, with expiry measured in minutes to hours.
+- **Range requests** (`Range: bytes=…`, answered with `206 Partial Content`) let a video player seek without downloading the whole file, and let a download resume.
+- **Precomputed renditions**: thumbnails at a few sizes, video in several bitrates cut into short segments for adaptive streaming; generate them once when the file arrives, never on each request.
+- **`Content-Disposition: attachment`** for user uploads served from your domain, so an uploaded HTML file is downloaded, not rendered as your page.
+"""
+
+[[sections]]
+heading = "Worked example: a 2 GB video upload"
+body = """
+:::steps From the upload button to a playable video
+- client | POST /uploads {size: 2 GB, type: video/mp4} | The API checks the user's quota and the type.
+- API | creates the multipart upload, inserts row 7f3c: uploading | It picks the key u/42/7f3c.mp4 and the part size, 16 MiB: 128 parts.
+- API | returns 128 presigned part URLs, valid 1 hour | Or hands them out in batches as the client asks.
+- client | PUTs 4 parts at a time to S3 | A failed part is retried alone; after an app restart it asks the API which parts are done.
+- client | asks the API to complete | The API calls CompleteMultipartUpload with the part ETags.
+- storage | object created event to a queue | The handler HEADs the object, checks size and checksum, sets uploaded.
+- workers | transcode, thumbnail, scan | Each writes its results and finally sets ready; the user is notified.
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Bytes around the servers**: presigned URLs to object storage; the API authorises and records metadata.
+2. **Parts and resume**: multipart with a part size that fits the largest file, parallel parts, per-part retry, a cleanup rule for abandoned uploads.
+3. **Status from storage**, not from the client: the completion event plus a size and checksum check.
+4. **Processing from a queue**, idempotent, with a status that only moves forward.
+5. **Downloads** through a CDN with signed URLs and range requests.
+6. For sync products: **content-defined chunks** named by hash, so edits upload only what changed and duplicates are stored once.
+
+> [!INTERVIEW]
+> "Upload: the API checks quota, creates an S3 multipart upload and a metadata row, and returns presigned part URLs. The client sends 16 MiB parts four at a time and retries failures. On the S3 event we verify size and checksum, mark it uploaded and enqueue transcoding. A lifecycle rule aborts multipart uploads older than a week."
 """
 
 [[checks]]
@@ -34,3 +289,126 @@ answer = "The bytes go straight to object storage, so app servers are not tied u
 [[checks]]
 prompt = "How does content-hashed chunking make syncing an edited 1 GB file cheap?"
 answer = "The file is split into chunks named by their hash; after an edit only the chunks whose hash changed are new, so only they are uploaded, and unchanged chunks (and identical ones across users) are stored once."
+
+[[checks]]
+prompt = "S3 allows at most 10,000 parts per multipart upload. What part size do you need for a 1 TiB file, and what does a smaller part size buy you?"
+answer = "At least 1 TiB ÷ 10,000 ≈ 105 MiB, so use 128 MiB (parts may be 5 MiB to 5 GiB). Smaller parts mean less data to resend when one fails and finer progress, at the cost of more requests; the part size must still be large enough that the biggest file fits in 10,000 parts."
+
+[[checks]]
+prompt = "The client calls POST /uploads/7f3c/done when its upload finishes, and the API marks the file ready. What can go wrong, and what should mark it ready instead?"
+answer = "The client may have crashed mid-upload, uploaded a different or truncated file, or be malicious, and the API would then serve a file that is missing or wrong. Mark it from storage's object-created event, after a HEAD that checks the object's size and checksum against what was declared, with an idempotent handler; then queue processing."
+
+[[checks]]
+prompt = "A presigned PUT URL for an avatar is valid for a day, and someone uses it to upload a 40 GB file. What should have prevented it?"
+answer = "A short expiry (minutes), a size bound (a presigned POST with a content-length-range condition, or a signed Content-Length), a key chosen by the server for that one upload, and a size check when the upload completes that rejects and deletes anything over the limit."
+
+[[checks]]
+prompt = "The storage bill grows although the number of files does not. You find thousands of multipart uploads that were never completed. Why do they cost money, and how do you stop it?"
+answer = "Uploaded parts are stored and billed until the multipart upload is completed or aborted, but they never appear as objects, so they are easy to miss. Add a lifecycle rule with AbortIncompleteMultipartUpload (say after 7 days), and abort uploads whose metadata rows expire in uploading."
+
+[[checks]]
+prompt = "Why does inserting 100 bytes near the start of a file force a sync client with fixed-size blocks to re-upload almost everything after the edit, and how does content-defined chunking avoid it?"
+answer = "Fixed blocks are cut at fixed offsets, so an insertion shifts every later byte and every later block's content and hash changes. Content-defined chunking cuts where a rolling hash of the nearby bytes matches a pattern, so boundaries move with the content: only the chunk containing the insertion changes (measured: 1 new chunk instead of 81 of 129)."
+
+[[terms]]
+term = "Object storage"
+means = "A store of immutable files under keys (S3, GCS), cheap per gigabyte and built for many clients."
+section = "Why the bytes go around your servers"
+
+[[terms]]
+term = "Presigned URL"
+means = "A URL carrying a signature that permits one operation on one key until an expiry."
+section = "Presigned URLs"
+
+[[terms]]
+term = "Multipart upload"
+means = "Uploading a large object as numbered parts, each retried alone, then completing it as one object."
+section = "Chunks and resume"
+
+[[terms]]
+term = "ETag"
+means = "The identifier storage returns for each uploaded part; completing the upload lists them."
+section = "Chunks and resume"
+
+[[terms]]
+term = "tus"
+means = "An open protocol for resumable HTTP uploads using HEAD and PATCH with an Upload-Offset."
+section = "Chunks and resume"
+
+[[terms]]
+term = "Content-defined chunking"
+means = "Cutting a file where a rolling hash of its bytes matches a pattern, so edits change few chunks."
+section = "Syncing edits: chunk by content"
+
+[[terms]]
+term = "Deduplication"
+means = "Storing one copy of each distinct chunk, however many files contain it."
+section = "Syncing edits: chunk by content"
+
+[[terms]]
+term = "Range request"
+means = "Asking for part of a file (Range: bytes=…), answered with 206 Partial Content."
+section = "Serving downloads"
+
+[[sources]]
+title = "Amazon S3: uploading objects with presigned URLs"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html"
+note = "who can create them, expiry and credentials"
+
+[[sources]]
+title = "Amazon S3: authenticating requests with query parameters (Signature Version 4)"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html"
+note = "the query-string signature and the 7-day maximum"
+
+[[sources]]
+title = "AWS SigV4 signing test suite (in smithy-rs)"
+kind = "docs"
+url = "https://github.com/smithy-lang/smithy-rs/tree/main/aws/rust-runtime/aws-sigv4/aws-signing-test-suite"
+note = "request, canonical request and expected signature for each case, header and query forms"
+
+[[sources]]
+title = "Amazon S3: multipart upload limits"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html"
+
+[[sources]]
+title = "Amazon S3: deleting incomplete multipart uploads with a lifecycle rule"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html"
+
+[[sources]]
+title = "tus resumable upload protocol 1.0"
+kind = "standard"
+url = "https://tus.io/protocols/resumable-upload"
+note = "HEAD for the offset, PATCH to append, 409 on a mismatch"
+
+[[sources]]
+title = "Resumable Uploads for HTTP (IETF draft)"
+kind = "standard"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpbis-resumable-upload/"
+note = "the HTTP working group's draft, grown out of tus"
+
+[[sources]]
+title = "Dropbox: content hash"
+kind = "docs"
+url = "https://www.dropbox.com/developers/reference/content-hash"
+note = "4 MiB blocks, SHA-256 per block, then of the concatenation"
+
+[[sources]]
+title = "A Low-bandwidth Network File System (SOSP 2001)"
+kind = "paper"
+url = "https://pdos.csail.mit.edu/papers/lbfs:sosp01/lbfs.pdf"
+note = "Muthitacharoen, Chen and Mazières: content-defined chunks with Rabin fingerprints"
+
+[[sources]]
+title = "FastCDC: a Fast and Efficient Content-Defined Chunking Approach for Data Deduplication (USENIX ATC 2016)"
+kind = "paper"
+url = "https://www.usenix.org/conference/atc16/technical-sessions/presentation/xia"
+note = "the gear rolling hash"
+
+[[figures]]
+name = "multipart-upload"
+after = "Chunks and resume"
+caption = "The API signs; the bytes go straight to storage in parts, a failed part is resent alone, and storage's event marks the file uploaded."
