@@ -1,10 +1,29 @@
 title = "Scaling reads"
 group = "pattern"
 order = 1
-minutes = 7
-lede = "Most products read far more than they write. The moves, in the order to reach for them: indexes, a cache, read replicas, precomputed views, a CDN."
-say = "Reads are 100 times writes, so: an index for the lookup, Redis in front for hot links, two replicas behind, and the redirect cached at the CDN for the most popular codes."
-related = ["caching", "replication", "indexes"]
+minutes = 20
+lede = "Most products read far more than they write, and reads are the easy half: data can be copied as many times as you like, while each write must happen in one place. The moves, in the order to reach for them: make each read cheap, cache the hot set, add read replicas, precompute the answers, and serve what is shared from the edge."
+say = "Reads are a hundred times writes, so: the lookup is one index probe, Redis in front takes about 95% of reads, two replicas take the misses with a lag check, the follower counts are kept on write instead of counted per read, and popular redirects are cached at the CDN."
+related = ["caching", "replication", "indexes", "consistency-cap", "scaling-writes", "elasticsearch"]
+credit = "\"Edge: CDNs, push and pull\" and the benchmarking advice in \"Make each read cheap\" are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#content-delivery-network) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "Reads scale by **copying**: caches, replicas, precomputed views and CDNs are all copies.",
+  "Climb the ladder in order: **cheap queries, cache, replicas, precompute, edge**; each step adds moving parts.",
+  "Every copy can be **stale**: decide per read what staleness the product accepts.",
+  "**Precompute** what is expensive and read often: a count kept on write is hundreds of times cheaper than counting.",
+  "Size for the day the cache is **empty**, not only the day it is warm.",
+]
+
+[[sections]]
+heading = "Reads are the easy half"
+body = """
+A read changes nothing, so any up-to-date copy of the data can answer it. That single fact is why read scaling has so many tools and write scaling so few: every technique on this page is a way of keeping a **copy** closer to the reader or cheaper to read, and of deciding how stale that copy may be.
+
+Read-heavy is the normal case. Facebook's TAO, the store behind its social graph, was described in 2013 as handling **a billion reads and millions of writes a second**. Twitter's timeline service in 2012 served about **300,000 timeline reads a second**. A URL shortener, a product catalogue or a news site sees similar skews.
+
+Know the capacity of one node before adding more. On a 4-vCPU container, Postgres 18 served **35,029 primary-key lookups a second** (`pgbench -S`, 16 clients, 2 million rows, all in memory) at 0.46 ms average latency. Real queries are heavier than a primary-key fetch, but the order of magnitude matters: one well-indexed database handles tens of thousands of simple reads a second, so many designs need fewer replicas than people first draw.
+"""
 
 [[sections]]
 heading = "In order"
@@ -14,17 +33,293 @@ body = """
 3. **Read replicas** for the long tail the cache misses; mind replication lag.
 4. **Precompute**: store the answer the page needs (a feed, a count) instead of computing it per read.
 5. **CDN / edge** for content that is the same for everyone.
+
+| Move | What it costs | What you gain | Where it stops helping |
+|---|---|---|---|
+| cheap queries | engineering time, an index's write cost | 10× to 1000× on the slow queries | the query is already one index probe |
+| cache | a cache cluster, invalidation, stale reads | most hot reads never reach the database | unique or write-heavy reads; a cold or failed cache |
+| read replicas | machines, replication lag | reads spread over N copies | every replica still replays every write |
+| precompute | write-time work, a second copy to keep correct | an expensive read becomes a lookup | data that changes faster than it is read |
+| CDN / edge | cache keys, purges, cost per GB | requests answered near users, never reaching you | personalised or fast-changing responses |
+
+The order is cheapest first and fewest new moving parts first. Each step also makes the next cheaper: a cache in front of an indexed query refills faster after a miss, and replicas behind a cache need to serve only the misses.
+"""
+
+[[sections]]
+heading = "Make each read cheap"
+body = """
+Before adding machines, find out what each read costs. **Benchmark** to simulate load and **profile** to find the slow queries: in Postgres, `pg_stat_statements` ranks queries by total time and `EXPLAIN (ANALYZE, BUFFERS)` shows where one spends it.
+
+What usually turns up:
+
+- **A missing or wrong index**: a sequential scan where an index lookup would do. See the indexes page; a composite index in the order of the query's equality columns, then its range or sort column, fixes most.
+- **N+1 queries**: the page loads 50 posts, then each post's author in its own query: 51 round trips. At 1 ms per round trip that is 51 ms before any work. Load the authors in one query (`WHERE id = ANY($1)`) or join.
+- **Fetching too much**: `SELECT *` of a row with a large `jsonb` column when the page needs the title. Select the columns you use; an index containing all of them (a covering index) answers without touching the table.
+- **Deep `OFFSET` pagination**: `OFFSET 100000` reads and throws away 100,000 rows. Paginate by key (`WHERE id < $last ORDER BY id DESC LIMIT 20`).
+- **Too many connections**: Postgres starts one backend process per connection (its "process per user" model) and defaults to about 100 connections. Thousands of app processes each holding a connection waste memory and time; a pooler such as PgBouncer in transaction mode lets them share a few dozen.
+- **Hot and cold data mixed**: move rarely read history out of the hot table (partition by time, or archive) so the hot part fits in memory.
+
+> [!TIP]
+> Fixing a query is the only scaling move with no consistency cost: the answer is exactly as fresh as before, just cheaper.
+"""
+
+[[sections]]
+heading = "Cache the hot set"
+body = """
+Access is skewed: a small share of keys gets most reads. A cache in memory holding that share answers most requests in well under a millisecond, and the database sees only the misses. The caching page covers it in full; the parts that matter for read scaling:
+
+- **Database load is proportional to the miss ratio.** At 100,000 reads a second, a 95% hit ratio sends 5,000 a second to the database; 99% sends 1,000.
+- **Where**: a shared cache (Redis, Memcached) for application objects; a small in-process cache for the very hottest keys; the CDN for whole responses that are the same for everyone.
+- **Freshness**: cache-aside with a TTL plus jitter and delete-on-write; change data capture when staleness must be tight.
+- **Hot keys and stampedes**: one key can outgrow one cache node, and an expiring popular key can send thousands of identical misses to the database at once. Replicate hot keys, coalesce concurrent misses, and refresh popular keys before they expire.
+"""
+
+[[sections]]
+heading = "Read replicas"
+body = """
+A replica is a full copy of the database that applies the primary's changes and serves reads. Postgres streams its write-ahead log to **hot standbys**; MySQL ships its binary log. The replication page covers the mechanics; for read scaling, four facts decide the design:
+
+1. **Every replica replays every write.** Replicas multiply read capacity, not write capacity: if the primary is busy writing, so is each replica.
+2. **Replicas lag.** Asynchronous replicas are usually milliseconds behind and, under heavy write load or a long-running query, can be seconds or minutes behind. Anything read from a replica may be stale.
+3. **Route by the staleness each read accepts.** A user's own data right after they change it goes to the primary (read-your-writes); public timelines, search pages and analytics go to replicas.
+4. **Long queries on a replica can be cancelled.** When the primary cleans up old row versions that a replica's query still needs, the replica must either delay applying the log or cancel the query. Postgres waits up to `max_standby_streaming_delay` (**30 seconds** by default) and then cancels the query. Raising the delay lets reports finish but lets the replica fall further behind; `hot_standby_feedback` stops the conflicts by holding back cleanup on the primary, at the cost of table bloat there.
+
+| Read | Where it goes | Why |
+|---|---|---|
+| the profile a user just edited | primary, for a few seconds after their write | they must see their own change |
+| a public profile | cache, then a replica | seconds of staleness are invisible |
+| the balance before a transfer | primary, in the transaction | the decision must use current data |
+| a nightly report | a dedicated replica with a long delay | its long queries must not be cancelled, and must not slow users' reads |
+
+**How many replicas?** Divide the read load that reaches the database by what one replica serves for **your** queries (measure it), then add one so a replica can fail or be rebuilt without overloading the rest.
+"""
+
+[[sections]]
+heading = "Precompute the answer"
+body = """
+Some reads are expensive however good the index: counting, aggregating, ranking, assembling a feed from hundreds of sources. If such a read is far more frequent than the writes that change its answer, compute the answer when the data changes and store it.
+
+Measured on Postgres 18, with a `follows` table of 5 million rows, one celebrity with a million followers, and an index on `(followee, follower)`:
+
+| Read | Time (warm, repeated) | Work |
+|---|---|---|
+| `SELECT count(*) FROM follows WHERE followee = 1` | 58 to 62 ms | a parallel index-only scan over 1,000,000 entries, 3,838 buffers |
+| `SELECT count(*) … WHERE followee = 50` (40 followers) | 0.3 to 0.5 ms | a short index range |
+| `SELECT n FROM follower_counts WHERE user_id = 1` | 0.15 ms | one index probe, 3 buffers |
+
+The count is cheap for most users and four hundred times more expensive for the celebrity, whose profile is also the most viewed. Three ways to precompute it:
+
+**Maintain it on write.** Update `follower_counts` in the same transaction as the follow (measured: 2.5 ms for the `UPDATE`). Always current; every follow now writes a second row, and a celebrity's counter row becomes a hot row under a follow storm (see contention: split it into sub-counters).
+
+**A materialized view**, refreshed on a schedule:
+
+```sql title=follower_counts_mv.sql
+CREATE MATERIALIZED VIEW follower_counts_mv AS
+    SELECT followee AS user_id, count(*) AS n FROM follows GROUP BY followee;
+CREATE UNIQUE INDEX ON follower_counts_mv (user_id);   -- needed for CONCURRENTLY
+
+REFRESH MATERIALIZED VIEW follower_counts_mv;              -- 0.57 s, blocks readers
+REFRESH MATERIALIZED VIEW CONCURRENTLY follower_counts_mv; -- 1.83 s, readers carry on
+```
+
+A follow inserted after a refresh was invisible in the view (still 1,000,000) until the next refresh made it 1,000,001. Every refresh recomputes the whole query, so the cost grows with the table, not with the number of changes. The plain refresh is faster but locks out readers while it runs; `CONCURRENTLY` lets reads continue, needs a unique index on plain columns, and only one refresh can run at a time. Fits dashboards and leaderboards that may be minutes old.
+
+**A separate read model**, fed by events or change data capture: the write side keeps the normalised tables, and a consumer builds whatever shape the reads need, in whatever store suits them: feeds in Redis lists, full-text search in Elasticsearch, counts in a key-value table. This is the idea behind CQRS (separate models for commands and queries). It scales reads furthest and costs the most: a second store to run, eventual consistency between them, and a rebuild procedure for when the consumer has a bug.
+
+**Feeds** are the classic case. **Fan-out on write** pushes each new post into every follower's precomputed timeline, so reading a timeline is one lookup; a celebrity with tens of millions of followers would make one post into tens of millions of writes, so their posts are instead **pulled at read time** and merged in: a hybrid of the two.
+"""
+
+[[sections]]
+heading = "Edge: CDNs, push and pull"
+body = """
+A content delivery network is a globally distributed set of proxy servers that serve content from locations close to the user. Static files (scripts, styles, images, video) are the usual content; many CDNs also cache dynamic responses. It helps twice: users get responses from a nearby data centre, and your servers never see the requests the CDN answers.
+
+- **Push CDN**: you upload content to the CDN whenever it changes, and rewrite URLs to point at it. Content is uploaded only when new or changed, which minimises traffic but uses the most storage. Fits sites with little traffic or content that rarely changes.
+- **Pull CDN**: the CDN fetches from your server the first time a user asks, then keeps it for its TTL. The first request is slower, storage holds only what was recently requested, and files that expire before they change are fetched again for nothing. Fits sites with heavy traffic.
+
+The costs: CDN bills can be significant (weigh them against serving the traffic yourself), content can be stale until its TTL ends or you purge it, and static URLs must point at the CDN.
+
+**What to put there**: anything identical for many users. A URL shortener's redirect for a popular code, a product page's shared parts, the images of a news article. Personalised pages can still use it: serve the shared shell from the CDN and fetch the user's part separately. HTTP's `Cache-Control: s-maxage` and `stale-while-revalidate` control how CDNs keep and refresh responses (see the caching page).
+"""
+
+[[sections]]
+heading = "Worked example: sizing the read path"
+body = """
+A link-in-bio service: 2 million daily users, 100,000 profile views a second at peak, 50 profile edits a second.
+
+1. **CDN**: profiles are public and identical for every viewer. With a 60-second TTL and purge-on-edit, suppose the CDN answers 80% of views: 20,000 a second reach the app.
+2. **Cache**: profiles are small JSON objects; the hot set fits in a few GB of Redis. At a 95% hit ratio, 1,000 reads a second reach the database.
+3. **Database**: one primary-key read each. If one replica serves 10,000 of these a second in your benchmark, one replica is plenty for the warm case.
+4. **The cold case**: if the cache is flushed, 20,000 reads a second arrive at once, two replicas' worth. Either run three replicas, or rate-limit the refill and let the CDN serve stale pages (`stale-if-error`) while the cache warms.
+5. **Writes**: 50 a second, on the primary, each deleting the profile's cache key and purging its CDN URL. The editor's next reads go to the primary for a few seconds.
+
+:::steps Where 100,000 profile views a second end up
+- CDN | answers 80,000 a second | Public, identical responses never leave the edge.
+- Redis | answers 19,000 a second | The app checks the cache for the rest; 95% are there.
+- replica | serves 1,000 a second | Misses read one row by primary key.
+- primary | takes 50 writes a second | Each edit deletes the cache key and purges the CDN URL.
+:::
 """
 
 [[sections]]
 heading = "The traps"
 body = """
-- Hot keys that one cache node or replica cannot serve.
-- Stale data the product cannot tolerate (prices at checkout).
-- Stampedes on expiry.
-- Precomputed views that are expensive to keep current when writes spike (a celebrity post fanned out to 50 million feeds).
+- **Hot keys** that one cache node or replica cannot serve: replicate the key under several names, or keep a short in-process copy.
+- **Stale data the product cannot tolerate** (prices at checkout, a balance before a transfer): read those from the primary, inside the transaction that acts on them; use cached copies only for display.
+- **Stampedes on expiry**: one rebuilder, early refresh, TTL jitter.
+- **Precomputed views that are expensive to keep current** when writes spike (a celebrity post fanned out to 50 million feeds): pull the heavy cases at read time.
+- **Staleness that adds up**: a cache filled from a replica that was 5 seconds behind holds a value up to TTL + 5 seconds old. Fill caches from the primary when that matters.
+- **Replicas that look healthy but are far behind**: alert on lag, and take a replica out of the read pool past a threshold.
+- **The cold start**: a flushed cache or a new region sends everything to the database. Size for it or warm gradually.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. State the **read:write ratio** and the peak read rate with a number.
+2. Say what makes **one read cheap** (the index, the query shape) before adding machines.
+3. Put a **cache** in front, say the expected hit ratio and what reaches the database.
+4. Add **replicas** for the misses and say which reads must not go to them.
+5. **Precompute** the expensive reads (counts, feeds) and say how the precomputed copy stays current.
+6. Say what happens when the **cache is cold**.
+
+> [!INTERVIEW]
+> "Profile reads are 2,000 times writes. Each is one primary-key lookup. The CDN serves public profiles with a one-minute TTL and a purge on edit; Redis takes 95% of the rest; two replicas serve misses, with a third so a cache flush doesn't take us down. Follower counts are maintained on write, sharded for celebrities."
 """
 
 [[checks]]
 prompt = "In what order would you reach for indexes, caching, replicas and precomputation, and why?"
 answer = "Indexes first (cheapest, fixes slow queries at the source), then a cache (absorbs most hot reads), then replicas (the misses and the long tail), then precomputed views for reads that are still expensive. Each adds more moving parts than the one before."
+
+[[checks]]
+prompt = "Product pages show prices from a cache with a five-minute TTL. A price changes and a user checks out a minute later. What should checkout read, and why?"
+answer = "The current price from the primary database, inside the transaction that creates the order. The cached copy is for display and may be up to five minutes old; the decision that charges money must use the authoritative value. Delete the cache key on the price change so pages catch up quickly too."
+
+[[checks]]
+prompt = "Peak is 200,000 reads a second, the cache hit ratio is 98%, and one replica serves 8,000 of your queries a second. How many replicas do you need, and what happens if the cache is flushed?"
+answer = "Warm, 2% of 200,000 is 4,000 reads a second: one replica, two for headroom and failover. Cold, all 200,000 reach the database: 25 replicas' worth, so the database falls over. Either size for a partial cold start, warm the cache before taking traffic, rate-limit refills, or serve stale responses from the CDN while it warms."
+
+[[checks]]
+prompt = "Counting a celebrity's followers takes 60 ms and their profile is the most viewed page. What are your options, and what does each cost?"
+answer = "Keep a count on write in the same transaction (always current, but each follow writes a second row and the celebrity's counter becomes a hot row: shard it). Or a materialized view refreshed on a schedule (cheap reads, minutes stale, each refresh recomputes everything). Or cache the count with a TTL (simple, stale until expiry). All turn a 60 ms count into a sub-millisecond lookup."
+
+[[checks]]
+prompt = "A user edits their bio, reloads, and sees the old one. Reads go to replicas. Why, and how do you fix it without sending every read to the primary?"
+answer = "Replication lag: the replica had not yet applied the edit. Route that user's reads of their own data to the primary for a short window after they write (a timestamp in their session), or carry the write's log position and read only from a replica that has reached it. Everyone else keeps reading from replicas."
+
+[[checks]]
+prompt = "A nightly report on a Postgres hot standby keeps failing with 'canceling statement due to conflict with recovery'. Why, and what are your options?"
+answer = "The primary cleaned up row versions the report still needed, and the standby cancels conflicting queries once applying the log has waited max_standby_streaming_delay (30 s by default). Options: a dedicated reporting replica with a longer or unlimited delay (it falls behind while the report runs), hot_standby_feedback (no cancellations, but cleanup is held back and the primary bloats), or run the report on a snapshot or an analytics store."
+
+[[terms]]
+term = "Read:write ratio"
+means = "How many reads the system serves for each write; read-heavy systems scale by copying data."
+section = "Reads are the easy half"
+
+[[terms]]
+term = "N+1 queries"
+means = "One query for a list, then one more per item: many round trips where one would do."
+section = "Make each read cheap"
+
+[[terms]]
+term = "Connection pooler"
+means = "A proxy such as PgBouncer that lets many clients share a few database connections."
+section = "Make each read cheap"
+
+[[terms]]
+term = "Keyset pagination"
+means = "Paging by the last key seen (WHERE id < $last) instead of skipping rows with OFFSET."
+section = "Make each read cheap"
+
+[[terms]]
+term = "Hot standby"
+means = "A Postgres replica that applies the primary's log and serves read-only queries."
+section = "Read replicas"
+
+[[terms]]
+term = "Replication lag"
+means = "How far a replica is behind the primary; reads from it may be that stale."
+section = "Read replicas"
+
+[[terms]]
+term = "Read-your-writes"
+means = "A user always sees their own changes, even when other reads come from replicas."
+section = "Read replicas"
+
+[[terms]]
+term = "Materialized view"
+means = "A query's result stored as a table and refreshed on demand."
+section = "Precompute the answer"
+
+[[terms]]
+term = "Read model"
+means = "A copy of the data shaped for one kind of read, kept up to date from the writes."
+section = "Precompute the answer"
+
+[[terms]]
+term = "Fan-out on write"
+means = "Pushing each new post into every follower's stored feed so reading a feed is one lookup."
+section = "Precompute the answer"
+
+[[terms]]
+term = "Pull CDN"
+means = "A CDN that fetches content from your server on the first request and keeps it for a TTL."
+section = "Edge: CDNs, push and pull"
+
+[[terms]]
+term = "Push CDN"
+means = "A CDN you upload content to whenever it changes."
+section = "Edge: CDNs, push and pull"
+
+[[sources]]
+title = "The System Design Primer: content delivery network, SQL tuning"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#content-delivery-network"
+note = "push and pull CDNs, benchmarking and profiling (CC BY 4.0)"
+
+[[sources]]
+title = "TAO: Facebook's Distributed Data Store for the Social Graph (USENIX ATC 2013)"
+kind = "paper"
+url = "https://www.usenix.org/system/files/conference/atc13/atc13-bronson.pdf"
+note = "a read-optimised graph store: a billion reads and millions of writes a second"
+
+[[sources]]
+title = "Timelines at Scale (QCon San Francisco 2012)"
+kind = "article"
+url = "https://www.infoq.com/presentations/Twitter-Timeline-Scalability"
+note = "Raffi Krikorian on Twitter's timeline read and write paths, fan-out on write"
+
+[[sources]]
+title = "PostgreSQL: hot standby, handling query conflicts"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/hot-standby.html#HOT-STANDBY-CONFLICT"
+note = "why replica queries are cancelled; max_standby_streaming_delay and hot_standby_feedback"
+
+[[sources]]
+title = "PostgreSQL: REFRESH MATERIALIZED VIEW"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html"
+note = "CONCURRENTLY and its unique-index requirement"
+
+[[sources]]
+title = "PostgreSQL: pg_stat_statements"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgstatstatements.html"
+note = "finding the queries that cost the most time"
+
+[[sources]]
+title = "PostgreSQL: pgbench"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgbench.html"
+note = "the benchmark used for the numbers on this page"
+
+[[sources]]
+title = "PgBouncer: features"
+kind = "docs"
+url = "https://www.pgbouncer.org/features.html"
+note = "session, transaction and statement pooling"
+
+[[figures]]
+name = "read-layers"
+after = "Worked example: sizing the read path"
+caption = "Each layer answers what it can; only the misses travel further, so the database sees a small share of the reads."

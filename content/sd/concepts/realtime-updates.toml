@@ -1,10 +1,18 @@
 title = "Realtime updates"
 group = "pattern"
 order = 4
-minutes = 7
-lede = "Getting new data to a client as it happens: polling, long polling, server-sent events or WebSockets, and the pub/sub behind them when there are many servers."
-say = "Clients hold a WebSocket to a gateway; each gateway subscribes to the chats its users are in on a Redis pub/sub channel and pushes new messages down."
-related = ["queues-and-streams", "api-styles"]
+minutes = 20
+lede = "Getting new data to a client as it happens: polling, long polling, server-sent events or WebSockets on the last hop, and a pub/sub layer behind them when there are many servers. The connection is the easy part; the design questions are what a client missed while it was disconnected and how one event reaches the right million sockets."
+say = "Viewers hold a server-sent events stream to a gateway; each gateway subscribes once per live video to a Redis channel and writes new comments to its local sockets; comments are stored first, carry an id, and a reconnecting client sends Last-Event-ID to get what it missed."
+related = ["queues-and-streams", "api-styles", "load-balancing", "resilience", "redis"]
+
+summary = [
+  "**Polling** is simple and wasteful; **long polling** answers when there is news; **SSE** streams one way; **WebSockets** go both ways.",
+  "Prefer **SSE** when only the server pushes: plain HTTP, automatic reconnect with **Last-Event-ID**.",
+  "Behind the gateways, a **pub/sub** layer routes each event to the servers holding the right connections.",
+  "The live channel is a **hint**: store events first, and let a reconnecting client catch up from its last id.",
+  "Long-lived connections need **heartbeats**, **draining** on deploys and **jittered** reconnects.",
+]
 
 [[sections]]
 heading = "Four ways"
@@ -15,6 +23,159 @@ body = """
 | Long polling | the server holds the request until there is news | modest scale, no special infrastructure |
 | Server-sent events | one long HTTP response the server writes to | one-way updates: feeds, prices, notifications |
 | WebSocket | a two-way connection | chat, games, collaboration |
+
+How they compare on what matters in a design:
+
+| | Polling | Long polling | SSE | WebSocket |
+|---|---|---|---|---|
+| direction | client asks | client asks, server answers when ready | server to client | both ways |
+| latency of an update | up to one interval | about one network trip | about one network trip | about one network trip |
+| cost while idle | a request per client per interval | one open request per client | one open connection per client | one open connection per client |
+| resume after a drop | the client sends its cursor | the client sends its cursor | built in: `Last-Event-ID` | yours to build |
+| through proxies and HTTP tooling | plain HTTP | plain HTTP, watch idle timeouts | plain HTTP, watch idle timeouts | needs the Upgrade to be passed through |
+
+Load is the arithmetic interviewers like: a million clients polling every five seconds is **200,000 requests a second**, nearly all answering "nothing new". The same clients on SSE are a million open connections and a request only when something actually happens.
+"""
+
+[[sections]]
+heading = "Polling and long polling"
+body = """
+**Polling** asks on a timer: `GET /notifications?since=812` every N seconds. It works through every proxy and cache, needs no connection state on the server, and is the right answer when updates are rare and a delay of N seconds is fine (a build status page, an export that takes minutes). The `since` cursor is essential: without it, the client either re-downloads everything or misses what changed between polls.
+
+**Long polling** makes the server hold the request open until there is something to say (or a timeout, say 30 seconds, after which it answers "nothing" and the client asks again at once). Updates arrive about one network trip after they happen, using nothing but ordinary HTTP. RFC 6202 lists its costs: every message pays for a full HTTP request and response with headers; after each answer there is a gap while the next request is sent, so bursts are delivered one round trip at a time; and intermediaries may cut held requests off. It is a sound fallback where streaming is blocked, and simple to run at modest scale.
+"""
+
+[[sections]]
+heading = "Server-sent events"
+body = """
+SSE is a single HTTP response that never ends. The server sends `Content-Type: text/event-stream` and then writes events as lines of text; the browser's `EventSource` parses them and reconnects on its own when the connection drops. It is defined in the HTML standard.
+
+The wire format, from a small server in plain Rust that sends three comments per connection and then drops the connection (as a restart or a load balancer would). It honours the `Last-Event-ID` request header:
+
+```rust title=sse.rs
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
+use std::thread;
+use std::time::Duration;
+
+/// A server-sent events endpoint in plain std: each connection gets the three comments after the client's
+/// Last-Event-ID, then the server drops it, as a restart or a load balancer would.
+fn main() -> std::io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:47913")?;
+    for stream in listener.incoming().take(2) {
+        let mut stream = stream?;
+        let mut last_id = 0u64;
+        for line in BufReader::new(stream.try_clone()?).lines() {
+            let line = line?;
+            if line.is_empty() {
+                break; // end of the request head
+            }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("last-event-id")
+            {
+                last_id = value.trim().parse().unwrap_or(0);
+            }
+        }
+        write!(stream, "HTTP/1.1 200 OK\\r\\nContent-Type: text/event-stream\\r\\nCache-Control: no-cache\\r\\n\\r\\n")?;
+        write!(stream, "retry: 2000\\n\\n")?; // reconnect after 2 s if the connection drops
+        for id in last_id + 1..=last_id + 3 {
+            write!(stream, "id: {id}\\nevent: comment\\ndata: {{\\"video\\":42,\\"text\\":\\"comment {id}\\"}}\\n\\n")?;
+            stream.flush()?;
+            thread::sleep(Duration::from_millis(200));
+        }
+        write!(stream, ": a comment line keeps idle proxies from closing the connection\\n\\n")?;
+    } // the stream is dropped here: the connection closes
+    Ok(())
+}
+```
+
+```text title=first_connection
+$ curl -N http://127.0.0.1:47913/videos/42/comments
+retry: 2000
+
+id: 1
+event: comment
+data: {"video":42,"text":"comment 1"}
+
+id: 2
+event: comment
+data: {"video":42,"text":"comment 2"}
+
+id: 3
+event: comment
+data: {"video":42,"text":"comment 3"}
+
+: a comment line keeps idle proxies from closing the connection
+```
+
+```text title=reconnect
+$ curl -N -H "Last-Event-ID: 3" http://127.0.0.1:47913/videos/42/comments
+retry: 2000
+
+id: 4
+event: comment
+data: {"video":42,"text":"comment 4"}
+…
+```
+
+What each field does:
+
+- `data:` is the payload; several `data:` lines join with newlines; a blank line ends the event.
+- `id:` sets the stream's **last event ID**. When the browser reconnects, it sends it back as the `Last-Event-ID` header, so the server can resume where the client left off. This is the feature that makes SSE pleasant: resume is in the protocol.
+- `event:` names the event type, so the page can listen for `comment` separately from `presence`.
+- `retry:` sets how many milliseconds the browser waits before reconnecting (otherwise a browser default, which the standard expects to be a few seconds).
+- A line starting with `:` is a comment, ignored by the client. The standard suggests sending one **every 15 seconds or so**, because some proxies drop connections that stay quiet.
+- To tell a client to stop reconnecting for good, answer with **204 No Content**.
+
+**The limits.** SSE carries text only, one way: the client sends with ordinary `POST`s, which suits comments, notifications, prices and progress bars. Over HTTP/1.1 a browser opens only a few connections per server (six in common browsers, per MDN), and each open `EventSource` holds one, so several tabs of the same site can starve each other; over HTTP/2 the streams share one connection and the problem goes away.
+"""
+
+[[sections]]
+heading = "WebSockets"
+body = """
+A WebSocket (RFC 6455) starts as an HTTP/1.1 request asking to switch protocols, then becomes a two-way stream of **frames** on the same TCP connection:
+
+```http title=handshake
+GET /chat HTTP/1.1
+Host: server.example.com
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+Sec-WebSocket-Version: 13
+
+HTTP/1.1 101 Switching Protocols
+Upgrade: websocket
+Connection: Upgrade
+Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+The accept value proves the server understood the WebSocket handshake (rather than being an HTTP server that echoes headers): it is the base64 SHA-1 of the client's key joined to a fixed GUID from the RFC.
+
+```python title=ws_accept.py
+import base64
+import hashlib
+
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"  # fixed by RFC 6455
+
+
+def accept(key: str) -> str:
+    \"\"\"The Sec-WebSocket-Accept a server must return for a client's Sec-WebSocket-Key.\"\"\"
+    return base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+
+
+print(accept("dGhlIHNhbXBsZSBub25jZQ=="))   # s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+```
+
+After the handshake, either side sends text or binary messages at any time; frames from the client are masked; **ping** and **pong** frames check the connection is alive; a **close** frame carries a status code (1000 normal, 1001 going away, for example a server shutting down).
+
+What WebSockets leave to you:
+
+- **Resume**: there is no `Last-Event-ID`. Number your messages and have the client send the last number it saw when it reconnects, exactly as with SSE but hand-built.
+- **Authentication**: the browser's `WebSocket` constructor takes a URL and subprotocols, not custom headers, so a bearer token cannot go in an `Authorization` header. Use a cookie, a short-lived token in the URL, or an auth message as the first frame (and close the socket if it does not come).
+- **Proxies**: `Upgrade` is a hop-by-hop header, so a reverse proxy must pass it on explicitly. NGINX, for example, needs `proxy_set_header Upgrade $http_upgrade` and `Connection "upgrade"`, and by default closes a proxied WebSocket whose server sends nothing for **60 seconds**; server pings reset that timer.
+- **Back pressure**: a slow client's socket buffer fills; decide whether to drop messages for it, coalesce them (send only the latest state), or disconnect it, rather than buffering without limit in the gateway.
+
+Choose WebSockets when the client also streams (chat typing indicators, multiplayer games, collaborative editing cursors) or needs binary frames. When only the server pushes, SSE gives the same latency with less to build.
 """
 
 [[sections]]
@@ -23,6 +184,59 @@ body = """
 A user's connection lives on one gateway server, but the event happens elsewhere. Gateways **subscribe** to the topics their connected users care about (Redis pub/sub, or a stream), and services **publish** to them. Keep a map of user to gateway if you need to target one user.
 
 Connections are long-lived: plan for reconnects (clients resume from the last event id), load balancers that support them, and the memory each connection holds.
+
+**The usual shape**: clients hold connections to a fleet of stateless **gateways** behind a load balancer. A gateway keeps an in-memory map from topic to its local sockets (`video:42` → 9,000 sockets). When the first local client joins a topic, the gateway subscribes to it on the pub/sub layer; when the last leaves, it unsubscribes. A service that creates an event publishes it once to the topic; every subscribed gateway receives it once and writes it to its local sockets.
+
+**Fan-out arithmetic**: a live video with 1,000,000 viewers spread over 100 gateways. A new comment is published **once**, received by **100** gateways, and written to **10,000** sockets on each. The pub/sub layer moves 100 messages, not a million; the gateways do the wide part, in parallel. For a very busy topic, batch (send the comments of the last 100 ms in one frame) or sample (show a representative subset to huge audiences).
+
+**Which pub/sub**:
+
+- **Redis pub/sub** is fast and simple, and its documentation is explicit that delivery is **at most once**: a subscriber that is disconnected or slow when a message is published never gets it. Since Redis 7.0, **sharded pub/sub** (`SSUBSCRIBE`, `SPUBLISH`) keeps a channel's messages within the cluster shard that owns its slot, so a busy cluster does not broadcast every message to every node.
+- **A log** (Kafka, Redis Streams, NATS JetStream) when gateways must not miss messages during a restart, at the cost of tracking positions.
+
+**Targeting one user** (a direct message, a notification): keep a **registry** of user → gateway(s), written when a connection opens, with a TTL refreshed by heartbeats so a crashed gateway's entries expire. The sender looks up the gateway and publishes to that gateway's own channel; or every user has a channel (`user:7`) that their gateway subscribes to while they are connected.
+"""
+
+[[sections]]
+heading = "Missing nothing: store first, push second"
+body = """
+The live connection will drop: phones change networks, laptops sleep, gateways restart. A design that only pushes loses whatever happened in the gap. The standard answer has three parts:
+
+1. **Store the event first**, in the system of record (the comments table, the messages table), with an increasing id per conversation or topic.
+2. **Push it as a hint**: publish to the pub/sub layer for the gateways. If a push is lost, nothing is lost for good.
+3. **Catch up on reconnect**: the client sends the last id it saw (`Last-Event-ID` for SSE, a field in the first frame for a WebSocket, `since=` for polling); the gateway replays from storage everything after it, then switches to live.
+
+:::steps A phone loses signal in a busy chat
+- client | last seen message 812 | The socket drops in a tunnel.
+- server | stores 813, 814, 815 | Messages keep arriving and are written to the database; pushes to this client fail.
+- client | reconnects, sends last id 812 | The connection opens on a different gateway.
+- gateway | replays 813-815, then live | Nothing is missed and nothing is shown twice.
+:::
+
+Client-side dedup by message id makes it safe for a message to arrive both in the replay and live.
+"""
+
+[[sections]]
+heading = "Running long-lived connections"
+body = """
+- **Heartbeats** in both directions (SSE comment lines, WebSocket pings) every 15 to 30 seconds keep idle proxies and NAT tables from dropping connections, and let each side notice a dead peer.
+- **Load balancing**: connections are long, so a new gateway gets only new connections and old gateways stay loaded. Balance on current connection count, and rebalance slowly by asking some clients to reconnect.
+- **Deploys and draining**: a gateway being replaced should stop accepting new connections, tell clients to reconnect elsewhere (a WebSocket close with 1001 "going away", or a final SSE event), and close them gradually over a minute or two rather than all at once.
+- **Reconnect storms**: if 500,000 clients lose their gateway at once and all reconnect immediately, the new gateways, the auth service and the catch-up queries are hit at the same instant. Clients must reconnect with **exponential backoff and random jitter** (see resilience), and the server can set the SSE `retry:` value per client to spread them.
+- **Capacity per gateway** is set by memory per connection (socket buffers, subscription state, the user's session) and file descriptors. Measure it for your gateway and plan in connections per box, separately from requests per second.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Choose the **last hop** from the traffic's direction: SSE for server-to-client, WebSocket when the client streams too, polling when updates are rare.
+2. Draw the **gateways** and the **pub/sub** behind them, and show one event reaching the right sockets (topic subscriptions, or a user → gateway registry).
+3. Say what happens **during a disconnect**: events stored first, ids, catch-up on reconnect.
+4. Do the **fan-out arithmetic** for the biggest topic.
+5. Mention **heartbeats, draining and jittered reconnects**.
+
+> [!INTERVIEW]
+> "Comments are POSTed, written to the comments table with an id, then published to Redis channel video:42. Each gateway subscribed to that channel pushes to its SSE clients. A reconnecting viewer sends Last-Event-ID and the gateway replays newer comments from the table. For a million viewers that's one publish, a hundred gateway deliveries, and ten thousand socket writes per gateway."
 """
 
 [[checks]]
@@ -32,3 +246,113 @@ answer = "Server-sent events fit: the traffic is one-way to viewers (comments ar
 [[checks]]
 prompt = "A message is published on server A, but the recipient's socket is on server B. How does it get there?"
 answer = "Through pub/sub: B subscribes to a channel for the chat (or for the user) and A publishes the message there; or a registry maps user to gateway and A forwards to B."
+
+[[checks]]
+prompt = "A million clients poll for notifications every five seconds. What load is that, and what changes if they switch to server-sent events?"
+answer = "200,000 requests a second, nearly all returning nothing, each paying for a full HTTP request and response. With SSE the same clients hold a million open connections and the server sends only when there is a notification, so the work tracks events instead of clients times frequency; the cost moves to holding connections (memory, file descriptors, heartbeats)."
+
+[[checks]]
+prompt = "A viewer's connection drops for twenty seconds during a live chat. How does your design make sure they see every message they missed, exactly once?"
+answer = "Messages are stored before they are pushed, each with an increasing id. On reconnect the client sends the last id it saw (Last-Event-ID for SSE, or in the first WebSocket frame); the gateway replays everything after it from storage, then continues live. The client drops any message whose id it has already shown, so overlap between replay and live is harmless."
+
+[[checks]]
+prompt = "Gateways use Redis pub/sub. A gateway restarts and its users miss messages sent meanwhile. Why, and what do you change?"
+answer = "Redis pub/sub is at-most-once: messages published while a subscriber is disconnected are never delivered to it. Treat the pub/sub push as a hint: store messages first and have reconnecting clients catch up from their last id; or use a log (Redis Streams, Kafka) that gateways read from a position if they must not miss anything."
+
+[[checks]]
+prompt = "You deploy a new gateway version and 500,000 WebSocket clients reconnect within the same second; auth and the database fall over. What should have happened?"
+answer = "Drain gateways gradually: stop new connections, then close existing ones over a minute or two with a going-away close code. Clients must reconnect with exponential backoff and random jitter so reconnects spread out, and catch-up should be cheap (bounded replay from the last id), so a deploy does not become a synchronised storm."
+
+[[checks]]
+prompt = "Users behind a corporate proxy see their WebSocket drop after exactly a minute of silence. Why, and what is the fix?"
+answer = "An intermediary (NGINX's default, for instance, is 60 seconds) closes connections that carry no data. Send heartbeats more often than the shortest idle timeout on the path: WebSocket ping frames (or SSE comment lines) every 15 to 30 seconds, and raise the timeout on proxies you control."
+
+[[terms]]
+term = "Long polling"
+means = "The server holds a request open until there is news or a timeout, then the client asks again."
+section = "Polling and long polling"
+
+[[terms]]
+term = "Server-sent events"
+means = "A never-ending HTTP response of text events from server to client, with automatic reconnect."
+section = "Server-sent events"
+
+[[terms]]
+term = "Last-Event-ID"
+means = "The header a reconnecting SSE client sends so the server can resume after the last event it saw."
+section = "Server-sent events"
+
+[[terms]]
+term = "WebSocket"
+means = "A two-way message channel that starts as an HTTP Upgrade request on one TCP connection."
+section = "WebSockets"
+
+[[terms]]
+term = "Ping and pong"
+means = "WebSocket control frames that check the connection is alive and keep idle proxies from closing it."
+section = "WebSockets"
+
+[[terms]]
+term = "Gateway"
+means = "A server that holds client connections and pushes events to them."
+section = "Many servers"
+
+[[terms]]
+term = "Pub/sub"
+means = "Publishers send to a topic; every current subscriber receives a copy."
+section = "Many servers"
+
+[[terms]]
+term = "Connection registry"
+means = "A map from user to the gateway holding their connection, kept fresh by heartbeats."
+section = "Many servers"
+
+[[terms]]
+term = "Catch-up"
+means = "Replaying from storage what a client missed since its last id before going live again."
+section = "Missing nothing: store first, push second"
+
+[[terms]]
+term = "Reconnect storm"
+means = "Many clients reconnecting at the same moment after a failure or deploy."
+section = "Running long-lived connections"
+
+[[sources]]
+title = "HTML Standard: server-sent events"
+kind = "standard"
+url = "https://html.spec.whatwg.org/multipage/server-sent-events.html"
+note = "the event stream format, Last-Event-ID, retry, 204 to stop, authoring notes on proxies and connection limits"
+
+[[sources]]
+title = "RFC 6455: The WebSocket Protocol"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc6455"
+note = "the opening handshake, framing, masking, ping and pong, close codes"
+
+[[sources]]
+title = "RFC 6202: Known Issues and Best Practices for the Use of Long Polling and Streaming in Bidirectional HTTP"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc6202"
+
+[[sources]]
+title = "MDN: Using server-sent events"
+kind = "docs"
+url = "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events"
+note = "EventSource in practice and the per-domain connection limit over HTTP/1.1"
+
+[[sources]]
+title = "NGINX: WebSocket proxying"
+kind = "docs"
+url = "https://nginx.org/en/docs/http/websocket.html"
+note = "passing Upgrade and Connection, the 60-second idle close, pings"
+
+[[sources]]
+title = "Redis: pub/sub"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/pubsub/"
+note = "at-most-once delivery, sharded pub/sub"
+
+[[figures]]
+name = "realtime-ways"
+after = "Four ways"
+caption = "Two events on one timeline: polling hears of each at its next request; long polling, SSE and WebSockets push it at once (a hollow dot is the WebSocket client sending)."

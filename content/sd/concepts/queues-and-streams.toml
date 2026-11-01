@@ -1,10 +1,18 @@
 title = "Queues and streams"
 group = "pattern"
 order = 5
-minutes = 9
-lede = "Two ways to hand work from one service to another without waiting: a queue hands each message to one worker and forgets it once done; a stream keeps an ordered log that many readers replay."
-say = "Sending the welcome email is a job, so it goes on a queue with retries and a dead-letter queue; the order events go on a stream because billing, search and analytics all read them."
-related = ["kafka", "scaling-writes", "multi-step-processes", "stream-processing", "resilience"]
+minutes = 22
+lede = "Two ways to hand work from one service to another without waiting: a queue hands each message to one worker and deletes it once that worker acknowledges it; a stream keeps an ordered log that many independent readers move through and can replay. Both deliver at least once, so every consumer must cope with seeing a message twice."
+say = "Sending the welcome email is a job, so it goes on a queue with a visibility timeout longer than the job, three attempts and a dead-letter queue; the order events go on a stream partitioned by order id, because billing, search and analytics all read them in order and at their own pace."
+related = ["kafka", "scaling-writes", "multi-step-processes", "stream-processing", "resilience", "contention"]
+
+summary = [
+  "A **queue** gives each message to one worker and deletes it on ack; a **stream** keeps the log and each reader keeps its place.",
+  "Delivery is **at least once**: a crash before the ack redelivers, so handlers must be **idempotent**.",
+  "Set the **visibility timeout** longer than the job, cap attempts, and send what keeps failing to a **dead-letter queue**.",
+  "Order exists **per partition or per group**, never across them: choose the key that needs ordering.",
+  "Watch **depth and the age of the oldest message**; a growing backlog is a capacity problem, not a buffer.",
+]
 
 [[sections]]
 heading = "Why go asynchronous"
@@ -14,6 +22,8 @@ body = """
 - **Retry**: a failed step is tried again without the user waiting.
 
 The price: the result is not there when the request returns, so the product must accept "it will happen shortly", and you now run something that can back up.
+
+A useful test: if the user needs the result to continue (the price of the order, whether the payment went through), do it synchronously. If the user only needs to know it **will** happen (the receipt email, the thumbnail, the search index update), put it on a queue or a stream and return.
 """
 
 [[sections]]
@@ -25,6 +35,133 @@ Each message goes to **one** consumer. The consumer **acknowledges** it when don
 - After N failures, move the message to a **dead-letter queue** to look at, rather than retrying forever.
 - Order is usually not guaranteed (FIFO queues exist, with lower throughput).
 - Examples: SQS, RabbitMQ, a Redis list or stream used as a queue.
+
+**The life of a message**: sent, then *available*; received by a worker, then *in flight* (invisible to other workers, not deleted); acknowledged, then deleted. If the worker crashes, times out or rejects it, it becomes available again. The two big brokers implement the same idea differently:
+
+| | Amazon SQS | RabbitMQ (quorum queue) |
+|---|---|---|
+| in flight until | the **visibility timeout** ends: default 30 s, from 0 s to 12 hours, extendable per message while working | the consumer's channel or connection closes, or it misses the consumer timeout (30 minutes by default) |
+| ack | `DeleteMessage` with the receipt handle | `basic.ack` on the channel |
+| poison messages | a redrive policy moves a message to a dead-letter queue after `maxReceiveCount` receives | a delivery limit (default 20 since RabbitMQ 4.0), then dropped or dead-lettered |
+| ordering | standard queues: none promised; FIFO queues: strict order within each message group id | FIFO per queue, but redeliveries and several consumers reorder; a single active consumer keeps order |
+| retention | default 4 days, 1 minute to 14 days | until consumed (or a TTL or length limit) |
+| waiting for messages | long polling up to 20 s per receive | the broker pushes, limited by the consumer's prefetch count |
+
+**Long polling** matters for cost and latency: a receive that waits up to 20 seconds for a message returns as soon as one arrives, instead of a tight loop of empty receives. **Prefetch** (RabbitMQ) caps how many unacknowledged messages one consumer holds, so a slow consumer does not hoard work that others could do.
+
+> [!WARNING]
+> If a job can run longer than the visibility timeout, a second worker receives the same message while the first is still working. Set the timeout above the slowest job's time, or extend it from the worker while it runs (a heartbeat calling `ChangeMessageVisibility`).
+"""
+
+[[sections]]
+heading = "At least once, and what to do about it"
+body = """
+Every broker on this page offers one of two promises:
+
+- **At most once**: acknowledge on receipt, then process. A crash loses the message. Acceptable for metrics samples, never for orders.
+- **At least once**: process, then acknowledge. A crash between the two delivers the message again. This is the default everywhere, and RabbitMQ's documentation says it plainly: consumers "must be prepared to handle redeliveries and otherwise be implemented with idempotence in mind".
+
+"Exactly once" in practice means **at least once delivery plus idempotent processing**: the effect happens once even when the message arrives twice. (SQS FIFO queues and Kafka transactions narrow the window inside their own systems, but the moment a handler touches the outside world, such as charging a card or sending an email, idempotence is the handler's job.)
+
+The simulation below is an SQS-style queue in plain Rust: receiving hides a message for 30 ticks, an ack deletes it, and a message received three times without an ack goes to the dead-letter queue. Order 4's first worker charges the card and crashes before acking; order 5 fails every time.
+
+```rust title=at_least_once.rs
+use std::collections::{BTreeMap, HashSet};
+
+/// A message in the queue: hidden until `visible_at` once received, deleted only by an ack.
+struct Msg {
+    id: u32,
+    receives: u32,
+    visible_at: u64,
+}
+
+/// An SQS-style queue: receiving hides a message for `visibility` ticks; no ack in time means it comes back.
+struct Queue {
+    msgs: Vec<Msg>,
+    dead: Vec<u32>,
+    visibility: u64,
+    max_receives: u32,
+}
+
+impl Queue {
+    fn receive(&mut self, now: u64) -> Option<(u32, u32)> {
+        loop {
+            let i = self.msgs.iter().position(|m| m.visible_at <= now)?;
+            if self.msgs[i].receives == self.max_receives {
+                // received too often without an ack: move it to the dead-letter queue
+                self.dead.push(self.msgs.remove(i).id);
+                continue;
+            }
+            let m = &mut self.msgs[i];
+            m.receives += 1;
+            m.visible_at = now + self.visibility;
+            return Some((m.id, m.receives));
+        }
+    }
+
+    fn ack(&mut self, id: u32) {
+        self.msgs.retain(|m| m.id != id);
+    }
+}
+
+/// What happens to order `id` on a given delivery.
+enum Outcome {
+    Ok,
+    CrashAfterCharge, // the side effect happened, then the worker died before acking
+    Fails,            // a poison message: the handler errors every time
+}
+
+fn outcome(id: u32, receive: u32) -> Outcome {
+    match (id, receive) {
+        (4, 1) => Outcome::CrashAfterCharge,
+        (5, _) => Outcome::Fails,
+        _ => Outcome::Ok,
+    }
+}
+
+fn run(idempotent: bool) -> (BTreeMap<u32, u32>, Vec<u32>, u64) {
+    let mut q = Queue { msgs: (1..=6).map(|id| Msg { id, receives: 0, visible_at: 0 }).collect(), dead: vec![], visibility: 30, max_receives: 3 };
+    let mut charges = BTreeMap::new();
+    let mut done = HashSet::new(); // the idempotent handler's record of processed message ids
+    let mut now = 0;
+    while !q.msgs.is_empty() {
+        let Some((id, receive)) = q.receive(now) else {
+            now += 1; // nothing visible: wait a tick
+            continue;
+        };
+        let already = idempotent && done.contains(&id);
+        match outcome(id, receive) {
+            Outcome::Fails => {} // no ack: it reappears after the visibility timeout
+            o => {
+                if !already {
+                    *charges.entry(id).or_insert(0) += 1; // the side effect: charge the card
+                    done.insert(id);
+                }
+                if matches!(o, Outcome::Ok) {
+                    q.ack(id);
+                }
+            }
+        }
+    }
+    (charges, q.dead, now)
+}
+
+fn main() {
+    for idempotent in [false, true] {
+        let (charges, dead, ticks) = run(idempotent);
+        println!("{}: charges per order {charges:?}, dead-lettered {dead:?}, finished at t={ticks}", if idempotent { "idempotent" } else { "naive     " });
+    }
+}
+```
+
+```text title=output
+naive     : charges per order {1: 1, 2: 1, 3: 1, 4: 2, 6: 1}, dead-lettered [5], finished at t=91
+idempotent: charges per order {1: 1, 2: 1, 3: 1, 4: 1, 6: 1}, dead-lettered [5], finished at t=91
+```
+
+The naive handler charged order 4 twice; the idempotent one remembered it had already handled message 4 and only acknowledged it. Order 5 was received at t = 0, 30 and 60 and dead-lettered at t = 90 instead of blocking the queue forever.
+
+In a real system the "already handled" record must be **durable and written atomically with the effect**: an `inbox` table with the message id as primary key, inserted in the same database transaction as the change; or an idempotency key passed to the payment provider, which then returns the first result for a repeated key. A set in memory, as in the simulation, is lost with the worker.
 """
 
 [[sections]]
@@ -35,12 +172,88 @@ Messages are appended to a **log** and kept for a while. Each reader keeps its o
 - Order is kept per partition (per key).
 - Good for events: "order placed", "location updated", consumed by many services.
 - Examples: Kafka, Kinesis, Redis Streams, Pulsar.
+
+**How Kafka does it.** A topic is split into **partitions**, each a totally ordered, append-only log; a record's key decides its partition, so all events for one order id stay in order. A **consumer group** shares the work: each partition is consumed by **exactly one consumer in the group** at a time, so the group's position in a partition is a single number, the **offset** of the next record. That is why acknowledging is cheap in a stream (commit one offset for many records) and why a group can never usefully have more active consumers than the topic has partitions. Several groups read the same topic independently, each with its own offsets, and records stay for the configured retention time or size whether or not anyone has read them.
+
+RabbitMQ has the same shape in its **streams**: an immutable append-only log with "non-destructive consumer semantics", where a consumer attaches at an offset (`first`, `last`, `next`, a number or a timestamp) and can replay.
+
+**What a stream gives that a queue does not**:
+
+- **Fan-out without copies**: billing, search and analytics each read every event at their own pace.
+- **Replay**: a new service, or a fixed bug, reprocesses history from an old offset.
+- **Order per key** with parallelism across keys.
+
+**What it costs**:
+
+- **A poison record blocks its partition**: the consumer cannot skip ahead without deciding what to do with it. The usual answer is to publish it to a retry topic (processed later, with a delay) or a dead-letter topic, commit past it, and alert.
+- **Parallelism is capped by partitions**; adding partitions later changes which partition a key maps to, which breaks per-key order for in-flight keys.
+- **Offsets are committed after processing**, so a crash between processing and commit replays the records since the last commit: at least once again, and idempotent consumers again.
+
+Since Kafka 4.2, **share groups** ("queues for Kafka", production-ready in that release) let several consumers take records from the same partition with per-record acknowledgement and delivery counting, for work that is processed one record at a time rather than as an ordered stream.
+"""
+
+[[sections]]
+heading = "Queue or stream?"
+body = """
+| Question | Queue | Stream |
+|---|---|---|
+| How many services need each message? | one | several, each independently |
+| Is a message a task or a fact? | a task to do (send this email) | a fact that happened (order placed) |
+| Must it be replayable? | no: done means deleted | yes: history kept for the retention period |
+| Per-message retry and dead-lettering? | built in | built by you (retry and dead-letter topics) |
+| Ordering | none, or per group (FIFO) | per partition key |
+| Scaling consumers | add workers freely | up to the number of partitions |
+| Typical systems | SQS, RabbitMQ queues, Sidekiq or Celery over Redis | Kafka, Kinesis, Pulsar, Redis Streams, RabbitMQ streams |
+
+They combine well. A common shape is a stream of facts that several services read, where one of those services turns the facts it cares about into tasks on its own queue (an "order placed" event becomes "send receipt", "reserve stock" jobs). The other common shape is **pub/sub fan-out to queues**: a topic (SNS, a RabbitMQ fanout exchange) copies each message into one queue per subscriber, so each subscriber gets queue semantics of its own.
+"""
+
+[[sections]]
+heading = "Ordering and partitions"
+body = """
+No broker gives global order and parallelism at once. What they give is order **within a key**:
+
+- SQS FIFO: strict order within a **message group id**; different groups are processed in parallel.
+- Kafka: order within a **partition**, chosen by the record's key.
+- RabbitMQ: order within a queue with a **single active consumer**; to keep per-entity order with parallelism, partition messages across several such queues by a hash of the entity id.
+
+So choose the key that **needs** ordering, and no broader. Events for one bank account must be in order; events for different accounts need not be. Using the account id as the key gives each account its order and spreads accounts across partitions.
+
+Two traps:
+
+- **A hot key** puts all its messages on one partition and one consumer: one celebrity's events, one huge tenant. Split it if its order does not matter, or give that partition's consumer more capacity.
+- **Retries reorder.** A message that fails and is retried later lands behind messages sent after it. If order matters, either block the key until the failed message succeeds or is dead-lettered, or make the consumer tolerate order (versions on the data: apply an update only if its version is newer than the stored one).
 """
 
 [[sections]]
 heading = "Back pressure"
 body = """
 When producers outrun consumers, the backlog grows. Watch **queue depth and age of the oldest message**, scale workers on them, and decide what happens at the limit: slow the producer, shed low-priority work, or accept a longer delay. A queue hides a slow consumer until the backlog is days long.
+
+**The arithmetic.** If messages arrive at λ per second and the consumers finish μ per second:
+
+- with λ < μ, the backlog stays near zero and drains after bursts;
+- with λ > μ, it grows by λ − μ every second, without limit.
+
+**Little's law** connects the numbers you can see: the average number of messages in the system equals the arrival rate times the average time each spends there. A queue holding 60,000 messages that drains 100 a second is ten minutes deep: a message added now waits about ten minutes.
+
+Example: image resizes arrive at 120 a second for eight daytime hours, and the workers finish 100 a second. The backlog grows by 20 a second, about 576,000 by evening (an oldest message 96 minutes old at 100 a second), and drains overnight. Whether that is acceptable depends on what the user was promised: for thumbnails, no; for a nightly export, yes. The fixes are to scale workers on **age** rather than depth, give interactive work its own queue so bulk work cannot delay it, and cap the queue (reject or defer new bulk work) rather than letting it grow until it is days old.
+
+**Bounded buffers inside a service** apply the same idea: a channel with a capacity makes the producer wait when it is full, so memory stays bounded and the slowdown travels upstream to where something can act on it.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say **why** it is asynchronous: the user does not need the result to continue.
+2. Choose **queue or stream** by "one handler or many, task or fact, replay or not".
+3. State the **delivery promise** (at least once) and how the handler is **idempotent** (an inbox table, an idempotency key, natural idempotence).
+4. Give the **visibility timeout or ack deadline**, the **attempt limit** and the **dead-letter** path.
+5. Name the **ordering key** and what happens on retry.
+6. Say what you **monitor** (depth, oldest age, consumer lag) and what you do when it grows.
+
+> [!INTERVIEW]
+> "Order placed goes to Kafka keyed by order id; billing, fulfilment and analytics each have a consumer group. Fulfilment turns it into jobs on SQS with a five-minute visibility timeout, three receives and a DLQ. Every consumer writes the message id into an inbox table in the same transaction as its change, so a redelivery is a no-op. We alert on the oldest message's age."
 """
 
 [[checks]]
@@ -50,6 +263,149 @@ answer = "When each message is a job that one worker should do once, with per-me
 [[checks]]
 prompt = "Your image-resize queue keeps growing during the day and empties at night. What do you measure and what do you change?"
 answer = "Measure queue depth and the age of the oldest message against how long users can wait. Autoscale workers on depth or age, and if the peak still exceeds capacity, prioritise interactive work and push bulk work to off-peak."
+
+[[checks]]
+prompt = "Video transcodes take up to four minutes and the SQS visibility timeout is 30 seconds. What goes wrong, and how do you fix it?"
+answer = "After 30 seconds the message becomes visible again while the first worker is still transcoding, so a second (and third…) worker starts the same job: wasted work and duplicate outputs. Set the visibility timeout above the slowest job's time, or have the worker extend it periodically while it runs (ChangeMessageVisibility as a heartbeat), and make the job idempotent anyway."
+
+[[checks]]
+prompt = "A vendor says their queue delivers exactly once. Your handler charges a card. What do you still need, and why?"
+answer = "An idempotent handler. Delivery guarantees stop at the broker: if the worker charges the card and crashes before acknowledging, the message is delivered again. Record the message id in an inbox table in the same transaction as the effect, or pass an idempotency key to the payment provider, so a second delivery does nothing."
+
+[[checks]]
+prompt = "A Kafka consumer processes a batch, writes to the database, and crashes before committing its offsets. What happens on restart, and how do you make it safe?"
+answer = "The consumer (or another in the group) resumes from the last committed offset and processes those records again. Make the writes idempotent (upserts keyed by event id, or an inbox table), or store the offset in the same database transaction as the results and seek to it on start, so a replayed record is recognised and skipped."
+
+[[checks]]
+prompt = "Events for each account must be processed in order, but you need many consumers in parallel. How do you get both?"
+answer = "Order per account, not globally: key messages by account id, so each account's events go to one partition (Kafka) or one message group (SQS FIFO), handled by one consumer at a time, while different accounts are processed in parallel. Handle retries so a failed event does not let later events for the same account overtake it."
+
+[[checks]]
+prompt = "A queue holds 60,000 messages and the workers finish 100 a second. How long does a new message wait, and what tells you whether that is a problem?"
+answer = "About ten minutes: by Little's law, time in the system is the backlog divided by the throughput, 60,000 ÷ 100 = 600 seconds. Whether it is a problem depends on what users were promised for that work; alert on the oldest message's age against that promise, not on depth alone."
+
+[[terms]]
+term = "Visibility timeout"
+means = "How long a received message stays hidden from other consumers before it reappears."
+section = "A queue"
+
+[[terms]]
+term = "Acknowledgement"
+means = "The consumer's signal that it is done with a message, so the broker can delete it."
+section = "A queue"
+
+[[terms]]
+term = "Dead-letter queue"
+means = "Where messages go after too many failed attempts, to be inspected instead of retried forever."
+section = "A queue"
+
+[[terms]]
+term = "Long polling"
+means = "A receive that waits for a message to arrive instead of returning empty at once."
+section = "A queue"
+
+[[terms]]
+term = "Prefetch"
+means = "How many unacknowledged messages the broker lets one consumer hold."
+section = "A queue"
+
+[[terms]]
+term = "At-least-once delivery"
+means = "Every message is delivered, some more than once; the consumer must tolerate duplicates."
+section = "At least once, and what to do about it"
+
+[[terms]]
+term = "Idempotent consumer"
+means = "A handler whose effect is the same whether a message arrives once or several times."
+section = "At least once, and what to do about it"
+
+[[terms]]
+term = "Partition"
+means = "One ordered log within a topic; a record's key decides which one it goes to."
+section = "A stream"
+
+[[terms]]
+term = "Offset"
+means = "A record's position in a partition; a consumer group stores the next one to read."
+section = "A stream"
+
+[[terms]]
+term = "Consumer group"
+means = "Consumers sharing a topic's partitions, each partition read by one of them at a time."
+section = "A stream"
+
+[[terms]]
+term = "Message group id"
+means = "SQS FIFO's ordering key: strict order within a group, parallelism across groups."
+section = "Ordering and partitions"
+
+[[terms]]
+term = "Little's law"
+means = "Items in a system equal arrival rate times time spent: depth ÷ throughput is the wait."
+section = "Back pressure"
+
+[[sources]]
+title = "Amazon SQS: configuring queue parameters"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-queue-parameters.html"
+note = "visibility timeout, retention, receive wait time and message size ranges and defaults"
+
+[[sources]]
+title = "Amazon SQS: visibility timeout"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html"
+
+[[sources]]
+title = "Amazon SQS: FIFO queue delivery logic"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-understanding-logic.html"
+note = "ordering within a message group, deduplication"
+
+[[sources]]
+title = "Amazon SQS: dead-letter queues"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html"
+note = "redrive policy and maxReceiveCount"
+
+[[sources]]
+title = "RabbitMQ: consumer acknowledgements and publisher confirms"
+kind = "docs"
+url = "https://www.rabbitmq.com/docs/confirms"
+note = "automatic requeueing, redeliveries, idempotent consumers, prefetch"
+
+[[sources]]
+title = "RabbitMQ: quorum queues, poison message handling"
+kind = "docs"
+url = "https://www.rabbitmq.com/docs/quorum-queues#poison-message-handling"
+note = "delivery limit, 20 by default since 4.0"
+
+[[sources]]
+title = "RabbitMQ: queues, message ordering"
+kind = "docs"
+url = "https://www.rabbitmq.com/docs/queues#message-ordering"
+
+[[sources]]
+title = "RabbitMQ: streams"
+kind = "docs"
+url = "https://www.rabbitmq.com/docs/streams"
+note = "non-destructive consumption and replay from an offset"
+
+[[sources]]
+title = "Apache Kafka: design, the consumer"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#design"
+note = "one consumer per partition in a group; offsets as the consumer's position; share groups"
+
+[[sources]]
+title = "A Proof for the Queuing Formula: L = λW (Operations Research, 1961)"
+kind = "paper"
+url = "https://doi.org/10.1287/opre.9.3.383"
+note = "John Little's original proof"
+
+[[figures]]
+name = "visibility-timeout"
+after = "A queue"
+caption = "A received message is hidden, not deleted; if its worker never acks, it comes back for another worker."
 
 [[figures]]
 name = "queue-vs-stream"

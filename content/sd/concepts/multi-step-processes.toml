@@ -1,15 +1,50 @@
 title = "Multi-step processes: sagas, outbox, workflows"
 group = "pattern"
 order = 7
-minutes = 13
+minutes = 24
 lede = "When one business action touches several services (charge the card, reserve the stock, book the courier), there is no single transaction to wrap it. Sagas undo completed steps, the outbox makes 'save and publish' atomic, and workflow engines make the whole thing durable."
 say = "Checkout is an orchestrated saga: reserve stock, charge, create the shipment, each step idempotent with a compensation; services publish events through an outbox table so a change and its event can never disagree."
-related = ["queues-and-streams", "kafka", "resilience", "isolation-anomalies"]
+related = ["queues-and-streams", "kafka", "resilience", "isolation-anomalies", "contention", "consensus-raft"]
+
+summary = [
+  "Across services there is no shared transaction; **two-phase commit** exists but blocks when its coordinator fails.",
+  "A **saga** is a sequence of local transactions, each with a **compensation** that undoes it semantically, run in reverse on failure.",
+  "The **outbox** writes the event in the same transaction as the change; a relay publishes it **at least once**.",
+  "Every consumer is **idempotent**: an inbox table, an idempotency key, or a naturally repeatable change.",
+  "When steps wait for hours, people or timers, a **durable workflow engine** keeps the state and the retries.",
+]
 
 [[sections]]
 heading = "Why not one big transaction"
 body = """
 **Two-phase commit** (2PC) can make several databases commit together: a coordinator asks each to prepare, then tells all to commit. It works inside one system, but across services it holds locks while waiting, blocks everyone if the coordinator dies between phases, and needs every participant to speak the protocol (payment providers do not). Most service designs avoid it.
+
+**Seeing it block.** Postgres supports the participant side of 2PC with `PREPARE TRANSACTION`. Measured on Postgres 18 with two databases standing in for two services, a coordinator prepares both and then "crashes" before phase two; the server is even restarted:
+
+```sql title=phase_one
+-- inventory database
+BEGIN; UPDATE stock SET n = n - 1 WHERE sku = 'mug'; PREPARE TRANSACTION 'order-812-stock';
+-- payments database
+BEGIN; INSERT INTO charges VALUES (812, 1499); PREPARE TRANSACTION 'order-812-charge';
+-- the coordinator dies here; the database server is restarted
+```
+
+```text title=after_the_restart
+SELECT gid, database FROM pg_prepared_xacts ORDER BY gid;
+       gid        | database
+------------------+-----------
+ order-812-charge | payments
+ order-812-stock  | inventory
+
+SET lock_timeout = '2s';
+UPDATE stock SET n = n - 1 WHERE sku = 'mug';
+ERROR:  canceling statement due to lock timeout
+CONTEXT:  while updating tuple (0,1) in relation "stock"
+```
+
+The prepared transactions survived the restart, as 2PC requires (a participant that voted yes must be able to commit later), and so did their **locks**: nobody else could buy a mug until someone ran `COMMIT PREPARED` on both. The participants cannot decide on their own, because only the coordinator knows whether the other side also prepared. Postgres's manual says `PREPARE TRANSACTION` "is not intended for use in applications", only for an external transaction manager, and that it is "unwise to leave transactions in the prepared state for a long time".
+
+That is the trade: 2PC gives atomic commit across databases at the price of blocking when the coordinator is lost, and it needs every participant to support it. Inside one database system that manages its own coordinator (a distributed SQL database committing across its own shards), it is routine. Across independently owned services and third-party APIs, it is not an option, so designs use the patterns below.
 """
 
 [[sections]]
@@ -27,6 +62,125 @@ A **saga** is a sequence of local transactions; each step commits on its own, an
 - **Choreography**: each service reacts to the previous one's event (`StockReserved` → payment charges). No centre, but the flow is spread across services and hard to see.
 
 Compensations are not rollbacks: others may have seen the intermediate state (the stock looked reserved), and some actions cannot be undone (an email sent), so you send a correction instead. Order steps so the hard-to-undo ones come last.
+
+**Where the idea comes from.** Garcia-Molina and Salem's paper "Sagas" (SIGMOD 1987) was about long-lived transactions inside one database, which held locks for too long. Their answer: write the long transaction as a sequence of transactions T₁ … Tₙ, each with a compensating transaction C₁ … Cₙ₋₁, and have the system guarantee that either the whole sequence runs, T₁ … Tₙ, or a prefix runs and is compensated in reverse, T₁ … Tⱼ, Cⱼ … C₁. Today the same guarantee is what services need across databases.
+
+A saga orchestrator in plain Rust, small enough to read in one go:
+
+```rust title=saga.rs
+/// What the three services hold, in one struct so the saga's effects can be seen.
+#[derive(Debug)]
+struct World {
+    stock: i32,
+    charged_cents: i32,
+    couriers_free: i32,
+}
+
+/// A local transaction in one service and the action that semantically undoes it.
+struct Step {
+    name: &'static str,
+    run: fn(&mut World) -> Result<(), String>,
+    undo: fn(&mut World),
+}
+
+fn reserve(w: &mut World) -> Result<(), String> {
+    if w.stock == 0 {
+        return Err("out of stock".into());
+    }
+    w.stock -= 1;
+    Ok(())
+}
+fn release(w: &mut World) {
+    w.stock += 1;
+}
+fn charge(w: &mut World) -> Result<(), String> {
+    w.charged_cents += 1499;
+    Ok(())
+}
+fn refund(w: &mut World) {
+    w.charged_cents -= 1499; // a refund, not an erased charge: both appear on the statement
+}
+fn book(w: &mut World) -> Result<(), String> {
+    if w.couriers_free == 0 {
+        return Err("no courier for this address".into());
+    }
+    w.couriers_free -= 1;
+    Ok(())
+}
+fn cancel_booking(w: &mut World) {
+    w.couriers_free += 1;
+}
+
+/// Runs the steps in order; if one fails, runs the undo of every completed step, newest first.
+/// Each log line is what a real orchestrator writes durably before it moves on, so it can resume after a crash.
+fn run_saga(steps: &[Step], w: &mut World, log: &mut Vec<String>) -> Result<(), String> {
+    for (i, s) in steps.iter().enumerate() {
+        log.push(format!("start {}", s.name));
+        if let Err(e) = (s.run)(w) {
+            log.push(format!("failed {}: {e}", s.name));
+            for done in steps[..i].iter().rev() {
+                (done.undo)(w); // compensations must not give up: retry them until they succeed
+                log.push(format!("compensated {}", done.name));
+            }
+            return Err(e);
+        }
+        log.push(format!("done {}", s.name));
+    }
+    Ok(())
+}
+
+fn main() {
+    let steps = [
+        Step { name: "reserve stock", run: reserve, undo: release },
+        Step { name: "charge card", run: charge, undo: refund },
+        Step { name: "book courier", run: book, undo: cancel_booking },
+    ];
+    for couriers_free in [1, 0] {
+        let mut w = World { stock: 5, charged_cents: 0, couriers_free };
+        let mut log = Vec::new();
+        let result = run_saga(&steps, &mut w, &mut log);
+        println!("couriers free: {couriers_free} -> {result:?}");
+        for line in &log {
+            println!("    {line}");
+        }
+        println!("    end: {w:?}");
+    }
+}
+```
+
+```text title=output
+couriers free: 1 -> Ok(())
+    start reserve stock
+    done reserve stock
+    start charge card
+    done charge card
+    start book courier
+    done book courier
+    end: World { stock: 4, charged_cents: 1499, couriers_free: 0 }
+couriers free: 0 -> Err("no courier for this address")
+    start reserve stock
+    done reserve stock
+    start charge card
+    done charge card
+    start book courier
+    failed book courier: no courier for this address
+    compensated charge card
+    compensated reserve stock
+    end: World { stock: 5, charged_cents: 0, couriers_free: 0 }
+```
+
+What the toy leaves out, and a real one must have:
+
+- **A durable log of progress**: the orchestrator writes "done charge card" before starting the next step, so after a crash it resumes, or compensates, from where it was.
+- **Retries everywhere**: a step that times out is retried with the same idempotency key; a compensation must eventually succeed, so it is retried until it does (or escalated to a person).
+- **Backward or forward**: compensating is *backward recovery*. Some failures are better handled *forward*: if the shipment cannot be booked today, retry tomorrow rather than refund. Garcia-Molina and Salem describe both.
+
+**Sagas are not isolated.** Each step commits and is visible at once, so other requests can see a half-finished saga: stock that looks reserved and is then released, a balance that dips and recovers. The usual countermeasures:
+
+- **Semantic locks**: mark records the saga is working on (`order.status = 'pending'`), and have other operations treat pending records as taken or wait.
+- **Commutative updates**: changes that give the same result in any order (`stock = stock - 1` rather than "set stock to 4").
+- **Reread before acting**: a later step checks that what an earlier step relied on is still true.
+- **Order by reversibility**: steps that can be compensated first, the point of no return (charging, shipping) as late as possible, steps that can only be retried forward last.
 """
 
 [[sections]]
@@ -44,12 +198,60 @@ COMMIT;
 ```
 
 The relay can publish a row twice (it crashed after publishing, before marking), so delivery is **at least once**: consumers must be idempotent.
+
+**The whole path, run.** On Postgres 18, with a table standing in for the broker's log: the change and its outbox row commit together; the relay publishes and dies before marking; the restarted relay claims unpublished rows (`FOR UPDATE SKIP LOCKED`, so several relay instances never take the same rows), publishes them again and marks them:
+
+```sql title=relay.sql
+WITH batch AS (
+    SELECT id, type, payload FROM outbox
+     WHERE published_at IS NULL
+     ORDER BY id
+     LIMIT 100
+       FOR UPDATE SKIP LOCKED
+), sent AS (
+    INSERT INTO kafka (event_id, type, payload) SELECT id, type, payload FROM batch RETURNING event_id
+)
+UPDATE outbox SET published_at = now() WHERE id IN (SELECT event_id FROM sent);
+```
+
+```text title=the_broker_log
+ offset_ | event_id |   type
+---------+----------+-----------
+       1 |        1 | OrderPaid
+       2 |        1 | OrderPaid
+```
+
+The event went out twice, exactly as predicted. In a real relay the publish is a call to the broker, made after the claim and before the mark; the duplicate window is the same.
+
+**Polling or the log.** A polling relay is simple and works on any database, at the cost of a query every interval and of ordering only by outbox id. **Change data capture** reads the outbox inserts from the database's log instead: Debezium's outbox event router, for example, routes each outbox row to a topic named after its `aggregatetype` and uses `aggregateid` as the message key, so all events for one order land in one partition, in order. Either way, delete or archive published outbox rows on a schedule so the table stays small.
 """
 
 [[sections]]
 heading = "Idempotent consumers"
 body = """
 Every message carries a unique id. The consumer records processed ids in an **inbox** (dedup) table in the same transaction as its own change, and skips ids it has already seen. Or make the operation naturally idempotent: `SET status = 'shipped'` instead of `count = count + 1`, upserts keyed by the event id, and idempotency keys passed to payment providers.
+
+The shipping service from the run above, reading both copies of event 1:
+
+```sql title=consumer.sql
+CREATE FUNCTION handle(e bigint, p jsonb) RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO inbox VALUES (e) ON CONFLICT DO NOTHING;
+    IF NOT FOUND THEN
+        RETURN 'event ' || e || ': already handled, skipped';
+    END IF;
+    INSERT INTO shipments (order_id) VALUES ((p->>'order')::int);
+    RETURN 'event ' || e || ': shipment created';
+END $$;
+SELECT handle(event_id, payload) FROM kafka ORDER BY offset_;
+```
+
+```text title=output
+ event 1: shipment created
+ event 1: already handled, skipped
+```
+
+One shipment, not two. The inbox insert and the shipment insert are in the same transaction, so a crash between them leaves neither, and the redelivered event is handled from scratch. An inbox in a different store from the change (Redis, say) reopens the gap.
 """
 
 [[sections]]
@@ -59,6 +261,46 @@ Long processes (an order that waits days for shipping, a KYC check with a human 
 
 > [!INTERVIEW]
 > For anything spanning services, say: saga (orchestrated), compensation per step, outbox for events, idempotent consumers, and a workflow engine when steps wait for hours or people.
+
+**How Temporal keeps the promise**, from its documentation:
+
+- **Workflow code must be deterministic.** On replay the engine re-runs the code and compares the commands it produces with the recorded history; a mismatch is a non-determinism error. So anything that can differ between runs (calls to other services, database queries, random numbers, the current time) goes into **activities** or the SDK's deterministic replacements.
+- **Activities retry by default**, with exponential backoff: a 1-second initial interval, a backoff coefficient of 2.0, a maximum interval of 100 seconds (100 × the initial interval) and unlimited attempts, until the activity succeeds, fails with a non-retryable error, or hits its timeouts.
+- **History has limits**: a workflow execution's event history is capped at 51,200 events or 50 MB, with warnings from 10,240 events or 10 MB. A workflow that loops for months uses Continue-As-New to start a fresh history carrying its state forward.
+
+What the engine replaces is everything the toy saga above left out: the durable progress log, retries with backoff, timers ("cancel the order if not paid in 30 minutes"), waiting for signals ("the warehouse confirmed"), and visibility into where each instance is. The compensations are still yours to write; the engine guarantees they run.
+"""
+
+[[sections]]
+heading = "Choosing"
+body = """
+| Situation | Use |
+|---|---|
+| all the data is in one database | one ordinary transaction; nothing on this page |
+| a change must be followed by an event others react to | the transactional outbox, idempotent consumers |
+| a few services, short steps, one team | a saga, orchestrated by the service that owns the outcome |
+| many services owned by different teams reacting to facts | choreography by events, with care: draw the flow somewhere |
+| steps that wait for minutes to months, people or timers | a durable workflow engine running an orchestrated saga |
+| atomic commit across resources that all support it, under one operator | two-phase commit, with a coordinator that recovers |
+
+:::steps Checkout as an orchestrated saga
+- order service | order 812: pending, outbox: CheckoutStarted | One local transaction starts the saga and records it.
+- inventory | reserve 1 mug, idempotent on order id | Compensation: release the reservation.
+- payments | charge with idempotency key order-812 | Compensation: refund. This is the point of no return for the customer.
+- shipping | book courier: fails, no courier | The orchestrator decides: compensate backwards.
+- payments, inventory | refund, then release | Retried until both succeed; the order ends cancelled, with an email.
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Say why there is **no single transaction** (separate services, a third-party API) and why not 2PC (blocking, participants that cannot prepare).
+2. List the **steps and their compensations**, and order them by reversibility.
+3. Choose **orchestration or choreography** and say where the saga's state lives.
+4. Show the **outbox** for every "update and publish", and the **inbox** or idempotency key for every consumer.
+5. Name what other requests see **mid-saga** and how a pending status protects them.
+6. Bring in a **workflow engine** when steps wait for long, with timers or people.
 """
 
 [[checks]]
@@ -72,6 +314,131 @@ answer = "The orchestrator runs the compensations of completed steps in reverse:
 [[checks]]
 prompt = "Why must consumers of outbox events be idempotent?"
 answer = "The relay delivers at least once: it may publish a row and crash before marking it sent, so the event is published again on restart. A consumer that dedups on the event id (or applies an idempotent change) handles the duplicate safely."
+
+[[checks]]
+prompt = "In two-phase commit, the coordinator crashes after both participants have prepared. What state are they in, and why is that a problem for the business?"
+answer = "Both are prepared: they promised to commit if told to, so they keep the transaction, and its locks, even across restarts, and cannot decide alone because only the coordinator knows the outcome. Until the coordinator recovers or an operator resolves them, the locked rows block other transactions (in the Postgres run, every other buyer of the item). That blocking is why services use sagas instead."
+
+[[checks]]
+prompt = "During a saga, stock is reserved, then released when the payment fails. Meanwhile another customer was told the item was sold out. What is going on, and how do you limit it?"
+answer = "Sagas are not isolated: each step commits and is visible immediately, so others see intermediate states. Limit it with semantic locks (a pending status other operations understand, for example showing 'reserved, may become available'), commutative updates, rereading before acting, and keeping the window short by putting the steps most likely to fail early."
+
+[[checks]]
+prompt = "A Temporal workflow calls the payment API and reads the current time directly in workflow code. Why is that a bug, and where do those calls belong?"
+answer = "Workflow code is replayed from the event history after a crash or when a worker restarts, and must produce the same commands each time; a direct API call or clock read can differ on replay and causes a non-determinism error (and the API call would run again). Put side effects in activities, which are recorded and retried, and use the SDK's deterministic time and random functions."
+
+[[checks]]
+prompt = "Six teams' services take part in onboarding a merchant. Each reacts to the previous service's event. A step silently stops, and nobody can say where merchants get stuck. What would you change?"
+answer = "Choreography spreads the flow across services, so no one owns its state. Move to orchestration: one service (or a workflow engine) owns the onboarding saga, records each step's progress, applies timeouts and retries, runs compensations, and can show where every merchant is. Events can still announce facts, but one place decides the next step."
+
+[[terms]]
+term = "Two-phase commit"
+means = "A coordinator asks every participant to prepare, then tells all to commit; it blocks if the coordinator is lost."
+section = "Why not one big transaction"
+
+[[terms]]
+term = "Prepared transaction"
+means = "A participant's vote to commit: kept, with its locks, until the coordinator decides."
+section = "Why not one big transaction"
+
+[[terms]]
+term = "Saga"
+means = "A sequence of local transactions, each with a compensation run in reverse if a later step fails."
+section = "Sagas"
+
+[[terms]]
+term = "Compensating action"
+means = "A new action that semantically undoes a committed step, such as a refund."
+section = "Sagas"
+
+[[terms]]
+term = "Orchestration"
+means = "One coordinator tells each service what to do and tracks the saga's state."
+section = "Sagas"
+
+[[terms]]
+term = "Choreography"
+means = "Each service reacts to the previous one's event; no central coordinator."
+section = "Sagas"
+
+[[terms]]
+term = "Semantic lock"
+means = "A status such as pending that tells other operations a saga is working on a record."
+section = "Sagas"
+
+[[terms]]
+term = "Transactional outbox"
+means = "Writing an event into a table in the same transaction as the change, for a relay to publish."
+section = "The outbox"
+
+[[terms]]
+term = "Dual write"
+means = "Writing to a database and a broker separately, which can leave them disagreeing."
+section = "The outbox"
+
+[[terms]]
+term = "Inbox table"
+means = "A table of handled message ids, written with the consumer's change, that turns duplicates into no-ops."
+section = "Idempotent consumers"
+
+[[terms]]
+term = "Durable execution"
+means = "Workflow code whose progress is recorded so it resumes after crashes, with retries and timers."
+section = "Workflow engines"
+
+[[sources]]
+title = "Sagas (SIGMOD 1987)"
+kind = "paper"
+url = "https://doi.org/10.1145/38713.38742"
+note = "Garcia-Molina and Salem: long-lived transactions as sequences with compensations"
+
+[[sources]]
+title = "PostgreSQL: PREPARE TRANSACTION"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-prepare-transaction.html"
+note = "the participant side of two-phase commit, and why not to leave transactions prepared"
+
+[[sources]]
+title = "Life beyond Distributed Transactions (ACM Queue, 2016)"
+kind = "article"
+url = "https://queue.acm.org/detail.cfm?id=3025012"
+note = "Pat Helland on building without distributed transactions"
+
+[[sources]]
+title = "Pattern: Transactional outbox"
+kind = "article"
+url = "https://microservices.io/patterns/data/transactional-outbox.html"
+note = "Chris Richardson's description, with polling and log-tailing relays"
+
+[[sources]]
+title = "Pattern: Saga"
+kind = "article"
+url = "https://microservices.io/patterns/data/saga.html"
+note = "orchestration and choreography"
+
+[[sources]]
+title = "Debezium: outbox event router"
+kind = "docs"
+url = "https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html"
+note = "routing outbox rows from the database log to topics, keyed by aggregate id"
+
+[[sources]]
+title = "Temporal: workflow definition and determinism"
+kind = "docs"
+url = "https://docs.temporal.io/workflow-definition"
+note = "replay, deterministic constraints, where side effects go"
+
+[[sources]]
+title = "Temporal: retry policies"
+kind = "docs"
+url = "https://docs.temporal.io/encyclopedia/retry-policies"
+note = "the default policy for activities"
+
+[[sources]]
+title = "Temporal: workflow execution limits"
+kind = "docs"
+url = "https://docs.temporal.io/workflow-execution/limits"
+note = "event history limits and Continue-As-New"
 
 [[figures]]
 name = "saga"
