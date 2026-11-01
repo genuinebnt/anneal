@@ -1117,7 +1117,7 @@ export interface SdConcept { id: string; title: string; group: string; order: nu
 export interface SdConceptView { concept: SdConcept; marked: string[]; used_in: { id: string; title: string; kind: string }[]; plans?: Record<string, PlanFile> }
 export interface SdPoint { id: string; text: string; level: "mid" | "senior" | "staff" }
 export interface SdStep { name: string; minutes: number; prompt: string; reference: string; points: SdPoint[] }
-export interface SdProblem { id: string; title: string; kind: string; order: number; minutes: number; prompt: string; uses: string[]; companies: string[]; hints: string[]; steps: SdStep[]; probes: { question: string; answer: string }[] }
+export interface SdProblem { id: string; title: string; kind: string; order: number; minutes: number; prompt: string; uses: string[]; companies: string[]; hints: string[]; steps: SdStep[]; probes: { question: string; answer: string }[]; sources?: { title: string; url: string; note?: string | null; kind?: string | null }[] }
 export interface SdDiagram { nodes?: { id: string; x: number; y: number; label: string; kind: "box" | "store" | "queue" }[]; edges?: { from: string; to: string }[] }
 export interface SdAttempt { id: number; finished_at: string; seconds: number; steps: Record<string, { answer: string; seconds: number }>; diagram: SdDiagram; hints: number; marks: Record<string, SdMark>; ai_review?: SdAiReview | null }
 export interface SdAiReview { points: Record<string, { mark: SdMark; why: string }>; followups: string[]; summary: string; model: string }
