@@ -24,7 +24,7 @@ pub const SD_KINDS: &[&str] = &["hld", "api", "lld"];
 pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream", "lsm-tree", "saga", "circuit-breaker", "quorum", "bloom-filter", "inverted-index", "cache-stampede"];
 /// Figures added per group (each group's drawings live in `web/src/components/sdfigs/<group>.tsx`), kept apart so pages written in
 /// parallel never edit the same list.
-pub const SD_FIGURES_CORE: &[&str] = &[];
+pub const SD_FIGURES_CORE: &[&str] = &["lock-vs-version"];
 pub const SD_FIGURES_DISTRIBUTED: &[&str] = &[];
 pub const SD_FIGURES_TECHNOLOGY: &[&str] = &[];
 pub const SD_FIGURES_DRILLS: &[&str] = &[];

@@ -1,30 +1,385 @@
 title = "Dealing with contention"
 group = "pattern"
 order = 3
-minutes = 8
-lede = "Many users wanting the same thing at once: the last seat, the last item, the same counter. Correctness first (one winner), then throughput."
-say = "Holding a seat is a conditional update on its row in one transaction; the hold expires after ten minutes, and a virtual waiting room meters the rush when sales open."
-related = ["postgres", "redis", "consistency-cap", "leases-and-fencing", "dynamodb"]
+minutes = 22
+lede = "Many users wanting the same thing at once: the last seat, the last item in stock, the same counter. Contention has two problems in a fixed order: first correctness (exactly one winner, no lost updates), then throughput (one hot row serialises everyone who touches it)."
+say = "Holding a seat is one conditional update, UPDATE … WHERE holder IS NULL OR held_until < now(), so the database picks one winner; the hold expires after ten minutes, payment confirms it, and a waiting room meters the rush when sales open."
+related = ["isolation-anomalies", "postgres", "leases-and-fencing", "dynamodb", "redis", "scaling-writes", "queues-and-streams"]
+
+summary = [
+  "Read-then-write in the application **loses updates**; let the database decide in one statement.",
+  "Reach first for an **atomic conditional update** or a **constraint**; then a **row lock** or a **version check**.",
+  "**Pessimistic** locks wait and suit hot items; **optimistic** checks retry and suit rare conflicts.",
+  "Never hold a lock across user think time: **hold with an expiry**, then confirm.",
+  "A hot row runs at about **1 ÷ lock-hold time**: shorten the hold, split the item, or queue the writers.",
+]
+
+[[sections]]
+heading = "What goes wrong: the lost update"
+body = """
+The bug behind most contention questions is a **read-modify-write** done in the application: read the value, compute the new one, write it back. Two sessions that interleave both read the same old value, and one sale disappears.
+
+Measured on Postgres 18 with two `psql` sessions running this script at the same time (one second of "work" between the read and the write):
+
+```sql title=read_modify_write.sql
+BEGIN;
+SELECT stock FROM items WHERE id = 1 \\gset
+SELECT pg_sleep(1);                              -- the application thinks
+UPDATE items SET stock = :stock - 1 WHERE id = 1;
+COMMIT;
+```
+
+```text title=output
+A: read stock = 10
+B: read stock = 10
+A: wrote stock = 10 - 1
+B: wrote stock = 10 - 1
+stock after two sales: 9
+```
+
+Two items were sold and the stock went down by one. Nothing failed and nothing was logged: the database did exactly what it was told. `BEGIN` did not help, because Postgres's default isolation level, **Read Committed**, lets each statement see the latest committed data and does not stop two transactions from reading the same row.
+
+There are five ways to make the database pick one winner, from the cheapest to the most general:
+
+| Tool | How | Waits or retries? | Fits |
+|---|---|---|---|
+| atomic conditional update | `UPDATE … SET stock = stock - 1 WHERE stock > 0` | the second writer waits a moment | counters, stock, claiming a free seat |
+| constraint | unique index, exclusion constraint | the loser gets an error | "at most one" rules: one booking per room and night |
+| pessimistic lock | `SELECT … FOR UPDATE`, then write | others wait | read, decide in code, write; hot items |
+| optimistic version check | `UPDATE … WHERE version = $read` | the loser retries | conflicts are rare; long edits; HTTP `If-Match` |
+| serializable isolation | `BEGIN ISOLATION LEVEL SERIALIZABLE` | the loser retries | many rows and rules too tangled to lock by hand |
+"""
 
 [[sections]]
 heading = "Getting one winner"
 body = """
-- **Pessimistic locking**: `SELECT … FOR UPDATE`; others wait. Simple, slow under heavy contention.
-- **Optimistic concurrency**: read a version, `UPDATE … WHERE version = v`; if no row changed, someone else won, retry or fail. Great when conflicts are rare.
-- **Conditional writes / constraints**: `UPDATE seat SET holder = me WHERE id = s AND holder IS NULL`, or a unique constraint; the database decides.
-- **A distributed lock** (Redis `SET key NX EX`, ZooKeeper) when the resource is not one database row; give it an expiry and a fencing token.
+**Atomic conditional updates** come first because they need no extra round trip and no lock held across application code. The condition goes into the `WHERE` clause and the arithmetic into `SET`, so the read and the write are one statement:
+
+```sql title=claim.sql
+-- sell one if any are left
+UPDATE items SET stock = stock - 1 WHERE id = 1 AND stock > 0 RETURNING stock;
+
+-- hold seat 7 if nobody holds it
+UPDATE seats SET holder = 'ben', held_until = now() + interval '10 minutes'
+ WHERE id = 7 AND holder IS NULL;
+```
+
+Why is the second one safe when two people click at the same moment? In Read Committed, an `UPDATE` that finds its row already changed by an uncommitted transaction **waits** for it; if that transaction commits, Postgres **re-evaluates the `WHERE` clause against the new version of the row** and updates only if it still matches. Measured with session A holding seat 7 (uncommitted, one second) while B tries the same seat:
+
+```text title=output
+A: committed
+B: UPDATE 0
+B: waited 0.68 s
+seat 7: ana
+```
+
+B waited for A, saw that `holder IS NULL` no longer held, and changed nothing. The application reads the row count: 1 means it won, 0 means someone else did.
+
+**Constraints** let the database enforce a rule that spans rows. A unique index stops two rows claiming the same thing (`UNIQUE (event_id, seat_no)` on tickets). An **exclusion constraint** generalises it to overlaps, which is what room and calendar bookings need:
+
+```sql title=bookings.sql
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE TABLE bookings (
+    room   int       NOT NULL,
+    guest  text      NOT NULL,
+    during tstzrange NOT NULL,
+    EXCLUDE USING gist (room WITH =, during WITH &&)
+);
+INSERT INTO bookings VALUES (12, 'ana', '[2026-12-01 14:00, 2026-12-03 11:00)');
+INSERT INTO bookings VALUES (12, 'ben', '[2026-12-02 14:00, 2026-12-04 11:00)');
+INSERT INTO bookings VALUES (12, 'cy',  '[2026-12-03 11:00, 2026-12-05 11:00)');
+```
+
+```text title=output
+ERROR:  conflicting key value violates exclusion constraint "bookings_room_during_excl"
+DETAIL:  Key (room, during)=(12, ["2026-12-02 14:00:00+00","2026-12-04 11:00:00+00")) conflicts with existing key (room, during)=(12, ["2026-12-01 14:00:00+00","2026-12-03 11:00:00+00")).
+```
+
+Ben's stay overlaps Ana's and is refused; Cy's starts the minute Ana's ends (the ranges are half-open, `[start, end)`) and is accepted. No application check, however careful, gives the same guarantee under concurrency.
+
+When the decision needs more than a `WHERE` clause can say (a price computed in code, a call to another system between read and write), use a lock or a version check.
+"""
+
+[[sections]]
+heading = "Pessimistic locking: lock, then decide"
+body = """
+`SELECT … FOR UPDATE` locks the rows it returns until the transaction ends. Anyone else who tries to update, delete or lock them waits. The same two-session sale, with the read changed to `FOR UPDATE`:
+
+```text title=output
+A: read stock = 10 after waiting 0.02 s
+A: wrote stock = 10 - 1
+B: read stock = 9 after waiting 0.80 s
+B: wrote stock = 9 - 1
+stock after two sales: 8
+```
+
+B waited for A's transaction and then read the committed 9. Correct, at the price of B's wait: under load, every buyer of the item queues behind the one holding it.
+
+Postgres has four row-lock strengths. A plain `UPDATE` takes `FOR NO KEY UPDATE` unless it changes a key column that a foreign key can use; `DELETE` takes `FOR UPDATE`.
+
+| Lock | Blocks | Use |
+|---|---|---|
+| `FOR UPDATE` | every other lock and write on the row | read, then update or delete |
+| `FOR NO KEY UPDATE` | the same, except `FOR KEY SHARE` | update that does not change the key |
+| `FOR SHARE` | updates, deletes and the two exclusive locks | "it must not change while I read" |
+| `FOR KEY SHARE` | deletes, key changes and `FOR UPDATE` | "it must keep existing" |
+
+**Do not wait forever.** By default a lock wait has no limit. Two options change that per statement or session:
+
+```sql title=bounded_waits.sql
+SELECT * FROM seats WHERE id = 7 FOR UPDATE NOWAIT;
+-- ERROR:  could not obtain lock on row in relation "seats"
+
+SET lock_timeout = '200ms';
+SELECT * FROM seats WHERE id = 7 FOR UPDATE;
+-- ERROR:  canceling statement due to lock timeout
+```
+
+**Deadlocks.** A locks seat 1 then wants seat 2; B locks seat 2 then wants seat 1. Neither can go on. Postgres checks for a cycle after a lock has waited `deadlock_timeout` (1 second by default) and aborts one of them:
+
+```text title=output
+B: ERROR:  deadlock detected
+B: DETAIL:  Process 279 waits for ShareLock on transaction 833; blocked by process 272.
+B: Process 272 waits for ShareLock on transaction 834; blocked by process 279.
+A: A committed
+```
+
+The manual's advice is the standard one: acquire locks on several objects **in a consistent order** (lock seats in ascending id: `SELECT … WHERE id IN (1, 2) ORDER BY id FOR UPDATE`), and retry the transaction that was aborted.
+
+> [!WARNING]
+> A lock is held until the transaction ends. The Postgres manual calls it "a bad idea for applications to hold transactions open for long periods of time (e.g., while waiting for user input)". Never keep a transaction open across a payment page or a human decision.
+"""
+
+[[sections]]
+heading = "Optimistic concurrency: check on write"
+body = """
+Optimistic concurrency control (Kung and Robinson, 1981) does not lock. It reads freely, and at write time checks that nothing changed in between; if something did, the write is rejected and the transaction starts again. The usual form is a **version column**:
+
+```sql title=versioned_update.sql
+SELECT stock, version FROM items WHERE id = 1;          -- stock 10, version 1
+-- … the application decides …
+UPDATE items SET stock = 9, version = version + 1
+ WHERE id = 1 AND version = 1;                          -- 1 row: you won; 0 rows: reread and retry
+```
+
+Two sessions that both read version 1:
+
+```text title=output
+A: read stock 10 at version 1
+A: UPDATE 1
+B: read stock 10 at version 1
+B: UPDATE 0
+stock 9, version 2
+```
+
+The same idea appears everywhere under other names:
+
+- **DynamoDB**: a `ConditionExpression` on the version attribute; a mismatch fails with `ConditionalCheckFailedException`, and the client rereads and retries.
+- **HTTP**: the server sends an `ETag`; the client updates with `If-Match: "<etag>"`, and a changed resource answers `412 Precondition Failed` instead of overwriting someone else's edit.
+- **CPUs**: compare-and-swap, the instruction lock-free data structures are built on.
+
+**Optimistic wins when conflicts are rare and loses when they are not.** A small simulation (16 threads, each selling 200 units, 200 µs of work between read and write, std Rust only) makes the difference concrete:
+
+```rust title=occ.rs
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// A row with a version: the store accepts a write only if the version is the one the writer read.
+struct Row {
+    version: u64,
+    stock: i64,
+}
+
+/// Compare-and-set: the `UPDATE … WHERE id = $1 AND version = $2` of a database.
+fn write_if(row: &Mutex<Row>, read_version: u64, stock: i64) -> bool {
+    let mut r = row.lock().unwrap();
+    if r.version != read_version {
+        return false; // someone else won: zero rows updated
+    }
+    r.version += 1;
+    r.stock = stock;
+    true
+}
+
+/// `workers` threads each sell `per_worker` units from `rows.len()` items, retrying on conflict.
+fn run(items: usize, workers: usize, per_worker: usize) -> (u64, u64, Duration) {
+    let rows: Arc<Vec<Mutex<Row>>> = Arc::new((0..items).map(|_| Mutex::new(Row { version: 1, stock: 1_000_000 })).collect());
+    let attempts = Arc::new(AtomicU64::new(0));
+    let start = Instant::now();
+    let handles: Vec<_> = (0..workers)
+        .map(|w| {
+            let (rows, attempts) = (rows.clone(), attempts.clone());
+            thread::spawn(move || {
+                for i in 0..per_worker {
+                    let row = &rows[(w * 7 + i * 13) % items];
+                    loop {
+                        attempts.fetch_add(1, Ordering::Relaxed);
+                        let (version, stock) = { let r = row.lock().unwrap(); (r.version, r.stock) }; // read
+                        thread::sleep(Duration::from_micros(200)); // the application's work between read and write
+                        if write_if(row, version, stock - 1) {
+                            break;
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let sold = rows.iter().map(|r| 1_000_000 - r.lock().unwrap().stock).sum::<i64>() as u64;
+    (sold, attempts.load(Ordering::Relaxed), start.elapsed())
+}
+
+fn main() {
+    for (items, label) in [(64, "64 items"), (1, "1 item ")] {
+        let (sold, attempts, took) = run(items, 16, 200);
+        println!("{label}: sold {sold}, attempts {attempts}, {:.2} attempts per sale, {:.2} s", attempts as f64 / sold as f64, took.as_secs_f64());
+    }
+}
+```
+
+```text title=output
+64 items: sold 3200, attempts 3255, 1.02 attempts per sale, 0.07 s
+1 item : sold 3200, attempts 41209, 12.88 attempts per sale, 0.92 s
+```
+
+A second run agreed to within 2%. Both are correct: 3,200 sold, none lost. Spread over 64 items, almost every attempt succeeds the first time. On one hot item, each sale takes about 13 attempts and the run is 13 times slower, because every winner invalidates the work of the fifteen threads that read alongside it. That is the rule for choosing: **optimistic for many items and rare conflicts (editing a document, updating a profile), pessimistic or an atomic update for one hot item (the last tickets)**. Always cap the retries and back off between them.
+"""
+
+[[sections]]
+heading = "Isolation levels do part of it for you"
+body = """
+Stronger isolation levels turn some races into errors the application retries:
+
+- **Repeatable Read**: a transaction that tries to update a row another transaction changed after its snapshot was taken gets `ERROR: could not serialize access due to concurrent update` instead of silently working on stale data. Measured: B in Repeatable Read, waiting on A's hold of seat 7, got exactly that error when A committed.
+- **Serializable**: Postgres also tracks reads, and aborts a transaction whose result could not have happened in any one-at-a-time order (`could not serialize access due to read/write dependencies among transactions`). It catches races no row lock covers, such as two doctors each checking "someone else is on call" and both going off call (write skew; see the isolation anomalies page).
+
+Both fail with SQLSTATE `40001`, and the manual is explicit that applications at these levels **must be prepared to retry** the whole transaction. A retry loop with a cap and a little jitter is part of the design, not an afterthought.
+"""
+
+[[sections]]
+heading = "Many workers, many items: SKIP LOCKED"
+body = """
+Some contention is not about one item but about **any** item: workers taking jobs from a table, a booking service handing out any free seat in a section. With plain `FOR UPDATE`, every worker asks for "the first ready job" and they queue behind each other on the same row. `SKIP LOCKED` tells each worker to pass over rows another transaction has locked:
+
+```sql title=claim_jobs.sql
+BEGIN;
+SELECT id FROM jobs
+ WHERE status = 'ready'
+ ORDER BY id
+ LIMIT 2
+ FOR UPDATE SKIP LOCKED;
+-- … do the work …
+UPDATE jobs SET status = 'done' WHERE id IN (…);
+COMMIT;
+```
+
+Two workers running it at once, each holding its jobs for a second:
+
+| Clause | Worker A | Worker B |
+|---|---|---|
+| `FOR UPDATE` | jobs 1, 2 after 0.00 s | jobs 3, 4 after **0.81 s** (waited for A) |
+| `FOR UPDATE SKIP LOCKED` | jobs 1, 2 after 0.00 s | jobs 3, 4 after **0.01 s** |
+
+The manual's own description is the right mental model: skipping locked rows "provides an inconsistent view of the data, so this is not suitable for general purpose work, but can be used to avoid lock contention with multiple consumers accessing a queue-like table." It is how Postgres-backed job queues let many workers pull from one table. The lock lasts only as long as the transaction, so a worker that crashes releases its jobs automatically; a job whose work outlives a transaction needs a `claimed_until` column instead, the same expiring hold as below.
 """
 
 [[sections]]
 heading = "Holding, then confirming"
 body = """
-Checkout takes minutes. Hold the item with an **expiry** (a status plus `held_until`, or a Redis key with a TTL), confirm on payment, release on expiry. Never hold by keeping a database lock open for minutes.
+Checkout takes minutes: choose a seat, type card details, pass a bank's check. Holding a database lock for that long would block everyone and leak locks when browsers close. Instead, split the purchase into two short transactions with an **expiring hold** in between:
+
+1. **Hold**: a conditional update that also treats an expired hold as free.
+2. **Confirm**: on payment, turn the hold into a sale only if it is still yours and still valid.
+3. **Expire**: nothing to do. A lapsed hold is simply ignored by the next claim; a periodic job can tidy the columns, but correctness does not depend on it.
+
+```sql title=hold_confirm.sql
+-- 1. hold (one winner, even against an expired hold)
+UPDATE seats SET holder = $user, held_until = now() + interval '10 minutes'
+ WHERE id = $seat AND (holder IS NULL OR held_until < now());
+
+-- 2. confirm after payment
+UPDATE seats SET sold_to = holder
+ WHERE id = $seat AND holder = $user AND held_until > now() AND sold_to IS NULL;
+```
+
+Measured: with seat 9 held by Ana until a minute ago, Ben's hold statement returned `UPDATE 1` and took it.
+
+Two details make or break this:
+
+- **The payment and the confirm can disagree.** If the hold expires while the bank is slow, the confirm updates 0 rows after the card was charged. Either refund automatically, or extend the hold when payment starts (a short second hold) and size the window for the slowest payment you accept.
+- **Use the same idempotency key** for the payment and its retries, so a retried confirm cannot charge twice (see the resilience page).
+
+A hold can also live in Redis (`SET hold:seat:9 ben NX PX 600000`), which is fast and expires on its own, but the final sale should still be a conditional write in the database of record.
+"""
+
+[[sections]]
+heading = "Beyond one database: distributed locks"
+body = """
+When the thing being protected is not a row (a file in object storage, a call to a partner API, a cron job that must run on one machine only), a lock service is used: Redis `SET lock:job ana NX PX 30000`, a ZooKeeper or etcd lease, a DynamoDB conditional put.
+
+Every such lock must **expire**, or a crashed holder keeps it forever. Expiry creates the hard case: the holder pauses (a long garbage-collection pause, a network stall) past the expiry, a second client takes the lock, and the first wakes up still believing it holds it. Both now write. The fix is a **fencing token**: the lock service hands out an increasing number with each grant, the protected resource remembers the highest number it has seen, and it rejects writes carrying a lower one. A Redis lock does not hand out such a token, which is one of the two objections in Martin Kleppmann's critique of using Redlock for correctness (the other is that its safety depends on timing assumptions); the leases and fencing page covers this in depth.
+
+> [!TIP]
+> Prefer not to need a distributed lock: make the protected operation a conditional write on the data itself, or give each resource a single owner (one partition, one worker) so there is nothing to race.
+"""
+
+[[sections]]
+heading = "Hot rows: why one item caps throughput"
+body = """
+Correct is not the same as fast. Every write to a row must wait for the previous writer's transaction to end, so a single row can take at most about **1 ÷ (time each writer holds its lock)** writes a second, however many servers and connections you add.
+
+Measured with `pgbench` on Postgres 18 (16 clients, 4 vCPUs, ten seconds each), incrementing one counter row against spreading the same work over 64 rows:
+
+| Transaction | One hot row | 64 rows | Ratio |
+|---|---|---|---|
+| a single `UPDATE … SET n = n + 1` | 1,104 per second, 14.5 ms average | 3,991 per second, 4.0 ms | 3.6× |
+| `UPDATE`, then 2 ms of work, then `COMMIT` | **273** per second, 58.6 ms average | 3,076 per second, 5.2 ms | 11× |
+| the same, one client | 235 per second, 4.3 ms | | |
+
+The hot row with 2 ms of work holds its lock about 3.7 ms per transaction, and 1 ÷ 3.7 ms ≈ 270: sixteen clients get barely more than one. Latency, meanwhile, rises fourteenfold as they queue. The numbers are from a small container and will differ on real hardware; the ratios are the point.
+
+The ways out:
+
+1. **Hold the lock for less time**: do every slow thing (validation, pricing, calls to other services) before the transaction, and make the write one statement at the end. Moving 2 ms of work out of the lock is the difference between the second row of the table and the first.
+2. **Split the item**: sell a concert's 10,000 tickets from 20 stock buckets of 500 (a buyer picks a bucket at random and falls back to another when it is empty), or count likes in 16 sub-counters summed on read. Each bucket is its own row, so the cap multiplies.
+3. **Queue the writers**: send all requests for one item to one partition of a log, consumed by one worker that applies them in order, in batches. There is no lock contention because there is no concurrency on the item; the price is that the user gets "pending" and a result shortly after.
+4. **Aggregate before writing**: buffer increments in memory or a stream and apply `+137` once a second instead of 137 separate `+1`s (see scaling writes).
 """
 
 [[sections]]
 heading = "When everyone arrives at once"
 body = """
-A sale opening or a concert drop: put a **virtual waiting room** (a queue that admits users at a rate) in front, so the booking path sees a load it can serve; or sell from pre-split stock buckets per shard.
+A ticket sale opening, a sneaker drop, a flash sale: demand arrives in the same second, many times over what the booking path can serve. Splitting rows and shortening locks help the database; something must also protect the whole path.
+
+- **A virtual waiting room** in front: arrivals get a place in a queue and are let through at a rate the system can serve. Cloudflare's Waiting Room, for example, is configured with a target of **total active users** and a cap on **new users per minute**; users beyond those wait on a holding page, and a user already admitted stays in until their session expires. The booking service never sees more than it was sized for, and the order of admission is fair.
+- **Pre-split inventory** per shard or per bucket, as above, so the rush spreads across many rows.
+- **Rate limits per user and per IP**, so bots cannot take every hold.
+- **Short holds** (a few minutes), so abandoned holds return stock quickly.
+- **Degrade, do not fall over**: show "sold out in this section" from a cached count rather than letting every page view query the stock row.
+
+:::steps A flash sale meets a waiting room
+- 10:00:00 | 500,000 users arrive | Every one would hit the stock rows at the same second.
+- waiting room | admits 2,000 a minute | The rest see their place in the queue; nobody is turned away by an error.
+- booking path | conditional updates on 20 buckets | Each admitted user holds a ticket in one short statement.
+- payment | confirm or let the hold lapse | Unpaid holds expire after five minutes and the tickets go back on sale.
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Name the **race** (two buyers, the last seat) and say that a read-then-write in the application loses updates.
+2. Give the **one-statement fix** first: a conditional update, or a constraint for "at most one".
+3. Say when you would **lock** (`FOR UPDATE`, hot item, short transaction, locks in a consistent order) and when you would **check a version** (rare conflicts, long edits), and that the loser retries with a cap.
+4. Separate **hold** from **confirm**, with an expiry, and never keep a transaction open across the user's think time.
+5. Do the **throughput arithmetic** for the hottest item (1 ÷ lock-hold time) and say how you would split it, queue it or put a waiting room in front.
+
+> [!INTERVIEW]
+> "Seat holds are UPDATE seats SET holder = $me, held_until = now() + 10 min WHERE id = $s AND (holder IS NULL OR held_until < now()). One row changed means you have it. Payment confirms with the same condition plus holder = $me, under an idempotency key. At on-sale we put a waiting room in front and admit at the rate the booking service handles."
 """
 
 [[checks]]
@@ -34,3 +389,155 @@ answer = "Payment takes minutes; a held lock blocks other transactions and conne
 [[checks]]
 prompt = "When does optimistic concurrency beat pessimistic locking?"
 answer = "When conflicts are rare: most updates succeed with no waiting, and the occasional loser retries. Under heavy contention on one item, retries pile up and a lock or a queue is better."
+
+[[checks]]
+prompt = "The checkout code reads stock, checks it is above zero, and writes stock − 1. Two buyers of the last item both succeed. What happened, and what is the smallest fix?"
+answer = "A lost update: both transactions read the same stock before either wrote, so both passed the check and both wrote the same new value. BEGIN does not prevent it under Read Committed. The smallest fix is one atomic conditional statement, UPDATE items SET stock = stock - 1 WHERE id = $1 AND stock > 0, and treating zero rows updated as sold out. SELECT … FOR UPDATE before the check also works."
+
+[[checks]]
+prompt = "Session A has updated seat 7 to holder = 'ana' but not committed. Session B runs UPDATE seats SET holder = 'ben' WHERE id = 7 AND holder IS NULL in Read Committed. What does B see, and why is that safe?"
+answer = "B blocks until A finishes. When A commits, Postgres re-evaluates B's WHERE clause against the new version of the row; holder is no longer NULL, so B updates zero rows. If A had rolled back, B would update the original row. Either way exactly one of them holds the seat, and B learns which from the row count."
+
+[[checks]]
+prompt = "Ten workers take jobs with SELECT … FROM jobs WHERE status = 'ready' ORDER BY id LIMIT 1 FOR UPDATE, and adding workers does not speed anything up. Why, and what fixes it?"
+answer = "Every worker asks for the same first ready row, so they queue on its lock and run one at a time. Adding SKIP LOCKED makes each worker pass over rows other transactions hold and take the next free one, so they work in parallel. Keep the transaction short, or use a claimed_until column for jobs that run longer."
+
+[[checks]]
+prompt = "One like counter row tops out at about 1,100 updates a second however many app servers you add. Why, and what would you do?"
+answer = "Each update must wait for the previous transaction on that row to commit, so the row runs at about 1 ÷ lock-hold time, and more clients only lengthen the queue. Split the counter into N sub-rows chosen at random and summed on read, or buffer increments and apply them aggregated once a second, or send them through one partition consumed in batches. Keep any per-update work outside the transaction."
+
+[[checks]]
+prompt = "Two transactions each lock two seats, in opposite orders, and one of them fails with 'deadlock detected'. What happened, and how do you prevent it?"
+answer = "Each held the row the other wanted, so neither could proceed; Postgres found the cycle after deadlock_timeout (1 second by default) and aborted one. Lock rows in a consistent order (for example SELECT … WHERE id IN (…) ORDER BY id FOR UPDATE) so a cycle cannot form, keep transactions short, and retry the aborted transaction."
+
+[[checks]]
+prompt = "A Redis lock with a 30-second expiry protects writes to a file. Client A stalls for 40 seconds mid-write, client B takes the lock and writes, then A resumes and writes too. What should have stopped A?"
+answer = "A fencing token: the lock service hands out an increasing number with each grant, and the storage rejects any write carrying a number lower than the highest it has seen. A's token is older than B's, so its late write is refused. An expiry alone cannot stop it, because A does not know its lock has lapsed."
+
+[[terms]]
+term = "Lost update"
+means = "Two read-modify-write cycles interleave and one overwrites the other's change."
+section = "What goes wrong: the lost update"
+
+[[terms]]
+term = "Read Committed"
+means = "Postgres's default isolation level: each statement sees the data committed before it started."
+section = "What goes wrong: the lost update"
+
+[[terms]]
+term = "Conditional update"
+means = "An UPDATE whose WHERE clause carries the rule, so checking and writing are one step."
+section = "Getting one winner"
+
+[[terms]]
+term = "Exclusion constraint"
+means = "A constraint that refuses rows overlapping an existing one, such as two bookings of a room."
+section = "Getting one winner"
+
+[[terms]]
+term = "Pessimistic locking"
+means = "Lock the row before deciding, so others wait until you finish."
+section = "Pessimistic locking: lock, then decide"
+
+[[terms]]
+term = "Deadlock"
+means = "Two transactions each wait for a lock the other holds; the database aborts one."
+section = "Pessimistic locking: lock, then decide"
+
+[[terms]]
+term = "Optimistic concurrency"
+means = "Read without locking and reject the write if the data changed since the read."
+section = "Optimistic concurrency: check on write"
+
+[[terms]]
+term = "Serialization failure"
+means = "SQLSTATE 40001: the transaction raced another and must be retried from the start."
+section = "Isolation levels do part of it for you"
+
+[[terms]]
+term = "SKIP LOCKED"
+means = "Pass over rows another transaction has locked instead of waiting for them."
+section = "Many workers, many items: SKIP LOCKED"
+
+[[terms]]
+term = "Expiring hold"
+means = "A claim with a deadline that becomes free again on its own when it lapses."
+section = "Holding, then confirming"
+
+[[terms]]
+term = "Fencing token"
+means = "An increasing number with each lock grant, so storage can refuse a stale holder's write."
+section = "Beyond one database: distributed locks"
+
+[[terms]]
+term = "Hot row"
+means = "A row so many transactions write that they queue on its lock."
+section = "Hot rows: why one item caps throughput"
+
+[[terms]]
+term = "Virtual waiting room"
+means = "A queue in front of the site that admits users at a rate the system can serve."
+section = "When everyone arrives at once"
+
+[[sources]]
+title = "PostgreSQL: explicit locking"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"
+note = "row-lock modes, deadlocks and the consistent-order advice, advisory locks"
+
+[[sources]]
+title = "PostgreSQL: SELECT, the locking clause"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE"
+note = "FOR UPDATE, NOWAIT and SKIP LOCKED, and when SKIP LOCKED is appropriate"
+
+[[sources]]
+title = "PostgreSQL: transaction isolation"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/transaction-iso.html"
+note = "how Read Committed re-evaluates WHERE after a wait; serialization failures and retries"
+
+[[sources]]
+title = "PostgreSQL: exclusion constraints"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-EXCLUSION"
+
+[[sources]]
+title = "PostgreSQL: deadlock_timeout and lock_timeout"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-locks.html"
+
+[[sources]]
+title = "On Optimistic Methods for Concurrency Control (ACM TODS, 1981)"
+kind = "paper"
+url = "https://dl.acm.org/doi/10.1145/319566.319567"
+note = "Kung and Robinson: read, validate, write"
+
+[[sources]]
+title = "DynamoDB: optimistic locking with version number"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/BestPractices_OptimisticLocking.html"
+note = "condition expressions on a version attribute"
+
+[[sources]]
+title = "RFC 9110: HTTP Semantics, If-Match"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9110#name-if-match"
+note = "conditional requests and 412 Precondition Failed"
+
+[[sources]]
+title = "How to do distributed locking"
+kind = "article"
+url = "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+note = "Martin Kleppmann on lock expiry, process pauses and fencing tokens"
+
+[[sources]]
+title = "Cloudflare Waiting Room: configuration settings"
+kind = "docs"
+url = "https://developers.cloudflare.com/waiting-room/reference/configuration-settings/"
+note = "total active users, new users per minute, session duration"
+
+[[figures]]
+name = "lock-vs-version"
+after = "Optimistic concurrency: check on write"
+caption = "With a lock, B waits and then reads A's result; with a version check, B's write matches no row, so it rereads and retries."
