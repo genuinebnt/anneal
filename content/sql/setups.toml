@@ -56,3 +56,13 @@ undo = "DROP INDEX customers_email_key;"
 [[setup]]
 id = "no-seqscan"
 session = "SET enable_seqscan = off;"
+
+[[setup]]
+id = "orders-status-customer"
+sql = "CREATE INDEX orders_status_customer ON orders (status, customer_id);"
+undo = "DROP INDEX orders_status_customer;"
+
+[[setup]]
+id = "orders-customer-status"
+sql = "CREATE INDEX orders_customer_status ON orders (customer_id, status);"
+undo = "DROP INDEX orders_customer_status;"

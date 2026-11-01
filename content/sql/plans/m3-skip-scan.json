@@ -1,0 +1,92 @@
+{
+ "id": "m3-skip-scan",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM orders WHERE created_at >= '2026-08-01' AND created_at < '2026-08-02';",
+ "setup": [
+  {
+   "id": "orders-status-created",
+   "sql": "CREATE INDEX orders_status_created ON orders (status, created_at);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 138.85,
+   "Total Cost": 138.86,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.6,
+   "Actual Total Time": 0.601,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 45,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Only Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "orders_status_created",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 130.33,
+     "Plan Rows": 3409,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.051,
+     "Actual Total Time": 0.402,
+     "Actual Rows": 3371.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "((created_at >= '2026-08-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2026-08-02 00:00:00+00'::timestamp with time zone))",
+     "Rows Removed by Index Recheck": 0,
+     "Heap Fetches": 0,
+     "Index Searches": 9,
+     "Shared Hit Blocks": 45,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.103,
+  "Triggers": [],
+  "Execution Time": 0.633
+ },
+ "text": "Aggregate  (cost=138.85..138.86 rows=1 width=8) (actual time=0.554..0.555 rows=1.00 loops=1)\n  Buffers: shared hit=45\n  ->  Index Only Scan using orders_status_created on orders  (cost=0.43..130.33 rows=3409 width=0) (actual time=0.083..0.393 rows=3371.00 loops=1)\n        Index Cond: ((created_at >= '2026-08-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2026-08-02 00:00:00+00'::timestamp with time zone))\n        Heap Fetches: 0\n        Index Searches: 9\n        Buffers: shared hit=45\nPlanning Time: 0.066 ms\nExecution Time: 0.590 ms"
+}

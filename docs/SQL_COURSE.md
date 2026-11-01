@@ -4,7 +4,7 @@
 query performance optimisation and everything about SQL performance. If multiple databases are needed, use them; if an analytical load
 needs an analytical engine, use it." The content must be **researched** (official docs, source, papers), with the best breadth and depth.
 
-**Status:** pilot started, **2 of about 47 modules written** (1 `sql-anatomy`, 2 `sql-equality`). The pipeline (plan capture, loader, reader,
+**Status:** pilot started, **3 of about 47 modules written** (1 `sql-anatomy`, 2 `sql-equality`, 3 `sql-multicolumn`). The pipeline (plan capture, loader, reader,
 plan view) works end to end for them. Everything below the "Built" section is still to do. Mockup (approved: "ok"):
 https://claude.ai/artifact/2m75DYbPU1u4v5j2GjQTx2 (private to the owner's account; the course map, a reference page, a lab, the plan explorer).
 
@@ -26,6 +26,7 @@ and measured on a real database.
 | Plan view | `web/src/plan.ts`, `web/src/components/PlanView.tsx`, `web/src/styles/plan.css` | parsers for Postgres JSON and text, MySQL `EXPLAIN ANALYZE` / `FORMAT=TREE`, SQLite `EXPLAIN QUERY PLAN`; per-step own time and pages; flags (misestimates, rows discarded by a filter, disk sorts, hash batches, heap fetches, missing workers); an operation knowledge base (`KB` in plan.ts); bars grow in run order; hottest step marked. Unit tests in `plan.test.ts` run against the captured plans. |
 | Module 1 | `content/sql/pages/sql-anatomy.toml` | anatomy of an index, measured with `pageinspect`: 3 plans, 4 checks, 10 terms, 9 sources. **The quality bar for every other module.** |
 | Module 2 | `content/sql/pages/sql-equality.toml` | equality, primary and unique keys (with bigint vs UUIDv4 vs UUIDv7 measured), selectivity and why a 5.5% value reads every page, IN/ANY/OR and `Index Searches`, checking index use (a forced plan, `pg_stat_user_indexes`), MySQL/SQLite/DuckDB/ClickHouse measured: 8 plans (Postgres 18.6), 7 checks, 12 terms, 17 sources |
+| Module 3 | `content/sql/pages/sql-multicolumn.toml` | multi-column indexes: the leftmost prefix, the column-order centrepiece (a customer's latest 20 orders: 3,116 pages with `(created_at, customer_id)`, 23 with `(customer_id, created_at)`, 4 covering; the 3,116 explained to the page), most-selective-first tested, Postgres 18 skip scan (and why text needs about two searches per value), redundant prefix indexes, `CREATE INDEX CONCURRENTLY` in an sqlx migration, MySQL/SQLite measured, ClickHouse key order: 10 plans (Postgres 18.6), 7 checks, 8 terms, 13 sources |
 
 The only Postgres in the loop is a throwaway container: `docker run -d --name anneal-sqlperf -e POSTGRES_USER=anneal -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=sqlperf -p 5418:5432 postgres:18-alpine -c shared_buffers=256MB -c max_parallel_workers_per_gather=2`, then
 `psql -h 127.0.0.1 -p 5418 -U anneal sqlperf -f tools/sqlperf/schema.sql` (about 75 s) and
@@ -60,7 +61,7 @@ database.** Production runs Postgres 18, so capture on 18 (the pilot's plans wer
 
 File name = `content/sql/pages/<id>.toml`; `group` in brackets. The order is the reading order; numbers are the mockup's.
 
-**I · Indexes** `[sql-indexes]`: 1 `sql-anatomy` **done** · 2 `sql-equality` **done** (equality, primary keys, verifying index use) · 3 `sql-multicolumn` (concatenated keys, column order, Postgres 18 **skip scan**; the mockup's centrepiece: `(created_at, customer_id)` 1,483 pages vs `(customer_id, created_at)` 4) · 4 `sql-functions` (functions, case-insensitive search, expression indexes, bind parameters) · 5 `sql-ranges` (greater, less, BETWEEN, LIKE and `text_pattern_ops`, collations, index combine/bitmap) · 6 `sql-partial-null` (partial indexes, NULL in indexes, NOT NULL) · 7 `sql-obfuscated` (conditions that hide a column: dates, numeric strings, redundant clauses, smart logic, maths).
+**I · Indexes** `[sql-indexes]`: 1 `sql-anatomy` **done** · 2 `sql-equality` **done** (equality, primary keys, verifying index use) · 3 `sql-multicolumn` **done** (concatenated keys, column order, Postgres 18 **skip scan**; the mockup's centrepiece, measured on the course schema: `(created_at, customer_id)` 3,116 pages vs `(customer_id, created_at)` 23, and 4 with a covering index; the mockup's 1,483 vs 4 were not from this data) · 4 `sql-functions` (functions, case-insensitive search, expression indexes, bind parameters) · 5 `sql-ranges` (greater, less, BETWEEN, LIKE and `text_pattern_ops`, collations, index combine/bitmap) · 6 `sql-partial-null` (partial indexes, NULL in indexes, NOT NULL) · 7 `sql-obfuscated` (conditions that hide a column: dates, numeric strings, redundant clauses, smart logic, maths).
 
 **II · Reading plans** `[sql-plans]`: 8 `sql-explain` (EXPLAIN, ANALYZE, BUFFERS, SETTINGS, FORMAT JSON; reading the tree) · 9 `sql-access-filter` (access vs filter conditions, `Index Searches`, `Rows Removed`) · 10 `sql-statistics` (pg_stats, MCVs, histograms, `CREATE STATISTICS`, n_distinct) · 11 `sql-planner-wrong` (misestimates, correlated columns, parameterised plans, generic vs custom, `plan_cache_mode`, hints via settings) · 12 `sql-parallel` (parallel query, `JIT`, `work_mem`).
 
@@ -97,3 +98,9 @@ File name = `content/sql/pages/<id>.toml`; `group` in brackets. The order is the
 - If a plan you wanted does not appear (the planner chose a different one), do not edit the JSON: change the setup or the query until Postgres chooses it, or say on the page what it chose and why.
 - Module ids are `sql-<topic>`; the loader rejects other prefixes in `content/sql/pages`.
 - `psql` here is 14; the container is 18. Use the container's server for plans (any client works).
+- Setups run through `psql`'s standard input, one statement at a time, so a setup may `VACUUM` (with `psql -c`, as before
+  2026-11-01, several statements ran as one transaction and `VACUUM` failed).
+- If Docker Hub answers 429 (rate limit), pull `mirror.gcr.io/library/postgres:18-alpine` (the same official image) and tag it
+  `postgres:18-alpine`.
+- When a sandbox blocks postgresql.org, the documentation's source is in the Postgres repository (`doc/src/sgml` on the
+  `REL_18_STABLE` branch, readable through raw.githubusercontent.com): the same text, to research from.

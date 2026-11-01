@@ -35,7 +35,8 @@ FENCE = re.compile(r"^```plan\s+(.*?)\n(.*?)^```\s*$", re.S | re.M)
 
 
 def psql(db: str, sql: str) -> str:
-    out = subprocess.run(["psql", db, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql], capture_output=True, text=True)
+    # on stdin, not with -c: -c runs several statements as one transaction, where VACUUM (in a setup) is refused
+    out = subprocess.run(["psql", db, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"], input=sql, capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"psql failed: {out.stderr.strip()}\n--- while running:\n{sql}")
     return out.stdout
