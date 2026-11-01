@@ -2,6 +2,54 @@ import { Arrow, Box, type Fig } from "./parts";
 
 /** Figures for the distributed and advanced pages. Add each name to `SD_FIGURES_DISTRIBUTED` in `crates/content/src/sd.rs`. */
 export const FIGS_DISTRIBUTED: Record<string, Fig> = {
+    watermark: {
+        steps: 12,
+        ms: 900,
+        draw: (t) => {
+            // event times in minutes, in the order the job receives them; the watermark trails the newest by half a minute
+            const arrivals = [0.2, 0.5, 0.9, 1.1, 0.7, 1.6, 2.2, 1.4, 2.7, 0.8, 3.3];
+            const x = (m: number) => 60 + m * 135;
+            const seen = arrivals.slice(0, t);
+            let max = 0;
+            const fired = new Set<number>();
+            const late = new Set<number>();
+            seen.forEach((e, i) => {
+                const w = Math.floor(e);
+                if (fired.has(w)) {
+                    late.add(i);
+                    return;
+                }
+                max = Math.max(max, e);
+                for (let k = 0; k < 4; k++) if (k + 1 <= max - 0.5) fired.add(k);
+            });
+            const wm = Math.max(0, max - 0.5);
+            const counts = [0, 1, 2, 3].map((k) => seen.filter((e, i) => Math.floor(e) === k && !late.has(i)).length);
+            return (
+                <>
+                    {[0, 1, 2, 3].map((k) => (
+                        <g key={k}>
+                            <rect className={`sf-cell${fired.has(k) ? " full" : ""}`} x={x(k) + 2} y={60} width={131} height={60} rx={6} />
+                            <text className="sf-lab" x={x(k) + 8} y={52}>{`${k}:00-${k + 1}:00`}</text>
+                            {fired.has(k) && <text className="sf-lab" x={x(k) + 8} y={138}>{`fired: ${counts[k]} clicks`}</text>}
+                        </g>
+                    ))}
+                    {seen.map((e, i) =>
+                        late.has(i) ? (
+                            <g key={i}>
+                                <circle className="sf-node" cx={x(e)} cy={170} r={6} />
+                                <text className="sf-lab" x={x(e) + 10} y={174}>late: its window already fired</text>
+                            </g>
+                        ) : (
+                            <circle key={i} className={`sf-key${i === t - 1 ? " moved" : ""}`} cx={x(e)} cy={90} r={5} />
+                        ),
+                    )}
+                    {t > 0 && <path className="sf-arrow on" d={`M${x(wm)} 20 V150`} strokeDasharray="4 4" />}
+                    {t > 0 && <text className="sf-lab" x={x(wm) + 6} y={24}>{`watermark ${wm.toFixed(1)}`}</text>}
+                    <text className="sf-lab" x={14} y={212}>{t === 0 ? "one-minute windows on event time; the watermark trails the newest event by 0.5 min" : late.has(t - 1) ? "an event behind the watermark: drop it, side-output it, or correct the result" : "a window fires when the watermark passes its end"}</text>
+                </>
+            );
+        },
+    },
     "geohash-cells": {
         steps: 6,
         ms: 1200,
