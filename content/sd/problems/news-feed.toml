@@ -16,11 +16,36 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and the estimate that drives the design."
 reference = """
-**Functional**: users can post; follow and unfollow; see a feed of posts from people they follow, newest first, paginated.
+**Functional**:
 
-**Non-functional**: the feed loads fast (under 200 ms p99); a new post appears in followers' feeds within seconds (eventual consistency is fine); highly available; 500M daily users.
+1. Users can **post** (text, optionally media).
+2. Users can **follow and unfollow** others (one-way, as on X or Instagram).
+3. Users see a **home feed** of posts from people they follow, **newest first**, and can scroll back page by page.
 
-**Estimate**: about 100k feed reads a second against a few thousand posts a second: very read-heavy. Some users have tens of millions of followers.
+Out of scope unless asked: ranking by relevance (say it would reuse the same candidates), likes and comments, notifications, search.
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Feed load | under 200 ms p99 for the first page |
+| Freshness | a new post reaches followers' feeds within ~5 s; **eventual consistency is fine** (nobody can tell if a friend's post appears 3 s late) |
+| Availability | the feed is the product: favour availability over consistency |
+| Scale | 500M daily active users (assumption) |
+
+**Estimate** (assumptions labelled):
+
+```text
+feed reads   500M DAU × 10 opens a day / 86,400 s ≈ 58,000/s (×2 at peak ≈ 116,000/s)
+posts        10% of DAU post once a day            ≈ 580/s
+fan-out      50M posts/day × 200 followers on average = 10B feed inserts/day ≈ 116,000/s
+skew         a few accounts have 50M+ followers
+```
+
+What it decides: reads outnumber posts **100 to 1**, so precomputing feeds pays; but the follower distribution is a power law, so the average (200) hides authors whose one post is 50 million inserts. Both facts must be on the board before the design.
+
+> [!INTERVIEW]
+> "Feeds are read a hundred times more than posts are written, so I'll precompute them at write time, except for the very large accounts, which I'll come back to."
 """
 [[steps.points]]
 id = "req-core"
@@ -39,7 +64,16 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`User`, `Follow` (follower, followee), `Post` (author, text, media, created), and a `Feed` (per-user list of post ids) if precomputed."
+reference = """
+| Entity | Fields | Keyed for |
+|---|---|---|
+| `User` | id, name, avatar, follower count, `is_large` flag | profile lookups; the flag drives the hybrid fan-out |
+| `Follow` | follower_id, followee_id, created_at | **both directions**: "whom do I follow" (read-time merge) and "who follows X" (fan-out) |
+| `Post` | id (time-ordered, Snowflake-style), author_id, text, media ids, created_at | by id (hydration) and by author, newest first |
+| `Feed` | per user: a list of post ids, newest first, capped (~500) | the user's id |
+
+`Follow` is its own entity, not an array on `User`: a celebrity's follower list has tens of millions of entries and changes constantly. The `Feed` holds **ids, not posts**: a post is stored once and referenced from millions of feeds, so an edit or delete touches one row, and the feed list stays small (8 bytes an entry).
+"""
 [[steps.points]]
 id = "ent-follow"
 text = "Follow as its own entity, and the feed as a list of post ids"
@@ -50,12 +84,17 @@ name = "API"
 minutes = 5
 prompt = "Endpoints for posting, following and reading the feed."
 reference = """
+```http
+POST   /posts                    { "text": "...", "media_ids": ["m_91"] }  -> 201 { "post": {...} }
+PUT    /users/{id}/follow        -> 204   (idempotent: following twice is still one follow)
+DELETE /users/{id}/follow        -> 204
+GET    /feed?limit=20            -> 200 { "items": [...], "next_cursor": "eyJ0IjoxNz..." }
+GET    /feed?limit=20&cursor=eyJ0IjoxNz...
 ```
-POST   /posts                      { text, media_ids? } -> 201 { post }
-POST   /users/{id}/follow           -> 204        DELETE /users/{id}/follow -> 204
-GET    /feed?cursor=&limit=20      -> { items[], next_cursor }
-```
-A cursor (created_at plus id of the last item) rather than pages; the author comes from the token.
+
+**Cursor, not offset.** While the user scrolls, new posts arrive at the top. With `?offset=20`, every new post shifts the list by one, so page 2 repeats the last item of page 1 (or skips one after a delete). A cursor names a position: "posts older than `(created_at, id)` of the last item I saw". Encode it opaquely (base64 of the pair) so the server can change what is inside. Because post ids are time-ordered, the cursor can simply be the last post id. "New posts since" is the same idea in the other direction: `GET /feed?since=<first id>`.
+
+The author of a post and the follower in a follow come from the **auth token**, never from the body or the path: otherwise anyone could post as anyone, or make others follow them.
 """
 [[steps.points]]
 id = "api-cursor"
@@ -71,10 +110,42 @@ name = "High-level design"
 minutes = 15
 prompt = "A design that works: posting, following and reading the feed."
 reference = """
-- **Post service** writes posts to a posts store (sharded by author). **Follow service** keeps `follows` both ways (followers of X, X follows).
-- **Feed (fan-out on write)**: on a new post, a worker looks up the author's followers and pushes the post id to each follower's feed list in a cache (Redis list per user, trimmed to the latest ~500).
-- **Read**: GET /feed reads the cached id list, hydrates posts (batch get, cached), returns a page.
-- The fan-out runs **asynchronously** through a queue, so posting is fast.
+**The two basic choices**:
+
+| | Fan-out on read (pull) | Fan-out on write (push) |
+|---|---|---|
+| Post | write one row | write one row, then insert the id into every follower's feed |
+| Read | fetch recent posts of everyone I follow (200+ queries), merge, sort | read one precomputed list |
+| Cost lands on | every one of 116,000 reads a second | 580 posts a second × followers |
+| Weak spot | slow feeds for users who follow many | authors with millions of followers |
+
+With reads 100× posts, **push** is the starting point. Facebook's News Feed is the well-known pull design at scale (its Multifeed aggregators assemble feeds per request from leaf servers holding recent activity in memory), which shows pull works too, at the price of a large in-memory serving tier.
+
+**The diagram**:
+
+```text
+POST /posts ─► post svc ─► posts DB (by author)
+                  │
+                  └─► queue ─► fan-out workers ─► feed cache
+                                    │             (list per user)
+                               follows DB
+GET /feed ─► feed svc ─► feed cache ─► ids
+                  └──────► post cache / posts DB (multi-get)
+```
+
+- **Post service**: stores the post (a time-ordered id), publishes `PostCreated(post_id, author_id)` to a queue, returns 201. Posting never waits for fan-out.
+- **Fan-out workers**: page through the author's followers (`follows` by followee), and for each follower `LPUSH feed:{follower} post_id` then `LTRIM feed:{follower} 0 499`. Batched with pipelining: thousands of inserts per round trip.
+- **Feed service**: `LRANGE feed:{me} start stop` gives 20 ids; **hydrates** them with one multi-get from the post cache (and author profiles from a user cache); drops deleted posts; returns the page.
+- **Stores**: posts in a store sharded by author (or by post id); `follows` stored twice, once keyed by follower and once by followee, so both queries hit one shard; the feed cache is Redis, sharded by user id.
+
+:::steps Posting reaches a follower's feed
+- author | POST /posts | The post service writes the post and enqueues PostCreated.
+- fan-out worker | followers of author, page 1 of n | Reads 1,000 follower ids at a time from follows-by-followee.
+- fan-out worker | LPUSH + LTRIM per follower (pipelined) | 200 followers on average: one pipeline, a few ms.
+- follower | GET /feed | LRANGE returns the new id first; one multi-get hydrates the page.
+:::
+
+**Sizing the feed cache**: 500M users × 500 ids × 8 B = **2 TB** of ids before overhead. That is about 60 Redis nodes of 64 GB if the overhead doubles it, which is why the deep dives cut whose feeds are kept.
 """
 [[steps.points]]
 id = "hld-fanout"
@@ -88,17 +159,33 @@ level = "senior"
 id = "hld-stores"
 text = "Posts and follows stored and keyed for their hot queries"
 level = "mid"
+[[steps.points]]
+id = "hld-pushpull"
+text = "Push and pull compared on where the cost lands, with the read-to-write ratio deciding"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "Celebrities, freshness, scale and failure."
 reference = """
-- **Celebrities**: fanning a post out to 50M feeds is too slow and costly. **Hybrid**: fan out on write for normal authors; for authors above a threshold, skip fan-out and **merge their recent posts at read time**.
-- **Inactive users**: do not maintain feeds for users who have not opened the app in weeks; rebuild on their next visit.
-- **Hot posts**: post bodies cached and replicated; counters (likes) split and aggregated.
-- **Failure**: the fan-out queue absorbs spikes and retries; the feed cache can be rebuilt from posts and follows.
-- **Ranking** (if asked): candidates from the same sources, a ranking service scores them; keep it out of the base design.
+**1. Celebrities: hybrid fan-out.** A post by an author with 50M followers is 50M inserts. Even at an assumed 1M inserts a second across the fleet, that one post takes 50 s and delays everyone else's posts queued behind it.
+
+- Mark authors above a follower threshold as **large** (the threshold is a tunable, tens of thousands to a million; measure where fan-out cost exceeds read-time cost).
+- Large authors' posts are **not fanned out**. They are kept in a small per-author list (`posts:{author}`, the latest few hundred), which is hot and heavily cached.
+- At read time the feed service fetches the user's precomputed list **plus** the recent posts of the large authors they follow (a typical user follows a handful), merges by time, and returns the page.
+
+The academic version of this is Yahoo's *Feeding Frenzy* (SIGMOD 2010): choose push or pull **per producer and consumer pair** from their rates, pushing for producers who post rarely relative to how often the consumer reads, pulling for prolific ones; local decisions turned out globally near-optimal.
+
+**2. Inactive users.** Most of the 2 TB would be feeds nobody opens. Fan out only to users active in the last ~30 days (a flag on the follow edge or a set of active users the worker checks). When an inactive user returns, **rebuild** their feed on the first request: fetch the recent posts of their followees (pull), merge, write the list, and switch them back to push. Their first load is slower (hundreds of ms); every later load is fast.
+
+**3. Freshness under spikes.** The queue absorbs bursts (a breaking-news hour); scale workers on queue lag; give fan-out jobs priority by author size so a celebrity job cannot starve normal posts. Target: p99 queue lag under the 5 s freshness goal.
+
+**4. Failure and rebuilds.** The feed cache is **derived data**: posts and follows are the source of truth, so a lost Redis node means slow first loads, not lost data. Fan-out jobs are idempotent (inserting an id twice is caught at read time by de-duplicating the page), so a worker crash simply retries from the queue.
+
+**5. Deletes, unfollows and privacy.** A deleted post stays in millions of lists; hydration drops ids whose post is gone, so lists need no cleanup. An unfollow removes that author's ids lazily at read time (filter by "still follows"), or with a background job for the most recent entries.
+
+**6. Ranking** (if asked): the same candidates (the precomputed list and the pulled large-author posts) go to a ranking service that scores them; the storage design does not change. Keep it out of the base design unless the interviewer wants it.
 """
 [[steps.points]]
 id = "dd-hybrid"
@@ -112,6 +199,10 @@ level = "staff"
 id = "dd-rebuild"
 text = "The feed cache is derived data and can be rebuilt; the queue gives retries"
 level = "senior"
+[[steps.points]]
+id = "dd-deletes"
+text = "Deleted posts and unfollows filtered at hydration instead of rewriting millions of lists"
+level = "senior"
 
 [[probes]]
 question = "A user with 50 million followers posts. With pure fan-out on write, what happens?"
@@ -124,3 +215,37 @@ answer = "With fan-out on write they would not until the next post; backfill the
 [[probes]]
 question = "The feed cache cluster loses a node. What do affected users see, and how do you recover?"
 answer = "Their feed lists are gone from cache; rebuild them on read from the follow graph and recent posts (slower first load), then refill. The posts and follows remain the source of truth."
+
+[[probes]]
+question = "A user scrolls to page 3 while 40 new posts arrive. With offset pagination, what do they see?"
+answer = "Page 3 is computed from a list that has grown by 40, so it repeats items they already saw on pages 1 and 2. A cursor (the last post id seen) asks for posts older than that one, which is the same answer however many posts arrived on top."
+
+[[sources]]
+title = "Krikorian: Timelines at Scale (QCon SF 2012)"
+kind = "article"
+url = "https://www.infoq.com/presentations/Twitter-Timeline-Scalability"
+note = "Twitter's write path and read path, home timelines in Redis"
+
+[[sources]]
+title = "Silberstein et al.: Feeding Frenzy, selectively materializing users' event feeds (SIGMOD 2010)"
+kind = "paper"
+url = "https://sns.cs.princeton.edu/assets/papers/2010-sigmod-silberstein.pdf"
+note = "push or pull chosen per producer and consumer by their rates"
+
+[[sources]]
+title = "Facebook: Serving Facebook Multifeed"
+kind = "article"
+url = "https://engineering.fb.com/2015/03/10/production-engineering/serving-facebook-multifeed-efficiency-performance/"
+note = "News Feed's read-time aggregators and leaf servers"
+
+[[sources]]
+title = "Twitter Snowflake (2010 README)"
+kind = "guide"
+url = "https://github.com/twitter-archive/snowflake/tree/snowflake-2010"
+note = "time-ordered 64-bit ids, which make the post id a cursor"
+
+[[sources]]
+title = "The System Design Primer: Design the Twitter timeline and search"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer/blob/master/solutions/system_design/twitter/README.md"
+note = "another worked fan-out design (CC BY 4.0)"
