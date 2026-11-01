@@ -2,6 +2,49 @@ import { Arrow, Box, type Fig } from "./parts";
 
 /** Figures for the distributed and advanced pages. Add each name to `SD_FIGURES_DISTRIBUTED` in `crates/content/src/sd.rs`. */
 export const FIGS_DISTRIBUTED: Record<string, Fig> = {
+    "geohash-cells": {
+        steps: 6,
+        ms: 1200,
+        draw: (t) => {
+            const x0 = 330, y0 = 10, s = 50;
+            const q = { x: 427, y: 104 }; // near the corner of its cell
+            const r = 44;
+            const pts = [[352, 40], [410, 30], [470, 52], [520, 70], [390, 84], [445, 88], [470, 120], [416, 126], [440, 140], [378, 150], [500, 160], [430, 190], [356, 118], [512, 112], [462, 74], [404, 62], [540, 30], [345, 195]] as const;
+            const cellOf = (x: number, y: number) => [Math.floor((x - x0) / s), Math.floor((y - y0) / s)] as const;
+            const [qc, qr] = cellOf(q.x, q.y);
+            const inOwn = (x: number, y: number) => { const [c, rr] = cellOf(x, y); return c === qc && rr === qr; };
+            const inNine = (x: number, y: number) => { const [c, rr] = cellOf(x, y); return Math.abs(c - qc) <= 1 && Math.abs(rr - qr) <= 1; };
+            const near = (x: number, y: number) => Math.hypot(x - q.x, y - q.y) <= r;
+            const lit = (cx: number, cy: number) => (t === 2 ? cx === qc && cy === qr : t >= 3 ? Math.abs(cx - qc) <= 1 && Math.abs(cy - qr) <= 1 : false);
+            const found = pts.filter(([x, y]) => near(x, y)).length;
+            const own = pts.filter(([x, y]) => inOwn(x, y) && near(x, y)).length;
+            const cand = pts.filter(([x, y]) => inNine(x, y)).length;
+            const say = [
+                "points filed by the cell they fall in",
+                "find everything within the circle",
+                `the own cell alone finds ${own} of ${found}: the point sits near an edge`,
+                `the cell and its 8 neighbours: ${cand} candidates`,
+                `filter by exact distance: all ${found} found`,
+                "cells at least as big as the radius always cover the circle",
+            ];
+            return (
+                <>
+                    {Array.from({ length: 16 }, (_, i) => {
+                        const cx = i % 4, cy = Math.floor(i / 4);
+                        return <rect key={i} className={`sf-cell${lit(cx, cy) ? " full" : ""}`} x={x0 + cx * s} y={y0 + cy * s} width={s - 2} height={s - 2} rx={4} />;
+                    })}
+                    {t >= 1 && <circle className="sf-ring" cx={q.x} cy={q.y} r={r} />}
+                    {pts.map(([x, y], i) => {
+                        const on = (t === 2 && inOwn(x, y) && near(x, y)) || (t === 3 && inNine(x, y)) || (t >= 4 && near(x, y));
+                        return <circle key={i} className={`sf-key${on ? " moved" : ""}`} cx={x} cy={y} r={4} />;
+                    })}
+                    {t >= 1 && <circle className="sf-node" cx={q.x} cy={q.y} r={5} />}
+                    <Box x={14} y={40} w={250} h={44} label={t < 2 ? "query: within the circle" : t === 2 ? "own cell only" : t === 3 ? "own cell + 8 neighbours" : "then exact distance"} tone={t === 2 ? "bad" : t >= 4 ? "grn" : "acc"} />
+                    <text className="sf-lab" x={14} y={212}>{say[t]}</text>
+                </>
+            );
+        },
+    },
     "fencing-token": {
         steps: 8,
         ms: 1100,
