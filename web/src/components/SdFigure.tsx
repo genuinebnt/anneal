@@ -1,5 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { StepControls, stepKeys } from "./SdMd";
+import { Arrow, Box, Log, type Fig } from "./sdfigs/parts";
+import { FIGS_CORE } from "./sdfigs/core";
+import { FIGS_DISTRIBUTED } from "./sdfigs/distributed";
+import { FIGS_DRILLS } from "./sdfigs/drills";
+import { FIGS_TECHNOLOGY } from "./sdfigs/technology";
 
 /** The figure's step and whether it plays. It plays on its own (motion is always on) and loops, unless motion is reduced; stepping
  *  by hand pauses it, as on the Idea tab. */
@@ -17,43 +22,7 @@ function useSteps(ms: number, steps: number) {
 const W = 640;
 const H = 220;
 
-function Box({ x, y, w = 96, h = 36, label, tone = "line", r = 9, sub }: { x: number; y: number; w?: number; h?: number; label: string; tone?: string; r?: number; sub?: string }) {
-    return (
-        <g className={`sf-box sf-${tone}`}>
-            <rect x={x} y={y} width={w} height={h} rx={r} />
-            <text x={x + w / 2} y={y + h / 2 + (sub ? -2 : 4)}>{label}</text>
-            {sub && <text className="sf-sub" x={x + w / 2} y={y + h / 2 + 12}>{sub}</text>}
-        </g>
-    );
-}
-
-function Arrow({ d, on = false, dash = false }: { d: string; on?: boolean; dash?: boolean }) {
-    return <path className={`sf-arrow${on ? " on" : ""}`} d={d} strokeDasharray={dash ? "4 4" : undefined} markerEnd="url(#sf-ar)" />;
-}
-
-/** A partition: cells with offsets, the tail filling as records arrive. */
-function Log({ x, y, n, filled, reads = [], label }: { x: number; y: number; n: number; filled: number; reads?: { at: number; tone: string; label: string }[]; label: string }) {
-    return (
-        <g>
-            <text className="sf-lab" x={x} y={y - 8}>{label}</text>
-            {Array.from({ length: n }, (_, i) => (
-                <g key={i}>
-                    <rect className={`sf-cell${i < filled ? " full" : ""}${i === filled - 1 ? " new" : ""}`} x={x + i * 30} y={y} width={26} height={26} rx={5} />
-                    <text className="sf-off" x={x + i * 30 + 13} y={y + 17}>{i}</text>
-                </g>
-            ))}
-            {reads.map((r, i) => (
-                <g key={r.label} className={`sf-${r.tone}`} transform={`translate(${x + r.at * 30 + 13} ${y + 34})`}>
-                    <path className="sf-pin" d="M0 0 -6 9 6 9z" />
-                    {/* readers at nearby offsets would print over each other: alternate their labels' height */}
-                    <text className="sf-pinl" y={22 + i * 13}>{r.label}</text>
-                </g>
-            ))}
-        </g>
-    );
-}
-
-const FIGS: Record<string, { steps: number; ms: number; draw: (t: number) => ReactNode }> = {
+const BASE: Record<string, Fig> = {
     "kafka-log": {
         steps: 12,
         ms: 700,
@@ -389,6 +358,8 @@ const FIGS: Record<string, { steps: number; ms: number; draw: (t: number) => Rea
         },
     },
 };
+
+const FIGS: Record<string, Fig> = { ...BASE, ...FIGS_CORE, ...FIGS_DISTRIBUTED, ...FIGS_TECHNOLOGY, ...FIGS_DRILLS };
 
 /** An animated drawing for a system design page, by name (the names are listed in `crates/content/src/sd.rs`). */
 export function SdFigure({ name, caption }: { name: string; caption: string }) {

@@ -22,6 +22,17 @@ pub const SD_LEVELS: &[&str] = &["mid", "senior", "staff"];
 pub const SD_KINDS: &[&str] = &["hld", "api", "lld"];
 /// The animated drawings the web app can show on a concept page (`web/src/components/SdFigure.tsx`). A name here needs a drawing there.
 pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "shards", "replication", "cache-aside", "write-fanout", "redis-structures", "btree-index", "queue-vs-stream", "lsm-tree", "saga", "circuit-breaker", "quorum", "bloom-filter", "inverted-index", "cache-stampede"];
+/// Figures added per group (each group's drawings live in `web/src/components/sdfigs/<group>.tsx`), kept apart so pages written in
+/// parallel never edit the same list.
+pub const SD_FIGURES_CORE: &[&str] = &[];
+pub const SD_FIGURES_DISTRIBUTED: &[&str] = &[];
+pub const SD_FIGURES_TECHNOLOGY: &[&str] = &[];
+pub const SD_FIGURES_DRILLS: &[&str] = &[];
+
+/// Every figure name the web app draws.
+pub fn sd_figures() -> Vec<&'static str> {
+    [SD_FIGURES, SD_FIGURES_CORE, SD_FIGURES_DISTRIBUTED, SD_FIGURES_TECHNOLOGY, SD_FIGURES_DRILLS].concat()
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct SdCatalog {
@@ -352,8 +363,8 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
             bad.push("`credit` must not be empty when given".to_owned());
         }
         for f in &c.figures {
-            if !SD_FIGURES.contains(&f.name.as_str()) {
-                bad.push(format!("figure {:?} is not one the web app draws ({})", f.name, SD_FIGURES.join(", ")));
+            if !sd_figures().contains(&f.name.as_str()) {
+                bad.push(format!("figure {:?} is not one the web app draws ({})", f.name, sd_figures().join(", ")));
             }
             if !c.sections.iter().any(|s| s.heading == f.after) {
                 bad.push(format!("figure {} follows {:?}, which is not a section heading", f.name, f.after));
