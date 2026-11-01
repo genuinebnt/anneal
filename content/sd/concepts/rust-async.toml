@@ -1,24 +1,98 @@
 title = "Async Rust architecture"
 group = "rust"
 order = 2
-minutes = 12
-lede = "How a Tokio service is built and what interviewers probe: tasks and the runtime, never blocking the executor, which lock to use, channels for ownership, backpressure, and shutting down cleanly."
+minutes = 22
+lede = "How a Tokio service is built and what interviewers probe: futures, tasks and the runtime, never blocking the executor, which lock to use, channels for ownership and backpressure, actors, cancellation, and shutting down cleanly. Every program on this page was run with Tokio 1.54."
 say = "Each connection is a task; CPU-heavy parsing goes to spawn_blocking; shared state is an Arc<Mutex> held only between awaits, or an actor owning the state behind an mpsc channel; bounded channels give backpressure."
-related = ["rust-design-patterns", "queues-and-streams"]
+related = ["rust-design-patterns", "queues-and-streams", "concurrency-primitives", "resilience"]
+
+summary = [
+  "A future does nothing until **polled**; a **task** is a future the runtime polls, parked at each `.await` that is not ready.",
+  "**Never block a worker thread**: one 200 ms blocking call made a 10 ms timer 192 ms late; `spawn_blocking` kept it on time.",
+  "A **std `Mutex`** is right for data locked between awaits; hold nothing `!Send` across an `.await` (the compiler checks `tokio::spawn`).",
+  "**Bounded channels** give backpressure; an **actor** owns state and serves messages, so no lock is needed.",
+  "**Cancellation** happens at an `.await`; **graceful shutdown** is: notice, tell every task, wait with a deadline.",
+]
 
 [[sections]]
-heading = "Tasks and the runtime"
+heading = "Futures and tasks"
 body = """
-A future does nothing until polled. `tokio::spawn` hands it to the runtime, whose worker threads poll ready tasks and park them at each `.await` that cannot proceed. Thousands of tasks share a few threads, so **every task must reach an `.await` quickly**.
+An `async fn` compiles to a state machine that implements `Future`: a type with one method, `poll`, which either returns `Ready(value)` or `Pending` after arranging (through a `Waker`) to be polled again when it can make progress. Futures are **lazy**: calling an `async fn` builds the state machine and runs none of its body until something polls it.
+
+- `.await` inside an async block polls the inner future and, if it is pending, returns `Pending` up the chain; the whole task is then parked until a waker fires.
+- A **task** is a top-level future handed to the runtime with `tokio::spawn`; the runtime polls it whenever it is woken. Thousands of tasks share a few threads because a parked task costs only its state machine's memory.
+- `tokio::spawn` requires the future to be `Send + 'static`: the multi-threaded scheduler may move a task to another thread at any `.await`, so everything it holds across an `.await` must be `Send`, and it may outlive the caller, so it cannot borrow from it.
+- Dropping a `JoinHandle` does **not** stop the task: Tokio's documentation says the handle *detaches* it, and it keeps running. Use `abort()`, a cancellation token, or a `JoinSet` (which aborts its tasks when dropped) to stop tasks you started.
+"""
+
+[[sections]]
+heading = "The runtime"
+body = """
+Tokio's default runtime (`#[tokio::main]`) is **multi-threaded**: one worker thread per CPU core by default, each with a local queue of ready tasks, and idle workers **steal** tasks from busy ones. `#[tokio::main(flavor = "current_thread")]` runs every task on one thread, which suits tests, small tools and code with `!Send` state.
+
+Scheduling is **cooperative**: a task runs until it returns `Pending` at an `.await`; nothing preempts it. To stop one task that is always ready (a loop over a busy channel) from starving the others, Tokio gives each task a budget of operations on Tokio resources (128 in Tokio 1.54) and makes them report "not ready" once it is spent, so the task yields. That only helps at `.await`s on Tokio's own types: a loop that never awaits is never interrupted.
+
+Next to the workers, a separate **blocking pool** runs closures passed to `spawn_blocking`: threads are started on demand, up to 512 by default (`max_blocking_threads`), and exit when idle.
 """
 
 [[sections]]
 heading = "Never block the executor"
 body = """
-A blocking call (a file read with std, a long computation, `std::thread::sleep`, a sync database driver) holds a worker thread, and every task scheduled there stalls.
+A blocking call (a file read with `std::fs`, a long computation, `std::thread::sleep`, a synchronous database driver, a `std` lock held by a slow thread) keeps a worker thread busy without returning to the runtime, and **every task scheduled on that worker stalls**. To see it, a task that wants to run every 10 ms shares a one-thread runtime with a job that needs 200 ms:
 
-- CPU-bound or blocking work: `tokio::task::spawn_blocking`, or a dedicated thread pool (rayon).
-- Use async I/O (`tokio::fs`, `tokio::net`, async drivers).
+```rust title=blocking.rs hl=29,32,36
+use std::time::{Duration, Instant};
+
+/// A task that wants to run every 10 ms; returns how late its worst tick was.
+async fn ticker() -> Duration {
+    let mut worst = Duration::ZERO;
+    let mut next = Instant::now() + Duration::from_millis(10);
+    for _ in 0..30 {
+        tokio::time::sleep_until(next.into()).await;
+        worst = worst.max(Instant::now() - next);
+        next += Duration::from_millis(10);
+    }
+    worst
+}
+
+/// Runs the ticker beside a job that needs 200 ms, on a runtime with one worker thread.
+fn run(name: &str, job: fn() -> tokio::task::JoinHandle<()>) {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let worst = rt.block_on(async {
+        let ticks = tokio::spawn(ticker());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        job().await.unwrap();
+        ticks.await.unwrap()
+    });
+    println!("{name:<44} worst tick late by {:>5.1} ms", worst.as_secs_f64() * 1e3);
+}
+
+fn main() {
+    run("std::thread::sleep(200 ms) inside a task", || {
+        tokio::spawn(async { std::thread::sleep(Duration::from_millis(200)) }) // blocks the only worker
+    });
+    run("tokio::time::sleep(200 ms) inside a task", || {
+        tokio::spawn(async { tokio::time::sleep(Duration::from_millis(200)).await }) // yields while waiting
+    });
+    run("std::thread::sleep(200 ms) in spawn_blocking", || {
+        tokio::spawn(async {
+            tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(200))).await.unwrap()
+        })
+    });
+}
+```
+
+```text title=output
+std::thread::sleep(200 ms) inside a task     worst tick late by 192.0 ms
+tokio::time::sleep(200 ms) inside a task     worst tick late by   3.6 ms
+std::thread::sleep(200 ms) in spawn_blocking worst tick late by   2.3 ms
+```
+
+On the multi-threaded runtime the damage is the same per worker: with 4 workers, four slow blocking calls freeze the whole service, and its timeouts, health checks and heartbeats with it.
+
+- **CPU-bound work**: `spawn_blocking`, or a dedicated pool (rayon) for heavy parallel computation; or split it into pieces with `tokio::task::yield_now().await` between them.
+- **Blocking I/O**: use async I/O (`tokio::fs`, `tokio::net`, an async database driver), or wrap the blocking call in `spawn_blocking`.
+- **Rule of thumb**: if a step between two `.await`s can take more than a moment (milliseconds, not microseconds), it does not belong on a worker thread.
 """
 
 [[sections]]
@@ -32,20 +106,213 @@ body = """
 | a counter or flag | atomics |
 | complex state many tasks change | an **actor**: one task owns the state, others send it messages over `mpsc` |
 
-`Rc` is not `Send`, so it cannot cross into spawned tasks; `Arc` can.
+Tokio's own documentation says that, contrary to popular belief, the ordinary `std::sync::Mutex` is fine and often preferred in async code; the async mutex exists to be held **across** an `.await` and costs more, and its main use is shared access to an I/O resource such as a connection, for which a task owning the resource is often better still. A common shape is a struct that wraps `Arc<Mutex<…>>` and offers non-async methods that lock inside.
+
+Holding a std `MutexGuard` across an `.await` is caught at compile time when the task is spawned, because the guard is not `Send` (an excerpt of the error from Rust 1.97 with Tokio 1.54):
+
+```text title=compiler-output
+error: future cannot be sent between threads safely
+   --> src/bin/notsend.rs:8:5
+    |
+  8 | /     tokio::spawn(async move {
+  9 | |         let mut n = h.lock().unwrap();
+ 10 | |         tokio::time::sleep(Duration::from_millis(10)).await; // the guard is still alive here
+ 11 | |         *n += 1;
+ 12 | |     })
+    | |______^ future created by async block is not `Send`
+    |
+note: future is not `Send` as this value is used across an await
+  9 |         let mut n = h.lock().unwrap();
+    |             ----- has type `std::sync::MutexGuard<'_, u64>` which is not `Send`
+ 10 |         tokio::time::sleep(Duration::from_millis(10)).await; // the guard is still alive here
+    |                                                       ^^^^^ await occurs here, with `mut n` maybe used later
+```
+
+The fix is to scope the guard so it is dropped before the next `.await`:
+
+```rust title=fixed.rs hl=10-13
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    let hits = Arc::new(Mutex::new(0u64));
+    let h = Arc::clone(&hits);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        {
+            let mut n = h.lock().unwrap(); // locked only between awaits
+            *n += 1;
+        } // the guard is dropped here, before any later .await
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    })
+    .await
+    .unwrap();
+    println!("hits = {}", *hits.lock().unwrap());
+}
+```
+
+`Rc` and `RefCell` are not `Send` (or not `Sync`) either, so they cannot live across an `.await` in a spawned task; use `Arc` and a lock, or keep the state in one task.
 """
 
 [[sections]]
 heading = "Channels and backpressure"
 body = """
-- `mpsc` (many producers, one consumer), `oneshot` (one reply), `broadcast` (fan-out), `watch` (latest value).
-- **Bounded** channels make a fast producer wait when the consumer falls behind: that is backpressure. Unbounded channels hide it until memory runs out.
+| Channel | Shape | Use |
+|---|---|---|
+| `mpsc` | many senders, one receiver, bounded or unbounded | work queues, an actor's inbox |
+| `oneshot` | one value, once | the reply to a request |
+| `broadcast` | every receiver gets every value; slow receivers lose old ones | events to many listeners |
+| `watch` | receivers see only the latest value | configuration, state ("shutting down") |
+
+A **bounded** channel makes `send` wait when the queue is full: a fast producer slows to the consumer's pace. That is **backpressure**, and it travels upstream: the producer stops reading its socket, TCP's window fills, and the client slows down. An **unbounded** channel never waits, so a consumer that falls behind turns into a queue that grows until memory runs out. Default to bounded; size the bound from how much work you are willing to hold in memory.
+"""
+
+[[sections]]
+heading = "Actors"
+body = """
+An **actor** is a task that owns some state and serves messages from a channel; the rest of the program holds a cloneable **handle** that sends messages. No lock exists because only one task touches the state, and the bounded inbox gives backpressure for free. Requests that need an answer carry a `oneshot` sender for the reply. This is the shape Alice Ryhl (a Tokio maintainer) describes in "Actors with Tokio".
+
+```rust title=actor.rs hl=15-27,33-43
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+
+/// Messages the counter actor understands; a reply travels back on a oneshot channel.
+enum Msg {
+    Add { key: String, by: u64 },
+    Get { key: String, reply: oneshot::Sender<u64> },
+}
+
+/// The actor: one task owns the map, so no lock exists. It stops when every handle is dropped.
+async fn counter_actor(mut inbox: mpsc::Receiver<Msg>) {
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    while let Some(msg) = inbox.recv().await {
+        match msg {
+            Msg::Add { key, by } => *counts.entry(key).or_default() += by,
+            Msg::Get { key, reply } => {
+                let _ = reply.send(counts.get(&key).copied().unwrap_or(0));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await; // pretend each message costs 1 ms
+    }
+    println!("actor: every handle dropped, {} keys, stopping", counts.len());
+}
+
+/// What callers hold: cheap to clone, and the only way to reach the state.
+#[derive(Clone)]
+struct Counter(mpsc::Sender<Msg>);
+
+impl Counter {
+    async fn add(&self, key: &str, by: u64) {
+        // a bounded channel: when the actor is behind, this waits (backpressure)
+        self.0.send(Msg::Add { key: key.to_owned(), by }).await.expect("actor stopped");
+    }
+    async fn get(&self, key: &str) -> u64 {
+        let (reply, answer) = oneshot::channel();
+        self.0.send(Msg::Get { key: key.to_owned(), reply }).await.expect("actor stopped");
+        answer.await.expect("actor dropped the reply")
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let (tx, rx) = mpsc::channel(8); // at most 8 messages queued
+    let actor = tokio::spawn(counter_actor(rx));
+    let counter = Counter(tx);
+
+    // backpressure: 50 adds into a queue of 8 served at 1 ms each cannot finish faster than the actor works
+    let start = Instant::now();
+    for _ in 0..50 {
+        counter.add("clicks", 1).await;
+    }
+    println!("50 sends took {:?}: the sender waited for the actor", start.elapsed());
+    println!("clicks = {}", counter.get("clicks").await);
+
+    // graceful shutdown: workers stop taking new work when the token is cancelled, finish what they hold, and are awaited
+    let token = CancellationToken::new();
+    let tracker = TaskTracker::new();
+    for id in 0..3 {
+        let (token, counter) = (token.clone(), counter.clone());
+        tracker.spawn(async move {
+            let mut done = 0;
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                        counter.add("jobs", 1).await; // a unit of work, never cut in half
+                        done += 1;
+                    }
+                }
+            }
+            println!("worker {id}: stopped cleanly after {done} jobs");
+        });
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await; // in a server: tokio::signal::ctrl_c().await
+    token.cancel();
+    tracker.close();
+    if tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await.is_err() {
+        println!("workers did not stop in time; exiting anyway");
+    }
+    println!("jobs = {}", counter.get("jobs").await);
+    drop(counter); // the last handle: the actor's inbox closes
+    actor.await.unwrap();
+}
+```
+
+```text title=output
+50 sends took 88.615026ms: the sender waited for the actor
+clicks = 50
+worker 1: stopped cleanly after 10 jobs
+worker 2: stopped cleanly after 10 jobs
+worker 0: stopped cleanly after 10 jobs
+jobs = 30
+actor: every handle dropped, 2 keys, stopping
+```
+
+The first part shows backpressure: 50 sends into a queue of 8, served at about 1 ms each, took 89 ms (90 ms in another run), because the sender waited whenever the queue was full instead of piling messages up. The actor stops by itself when the **last handle is dropped**: `recv()` then returns `None`.
+"""
+
+[[sections]]
+heading = "Cancellation"
+body = """
+Cancelling a future in Rust means **dropping** it: it simply stops at the `.await` where it was parked, and its destructors run. Several things drop futures for you:
+
+- `tokio::time::timeout(d, fut)` drops `fut` if `d` passes first;
+- `tokio::select!` drops every branch that did not finish first;
+- `JoinHandle::abort()` and dropping a `JoinSet` cancel tasks.
+
+So any `.await` is a point where a function may stop forever. A function is **cancellation safe** if stopping at any of its `.await`s loses nothing. Tokio's documentation lists `mpsc::Receiver::recv`, `broadcast::Receiver::recv`, `TcpListener::accept` and `AsyncReadExt::read` as cancellation safe, and `read_exact`, `read_to_end` and `write_all` as **not**: they may have consumed or written part of the data when dropped. It also lists `Mutex::lock`, `RwLock` locks, `Semaphore::acquire` and `Notify::notified` as not cancellation safe because a cancelled call loses its place in the fair queue.
+
+In a `select!` loop, use cancellation-safe operations in the racing branches, and do non-safe work (a multi-step write, a transaction) inside the branch **body**, which runs to completion once chosen.
 """
 
 [[sections]]
 heading = "Graceful shutdown"
 body = """
-Listen for the signal, stop accepting work, tell tasks to finish (a `CancellationToken` or a `watch` channel they `select!` on), wait for them with a `JoinSet` and a deadline, then exit. In-flight requests complete; queued work is drained or handed back.
+Tokio's guide splits it into three parts:
+
+1. **Notice** that it is time: usually `tokio::signal::ctrl_c()` (SIGINT) or SIGTERM from the orchestrator; or an internal error sent over a channel.
+2. **Tell every task**: a `CancellationToken` (from `tokio-util`) that tasks watch in a `select!`, or a `watch` channel. Tasks stop taking new work and finish what they hold.
+3. **Wait for them**: a `TaskTracker` or `JoinSet`, with a deadline (`timeout`) after which the process exits anyway.
+
+In the actor program above, three workers stop on the token's signal after finishing their current job, the tracker waits for them, and then dropping the last handle stops the actor. In a server the order is: stop accepting connections, let in-flight requests finish, flush queued work (or hand it back to a durable queue), close connections to databases, exit. The deadline should be shorter than the orchestrator's grace period (Kubernetes sends SIGKILL 30 seconds after SIGTERM by default), so the process ends on its own terms.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Tasks**: one per connection or request; name what runs in `spawn_blocking`.
+2. **Shared state**: `Arc<Mutex<…>>` with the guard never held across an `.await`, or an actor; say which and why.
+3. **Channels**: bounded everywhere, and what happens when one is full (wait, drop, or reject with 429/503).
+4. **Timeouts** on every external call, and what is cancellation safe in your `select!` loops.
+5. **Shutdown**: signal, token, tracker, deadline.
+
+> [!INTERVIEW]
+> "Is this async code correct?" questions usually hide one of three bugs: a blocking call on a worker, a std guard held across an `.await`, or an unbounded channel. Look for those first.
 """
 
 [[checks]]
@@ -55,3 +322,118 @@ answer = "It blocks the runtime worker thread for the whole query, so every othe
 [[checks]]
 prompt = "When must you use tokio::sync::Mutex instead of std::sync::Mutex?"
 answer = "When the guard has to be held across an .await; a std MutexGuard held over an await is not Send and can block the thread. If the critical section has no await, std::sync::Mutex is faster and fine."
+
+[[checks]]
+prompt = "A service spawns a background task with tokio::spawn and drops the JoinHandle, expecting the task to stop. What actually happens, and how should it be stopped?"
+answer = "Dropping a JoinHandle detaches the task; it keeps running until it finishes. Stop it explicitly: keep the handle and call abort(), give the task a CancellationToken (or a watch channel) it checks in a select!, or spawn it into a JoinSet, which aborts its tasks when dropped."
+
+[[checks]]
+prompt = "A producer task reads events from a socket and sends them to a worker over an unbounded mpsc channel. The worker is sometimes slow. What goes wrong, and what is the fix?"
+answer = "The unbounded channel never makes the producer wait, so when the worker falls behind the queue grows without limit and memory runs out (and latency grows with it). Use a bounded channel: the producer's send waits when it is full, which slows its reading from the socket and pushes back to the client through TCP flow control; or decide explicitly to drop or reject work when full."
+
+[[checks]]
+prompt = "Inside a select! loop, one branch calls read_exact on a socket and another waits for a shutdown token. Why can this lose data, and how do you restructure it?"
+answer = "read_exact is not cancellation safe: if the shutdown branch wins, the read_exact future is dropped after it may already have consumed part of the message, which is then lost. Race only cancellation-safe operations (such as read into a buffer that persists across iterations, or a framed reader's next()) and do multi-step work in the chosen branch's body, which runs to completion."
+
+[[checks]]
+prompt = "Why does tokio::spawn require the future to be Send and 'static?"
+answer = "On the multi-threaded runtime a task can be moved to another worker thread at any .await, so everything it holds across an .await must be safe to send between threads; and the task may outlive the function that spawned it, so it must own its data rather than borrow from the caller's stack. Non-Send futures can run with spawn_local on a LocalSet or a current-thread runtime."
+
+[[terms]]
+term = "Future"
+means = "A value that will be ready later; polled until it returns Ready."
+section = "Futures and tasks"
+
+[[terms]]
+term = "Task"
+means = "A top-level future the runtime polls; the unit Tokio schedules."
+section = "Futures and tasks"
+
+[[terms]]
+term = "Waker"
+means = "The handle a pending future uses to ask to be polled again."
+section = "Futures and tasks"
+
+[[terms]]
+term = "Work stealing"
+means = "Idle worker threads take ready tasks from busy workers' queues."
+section = "The runtime"
+
+[[terms]]
+term = "Cooperative scheduling"
+means = "Tasks give up the thread only at an .await; nothing preempts them."
+section = "The runtime"
+
+[[terms]]
+term = "spawn_blocking"
+means = "Run a blocking closure on Tokio's separate blocking thread pool."
+section = "Never block the executor"
+
+[[terms]]
+term = "Backpressure"
+means = "A full bounded channel making the producer wait, slowing it to the consumer's pace."
+section = "Channels and backpressure"
+
+[[terms]]
+term = "Actor"
+means = "A task that owns state and changes it only in response to messages."
+section = "Actors"
+
+[[terms]]
+term = "Cancellation safe"
+means = "A future that loses nothing if it is dropped at any .await."
+section = "Cancellation"
+
+[[terms]]
+term = "CancellationToken"
+means = "A tokio-util signal that tells many tasks to stop."
+section = "Graceful shutdown"
+
+[[sources]]
+title = "Tokio tutorial"
+kind = "guide"
+url = "https://tokio.rs/tokio/tutorial"
+note = "spawning, shared state, channels, select"
+
+[[sources]]
+title = "Tokio: graceful shutdown"
+kind = "guide"
+url = "https://tokio.rs/tokio/topics/shutdown"
+
+[[sources]]
+title = "Tokio API: tokio::sync::Mutex (which kind of mutex should you use?)"
+kind = "docs"
+url = "https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html"
+
+[[sources]]
+title = "Tokio API: select! (cancellation safety)"
+kind = "docs"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html"
+
+[[sources]]
+title = "Tokio API: runtime Builder"
+kind = "docs"
+url = "https://docs.rs/tokio/latest/tokio/runtime/struct.Builder.html"
+note = "worker threads, max_blocking_threads"
+
+[[sources]]
+title = "Tokio blog: reducing tail latencies with automatic cooperative task yielding (2020)"
+kind = "article"
+url = "https://tokio.rs/blog/2020-04-preemption"
+note = "the per-task budget and why blocking is still on you"
+
+[[sources]]
+title = "Asynchronous Programming in Rust (the async book)"
+kind = "book"
+url = "https://rust-lang.github.io/async-book/"
+note = "futures, polling, wakers, executors"
+
+[[sources]]
+title = "Alice Ryhl: Actors with Tokio"
+kind = "article"
+url = "https://ryhl.io/blog/actors-with-tokio/"
+
+[[sources]]
+title = "tokio-util: CancellationToken and TaskTracker"
+kind = "docs"
+url = "https://docs.rs/tokio-util/latest/tokio_util/task/task_tracker/struct.TaskTracker.html"
