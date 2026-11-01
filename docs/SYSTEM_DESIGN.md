@@ -80,18 +80,18 @@ Groups (`group` in a concept file) and what each holds; written pages are marked
   consistent hashing ✓, CAP, PACELC and consistency models ✓, storage types (block, file, object), unique ID generation ✓
   (Snowflake, ULID, ranges), authentication and authorisation, observability (logs, metrics, traces).
 - **pattern**: realtime updates ✓, contention ✓, scaling reads ✓, scaling writes ✓, queues and streams ✓, long-running
-  tasks, large blobs (presigned URLs, multipart, chunking), multi-step processes ✓ (sagas, workflows, the outbox pattern),
-  event sourcing and CQRS, fan-out on write vs read, backpressure and load shedding, resilience ✓ (retries with backoff, circuit breakers
+  tasks, large blobs ✓ (presigned URLs, multipart, chunking), multi-step processes ✓ (sagas, workflows, the outbox pattern),
+  event sourcing and CQRS, fan-out on write vs read, backpressure and load shedding ✓ (on resilience and queues and streams), resilience ✓ (retries with backoff, circuit breakers
   and bulkheads), rate limiting algorithms, leader election, service discovery, microservices vs monolith.
 - **technology**: Kafka ✓, Redis ✓, Postgres ✓, Cassandra ✓, DynamoDB ✓, Elasticsearch ✓, Temporal, API gateway, ZooKeeper and
   etcd ✓, Flink, S3 and object storage ✓, RabbitMQ/SQS, MongoDB, ClickHouse and column stores, Spark.
-- **advanced**: proximity search (geohash, quadtree, S2, H3), typeahead and tries, vector databases (embeddings, HNSW, IVF),
-  time-series databases, change data capture, CRDTs and operational transformation, probabilistic structures ✓ (Bloom filter,
+- **advanced**: proximity search ✓ (geohash, quadtree, S2, H3), typeahead and tries ✓, vector databases (embeddings, HNSW, IVF),
+  time-series databases, change data capture, CRDTs and operational transformation ✓, probabilistic structures ✓ (Bloom filter,
   HyperLogLog, count-min sketch, top-k), stream processing ✓ (windows, watermarks, exactly-once), search ranking (BM25),
   multi-region and geo-replication, data lakes and batch processing.
-- **distributed** (DDIA): clocks and ordering ✓ (Lamport, vector clocks, hybrid logical clocks, TrueTime), consensus (Raft,
-  Paxos), linearizability, quorums, anti-entropy and hinted handoff, gossip and failure detection ✓, transactions and
-  isolation anomalies (dirty read, lost update, write skew, phantoms), distributed transactions (2PC, 3PC, sagas), leases
+- **distributed** (DDIA): clocks and ordering ✓ (Lamport, vector clocks, hybrid logical clocks, TrueTime), consensus ✓ (Raft,
+  Paxos), linearizability, quorums ✓, anti-entropy and hinted handoff ✓, gossip and failure detection ✓, transactions and
+  isolation anomalies ✓ (dirty read, lost update, write skew, phantoms), distributed transactions (2PC, 3PC, sagas), leases
   and fencing tokens ✓, storage engines ✓ (LSM tree vs B-tree, WAL, compaction), encoding and schema evolution, partitioning
   and rebalancing, batch vs stream (Lambda, Kappa).
 - **lld**: OOP and class relationships, SOLID, DRY/KISS/YAGNI, design patterns (strategy, observer, factory, builder,
@@ -123,6 +123,11 @@ Typeahead is a problem with an advanced page on tries behind it; CRDTs are an ad
 Markdown with callouts (`> [!NOTE]`, `> [!TIP]`, `> [!WARNING]`, `> [!INTERVIEW]` for what to say, `> [!ASIDE]`), tables,
 code (Rust, Python, SQL, HTTP), and animated figures (`[[figures]]`, drawn by the web app). Every page ends with open
 checks; problems carry a rubric tagged by level and probes for the deep dives.
+
+Figures are drawn per group in `web/src/components/sdfigs/` (shared pieces in `parts.tsx`; names listed per group in
+`crates/content/src/sd.rs`): core, fundamentals and Rust pages (offset-vs-cursor, two-choices, snowflake-bits, delivery-timeline),
+pattern pages, also in `core.tsx` (lock-vs-version, read-layers, visibility-timeout, realtime-ways, retry-jitter, multipart-upload),
+distributed and advanced pages (count-min, vector-clocks, raft-log, fencing-token, geohash-cells, watermark, trie-topk).
 
 ## AI help (owner asked 2026-10-31)
 
