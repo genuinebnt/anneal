@@ -252,3 +252,9 @@ title = "Kubernetes: CronJob"
 kind = "docs"
 url = "https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/"
 note = "concurrency policy, starting deadlines, and the 100 missed schedules limit"
+
+[[sources]]
+title = "Burrows: The Chubby lock service for loosely-coupled distributed systems (OSDI 2006)"
+kind = "paper"
+url = "https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/"
+note = "sequencers: a lock generation number passed with each request so servers reject stale holders"
