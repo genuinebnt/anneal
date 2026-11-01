@@ -1,47 +1,163 @@
 title = "The delivery framework"
 group = "fundamentals"
 order = 1
-minutes = 8
-lede = "A fixed order for a 45-minute design round, so you never stall and the interviewer always knows where you are: requirements, core entities, API, data flow, high-level design, deep dives."
+minutes = 16
+lede = "A fixed order for a 45-minute design round, so you never stall and the interviewer always knows where you are: requirements, core entities, API, data flow, high-level design, deep dives. The order is not ceremony: each step produces what the next one needs, and the split between functional and non-functional requirements decides what you draw first and what you spend the deep dives on."
 say = "Let me start with requirements, then the core entities and the API, sketch a design that works, and spend the rest of the time on the parts that make it hard."
-related = ["estimation", "api-styles"]
+related = ["estimation", "api-styles", "data-modeling", "numbers-to-know"]
+credit = "The questions for scoping a problem in \"Requirements\" are adapted from [The System Design Primer](https://github.com/donnemartin/system-design-primer#how-to-approach-a-system-design-interview-question) by Donne Martin, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The rest is written for anneal."
+
+summary = [
+  "Six steps in a fixed order: **requirements, entities, API, (data flow), high-level design, deep dives**.",
+  "**Functional** requirements drive the high-level design; **non-functional** ones drive the deep dives.",
+  "Make non-functional requirements **measurable**: \"p99 under 100 ms\", not \"fast\".",
+  "Draw a design that **works end to end** before optimising any part of it.",
+  "You lead: say where you are, check in at each step, and choose the deep dives yourself.",
+]
+
+[[sections]]
+heading = "Why a fixed order"
+body = """
+A design round is an open-ended conversation that **you are expected to lead**. Without a plan, candidates stall, jump into a database debate in minute three, or spend thirty minutes on requirements and never reach the hard part. A fixed order fixes that:
+
+- Each step produces what the next one needs: requirements name the entities, entities shape the API, the API is what the high-level design must serve, and the non-functional requirements are the agenda for the deep dives.
+- The interviewer can follow you and steer you ("let's skip the API, I'm happy with it").
+- When you get stuck, you know what to do next.
+
+| Step | Time (45 min round) | On the board when done |
+|---|---|---|
+| Requirements | about 5 min | 3 to 5 functional lines; measurable non-functional ones; scale if it matters |
+| Core entities | about 2 min | a list of nouns |
+| API | about 5 min | one endpoint per functional requirement |
+| Data flow (optional) | about 5 min | the stages of a pipeline |
+| High-level design | 10 to 15 min | boxes and arrows that satisfy every functional requirement |
+| Deep dives | 10 to 15 min | the design changed to meet the non-functional requirements |
+
+Leave a few minutes at the end for the interviewer's questions and for naming what you would do next.
+"""
 
 [[sections]]
 heading = "Requirements (about 5 minutes)"
 body = """
-- **Functional**: what users can do, as 3 to 5 lines starting "Users should be able to…". Pick the core ones out loud and park the rest.
-- **Non-functional**: the qualities that shape the design, made concrete: "redirects in under 100 ms at the 99th percentile", "a post is visible to followers within 5 seconds", "no double booking". Consistency or availability for each part, latency, scale, durability.
-- **Capacity**: estimate only what changes a decision (does it fit on one machine? is it read-heavy?). Say the number, then what it means.
+**Functional requirements** are what users can do, as 3 to 5 lines starting "Users should be able to…":
+
+- Users should be able to create a short link for a long URL, optionally with a custom alias.
+- Users should be able to open a short link and be redirected to the long URL.
+- *(Out of scope: analytics dashboards, user accounts, link editing.)*
+
+Pick the core ones out loud and **park the rest** in an out-of-scope line; the interviewer will say if they want something back.
+
+**Non-functional requirements** are the qualities that shape the design, made concrete enough to design against:
+
+- "Redirects in under 100 ms at the 99th percentile."
+- "A short code is never reused, and a link is never lost once created."
+- "Available during a region's outage for redirects; creating links may fail over more slowly."
+- "100 million new links a month, 100 redirects per link."
+
+Decide **consistency or availability per feature**, not for the system: a redirect may be served from a slightly stale cache; a payment may not be taken twice.
+
+Questions that scope a problem quickly:
+
+- Who will use it, and how?
+- How many users are there, and how many requests a second do we expect?
+- What does the system do: what goes in and what comes out?
+- How much data do we expect to handle?
+- What is the expected ratio of reads to writes?
+
+**Capacity**: estimate only what changes a decision (does it fit on one machine? is it read-heavy?), say the number, then what it means. Many interviewers prefer you to do the arithmetic later, when a design choice depends on it.
 """
 
 [[sections]]
 heading = "Core entities (about 2 minutes)"
 body = """
-The nouns the system stores and moves: `User`, `Link`, `Click`. A list is enough here; fields come later when they matter. They anchor the API and the data model.
+The nouns the system stores and moves: `User`, `Link`, `Click`. A list is enough here; fields come later, when they matter for a query or a constraint. Entities anchor the API (each endpoint reads or writes some of them) and the data model (each becomes a table, a document or a stream).
+
+If you cannot name the entities, the requirements are not clear yet: go back and ask.
 """
 
 [[sections]]
 heading = "API (about 5 minutes)"
 body = """
-One endpoint per functional requirement, usually REST: method, path, what goes in, what comes back. Take the user from the auth token, never from the request body. Mention pagination for lists and an idempotency key for anything retried.
+One endpoint per functional requirement, usually REST: method, path, what goes in, what comes back.
+
+```http title=api.http
+POST /links
+{ "url": "https://example.com/a/very/long/path", "alias": "launch" }    -> 201 { "code": "launch" }
+
+GET /{code}                                                             -> 302 Location: https://example.com/a/very/long/path
+```
+
+- Take the **user from the auth token**, never from the request body.
+- Lists get a **cursor** for pagination; writes that may be retried get an **idempotency key**.
+- Choose the style with a reason: REST at the edge; gRPC between services; GraphQL only when many clients need different shapes (see "API styles").
+
+Be quick here: the API is rarely where the round is won, but a missing endpoint for a requirement is a gap the interviewer will note.
 """
 
 [[sections]]
 heading = "Data flow (optional, about 5 minutes)"
 body = """
-For pipelines and batch systems (a crawler, an ad-click aggregator), list the stages data passes through before drawing boxes. Skip it for request-response products.
+For pipelines and batch systems (a web crawler, an ad-click aggregator, a metrics system), list the stages data passes through before drawing boxes:
+
+1. fetch the URL from the frontier;
+2. download the page, respecting robots.txt and per-site rate limits;
+3. extract text and links;
+4. deduplicate links and add new ones to the frontier;
+5. store the text for indexing.
+
+Each stage becomes a component or a queue in the high-level design. Skip this step for request-response products, where the API already describes the flow.
 """
 
 [[sections]]
 heading = "High-level design (10 to 15 minutes)"
 body = """
-Boxes and arrows that satisfy the **functional** requirements, one endpoint at a time: client, gateway, services, databases, caches. Keep it simple and correct first; say "this will be a bottleneck, I'll come back to it" rather than over-building now. Write the key tables and fields next to the database.
+Boxes and arrows that satisfy the **functional** requirements, one endpoint at a time: client, load balancer or gateway, services, databases, caches, queues. Walk each request through the drawing as you add it.
+
+- **Simple and correct first.** A single service and a single database that work end to end beat a sharded, cached, multi-region design that does not.
+- Say "this will be a bottleneck, I'll come back to it" rather than over-building now; it shows you see it and keeps you moving.
+- **Write the key tables and fields** next to the database: the primary key, the main indexes. Data modelling is where many designs are won or lost.
+- Name real technologies where it helps ("Postgres", "Redis", "S3"), with the reason in a few words.
+
+By the end of this step, every functional requirement has a path through the diagram.
 """
 
 [[sections]]
-heading = "Deep dives (about 10 minutes)"
+heading = "Deep dives (10 to 15 minutes)"
 body = """
-Now meet the **non-functional** requirements: scale the hot path, remove single points of failure, handle the edge cases (a celebrity, a retry, a region down). Lead them yourself when you are senior; at staff level, choose the two or three that matter most and say why the others matter less.
+Now meet the **non-functional** requirements: each one is a question the design must answer.
+
+| Non-functional requirement | Deep dive |
+|---|---|
+| redirects under 100 ms at p99, 10k reads a second | a cache in front of the database, its hit ratio and invalidation |
+| short codes unique at scale | how codes are generated (counter with base62, ranges per server, random with a unique constraint) |
+| available through a region outage | replication, failover, what users see meanwhile |
+| a celebrity's link gets 1 million clicks a minute | hot keys: replicate the hot entry, absorb at the CDN |
+| no link lost once created | durability: synchronous replication or a replicated log before acknowledging |
+
+Lead them yourself when you are senior: pick the two or three that matter most for this product, say why, and go deep (numbers, failure modes, alternatives rejected). At staff level, also say why the others matter less, and which decisions would be hard to reverse later. Leave room for the interviewer's own probes: they often have a deep dive in mind.
+"""
+
+[[sections]]
+heading = "Communicating"
+body = """
+- **Say where you are** at each transition: "That's the API; now the high-level design."
+- **Check in, briefly**: "Does this scope sound right?" at the end of requirements, not after every sentence.
+- **Think aloud** when choosing: name the options, the trade-off, and the choice.
+- **Keep the board readable**: requirements top left, API beside them, the diagram in the middle, tables next to their database, deep-dive notes beside the box they change.
+- **When you are corrected**, take it and adjust; arguing a point the interviewer has already decided costs time and signal.
+- **When you are stuck**, go back to the requirements: the design is answering them, and the next step usually follows from the one you have not answered yet.
+"""
+
+[[sections]]
+heading = "Common mistakes"
+body = """
+- **Jumping to a solution** ("we'll use Kafka and Cassandra") before the requirements say why.
+- **Vague non-functional requirements** ("scalable, highly available") that no design choice can be checked against.
+- **Estimating everything**: ten minutes of arithmetic for numbers that change nothing.
+- **Over-building the first design**: sharding and multi-region before the design works.
+- **Never reaching the deep dives**: the part that separates levels gets five rushed minutes.
+- **Single points of failure left unnamed**: one database, one cache, one queue, with no word on what happens when it fails.
+- **Waiting to be led**: at senior level and above, the interviewer expects you to drive.
 """
 
 [[checks]]
@@ -51,3 +167,62 @@ answer = "A simple design that works end to end gives a correct base and somethi
 [[checks]]
 prompt = "Turn 'it should be fast and scalable' into non-functional requirements you could design against."
 answer = "Make them measurable and specific to the parts of the system: for example redirects under 100 ms at p99, 10k new links a second at peak, and links never lost once created (durable). Add consistency or availability per feature."
+
+[[checks]]
+prompt = "Twenty minutes into the round you have requirements, an API, and a long discussion of SQL against NoSQL, but no diagram. What went wrong and how do you recover?"
+answer = "You went deep before the design existed: the database debate belongs in a deep dive, once a working end-to-end design shows what the data and queries are. Recover by saying so and sketching the high-level design now, one endpoint at a time, with a reasonable default store and its key tables, then use the remaining time for the two deep dives that matter most."
+
+[[checks]]
+prompt = "For a ticket-booking system, which features need strong consistency and which can be eventually consistent? Why decide per feature?"
+answer = "Holding and buying a seat must be strongly consistent (a seat sold twice is a real failure), and so must payment. Browsing events, seat maps shown for orientation, search and recommendations can be slightly stale. Deciding per feature lets each part use the cheapest design that is correct for it, instead of paying for strong consistency everywhere or risking double sales."
+
+[[checks]]
+prompt = "What should be on the board at the end of the high-level design step?"
+answer = "A diagram in which every functional requirement has a path: client, entry point (load balancer or gateway), the services, the data stores with their key tables and fields, and any queues or caches already needed, with each request walked through it. Known bottlenecks are marked for the deep dives rather than solved yet."
+
+[[terms]]
+term = "Functional requirement"
+means = "Something users can do with the system."
+section = "Requirements (about 5 minutes)"
+
+[[terms]]
+term = "Non-functional requirement"
+means = "A quality the system must have, such as latency, availability or durability, stated measurably."
+section = "Requirements (about 5 minutes)"
+
+[[terms]]
+term = "Core entities"
+means = "The nouns the system stores and moves."
+section = "Core entities (about 2 minutes)"
+
+[[terms]]
+term = "Data flow"
+means = "The ordered stages data passes through in a pipeline."
+section = "Data flow (optional, about 5 minutes)"
+
+[[terms]]
+term = "High-level design"
+means = "Components and the paths requests take through them, satisfying the functional requirements."
+section = "High-level design (10 to 15 minutes)"
+
+[[terms]]
+term = "Deep dive"
+means = "A focused change to the design to meet a non-functional requirement."
+section = "Deep dives (10 to 15 minutes)"
+
+[[sources]]
+title = "The System Design Primer: how to approach a system design interview question"
+kind = "guide"
+url = "https://github.com/donnemartin/system-design-primer#how-to-approach-a-system-design-interview-question"
+note = "scoping questions, the four steps (CC BY 4.0)"
+
+[[sources]]
+title = "Hello Interview: system design delivery framework"
+kind = "guide"
+url = "https://www.hellointerview.com/learn/system-design/in-a-hurry/delivery"
+note = "the step order this page follows; read there, not copied"
+
+[[figures]]
+name = "delivery-timeline"
+after = "Why a fixed order"
+caption = "A 45-minute round as phases, each leaving something on the board for the next."

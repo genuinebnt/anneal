@@ -73,6 +73,44 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    /** delivery-framework: a 45-minute round as a bar of phases, each with what it should leave on the board. */
+    "delivery-timeline": {
+        steps: 7,
+        ms: 1600,
+        draw: (t) => {
+            const phases: { name: string; short: string; min: number; out: string }[] = [
+                { name: "Requirements", short: "Reqs", min: 5, out: "3-5 functional lines, measurable non-functional ones" },
+                { name: "Entities", short: "E", min: 2, out: "User, Link, Click: a list, no fields yet" },
+                { name: "API", short: "API", min: 5, out: "POST /links, GET /{code}: one endpoint per requirement" },
+                { name: "High-level design", short: "High-level design", min: 13, out: "boxes and arrows that work end to end, tables beside the DB" },
+                { name: "Deep dives", short: "Deep dives", min: 15, out: "the hot path, failures, the hard edge cases" },
+                { name: "Wrap-up", short: "Wrap-up", min: 5, out: "bottlenecks left, what you would do next; their questions" },
+            ];
+            const k = Math.min(t, phases.length - 1);
+            const scale = 600 / 45;
+            let x = 20;
+            return (
+                <>
+                    <text className="sf-lab" x={20} y={22}>a 45-minute round</text>
+                    {phases.map((p, i) => {
+                        const w = p.min * scale;
+                        const box = <Box key={p.name} x={x} y={34} w={w - 4} h={44} r={6} label={p.short} sub={p.min >= 5 ? `${p.min} min` : undefined} tone={i === k && t < phases.length ? "acc" : i < k || t >= phases.length ? "grn" : "line"} />;
+                        x += w;
+                        return box;
+                    })}
+                    {t < phases.length ? (
+                        <>
+                            <text className="sf-lab" x={20} y={120}>{`now: ${phases[k]!.name} (${phases[k]!.min} min)`}</text>
+                            <text className="sf-lab" x={20} y={142}>{`on the board: ${phases[k]!.out}`}</text>
+                        </>
+                    ) : (
+                        <text className="sf-lab" x={20} y={120}>a design that works first, then the parts that make it hard</text>
+                    )}
+                    <text className="sf-lab" x={20} y={200}>functional requirements shape the design; non-functional ones, the deep dives</text>
+                </>
+            );
+        },
+    },
     /** unique-ids: a Snowflake id is time, machine and sequence side by side; the sequence counts within a millisecond. */
     "snowflake-bits": {
         steps: 8,
