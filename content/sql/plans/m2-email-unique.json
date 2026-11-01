@@ -1,0 +1,62 @@
+{
+ "id": "m2-email-unique",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT * FROM customers WHERE email = 'user4242@example.com';",
+ "setup": [
+  {
+   "id": "customers-email-unique",
+   "sql": "CREATE UNIQUE INDEX customers_email_key ON customers (email);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Index Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Scan Direction": "Forward",
+   "Index Name": "customers_email_key",
+   "Relation Name": "customers",
+   "Alias": "customers",
+   "Startup Cost": 0.41,
+   "Total Cost": 8.43,
+   "Plan Rows": 1,
+   "Plan Width": 50,
+   "Actual Startup Time": 0.028,
+   "Actual Total Time": 0.029,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Index Cond": "(email = 'user4242@example.com'::text)",
+   "Rows Removed by Index Recheck": 0,
+   "Index Searches": 1,
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.061,
+  "Triggers": [],
+  "Execution Time": 0.047
+ },
+ "text": "Index Scan using customers_email_key on customers  (cost=0.41..8.43 rows=1 width=50) (actual time=0.037..0.037 rows=1.00 loops=1)\n  Index Cond: (email = 'user4242@example.com'::text)\n  Index Searches: 1\n  Buffers: shared hit=4\nPlanning Time: 0.041 ms\nExecution Time: 0.058 ms"
+}

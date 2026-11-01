@@ -1,0 +1,479 @@
+title = "Equality, primary keys and checking index use"
+group = "sql-indexes"
+order = 2
+minutes = 26
+lede = "A condition `column = value` is the case a B-tree is built for: one descent to the first match, then a short walk along the leaves. Primary keys and unique constraints are such indexes, created for you. Whether the planner uses an index still depends on how many rows match and where they sit in the table, so this module also shows how to check what it chose and why."
+say = "Equality on an indexed column is one descent and a short leaf walk, but the planner only uses the index when few enough rows match; I check what it did with EXPLAIN (ANALYZE, BUFFERS) and compare against the forced alternative instead of assuming."
+related = ["indexes", "data-modeling"]
+
+summary = [
+  "A **primary key** or **unique constraint** is a unique B-tree index; a lookup on all of its columns reads 3 or 4 pages and is estimated at exactly one row.",
+  "For a non-unique value the planner picks an **Index Scan**, a **Bitmap Heap Scan** or a **Seq Scan** from how many rows it expects, using the column's statistics.",
+  "An index on `status` finds the 5.5% of orders that are pending yet still reads 14,952 of 14,960 table pages: matching rows sit on almost every page.",
+  "`IN (...)`, `= ANY(...)` and an `OR` of equalities are one scan; Postgres 17 and 18 read neighbouring values in **one index search**.",
+  "Check, never assume: read the plan's `Index Cond` and buffers, force the other plan to compare, and use `pg_stat_user_indexes` for what really runs.",
+]
+
+[[sections]]
+heading = "Equality: one descent, then a short walk"
+body = """
+A condition `column = value` on an indexed column is answered in three steps, the same ones module 1 measured: descend from the root to the first leaf entry whose key is not less than the value, read entries to the right while the key still equals the value (following the link to the next leaf page if the matches continue there), and for every entry read the table page its TID names.
+
+`order_items` has a two-column primary key, `(order_id, line)`, so equality on both columns names at most one row:
+
+```plan id=m2-pk-two-columns
+SELECT * FROM order_items WHERE order_id = 1234567 AND line = 2;
+```
+
+Four pages: the index has three levels on 6 million rows (`bt_metap('order_items_pkey')` reports level 2 for the root, so two internal levels above the leaves), and the fourth page is the table page holding the row. Three lines of the plan are worth learning to read on every index scan:
+
+- **`Index Cond`** lists the conditions used to *navigate* the index: here both columns, so the descent goes straight to the one entry.
+- **`Filter`**, when present, lists conditions checked *after* a row was fetched. Rows that fail it were read for nothing; the plan view counts them as `Rows Removed by Filter`.
+- **`Index Searches`** (new in Postgres 18) counts how many times the scan descended from the root. One equality is one search; a list of values can be several.
+
+The planner leans on uniqueness when it estimates. For a column with a single-column unique index it assumes exactly one match whatever the statistics say, and for a multi-column unique index with an equality on every column it costs the index scan as returning one entry (both rules are in the planner's `selfuncs.c`).
+"""
+
+[[sections]]
+heading = "Primary keys and unique constraints are indexes"
+body = """
+A `PRIMARY KEY` is a `UNIQUE` constraint plus `NOT NULL` on its columns, and Postgres enforces both kinds with a unique B-tree index it creates itself, named `<table>_pkey` for the primary key. The documentation says it directly: there is no need to create an index on a unique column by hand, it would only duplicate the one the constraint made.
+
+Without an index, finding a customer by email reads the whole table:
+
+```plan id=m2-email-no-index
+SELECT * FROM customers WHERE email = 'user4242@example.com';
+```
+
+515 pages and 49,999 rows checked and thrown away to return one. With a unique index on `email`, the same query is a three-level descent and one table page:
+
+```plan id=m2-email-unique setup=customers-email-unique
+SELECT * FROM customers WHERE email = 'user4242@example.com';
+```
+
+The index is also what enforces the rule. Every insert looks up its key in the unique index first:
+
+```sql title=duplicate.sql
+INSERT INTO customers (id, email, name, country, created_at)
+VALUES (50001, 'user4242@example.com', 'Someone else', 'US', now());
+-- ERROR:  duplicate key value violates unique constraint "customers_email_key"
+-- DETAIL:  Key (email)=(user4242@example.com) already exists.
+```
+
+Declaring uniqueness tells the planner more than the row estimate. In a join on a unique key, `EXPLAIN VERBOSE` shows `Inner Unique: true`, and the executor then moves to the next outer row as soon as it finds one match instead of looking for more:
+
+```sql title=inner_unique.sql
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT o.id, c.email FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id < 100;
+--  Nested Loop
+--    Output: o.id, c.email
+--    Inner Unique: true
+--    ->  Index Scan using orders_pkey on public.orders o
+--    ...
+--    ->  Index Scan using customers_pkey on public.customers c
+--          Output: c.email, c.id
+--          Index Cond: (c.id = o.customer_id)
+```
+
+Two details trip people up. A unique column allows **any number of NULLs** by default, because NULL is not equal to NULL; `UNIQUE NULLS NOT DISTINCT` (Postgres 15 and later) makes a second NULL a duplicate. And only B-tree indexes can be unique.
+
+> [!NOTE]
+> **ANSI SQL.** `PRIMARY KEY` and `UNIQUE` are standard SQL; `CREATE INDEX` is not. The Postgres reference says it plainly: there are no provisions for indexes in the SQL standard, so every engine's index syntax is its own. Constraints are portable; indexes are a physical-design decision per engine.
+
+:::deeper Hash indexes: equality only | 2 min
+A hash index stores a 32-bit hash code of each value instead of the value, so it can answer only `=`: no ranges, no sorting, no uniqueness. On the example schema the trade does not pay: `customers (email)` is 2,064 kB as a hash index and 2,008 kB as a B-tree, because the emails are short. Asking for a unique one fails outright:
+
+```sql title=hash_unique.sql
+CREATE UNIQUE INDEX customers_email_hash ON customers USING hash (email);
+-- ERROR:  access method "hash" does not support unique indexes
+```
+
+Hash indexes are fully crash-recoverable, and they can win for long values looked up only by equality (long URLs, tokens), where a B-tree would store every full value. Measure before choosing one.
+:::
+"""
+
+[[sections]]
+heading = "Choosing a primary key: bigint, UUIDv4 or UUIDv7"
+body = """
+The kind of key decides where each new entry lands in the primary-key index. Three tables with a million rows each, inserted one statement at a time into an existing index (the measurement is the script below; times are one run on the course's container):
+
+| Key | Index size | Leaf pages filled | Leaf pages out of order | Insert time |
+|---|---|---|---|---|
+| `bigint GENERATED ALWAYS AS IDENTITY` | 21 MB, 2,745 pages | 90% | 0% | 2.3 s |
+| `uuid DEFAULT gen_random_uuid()` (version 4, random) | 37 MB, 4,790 pages | about 72% | about 50% | 5.7 s |
+| `uuid DEFAULT uuidv7()` (version 7, time-ordered; Postgres 18) | 30 MB, 3,853 pages | 90% | 0% | 3.3 s |
+
+An identity or a UUIDv7 always lands at the right edge of the index, so the tree fills its last page and starts a new one, leaving pages at the 90% fillfactor (module 1). A random UUID lands on any leaf page: pages split in the middle and stay part-empty (71 to 72% full over two runs, since the keys are random), and half of the leaf pages end up physically out of key order. More important on a real server: each random insert touches a random leaf page, so once the index outgrows memory every insert can be a disk read. A UUID is also 16 bytes against 8, which is the difference between the 21 MB and the 30 MB rows.
+
+```sql title=key_kinds.sql
+CREATE TABLE pk_bigint (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n int);
+CREATE TABLE pk_uuid4 (id uuid DEFAULT gen_random_uuid() PRIMARY KEY, n int);
+CREATE TABLE pk_uuid7 (id uuid DEFAULT uuidv7() PRIMARY KEY, n int);
+INSERT INTO pk_bigint (n) SELECT i FROM generate_series(1, 1000000) AS i;
+INSERT INTO pk_uuid4 (n) SELECT i FROM generate_series(1, 1000000) AS i;
+INSERT INTO pk_uuid7 (n) SELECT i FROM generate_series(1, 1000000) AS i;
+CREATE EXTENSION IF NOT EXISTS pgstattuple;   -- avg_leaf_density and leaf_fragmentation
+SELECT 'pk_bigint_pkey' AS index, avg_leaf_density, leaf_fragmentation FROM pgstatindex('pk_bigint_pkey')
+UNION ALL SELECT 'pk_uuid4_pkey', avg_leaf_density, leaf_fragmentation FROM pgstatindex('pk_uuid4_pkey')
+UNION ALL SELECT 'pk_uuid7_pkey', avg_leaf_density, leaf_fragmentation FROM pgstatindex('pk_uuid7_pkey');
+```
+
+`leaf_fragmentation` is the share of leaf pages whose next page in key order sits earlier in the file (that is what `pgstatindex` counts), the trace of splits in the middle of the index. When keys must be generated outside the database (several services, offline clients), UUIDv7 keeps the right-edge behaviour; when the database assigns them, an identity column is smaller still.
+"""
+
+[[sections]]
+heading = "How many rows match decides the plan"
+body = """
+The planner chooses between three ways to answer an equality by estimating how many rows match, its **selectivity**, from statistics `ANALYZE` collected. For a column with few distinct values it keeps the **most common values** and their frequencies:
+
+```sql title=status_stats.sql
+SELECT most_common_vals, most_common_freqs FROM pg_stats
+WHERE tablename = 'orders' AND attname = 'status';
+--         most_common_vals         |            most_common_freqs
+-- ---------------------------------+------------------------------------------
+--  {paid,shipped,refunded,pending} | {0.60896665,0.22456667,0.11146667,0.055}
+```
+
+| Plan | How it reads the table | Chosen when |
+|---|---|---|
+| Index Scan | one table page per index entry, in index order | few rows, or rows wanted in index order |
+| Bitmap Heap Scan | collects every matching TID first, then reads each table page once, in file order | more rows than an Index Scan handles well |
+| Seq Scan | every page, every row checked | a large share of the table |
+
+With an index on `status`, the 5.5% of orders that are pending:
+
+```plan id=m2-status-pending setup=orders-status
+SELECT id, total_cents FROM orders WHERE status = 'pending';
+```
+
+The bitmap reads **14,952 of the table's 14,960 pages** to return 111,232 rows. Orders of every status are mixed together in insertion order, about 134 rows to a page, so the chance that a page holds no pending order at all is tiny:
+
+$$1 - (1 - 0.055)^{134} \\approx 0.9995$$
+
+99.95% of 14,960 pages is 14,952: the measurement and the arithmetic agree. The index still paid for itself in CPU, since Postgres checked 111,232 rows instead of 2 million, but it saved almost no page reads. For the 61% that are paid, the planner does not bother with the index at all:
+
+```plan id=m2-status-paid setup=orders-status
+SELECT id, total_cents FROM orders WHERE status = 'paid';
+```
+
+How the rows sit in the table matters as much as how many there are. `pg_stats.correlation` measures how closely a column's order follows the table's physical order, from -1 to 1. For `orders.id` and `order_items.order_id` it is 1 (rows were inserted in that order); for `orders.customer_id` it is -0.0065. The planner uses it to estimate how many distinct table pages an Index Scan will touch: near 1 or -1 the scan is costed as mostly sequential reads, near 0 as one random read per row, which is one reason a customer's 44 orders came back through a bitmap in module 1 while a range of order ids is a plain Index Scan.
+
+> [!TIP]
+> When most matching rows are on most pages, the fix is not a better index but fewer table visits: an index that holds every column the query needs (an index-only scan, Part IV), rows stored together (clustering, Part IV), or an index on just the rows you look for (a partial index, module 6).
+"""
+
+[[sections]]
+heading = "Several values: IN, ANY and OR"
+body = """
+`IN (list)` is equality against several values, and Postgres rewrites it to `= ANY (array)`, which a B-tree scan handles in one pass. Since Postgres 17 the scan does not descend from the root once per value when the next value can be on the leaf page it already holds; Postgres 18 shows the effect as `Index Searches`. Five neighbouring order ids:
+
+```plan id=m2-in-neighbours
+SELECT id, status FROM orders WHERE id IN (1000001, 1000002, 1000003, 1000004, 1000005);
+```
+
+One search and five pages: three for the descent and the two table pages the rows sit on (their `ctid`s are `(7479,131)` to `(7480,1)`). Five ids spread across the table:
+
+```plan id=m2-in-scattered
+SELECT id, status FROM orders WHERE id IN (17, 400023, 812345, 1299999, 1999998);
+```
+
+Five searches of four pages each (three index levels and a table page): 20 pages. The same rule applies to an `OR` of equalities on one column, which Postgres 18 turns into the same array condition:
+
+```sql title=or_to_any.sql
+EXPLAIN SELECT * FROM orders WHERE id = 17 OR id = 400023;
+--  Index Scan using orders_pkey on orders  (cost=0.43..12.89 rows=2 width=30)
+--    Index Cond: (id = ANY ('{17,400023}'::integer[]))
+```
+
+From application code, send the values as one array parameter, `WHERE id = ANY($1)`, instead of building `IN (...)` lists of different lengths: the statement text stays the same, so it is prepared and planned once, and nothing is pasted into SQL (module 14 covers the N+1 pattern this replaces).
+
+> [!NOTE]
+> **ANSI SQL.** `IN (list)` is standard SQL; the `= ANY (array)` you see in plans is how Postgres represents it. The standard's null-safe equality `a IS NOT DISTINCT FROM b` works in Postgres but cannot use a B-tree index: `EXPLAIN SELECT * FROM orders WHERE id IS NOT DISTINCT FROM 1234567` is a parallel Seq Scan with `Filter: (NOT (id IS DISTINCT FROM 1234567))`. When the value cannot be NULL, write `=`.
+"""
+
+[[sections]]
+heading = "Checking that the index is used"
+body = """
+Never assume an index is used because it exists. The tools, in the order to reach for them:
+
+1. **`EXPLAIN`** shows the plan the planner chose and its estimates, without running the query.
+2. **`EXPLAIN (ANALYZE, BUFFERS)`** runs it and adds what really happened: rows per step, time, and pages touched (Postgres 18 includes `BUFFERS` with `ANALYZE` by default). Because it runs the statement, wrap an `INSERT`, `UPDATE` or `DELETE` in `BEGIN; ... ROLLBACK;`.
+3. In the plan, look for the index's name (`Index Scan using ...`, `Bitmap Index Scan on ...`), for your condition under `Index Cond` rather than `Filter`, and for estimated rows close to actual rows.
+
+When the planner skips your index, ask it for the alternative and compare. Planner settings such as `enable_seqscan = off` discourage one kind of plan for the current session (they cannot forbid a Seq Scan outright), which is a diagnostic, never a production setting:
+
+```plan id=m2-status-paid-forced setup=orders-status,no-seqscan
+SELECT id, total_cents FROM orders WHERE status = 'paid';
+```
+
+Forced onto the index, the paid orders cost **15,991 pages** against the Seq Scan's 14,960: every table page anyway, plus 1,031 pages of index. The planner was right. The Postgres documentation draws the two conclusions a forced plan allows: if the forced plan is faster, the cost estimates are off (statistics or cost settings, module 10); if even a forced plan will not use the index, the condition does not match the index, which module 4 shows.
+
+For what production really uses, every index has counters in `pg_stat_user_indexes`. On the freshly loaded example schema, `products_pkey` showed **6,000,000 scans** before any query had touched products, and `customers_pkey` about 2,000,000: one foreign-key check per inserted order item (each looks up its product, and its order in `orders_pkey`) and per inserted order (each looks up its customer). Indexes serve constraints as well as queries.
+
+```sql title=index_usage.sql
+SELECT relname AS table_name, indexrelname AS index_name, idx_scan, last_idx_scan,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+ORDER BY idx_scan, pg_relation_size(indexrelid) DESC;
+```
+
+An index with `idx_scan = 0` over a long period is a write cost with no benefit, with two exceptions: indexes that enforce a primary key or unique constraint do their job on every insert even if no query reads them, and the counters cover only the queries this server ran since they were last reset, so check every replica before dropping anything.
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+Measured on MySQL 8.4.13, SQLite 3.53.1, DuckDB 2.0.0 and ClickHouse 26.9 (chDB), on small copies of the same tables:
+
+| Engine | Lookup by primary or unique key | Non-unique equality | No index |
+|---|---|---|---|
+| MySQL (InnoDB) | `EXPLAIN` type `const`: at most one row, read once while planning (`FORMAT=TREE` says `Rows fetched before execution`); in a join on a unique key, `eq_ref` | type `ref` | type `ALL` (a full scan) |
+| SQLite | `SEARCH orders USING INTEGER PRIMARY KEY (rowid=?)`; a unique index: `SEARCH customers USING INDEX customers_email (email=?)` | the same `SEARCH ... USING INDEX` | `SCAN customers` |
+| DuckDB | `PRIMARY KEY` and `UNIQUE` build ART indexes that reject duplicates; a selective equality runs as `Type: Index Scan`, decided when the query runs, so plain `EXPLAIN` prints a Seq Scan and only `EXPLAIN ANALYZE` shows the index | Seq Scan, skipping row groups by their min and max (module 1) | Seq Scan |
+| ClickHouse | the `PRIMARY KEY` sets the sort order and the sparse index; it does **not** enforce uniqueness: three rows inserted with the same key all stay | granule skipping by the sorting key | full scan of the needed columns |
+
+Two differences matter in practice. In InnoDB the primary key *is* the table (module 1), so a primary-key lookup ends in the leaf that holds the row, while a secondary-key lookup walks a second tree. And in an analytical engine the primary key is about sort order and compression, not identity: never count on it to reject duplicates.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+With sqlx, a lookup by primary key returns zero or one row, so `fetch_optional` makes "not found" a `None` instead of an error. Several keys go in as one array parameter:
+
+```rust title=lookups.rs
+#[derive(Debug, sqlx::FromRow)]
+struct Customer {
+    id: i32,
+    email: String,
+    name: String,
+}
+
+let customer: Option<Customer> = sqlx::query_as("SELECT id, email, name FROM customers WHERE id = $1")
+    .bind(4242_i32)
+    .fetch_optional(&pool)
+    .await?;
+
+let ids: Vec<i64> = vec![17, 400023, 812345];
+let orders: Vec<(i64, String)> = sqlx::query_as("SELECT id, status FROM orders WHERE id = ANY($1)")
+    .bind(&ids)
+    .fetch_all(&pool)
+    .await?;
+```
+
+Let the unique index enforce uniqueness, and turn its error into an answer, instead of checking with a `SELECT` first (two concurrent sign-ups can both pass the check):
+
+```rust title=signup.rs
+let inserted = sqlx::query("INSERT INTO customers (id, email, name, country, created_at) VALUES ($1, $2, $3, $4, now())")
+    .bind(50001_i32)
+    .bind("user4242@example.com")
+    .bind("Someone else")
+    .bind("US")
+    .execute(&pool)
+    .await;
+match inserted {
+    Ok(_) => println!("created"),
+    Err(sqlx::Error::Database(e)) if e.is_unique_violation() => println!("that email is taken"),
+    Err(e) => return Err(e.into()),
+}
+```
+
+And a test can check that a query still uses an index, by asking for the plan as JSON and walking it (module 41 builds this into a helper):
+
+```rust title=plan_check.rs
+fn node_types(node: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(t) = node["Node Type"].as_str() {
+        out.push(t.to_owned());
+    }
+    for child in node["Plans"].as_array().into_iter().flatten() {
+        node_types(child, out);
+    }
+}
+
+let plan: serde_json::Value = sqlx::query_scalar("EXPLAIN (FORMAT JSON) SELECT * FROM customers WHERE email = $1")
+    .bind("user4242@example.com")
+    .fetch_one(&pool)
+    .await?;
+let mut nodes = Vec::new();
+node_types(&plan[0]["Plan"], &mut nodes);
+assert!(!nodes.iter().any(|n| n == "Seq Scan"), "the email lookup scans the table: {nodes:?}");
+```
+"""
+
+[[checks]]
+prompt = "Shipped orders are 22% of the table. With an index on `status`, predict the plan for `SELECT id, total_cents FROM orders WHERE status = 'shipped'` and roughly how many table pages it reads, and explain why."
+answer = "A Bitmap Heap Scan reading essentially every table page. Measured on the example schema: all 14,960 pages (and 377 index pages) for 444,805 rows. With about 134 rows to a page and statuses mixed in insertion order, a value on 22% of rows is on every page. The bitmap is still estimated cheaper than a Seq Scan because only the matching rows are checked, but it saves no page reads."
+
+[[checks]]
+prompt = "A colleague adds `CREATE INDEX customers_email_idx ON customers (email)` to a table that already has `UNIQUE (email)`, to make logins faster. What does it change?"
+answer = "Nothing for reads: the unique constraint already created a unique B-tree index on email, which the login query uses. The new index duplicates it, so every insert and every update of email now maintains two identical indexes, and the table carries twice the index space. Drop the duplicate."
+
+[[checks]]
+prompt = "Why does an index on `status` that finds only the 5.5% pending orders still read 14,952 of 14,960 table pages? Name two changes that would make the same question read far fewer pages."
+answer = "The pending orders are spread evenly through the table, about 7 on each 134-row page, so almost every page has at least one (1 - 0.945^134 is about 99.95%). Reading fewer pages means visiting the table less: answer from the index alone (an index-only scan; `SELECT count(*) ... WHERE status = 'pending'` reads 97 index pages), keep an index on just the pending rows (a partial index), or store the rows together (clustering or partitioning by status)."
+
+[[checks]]
+prompt = "You set `enable_seqscan = off` and the plan still shows a Seq Scan, now marked `Disabled: true`. What does that tell you, and what do you check next?"
+answer = "No index can answer the condition as written, because the planner had no other way to run the query. Compare the condition with the index definition: a function or cast on the column (`lower(email)` against an index on `email`, or a numeric parameter against an integer column), or an operator the index type does not support (`IS NOT DISTINCT FROM`, or a range against a hash index). The fix is to change the condition or create an index that matches it."
+
+[[checks]]
+prompt = "An endpoint loads 300 orders by id. Compare three ways to do it: 300 queries `WHERE id = $1`, one query with an `IN (...)` list built as text, and one query `WHERE id = ANY($1)` with an array."
+answer = "Three hundred queries cost 300 round trips; each is a cheap index lookup, but latency adds up. An IN list built as text is one round trip, but every list length is a different statement (no reuse of prepared statements) and pasting values into SQL invites injection bugs. `= ANY($1)` is one round trip and one fixed statement text, prepared and planned once; the index scan makes at most 300 searches and fewer when ids are neighbours (Postgres 17 and later)."
+
+[[checks]]
+prompt = "A table will take thousands of inserts per second from several services, each generating its own ids. Which primary key type do you choose, and what would the other choices cost?"
+answer = "UUIDv7 (Postgres 18's `uuidv7()`, or generated in the service): unique without coordination and time-ordered, so inserts go to the right edge of the index and pages stay 90% full. Random UUIDv4 keys land anywhere in the index: on a million rows the index was 37 MB at about 72% leaf density against 30 MB at 90% for UUIDv7, and each insert touches a random page, which becomes a disk read once the index outgrows memory. A bigint identity is smallest (21 MB) but needs the database, or a coordinated sequence, to hand out ids."
+
+[[checks]]
+prompt = "MySQL's `EXPLAIN` shows type `const` for `WHERE id = 123456` and type `ref` for `WHERE customer_id = 4242` on the same table. What does each mean, and what is the Postgres counterpart?"
+answer = "`const` means at most one row can match, through the primary key or a unique index, and MySQL reads it once while optimising and treats it as a constant. `ref` means an index lookup on a non-unique value that can return several rows. In Postgres both are an Index Scan (or a Bitmap Heap Scan for more rows); uniqueness shows as an estimate of `rows=1` and, in joins, `Inner Unique: true`."
+
+[[terms]]
+term = "Index Cond"
+means = "The conditions a scan uses to navigate the index, as opposed to a Filter checked afterwards."
+section = "Equality: one descent, then a short walk"
+
+[[terms]]
+term = "Index Searches"
+means = "How many times an index scan descended from the root (shown by Postgres 18)."
+section = "Equality: one descent, then a short walk"
+
+[[terms]]
+term = "Unique index"
+means = "A B-tree that rejects a second entry with the same key; constraints are built on it."
+section = "Primary keys and unique constraints are indexes"
+
+[[terms]]
+term = "Primary key"
+means = "A unique, NOT NULL key, enforced by the index named <table>_pkey."
+section = "Primary keys and unique constraints are indexes"
+
+[[terms]]
+term = "UUIDv7"
+means = "A UUID that starts with a timestamp, so new keys sort after older ones."
+section = "Choosing a primary key: bigint, UUIDv4 or UUIDv7"
+
+[[terms]]
+term = "Selectivity"
+means = "The share of rows a condition matches; the planner estimates it from statistics."
+section = "How many rows match decides the plan"
+
+[[terms]]
+term = "Most common values"
+means = "The frequent values of a column and their frequencies, kept in pg_stats."
+section = "How many rows match decides the plan"
+
+[[terms]]
+term = "Bitmap Heap Scan"
+means = "Reads the table pages named by the index once each, in file order."
+section = "How many rows match decides the plan"
+
+[[terms]]
+term = "Correlation"
+means = "How closely a column's order follows the table's physical order, from -1 to 1."
+section = "How many rows match decides the plan"
+
+[[terms]]
+term = "enable_seqscan"
+means = "A planner setting that discourages Seq Scans for a session; for diagnosis only."
+section = "Checking that the index is used"
+
+[[terms]]
+term = "idx_scan"
+means = "How many scans used an index since statistics were reset (pg_stat_user_indexes)."
+section = "Checking that the index is used"
+
+[[terms]]
+term = "Access type"
+means = "MySQL's EXPLAIN column for how a table is read: const, eq_ref, ref, range, index, ALL."
+section = "The same idea in other engines"
+
+[[sources]]
+title = "PostgreSQL: unique indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-unique.html"
+
+[[sources]]
+title = "PostgreSQL: constraints (primary keys, unique, NULLS NOT DISTINCT)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-constraints.html"
+
+[[sources]]
+title = "PostgreSQL: examining index usage"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-examine.html"
+note = "forcing plans, and the two conclusions a forced plan allows"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN (Index Searches, EXPLAIN ANALYZE)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
+
+[[sources]]
+title = "PostgreSQL: planner method configuration (enable_seqscan and friends)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-query.html"
+
+[[sources]]
+title = "PostgreSQL: cumulative statistics (pg_stat_user_indexes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/monitoring-stats.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX (compatibility: no indexes in the SQL standard)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+[[sources]]
+title = "PostgreSQL: pgstattuple (pgstatindex)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgstattuple.html"
+
+[[sources]]
+title = "PostgreSQL 18 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/18/release-18.html"
+note = "uuidv7(), OR-clauses to arrays, Index Searches, BUFFERS by default"
+
+[[sources]]
+title = "PostgreSQL 17 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/17/release-17.html"
+note = "B-tree scans of IN lists"
+
+[[sources]]
+title = "RFC 9562: Universally Unique IDentifiers (UUIDs)"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9562"
+note = "UUID version 7"
+
+[[sources]]
+title = "PostgreSQL source: selfuncs.c"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/selfuncs.c"
+note = "how unique indexes and statistics turn into row estimates"
+
+[[sources]]
+title = "MySQL 8.4: EXPLAIN output format (access types)"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/explain-output.html"
+
+[[sources]]
+title = "SQLite: EXPLAIN QUERY PLAN"
+kind = "docs"
+url = "https://www.sqlite.org/eqp.html"
+
+[[sources]]
+title = "DuckDB: indexing"
+kind = "docs"
+url = "https://duckdb.org/docs/stable/guides/performance/indexing"
+
+[[sources]]
+title = "ClickHouse: choosing a primary key"
+kind = "docs"
+url = "https://clickhouse.com/docs/best-practices/choosing-a-primary-key"
+
+[[sources]]
+title = "Use The Index, Luke: the equals operator"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/the-equals-operator"
+note = "further reading"

@@ -4,8 +4,8 @@
 query performance optimisation and everything about SQL performance. If multiple databases are needed, use them; if an analytical load
 needs an analytical engine, use it." The content must be **researched** (official docs, source, papers), with the best breadth and depth.
 
-**Status:** pilot started, **1 of about 47 modules written**. The pipeline (plan capture, loader, reader, plan view) works end to end
-for that one page. Everything below the "Built" section is still to do. Mockup (approved: "ok"):
+**Status:** pilot started, **2 of about 47 modules written** (1 `sql-anatomy`, 2 `sql-equality`). The pipeline (plan capture, loader, reader,
+plan view) works end to end for them. Everything below the "Built" section is still to do. Mockup (approved: "ok"):
 https://claude.ai/artifact/2m75DYbPU1u4v5j2GjQTx2 (private to the owner's account; the course map, a reference page, a lab, the plan explorer).
 
 Use Use The Index, Luke (use-the-index-luke.com, Markus Winand, all rights reserved) and the book *SQL Performance Explained* for
@@ -17,7 +17,7 @@ and measured on a real database.
 | Piece | Where | Notes |
 |---|---|---|
 | Example schema | `tools/sqlperf/schema.sql` | customers 50k, products 10k, orders 2M, order_items ~6M, deterministic (`setseed`); `psql -v scale=N` multiplies orders. Throwaway databases only. |
-| Setups | `content/sql/setups.toml` | each plan's indexes are applied before and undone after (`sql`, `undo`), so the schema stays the same for every plan |
+| Setups | `content/sql/setups.toml` | each plan's indexes are applied before and undone after (`sql`, `undo`), so the schema stays the same for every plan; a setup with `session` instead (planner settings such as `SET enable_seqscan = off`, to show the plan the planner rejected) runs in the session that takes the plan |
 | Plan capture | `tools/sqlperf/capture.py` | finds ```` ```plan id=… setup=… ```` blocks in pages, runs them on a real Postgres (warm, one session), writes `content/sql/plans/<id>.json` (query, setups, JSON plan, text plan, server version). `--check` re-runs and fails if a plan's **shape** changed or a plan is unused. |
 | Pages | `content/sql/pages/sql-*.toml` | the same format as System design pages (sections, checks, terms, sources, summary, figures); file names start with `sql-`; `group` is one of `SQL_GROUPS` in `crates/content/src/sd.rs` |
 | Loader | `crates/content/src/sd.rs` | SQL pages join the System design catalog (so checks, review cards, ⌘K and search work unchanged); plans load into `catalog.plans`; a ```` ```plan ```` block without a captured plan is a content error |
@@ -25,6 +25,7 @@ and measured on a real database.
 | Reader | `web/src/pages/sd/SdRead.tsx`, `web/src/components/SdMd.tsx` | the reading view; `PlansContext` hands the plans to `PlanBlock` |
 | Plan view | `web/src/plan.ts`, `web/src/components/PlanView.tsx`, `web/src/styles/plan.css` | parsers for Postgres JSON and text, MySQL `EXPLAIN ANALYZE` / `FORMAT=TREE`, SQLite `EXPLAIN QUERY PLAN`; per-step own time and pages; flags (misestimates, rows discarded by a filter, disk sorts, hash batches, heap fetches, missing workers); an operation knowledge base (`KB` in plan.ts); bars grow in run order; hottest step marked. Unit tests in `plan.test.ts` run against the captured plans. |
 | Module 1 | `content/sql/pages/sql-anatomy.toml` | anatomy of an index, measured with `pageinspect`: 3 plans, 4 checks, 10 terms, 9 sources. **The quality bar for every other module.** |
+| Module 2 | `content/sql/pages/sql-equality.toml` | equality, primary and unique keys (with bigint vs UUIDv4 vs UUIDv7 measured), selectivity and why a 5.5% value reads every page, IN/ANY/OR and `Index Searches`, checking index use (a forced plan, `pg_stat_user_indexes`), MySQL/SQLite/DuckDB/ClickHouse measured: 8 plans (Postgres 18.6), 7 checks, 12 terms, 17 sources |
 
 The only Postgres in the loop is a throwaway container: `docker run -d --name anneal-sqlperf -e POSTGRES_USER=anneal -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=sqlperf -p 5418:5432 postgres:18-alpine -c shared_buffers=256MB -c max_parallel_workers_per_gather=2`, then
 `psql -h 127.0.0.1 -p 5418 -U anneal sqlperf -f tools/sqlperf/schema.sql` (about 75 s) and
@@ -59,7 +60,7 @@ database.** Production runs Postgres 18, so capture on 18 (the pilot's plans wer
 
 File name = `content/sql/pages/<id>.toml`; `group` in brackets. The order is the reading order; numbers are the mockup's.
 
-**I · Indexes** `[sql-indexes]`: 1 `sql-anatomy` **done** · 2 `sql-equality` (equality, primary keys, verifying index use) · 3 `sql-multicolumn` (concatenated keys, column order, Postgres 18 **skip scan**; the mockup's centrepiece: `(created_at, customer_id)` 1,483 pages vs `(customer_id, created_at)` 4) · 4 `sql-functions` (functions, case-insensitive search, expression indexes, bind parameters) · 5 `sql-ranges` (greater, less, BETWEEN, LIKE and `text_pattern_ops`, collations, index combine/bitmap) · 6 `sql-partial-null` (partial indexes, NULL in indexes, NOT NULL) · 7 `sql-obfuscated` (conditions that hide a column: dates, numeric strings, redundant clauses, smart logic, maths).
+**I · Indexes** `[sql-indexes]`: 1 `sql-anatomy` **done** · 2 `sql-equality` **done** (equality, primary keys, verifying index use) · 3 `sql-multicolumn` (concatenated keys, column order, Postgres 18 **skip scan**; the mockup's centrepiece: `(created_at, customer_id)` 1,483 pages vs `(customer_id, created_at)` 4) · 4 `sql-functions` (functions, case-insensitive search, expression indexes, bind parameters) · 5 `sql-ranges` (greater, less, BETWEEN, LIKE and `text_pattern_ops`, collations, index combine/bitmap) · 6 `sql-partial-null` (partial indexes, NULL in indexes, NOT NULL) · 7 `sql-obfuscated` (conditions that hide a column: dates, numeric strings, redundant clauses, smart logic, maths).
 
 **II · Reading plans** `[sql-plans]`: 8 `sql-explain` (EXPLAIN, ANALYZE, BUFFERS, SETTINGS, FORMAT JSON; reading the tree) · 9 `sql-access-filter` (access vs filter conditions, `Index Searches`, `Rows Removed`) · 10 `sql-statistics` (pg_stats, MCVs, histograms, `CREATE STATISTICS`, n_distinct) · 11 `sql-planner-wrong` (misestimates, correlated columns, parameterised plans, generic vs custom, `plan_cache_mode`, hints via settings) · 12 `sql-parallel` (parallel query, `JIT`, `work_mem`).
 

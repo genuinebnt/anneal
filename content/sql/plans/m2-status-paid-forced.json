@@ -1,0 +1,97 @@
+{
+ "id": "m2-status-paid-forced",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, total_cents FROM orders WHERE status = 'paid';",
+ "setup": [
+  {
+   "id": "orders-status",
+   "sql": "CREATE INDEX orders_status ON orders (status);"
+  },
+  {
+   "id": "no-seqscan",
+   "sql": "SET enable_seqscan = off;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Bitmap Heap Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 13579.41,
+   "Total Cost": 43763.57,
+   "Plan Rows": 1217933,
+   "Plan Width": 12,
+   "Actual Startup Time": 23.476,
+   "Actual Total Time": 156.267,
+   "Actual Rows": 1221501.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Recheck Cond": "(status = 'paid'::text)",
+   "Rows Removed by Index Recheck": 0,
+   "Exact Heap Blocks": 14960,
+   "Lossy Heap Blocks": 0,
+   "Shared Hit Blocks": 15991,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Index Name": "orders_status",
+     "Startup Cost": 0.0,
+     "Total Cost": 13274.92,
+     "Plan Rows": 1217933,
+     "Plan Width": 0,
+     "Actual Startup Time": 21.225,
+     "Actual Total Time": 21.226,
+     "Actual Rows": 1221501.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "(status = 'paid'::text)",
+     "Index Searches": 1,
+     "Shared Hit Blocks": 1031,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "enable_seqscan": "off"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.111,
+  "Triggers": [],
+  "Execution Time": 205.101
+ },
+ "text": "Bitmap Heap Scan on orders  (cost=13579.41..43763.57 rows=1217933 width=12) (actual time=22.300..195.376 rows=1221501.00 loops=1)\n  Recheck Cond: (status = 'paid'::text)\n  Heap Blocks: exact=14960\n  Buffers: shared hit=15991\n  ->  Bitmap Index Scan on orders_status  (cost=0.00..13274.92 rows=1217933 width=0) (actual time=20.025..20.026 rows=1221501.00 loops=1)\n        Index Cond: (status = 'paid'::text)\n        Index Searches: 1\n        Buffers: shared hit=1031\nPlanning Time: 0.093 ms\nExecution Time: 256.308 ms"
+}
