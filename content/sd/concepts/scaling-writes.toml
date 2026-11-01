@@ -1,10 +1,38 @@
 title = "Scaling writes"
 group = "pattern"
 order = 2
-minutes = 7
-lede = "When writes outgrow one machine: shard by a key, batch, buffer through a queue, and pick a store built for writes."
-say = "Clicks go to Kafka first, partitioned by link; workers batch them into per-minute counts, so the database sees a few thousand upserts instead of millions of inserts."
-related = ["sharding", "kafka", "queues-and-streams"]
+minutes = 20
+lede = "Reads scale by copying; writes cannot, because each write must land in one authoritative place and be made durable there. When writes outgrow one machine: write fewer, bigger batches, aggregate before writing, buffer bursts through a log, shard by a key, and pick storage built for writes."
+say = "Clicks go to Kafka first, partitioned by link; workers count them in memory and upsert per-link totals every ten seconds, so the database sees about 10,000 upserts a second instead of a million inserts."
+related = ["sharding", "kafka", "queues-and-streams", "storage-engines", "contention", "cassandra", "dynamodb"]
+
+summary = [
+  "A write costs a **durable flush**, every **index**, and every **replica**; count them before scaling out.",
+  "**Batch**: one statement of 1,000 rows was 165 times faster than 1,000 single-row commits.",
+  "**Aggregate** before writing: a ten-second window turned 10 million clicks into 100,000 rows.",
+  "**Buffer** bursts in a durable log, and **shard** when one primary is not enough.",
+  "**Hot keys** defeat every one of these: split them, or route them to one writer that batches.",
+]
+
+[[sections]]
+heading = "Why writes are the hard half"
+body = """
+A read can be answered by any copy. A write must reach the **one** place that owns that data, and it is not done until it is **durable** there. Each write pays for:
+
+- **The durable flush**: the database writes its log (Postgres's write-ahead log) and asks the disk to flush it before saying "committed". This is usually the floor on a single client's commit latency.
+- **Every index**: an `INSERT` updates the table and each of its indexes; an `UPDATE` may too.
+- **Every replica**: each one receives and replays the same change, so replicas add read capacity but no write capacity.
+- **Locks**: writers to the same row queue behind each other (see contention).
+
+Measured on Postgres 18 in a 4-vCPU container, single-row `INSERT`s, each its own transaction:
+
+| Clients | Rows per second | Average latency |
+|---|---|---|
+| 1 | 1,513 | 0.66 ms |
+| 16 | 4,169 | 3.8 ms |
+
+One client is bound by the flush on every commit. Sixteen clients get more because Postgres flushes several transactions' log records together, but not sixteen times more. The rest of this page is about getting far past those numbers.
+"""
 
 [[sections]]
 heading = "The moves"
@@ -14,17 +42,334 @@ body = """
 - **Batch and aggregate**: turn a million +1s into one +1,000,000.
 - **A write-optimised store** (LSM-based: Cassandra, RocksDB) when the volume is huge and queries are simple.
 - **Do less on the hot path**: write the event, compute the rest asynchronously.
+
+| Move | Multiplies write capacity by | Costs | Reach for it when |
+|---|---|---|---|
+| batch | 10× to 100× and more | latency until the batch is sent; partial-failure handling | many small writes from one producer |
+| aggregate | the number of events per key per window | the raw events (keep them elsewhere if needed); freshness | counters, metrics, anything summed |
+| buffer in a log | nothing on average; absorbs peaks | a log to run; the result is not visible immediately | bursty load; the work can wait seconds |
+| shard | roughly the number of shards | cross-shard queries and transactions; operations | sustained load beyond one primary |
+| write-optimised store | depends on the workload | weaker queries; compaction | huge append-heavy volume, simple access |
+| do less | whatever you stop doing | moving work elsewhere | indexes, triggers or calls on the write path |
+"""
+
+[[sections]]
+heading = "Batch: fewer, bigger writes"
+body = """
+Most of a single-row commit's cost is fixed: a round trip, parsing, the commit's log flush. Spreading it over many rows is the cheapest write-scaling move there is. Measured on the same container, inserting click rows (`link_id`, timestamp, IP, user agent) into a table with only a primary key:
+
+| How | Rows per second | Compared with one row per commit |
+|---|---|---|
+| one `INSERT` per transaction, 1 client | 1,513 | 1× |
+| the same, `synchronous_commit = off` | 12,680 | 8× |
+| `INSERT … SELECT` of 1,000 rows per statement, 1 client | 249,617 | 165× |
+| `COPY` of 1,000,000 rows from a CSV file | about 590,000 (1.70 s) | 390× |
+
+```sql title=batch_insert.sql
+-- one statement, many rows: one round trip, one commit
+INSERT INTO clicks (link_id, ip, ua)
+VALUES ($1, $2, $3), ($4, $5, $6), …;            -- or unnest($1::bigint[], $2::inet[], $3::text[])
+
+-- bulk loads: COPY streams rows without per-statement work
+COPY clicks (link_id, ip, ua) FROM STDIN WITH (FORMAT csv);
+```
+
+**`synchronous_commit = off`** returns before the commit's log record is flushed. The data stays consistent (the database cannot end up with a later transaction kept and an earlier one lost), but a crash can lose the most recent commits. The Postgres manual puts the maximum risk window at three times `wal_writer_delay`, which defaults to 200 ms, so up to about 600 ms of acknowledged writes. It can be set per transaction: fine for click events and logs, never for payments.
+
+Batching has costs of its own: a write waits until its batch is sent (cap the wait, say 50 ms or 1,000 rows, whichever comes first), and one bad row can fail the whole statement, so validate before batching or fall back to smaller batches on error.
+"""
+
+[[sections]]
+heading = "Aggregate before you write"
+body = """
+If the reads only need totals, there is no reason to store every event in the hot database. Count in memory and write the totals.
+
+```rust title=batcher.rs
+use std::collections::HashMap;
+use std::io::Write;
+
+/// Counts clicks in memory and hands back one row per link when flushed.
+#[derive(Default)]
+struct Batcher {
+    counts: HashMap<u64, u64>,
+}
+
+impl Batcher {
+    fn add(&mut self, link: u64) {
+        *self.counts.entry(link).or_default() += 1;
+    }
+
+    /// Everything counted since the last flush, as (link, clicks); the batcher starts empty again.
+    fn flush(&mut self) -> Vec<(u64, u64)> {
+        std::mem::take(&mut self.counts).into_iter().collect()
+    }
+}
+
+/// xorshift64*: a small deterministic generator, so the run is repeatable without crates.
+struct Rng(u64);
+impl Rng {
+    fn unit(&mut self) -> f64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+fn main() {
+    let links = 100_000f64;
+    let mut rng = Rng(42);
+    // a flush every 1 s and every 10 s at 1,000,000 clicks a second
+    for clicks in [1_000_000, 10_000_000] {
+        let mut batcher = Batcher::default();
+        for _ in 0..clicks {
+            // skewed like real traffic: link k is clicked about 1/k as often as link 1
+            let link = links.powf(rng.unit()) as u64;
+            batcher.add(link);
+        }
+        let mut rows = batcher.flush();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("{clicks} clicks became {} rows to write ({:.0}x fewer)", rows.len(), clicks as f64 / rows.len() as f64);
+        println!("busiest links: {:?}", &rows[..3]);
+        let mut out = std::fs::File::create(format!("counts-{clicks}.csv")).unwrap();
+        for (link, n) in &rows {
+            writeln!(out, "{link},{n}").unwrap();
+        }
+    }
+}
+```
+
+```text title=output
+1000000 clicks became 81761 rows to write (12x fewer)
+busiest links: [(1, 60561), (2, 34959), (3, 24787)]
+10000000 clicks became 99998 rows to write (100x fewer)
+busiest links: [(1, 601150), (2, 351840), (3, 250357)]
+```
+
+The totals are then **upserted** into per-minute rows, so each flush adds to what is there:
+
+```sql title=upsert_counts.sql
+INSERT INTO click_counts (link_id, minute, n)
+SELECT link_id, date_trunc('minute', now()), n FROM batch
+ON CONFLICT (link_id, minute) DO UPDATE SET n = click_counts.n + excluded.n;
+```
+
+Loading those files into Postgres measured the other half: the one-second batch (81,761 rows) took **1.5 to 1.8 s** to upsert, longer than the second it covers, so this container could not keep up at one flush a second. The ten-second batch (99,998 rows) took **2.1 to 2.6 s** per ten seconds and keeps up with room to spare. **A longer window aggregates more**: the number of distinct keys grows much more slowly than the number of events, especially with skewed traffic. The price is freshness (counts up to ten seconds behind) and what a crash loses (the unflushed window), which is why the events go through a durable log first.
+"""
+
+[[sections]]
+heading = "Buffer with a log"
+body = """
+A durable log (Kafka, Kinesis, Redpanda) or a queue in front of the database turns a bursty write load into a steady one. Producers append and return as soon as the log has the event; consumers read at the rate the database can absorb, in batches, and the backlog absorbs the peak.
+
+The rules that keep it correct:
+
+- **Acknowledge after the log has it durably** (in Kafka, `acks=all` with enough in-sync replicas). The log is now the source of truth for events not yet in the database; an in-memory buffer in the API server is not.
+- **Partition by the key that is aggregated** (the link id), so one consumer owns each key and can sum it without coordination.
+- **Commit the consumer's position after the database write**, not before. A crash between the two replays some events, so make the write idempotent: store the last applied offset per partition in the same transaction as the upsert, and skip anything at or below it.
+- **Watch consumer lag**: if the backlog grows through the day and never drains, the buffer is hiding a capacity problem, not solving it.
+
+A log does not add write capacity on average; it moves the work out of the request and smooths it. If the sustained rate exceeds what the consumers and database can do, the lag grows without limit.
+"""
+
+[[sections]]
+heading = "Shard when one primary is not enough"
+body = """
+When even batched, aggregated writes exceed one primary, split the data by a key so that each shard takes a share (the sharding page covers keys, routing and resharding in full). Write capacity grows roughly with the number of shards, **if** the writes spread evenly.
+
+- **The key must be in every write**, so each write goes to exactly one shard.
+- **Avoid keys that increase over time** on range-partitioned stores. Timestamps, auto-increment ids and time-ordered ids send every new write to the shard holding the end of the range while the others idle. Hash the key, or prefix it with a small bucket number (`bucket = hash(id) % 16`) when you still need ranges inside each bucket.
+- **Start with many logical shards** on a few machines, so adding machines moves whole shards.
+- **Shards can still have hot keys**: an even spread of keys is not an even spread of traffic (next section).
+"""
+
+[[sections]]
+heading = "Storage built for writes"
+body = """
+A B-tree updates pages in place: an insert finds the right leaf page and changes it, which for random keys means scattered page writes. A **log-structured merge tree** (LSM) instead appends every write to a log and an in-memory sorted table, flushes that table to an immutable sorted file when it fills, and merges files in the background (compaction). Writes become sequential and cheap; reads may check several files, and compaction uses disk bandwidth later. Cassandra, ScyllaDB, RocksDB and the storage engines of many time-series and key-value stores are LSM-based (see storage engines).
+
+Whatever the engine, **indexes are write costs**. Measured: inserting 1,000-row batches of clicks with random values into a table with only a primary key ran at 153,781 rows a second; the same into a table with four more secondary indexes ran at **59,864**, 2.6 times slower. Every index must earn its write cost with a read that needs it.
+
+Two more write-friendly habits:
+
+- **Partition append-only data by time** (a table per day or month). Inserts touch only the newest partition's indexes, and expired data is removed by dropping a whole partition instead of deleting rows one by one.
+- **Keep raw events out of the transactional database**: an object store or a column store holds the full event history cheaply, and the transactional database holds the aggregates the product reads.
 """
 
 [[sections]]
 heading = "Hot keys"
 body = """
 A viral post's like counter takes one key's worth of traffic. Split it into N sub-counters (`likes:post:{0..15}`) incremented at random and summed on read, or count in memory and flush periodically.
+
+No amount of sharding fixes a single hot key: all its writes go to one shard, one partition, one row. Managed stores make the limit explicit: DynamoDB throttles a single partition key value beyond about **1,000 write capacity units and 3,000 read capacity units a second** (AWS's own guidance), and recommends **write sharding** with a suffix for keys that must take more.
+
+```sql title=split_counter.sql
+-- 16 rows per post instead of 1: writers pick one at random
+INSERT INTO like_counts (post_id, slot, n) VALUES ($1, floor(random() * 16)::int, 1)
+ON CONFLICT (post_id, slot) DO UPDATE SET n = like_counts.n + 1;
+
+-- reads sum the slots (and are cached)
+SELECT sum(n) FROM like_counts WHERE post_id = $1;
+```
+
+On the contention page, spreading the same increments over 64 rows instead of one gave 3.6 times the throughput for single-statement updates and 11 times when each transaction held its lock for 2 ms.
+
+The other cure is **one writer per key**: route all of a hot key's events to one partition of a log, consumed by one worker that sums them and writes once per window. There is then no lock contention at all, because there is no concurrency on the key.
+"""
+
+[[sections]]
+heading = "Do less on the hot path"
+body = """
+The fastest write is the one the request does not wait for.
+
+- **Write the event, derive the rest later**: the request records "order placed" (and its outbox row, so the event cannot be lost); emails, search indexing, analytics and recommendations happen from the event, asynchronously.
+- **Drop indexes, triggers and foreign keys that no read needs**: each runs on every write.
+- **Do not read in order to write**: `UPDATE … SET n = n + 1` instead of reading `n` first; upserts instead of "select, then insert or update".
+- **Choose durability per write**: a click can use `synchronous_commit = off` or a buffered log; a payment cannot.
+- **Avoid synchronous fan-out**: a post that must be written into 10,000 followers' feeds is written once, and the fan-out happens in the background (or at read time for very large accounts).
+"""
+
+[[sections]]
+heading = "Worked example: a click counter"
+body = """
+A URL shortener's analytics: 1,000,000 clicks a second at peak, 100,000 active links, dashboards that may be ten seconds behind.
+
+1. **Edge**: the redirect service appends each click to Kafka, partitioned by link id, with `acks=all`, and redirects the user without waiting for anything else.
+2. **Aggregate**: one consumer per partition counts clicks in memory and flushes every ten seconds: about 100,000 rows per flush across all partitions, measured above as roughly 10,000 upserts a second.
+3. **Write**: each flush upserts `(link_id, minute) → n` and stores the partition's offset in the same transaction, so a replay after a crash is skipped, not double-counted.
+4. **Raw events**: a second consumer group writes the raw clicks to object storage in large files for later analysis; the transactional database never holds them.
+5. **Hot links**: link 1 alone gets 6% of clicks here, but it is one in-memory counter in one consumer, so it costs one row per flush.
+
+:::steps One click, from redirect to dashboard
+- redirect | appends to Kafka, partition = link | The user is redirected; the click is durable in the log.
+- consumer | counts it in memory | Ten seconds of clicks become one total per link.
+- flush | upserts totals and the offset | One transaction per batch, so a replay is detected.
+- dashboard | reads per-minute totals | At most about ten seconds behind.
+:::
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. Give the **write rate** at peak, and what one node does (thousands of single-row commits a second, far more in batches).
+2. **Batch and aggregate** first, and say what freshness and crash loss that costs.
+3. Put a **durable log** in front for bursts, partitioned by the aggregation key, with idempotent consumers.
+4. **Shard** only for sustained load beyond one primary, with a key in every write and no monotonic hot spot.
+5. Name the **hot key** and how it is split or given a single writer.
+
+> [!INTERVIEW]
+> "A million clicks a second can't be a million inserts. Clicks go to Kafka by link id; consumers sum them per link and upsert totals every ten seconds, with the offset in the same transaction. That's about 10,000 upserts a second on one Postgres primary, and raw clicks go to S3."
 """
 
 [[checks]]
 prompt = "A viral post gets 50,000 likes a second on one counter row. What do you do?"
 answer = "Split the counter: write to one of N sub-counters chosen at random (or buffer increments in memory or a stream and flush aggregated counts every second), and sum the sub-counters on read, cached. The single hot row disappears."
+
+[[checks]]
+prompt = "An event table takes 1,500 single-row inserts a second and you need 50,000. What do you try before sharding?"
+answer = "Batch: many rows per statement (multi-row VALUES, unnest arrays, or COPY) so the round trip and commit flush are paid once per batch; measured here, 1,000 rows per statement was 165 times faster than one row per commit. If only totals are read, aggregate in memory and write sums. Drop indexes no read needs, and consider synchronous_commit = off for loss-tolerant events. Shard only if that is still not enough."
+
+[[checks]]
+prompt = "Setting synchronous_commit = off made inserts eight times faster. What exactly do you risk, and where is it acceptable?"
+answer = "Commit returns before the log record is flushed, so a crash can lose the most recent acknowledged transactions: up to three times wal_writer_delay, about 600 ms with the default 200 ms. The database stays consistent (no later transaction survives without an earlier one). Acceptable per transaction for loss-tolerant data such as clicks or logs, never for payments or orders."
+
+[[checks]]
+prompt = "Consumers flush per-second click totals to Postgres, and each flush takes 1.5 seconds. What happens, and what do you change?"
+answer = "Each second's work takes longer than a second, so consumer lag grows without limit and dashboards fall further behind. Flush less often (a ten-second window aggregates far more because distinct keys grow slower than events: 100,000 rows for 10 million clicks here), run more partitions and consumers in parallel, trim indexes on the counts table, or shard it."
+
+[[checks]]
+prompt = "Writes are keyed by a timestamp in a range-partitioned store, and one node is at 100% while the others idle. Why, and what is the fix?"
+answer = "Every new write has a key later than all existing ones, so all of them land in the range at the end of the key space, on one node. Hash the key, or prefix it with a bucket (hash(id) mod N) so writes spread over N ranges, and read across the buckets when you need time order."
+
+[[checks]]
+prompt = "Why does adding a secondary index slow inserts, and how do you decide whether it is worth it?"
+answer = "Each insert must also add an entry to every index, and keep each one's pages up to date, so write work grows with the number of indexes (four extra indexes made batched inserts 2.6 times slower here). Keep an index only if a frequent or important read needs it; move occasional queries to a replica, a search index or an analytics store instead."
+
+[[terms]]
+term = "Durable flush"
+means = "Forcing the commit's log record to disk before saying it is committed."
+section = "Why writes are the hard half"
+
+[[terms]]
+term = "Batching"
+means = "Sending many rows in one statement or commit so fixed costs are paid once."
+section = "Batch: fewer, bigger writes"
+
+[[terms]]
+term = "Asynchronous commit"
+means = "Commit returns before the log is flushed: faster, but a crash can lose the last moments."
+section = "Batch: fewer, bigger writes"
+
+[[terms]]
+term = "Upsert"
+means = "Insert a row, or update it if its key already exists, in one statement."
+section = "Aggregate before you write"
+
+[[terms]]
+term = "Aggregation window"
+means = "How long events are summed in memory before the totals are written."
+section = "Aggregate before you write"
+
+[[terms]]
+term = "Consumer lag"
+means = "How far a log's consumers are behind its newest events."
+section = "Buffer with a log"
+
+[[terms]]
+term = "Monotonic key"
+means = "A key that keeps increasing, such as a timestamp, so new writes all go to one range."
+section = "Shard when one primary is not enough"
+
+[[terms]]
+term = "LSM tree"
+means = "Storage that appends writes and merges sorted files later, trading read work for cheap writes."
+section = "Storage built for writes"
+
+[[terms]]
+term = "Write sharding"
+means = "Spreading one hot key's writes over several keys with a suffix, summed on read."
+section = "Hot keys"
+
+[[sources]]
+title = "PostgreSQL: asynchronous commit"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-async-commit.html"
+note = "what synchronous_commit = off risks, and the three-times-wal_writer_delay window"
+
+[[sources]]
+title = "PostgreSQL: populating a database"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/populate.html"
+note = "COPY, batching into one transaction, indexes during bulk loads"
+
+[[sources]]
+title = "PostgreSQL: INSERT … ON CONFLICT"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT"
+
+[[sources]]
+title = "PostgreSQL: table partitioning"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-partitioning.html"
+note = "dropping old partitions instead of deleting rows"
+
+[[sources]]
+title = "Choosing the right DynamoDB partition key (AWS Database Blog)"
+kind = "article"
+url = "https://aws.amazon.com/blogs/database/choosing-the-right-dynamodb-partition-key/"
+note = "per-partition-key limits and write sharding with a suffix"
+
+[[sources]]
+title = "Apache Kafka documentation: producer configs"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#producerconfigs"
+note = "acks, batching and partitioning on the producer"
+
+[[sources]]
+title = "The Log-Structured Merge-Tree (Acta Informatica, 1996)"
+kind = "paper"
+url = "https://link.springer.com/article/10.1007/s002360050048"
+note = "O'Neil, Cheng, Gawlick and O'Neil: the original LSM design"
 
 [[figures]]
 name = "write-fanout"
