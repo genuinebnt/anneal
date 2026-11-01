@@ -16,11 +16,33 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and the estimate."
 reference = """
-**Functional**: riders see an estimate and request a ride; the system matches a nearby available driver who accepts or declines; both see live location; the trip starts and ends.
+**Functional**:
 
-**Non-functional**: a match within seconds; a driver is never matched to two riders at once; location updates near real time; highly available in each city.
+1. A rider enters pickup and destination and sees a **fare estimate** and pickup ETA.
+2. The rider **requests** a ride; the system **matches** a nearby available driver, who **accepts or declines**.
+3. Rider and driver see each other's **live location** until pickup, then the trip is tracked until it **ends** and is paid.
 
-**Estimate**: 5M active drivers updating every 4 s ≈ 1.25M location writes a second; ride requests far fewer (thousands a second).
+Out of scope unless asked: pooling, scheduled rides, ratings, payments internals (a payment service is called at the end).
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Match latency | a driver offered the ride within a few seconds of the request |
+| Assignment consistency | **a driver is never assigned two rides at once**; a ride never gets two drivers |
+| Location freshness | positions on the map a few seconds old at most |
+| Availability | a city keeps working if another region fails; matching degrades rather than stops |
+
+**Estimate** (assumptions labelled):
+
+```text
+location writes   5M drivers online × 1 update every 4 s (assumption) = 1.25M writes/s
+payload           ~100 B each → 125 MB/s in; latest positions 5M × 100 B = 500 MB
+ride requests     20M rides/day (assumption) ≈ 230/s, ×5 at peak ≈ 1,200/s
+nearby search     one per request plus re-searches: thousands/s, each a small area
+```
+
+The estimate shows the shape: **location updates are a firehose** (a thousand times the ride requests) of data that is stale in seconds, while **rides are few and must be exactly right**. Two different stores follow from that.
 """
 [[steps.points]]
 id = "req-one-ride"
@@ -35,7 +57,24 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Rider`, `Driver` (status, current location), `Ride` (rider, driver, pickup, dropoff, status, fare), `Location` updates."
+reference = """
+| Entity | Fields | Store |
+|---|---|---|
+| `Rider` | id, payment method, rating | database |
+| `Driver` | id, vehicle, **status** (`offline`, `available`, `offered`, `on_trip`), current cell | status in the database and mirrored in memory |
+| `DriverLocation` | driver_id, lat, lng, heading, timestamp | **in memory only, latest value**; traces written in batches for history |
+| `Ride` | id, rider, driver, pickup, destination, fare estimate, **status** | durable database |
+
+**The ride's state machine**:
+
+```text
+requested ─► matching ─► driver_assigned ─► arrived ─► in_progress ─► completed
+                │
+                └──► no_driver_found / cancelled
+```
+
+Every transition is a conditional update (`... WHERE status = 'matching'`), so two actors cannot move a ride in conflicting directions.
+"""
 [[steps.points]]
 id = "ent-ride"
 text = "A Ride with a status that moves through requested, matched, started, ended"
@@ -46,17 +85,28 @@ name = "API"
 minutes = 5
 prompt = "Rider, driver and location endpoints."
 reference = """
+```http
+POST  /fare-estimates   { "pickup": {"lat": 51.5007, "lng": -0.1246}, "destination": {...} }
+-> 200 { "estimate_id": "est_4", "price": { "amount": 1840, "currency": "GBP" }, "pickup_eta_s": 240, "expires_at": "..." }
+
+POST  /rides            { "estimate_id": "est_4" }         -> 201 { "ride_id": "r_77", "status": "matching" }
+POST  /drivers/me/location  { "lat": ..., "lng": ..., "heading": 90, "ts": ... }   -> 204   (every few seconds)
+PATCH /rides/r_77       { "action": "accept" }              (driver)  -> 200 | 409 if the offer expired
+PATCH /rides/r_77       { "action": "arrived" | "start" | "end" | "cancel" }
 ```
-POST /fare-estimates {pickup, dropoff} -> {estimate_id, price, eta}
-POST /rides {estimate_id}             -> 201 {ride_id, status: "matching"}
-POST /drivers/location {lat, lng}      (every few seconds)
-PATCH /rides/{id} {action: accept|decline|start|end}
-```
-Live updates to the apps over WebSocket or push notifications.
+
+- The **estimate** is created first and the ride request refers to it, so the price the rider agreed to is the price charged, and an estimate cannot be reused after it expires.
+- Driver location goes up on a **persistent connection** in practice (a WebSocket or a long-lived HTTP/2 stream from the app), since an update every few seconds over fresh HTTPS requests wastes battery and handshakes.
+- **Server to app** (a ride offer to a driver, the driver's position to the rider): over the same persistent connection, with **push notifications** as a fallback when the app is in the background.
+- `accept` returns 409 if the offer has already expired or gone to someone else: the driver app shows "missed" instead of a ride that is not theirs.
 """
 [[steps.points]]
 id = "api-flow"
 text = "Estimate, request, driver location and ride status endpoints"
+level = "mid"
+[[steps.points]]
+id = "api-push"
+text = "Live updates over a persistent connection, with push notifications as the fallback"
 level = "mid"
 
 [[steps]]
@@ -64,10 +114,44 @@ name = "High-level design"
 minutes = 15
 prompt = "Locations, matching, and notifying."
 reference = """
-- **Location service**: driver updates go to an in-memory **geospatial index** (Redis GEO or a geohash/H3 grid) sharded by city/region; only the latest position is kept.
-- **Matching service**: on a request, query cells around the pickup for available drivers, rank by ETA, offer to the best one with a timeout (say 10 s), then the next.
-- **Ride service** keeps rides in a database (Postgres, sharded by city).
-- **Notifications** to drivers and riders over a persistent connection or push.
+**The diagram**:
+
+```text
+driver app ═══ gateway (WebSocket) ─► location svc ─► geo index (memory,
+                    ║                                   sharded by cell)
+rider app  ═════════╝                                        ▲
+   │ POST /rides                                             │ nearby?
+   └──────────────► ride svc ─► rides DB    matching svc ────┘
+                                    ▲            │ offer (lock driver)
+                                    └────────────┘
+```
+
+**Location service.** Each update replaces the driver's position in an in-memory **geospatial index**: only the latest point is kept. Two ways to index:
+
+| Index | How | Fits |
+|---|---|---|
+| Redis `GEOADD` / `GEOSEARCH` | a sorted set scored by a 52-bit geohash; search by radius | simple; one set per city or cell range |
+| a grid of cells (H3 hexagons, S2 cells, geohash) | driver → cell id; cell → set of drivers | the scalable one: cells are also the shard key |
+
+With H3 at resolution 8, cells average 0.737 km² with edges of about 0.53 km, and neighbouring centres are about 0.92 km apart. A 2 km search is the pickup's cell plus 3 rings of neighbours: 1 + 3·3·4 = **37 cells**. At an assumed 20 available drivers per km² in a city centre, a 2 km circle (π × 2² ≈ 12.6 km²) holds about 250 candidates: rank those, not the city.
+
+**Matching service.** On a request:
+
+1. Find available drivers in the cells around the pickup.
+2. Rank by **ETA** (road distance and traffic from a routing service), not straight-line distance: a driver 500 m away across a river can be 15 minutes out.
+3. **Offer** the ride to the best driver with a timeout (say 10-15 s). On decline or timeout, offer to the next. After N tries, widen the radius or report no driver.
+
+:::steps One match
+- rider | POST /rides | The ride is stored as matching; the matching service gets the request.
+- matching svc | cells around pickup → 250 drivers → top 5 by ETA | The routing service gives ETAs for the short list only.
+- matching svc | lock driver d1 (status available → offered, 15 s) | A conditional update: exactly one ride can win d1.
+- driver d1 | offer arrives over the socket | 15 s to accept.
+- driver d1 | accept | ride → driver_assigned, d1 → on_trip; the rider sees the driver's position from now on.
+:::
+
+**Ride service** stores rides in a durable database (Postgres or a key-value store), sharded by city or region: the low-volume, must-be-right data.
+
+**Notifications** travel over the persistent connections; a connection registry (driver → gateway node) tells the matching service where to send an offer.
 """
 [[steps.points]]
 id = "hld-geo"
@@ -77,16 +161,32 @@ level = "mid"
 id = "hld-offer"
 text = "Matching offers one driver at a time with a timeout, then moves on"
 level = "senior"
+[[steps.points]]
+id = "hld-eta"
+text = "Candidates ranked by ETA on the road network, not straight-line distance"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "Double-assignment, scale and failure."
 reference = """
-- **One driver, one ride**: lock the driver while an offer is out: `SET driver:{id}:offer ride NX EX 10` in Redis, or a conditional update of the driver's status; a second matcher skips locked drivers.
-- **Hot cities**: shard the location index by city and by cell; a big city spans several shards.
-- **Surge**: requests and available drivers per cell feed a pricing service.
-- **Failures**: matching state is short-lived and can be rebuilt; the ride record is durable; a driver offline mid-offer just times out.
+**1. One driver, one ride.** Two matchers pick the same driver for two riders in the same second. Make taking the driver an atomic, expiring claim:
+
+- In Redis: `SET driver:{id}:offer {ride_id} NX EX 15`: only one `SET NX` succeeds; the expiry frees the driver if the offer is never answered.
+- Or in the database: `UPDATE drivers SET status = 'offered', offer_ride = $ride, offer_until = now() + interval '15 seconds' WHERE id = $d AND (status = 'available' OR (status = 'offered' AND offer_until < now()))`, checked by row count.
+
+The loser moves to its next candidate. The ride side is symmetric: `UPDATE rides SET driver = $d, status = 'driver_assigned' WHERE id = $r AND status = 'matching'` means a ride can only be accepted once.
+
+**2. Sharding the firehose.** 1.25M writes a second do not fit one node. Shard the location index **by cell**: each shard owns a set of cells (a city centre may be several shards, a rural region one). A search computes the cells covering the radius and asks each owning shard, then merges. Uber's dispatch system (as described in a 2015 QCon talk by Matt Ranney) sharded supply and demand by Google S2 cells, about 3.31 km² each at level 12, with Ringpop, its consistent-hashing library, routing each cell to its owner.
+
+**3. Moving drivers.** A driver crossing a cell boundary is removed from one cell's set and added to the next; if the cells are on different shards, the old entry is left to expire (a TTL of a few update intervals) rather than coordinating a cross-shard move.
+
+**4. Offers that time out.** A driver whose app is in a tunnel never answers. The offer's expiry (15 s) frees both the driver and the matcher, which moves on; the rider sees "still looking", not a frozen screen. A driver who repeatedly lets offers lapse is marked unavailable.
+
+**5. Surge.** Counts of open requests and available drivers **per cell** over the last few minutes feed a pricing service. Uber described using H3 hexagons for exactly this: measuring supply and demand per hexagon to set dynamic prices.
+
+**6. Failure.** The location index is **rebuildable**: lose a shard and drivers' next updates (within 4 s) repopulate it. Rides are durable; matching state (offers in flight) is short-lived and recoverable from the ride's status. Trip traces for receipts and disputes are written asynchronously in batches to a log or column store (at an assumed 40 B per point for the half of updates sent during trips, about 2 TB a day), never on the update path.
 """
 [[steps.points]]
 id = "dd-lock"
@@ -100,6 +200,10 @@ level = "senior"
 id = "dd-timeout"
 text = "Offers time out so a silent driver does not stall the match"
 level = "staff"
+[[steps.points]]
+id = "dd-rebuild"
+text = "The location index is rebuildable from the next updates; traces written asynchronously"
+level = "senior"
 
 [[probes]]
 question = "Why not store every location update in Postgres?"
@@ -112,3 +216,37 @@ answer = "Both try to take the driver's offer lock (SET NX with a 10-second expi
 [[probes]]
 question = "A rider is near the edge of two location shards. How do you still find drivers across the line?"
 answer = "Query by cells, not by shard: compute the cells covering the search radius (the cell and its neighbours) and send each cell's query to whichever shard owns it, then merge and rank the results."
+
+[[probes]]
+question = "The nearest driver by distance is 400 m away but across a river with the bridge 3 km off. How does your design avoid offering them first?"
+answer = "Distance only builds the candidate list from the nearby cells; the ranking uses ETAs from a routing service on the road network, computed for the short list only (say the 20 nearest), so the driver across the river ranks below a farther driver on the right side."
+
+[[sources]]
+title = "H3: tables of cell statistics across resolutions"
+kind = "docs"
+url = "https://h3geo.org/docs/core-library/restable/"
+note = "average cell areas and edge lengths per resolution"
+
+[[sources]]
+title = "Uber: H3, Uber's hexagonal hierarchical spatial index"
+kind = "article"
+url = "https://www.uber.com/en-US/blog/h3/"
+note = "why hexagons; supply and demand per hexagon for pricing"
+
+[[sources]]
+title = "InfoQ: Uber's real-time market platform (QCon London 2015)"
+kind = "article"
+url = "https://www.infoq.com/news/2015/03/uber-realtime-market-platform"
+note = "dispatch sharded by S2 cells, Ringpop"
+
+[[sources]]
+title = "Ringpop"
+kind = "guide"
+url = "https://github.com/uber/ringpop-node"
+note = "a consistent hash ring on a membership protocol, with request forwarding (archived)"
+
+[[sources]]
+title = "Redis: GEOSEARCH"
+kind = "docs"
+url = "https://redis.io/docs/latest/commands/geosearch/"
+note = "radius search over a sorted set of 52-bit geohashes"
