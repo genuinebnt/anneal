@@ -40,7 +40,7 @@ Written for anneal; nothing is copied from another course. Checked by `anneal-co
   interview), `[[checks]]` (`prompt`, `answer`), `related` (concept ids).
 - `problems/<id>.toml`: `title`, `kind` (`hld` now; `api`, `lld` later), `minutes`, `prompt`, `uses` (concept ids),
   `companies`, `hints`, `[[steps]]` (`name`, `minutes`, `prompt`, `reference`, `[[steps.points]]` with `id`, `text`,
-  `level`), `[[probes]]` (`question`, `answer`).
+  `level`), `[[probes]]` (`question`, `answer`), and optional `[[sources]]` (`title`, `url`, `note`, `kind`) shown in Compare.
 
 ## Data (migration 0022, additive)
 
