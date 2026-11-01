@@ -1,10 +1,29 @@
 title = "Transactions and isolation anomalies"
 group = "distributed"
 order = 2
-minutes = 10
+minutes = 22
 lede = "What can go wrong when transactions run at the same time, and which isolation level stops each problem: dirty reads, lost updates, write skew and phantoms."
 say = "Two doctors going off call at once is write skew; read committed allows it, so that check runs under serializable, or with SELECT … FOR UPDATE on the rows it depends on."
-related = ["postgres", "contention", "consistency-cap", "multi-step-processes"]
+related = ["postgres", "contention", "consistency-cap", "multi-step-processes", "leases-and-fencing"]
+credit = "The comparison of what each database's isolation levels prevent draws on [Hermitage](https://github.com/ept/hermitage) by Martin Kleppmann, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The experiments were run for anneal on PostgreSQL 18.6; the rest is written for anneal."
+
+summary = [
+  "Isolation levels are **weaker promises than serializable**, each defined by the anomalies it still allows.",
+  "**Lost update**: two read-modify-writes, one overwrites the other. Fix with an atomic `UPDATE … SET x = x + 1`, a row lock, or a version check.",
+  "**Write skew**: two transactions read the same rows and write different ones, breaking a rule together. Snapshot isolation allows it; serializable or locking the rows read stops it.",
+  "Postgres defaults to **read committed**; its repeatable read is **snapshot isolation**; its serializable **aborts** conflicting transactions, so the app must **retry**.",
+  "Across services there is no isolation: design with **conditional writes, idempotency and sagas**.",
+]
+
+[[sections]]
+heading = "Why isolation levels exist"
+body = """
+The ideal is **serializability**: concurrent transactions produce a result some one-at-a-time order could have produced. It is also the most expensive guarantee, so databases offer weaker **isolation levels** and most run at one of them by default.
+
+The SQL standard (1992) defined its levels by three phenomena a level must not allow: **dirty reads**, **non-repeatable reads** and **phantoms**. Berenson, Bernstein, Gray, Melton and both O'Neils showed in 1995 ("A Critique of ANSI SQL Isolation Levels") that those definitions are ambiguous and miss anomalies that matter, notably **lost updates** and **write skew**, and they defined **snapshot isolation**, which many databases had implemented and called "serializable" or "repeatable read". Adya's 1999 thesis restated every level as cycles in a graph of dependencies between transactions, the definitions tools such as Hermitage and Jepsen test today.
+
+The practical consequence: **a level's name does not tell you what it prevents**. The same words mean different things in Postgres, MySQL and Oracle, so a design names the anomaly it must prevent and checks what its database actually does.
+"""
 
 [[sections]]
 heading = "The anomalies"
@@ -16,12 +35,91 @@ body = """
 | Lost update | two read-modify-writes, one overwrites the other | atomic updates, `FOR UPDATE`, or a version check |
 | Write skew | two transactions read the same rows, each writes a different row; together they break a rule | serializable, or locking the rows read |
 | Phantom | a query's result set changes because another transaction inserted rows | serializable, predicate locks |
+
+Two more complete the picture:
+
+- **Dirty write**: overwriting another transaction's uncommitted write. Every real level prevents it, with row locks held until commit.
+- **Read skew**: reading part of the data before another transaction commits and part after, so the parts disagree (an account transfer seen half done: one balance before, the other after). Snapshot isolation prevents it because every read comes from the same snapshot.
+"""
+
+[[sections]]
+heading = "Seen on a real database"
+body = """
+Every result below was run on **PostgreSQL 18.6** with two sessions, the second starting a second after the first; the first pauses two seconds between its read and its write, so the two overlap.
+
+**Lost update.** Both sessions read a balance of 100, add 10 in the application, and write the result back:
+
+```sql title=lost_update.sql
+-- session A and session B, both:
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT balance FROM accounts WHERE id = 1;            -- both read 100
+UPDATE accounts SET balance = 110 WHERE id = 1;       -- 100 + 10, computed in the app
+COMMIT;
+```
+
+| What ran | Result |
+|---|---|
+| read-modify-write, read committed | both commit; balance **110**: one deposit is lost |
+| read-modify-write, repeatable read | B commits; A fails with `could not serialize access due to concurrent update`; balance 110 until A retries |
+| `UPDATE … SET balance = balance + 10`, read committed | both commit; balance **120** |
+
+The atomic update works at any level because the second `UPDATE` waits for the first to commit and then re-reads the row before adding. At repeatable read, Postgres detects that the row changed after its snapshot was taken ("first updater wins") and aborts the later writer, which must retry.
+
+**Non-repeatable read and phantom.** Session A reads one order's total and the count of open orders twice; between the reads, B changes the total from 50 to 55 and inserts a third open order:
+
+| Level | First read | Second read |
+|---|---|---|
+| read committed | total 50; 2 open orders, sum 120 | total **55**; **3** open orders, sum **145** |
+| repeatable read | total 50; 2 open orders, sum 120 | total 50; 2 open orders, sum 120 |
+
+At read committed **each statement** gets a fresh snapshot; at repeatable read the **whole transaction** reads one snapshot. Postgres's repeatable read prevents phantoms too, which the standard allows a database to do.
+
+**Dirty read.** A sets the balance to 0 and pauses before rolling back; B, at `READ UNCOMMITTED`, reads **100**. Postgres accepts the level name but runs it as read committed: its multiversion design never shows uncommitted data.
 """
 
 [[sections]]
 heading = "Write skew, in one example"
 body = """
 Rule: at least one doctor on call. Alice and Bob are both on call; each checks "is someone else on call?" (yes), and each goes off call. Neither overwrote the other's row, yet now nobody is on call. Snapshot isolation allows this; **serializable** detects it and aborts one.
+
+:::steps Two doctors go off call at once
+- Alice | counts doctors on call: 2 | Her transaction reads both rows; the rule allows her to leave.
+- Bob | counts doctors on call: 2 | His transaction, overlapping hers, sees the same two rows.
+- Alice | sets her own row to off call, commits | She wrote only her row.
+- Bob | sets his own row to off call, commits | He wrote only his row: no two writes touched the same row, so no write conflict is detected.
+- result | nobody on call | Each transaction was correct alone; together they broke the rule.
+:::
+
+Measured on Postgres 18.6 with exactly this script:
+
+| How it ran | Result |
+|---|---|
+| read committed | both commit: **nobody on call** |
+| repeatable read (snapshot isolation) | both commit: **nobody on call** |
+| serializable | Bob commits; Alice fails with `could not serialize access due to read/write dependencies among transactions`: Bob off call, Alice still on |
+| read committed, rows read with `FOR UPDATE` | Bob's read waits for Alice's lock; after she commits he sees 1 doctor on call and stays: Alice off, Bob on |
+
+`FOR UPDATE` works by turning the read into a write lock on the rows the rule depends on, so the second transaction waits instead of reading a stale picture.
+
+**When the rows do not exist yet** there is nothing to lock. Two people book room 7 from 10:00 to 11:00; each first checks that no booking overlaps, then inserts. Measured at read committed: **both inserts succeed**, a double booking. Remedies:
+
+- **A constraint**: Postgres's exclusion constraint `EXCLUDE USING gist (room WITH =, during WITH &&)` (with the `btree_gist` extension) made the second insert fail with `conflicting key value violates exclusion constraint`. For fixed slots, a unique index on `(room, slot)` does the same.
+- **Materialise the conflict**: create a row per room and time slot in advance, so there is a row to lock with `FOR UPDATE`.
+- **Serializable**, which tracks the rows and ranges each transaction read (predicate locks) and aborts one of the two.
+"""
+
+[[sections]]
+heading = "How databases implement the levels"
+body = """
+- **Locking (two-phase locking)**: a transaction takes shared locks on what it reads and exclusive locks on what it writes, and holds them until it ends; **predicate** or **next-key** locks cover ranges so inserts into them wait (phantoms). Serializable, but readers block writers and writers block readers, and deadlocks are routine. MySQL's serializable level and SQL Server's locking levels work this way.
+- **Multiversion concurrency control (MVCC)**: writers create new row versions, and readers read the versions visible to their **snapshot**, so readers never block writers. Read committed takes a snapshot per statement; snapshot isolation takes one per transaction and aborts a writer whose row changed since its snapshot (first updater wins).
+- **Serializable snapshot isolation (SSI)**: Cahill, Röhm and Fekete (2008) showed that every serialization anomaly under snapshot isolation contains a particular pattern of read-write dependencies between concurrent transactions, which can be tracked cheaply. Postgres has used it for `SERIALIZABLE` since 9.1 (Ports and Grittner, 2012): reads take non-blocking **SIRead** locks, and a transaction caught as the "pivot" of a dangerous pattern is aborted with SQLSTATE `40001`. Reads still never block, at the price of some false positives and retries.
+
+| | Readers block writers | Needs retries | Prevents write skew |
+|---|---|---|---|
+| two-phase locking | yes | on deadlock | yes |
+| snapshot isolation | no | on write conflicts | no |
+| serializable snapshot isolation | no | on dangerous patterns | yes |
 """
 
 [[sections]]
@@ -30,6 +128,76 @@ body = """
 - Postgres default: **read committed**; `REPEATABLE READ` is snapshot isolation; `SERIALIZABLE` is serializable snapshot isolation (aborts conflicts, the app retries).
 - MySQL InnoDB default: repeatable read (with gap locks against phantoms).
 - Across services there is no isolation at all: use sagas, idempotency and compensations.
+
+What each level prevents is easier to read from tests than from names. From Hermitage (Postgres tested at 9.3, MySQL at 5.6, Oracle at 11.2; the Postgres rows agree with the runs on 18.6 above):
+
+| Database | Level asked for | Lost update | Write skew | Default |
+|---|---|---|---|---|
+| PostgreSQL | read committed | allowed | allowed | yes |
+| PostgreSQL | repeatable read | prevented | allowed | |
+| PostgreSQL | serializable | prevented | prevented | |
+| MySQL InnoDB | repeatable read | **allowed** | allowed | yes |
+| MySQL InnoDB | serializable | prevented | prevented | |
+| Oracle | read committed | allowed | allowed | yes |
+| Oracle | serializable | prevented | allowed (it is snapshot isolation) | |
+
+Two surprises worth remembering: MySQL's default repeatable read does **not** stop a lost update, because a plain `SELECT` reads the snapshot while the `UPDATE` waits and then overwrites the latest row; and Oracle's "serializable" is snapshot isolation, so it allows write skew.
+
+> [!NOTE]
+> Distributed SQL databases differ again: CockroachDB defaults to serializable (Hermitage, version 23.2). Check the current documentation of the version you run, because defaults have changed between releases.
+"""
+
+[[sections]]
+heading = "Retrying serialization failures"
+body = """
+At repeatable read or serializable, a correct application treats SQLSTATE `40001` as normal: roll back and run the **whole transaction** again, including its reads, because the decision it made was based on data that changed. Postgres's documentation says the same, and recommends retrying the transaction until it succeeds.
+
+```python title=retry.py hl=21-27
+import time
+
+import psycopg
+from psycopg import errors
+
+
+def go_off_call(conn, name, pause):
+    \"\"\"The doctors' rule, run as one serializable transaction; returns whether this doctor went off call.\"\"\"
+    with conn.transaction():
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        (on_call,) = conn.execute("SELECT count(*) FROM doctors WHERE shift = 1 AND on_call").fetchone()
+        time.sleep(pause)  # widen the race so both transactions overlap
+        if on_call < 2:
+            return False
+        conn.execute("UPDATE doctors SET on_call = false WHERE name = %s", (name,))
+        return True
+
+
+def with_retries(fn, *args, attempts=5):
+    \"\"\"Run the whole transaction again on a serialization failure (SQLSTATE 40001), with a short backoff.\"\"\"
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn(*args), attempt
+        except errors.SerializationFailure:
+            if attempt == attempts:
+                raise
+            time.sleep(0.05 * 2**attempt)
+```
+
+Run three times with both doctors at once (psycopg 3.3, Postgres 18.6): every time, one doctor went off call on the first attempt and the other was aborted, retried, saw only one doctor on call and stayed. The rule held, and neither caller saw an error.
+
+> [!WARNING]
+> Keep anything that cannot be repeated out of a retried transaction: sending an email, charging a card, publishing an event. Do those after the commit, or record them in an outbox table inside the transaction.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Name the anomaly** the feature must prevent: "two holds on one seat is a lost update or a write skew, depending on the schema".
+2. **Prefer the database's own tools** for one row: an atomic `UPDATE … SET stock = stock - 1 WHERE stock > 0`, a conditional write on a version column, a unique or exclusion constraint.
+3. **For rules over several rows**, lock the rows read (`FOR UPDATE`), materialise the conflict, or run that transaction as serializable with retries.
+4. **Across services**, there is no shared transaction: conditional writes, idempotency keys and sagas.
+
+> [!INTERVIEW]
+> "The seat hold is one statement: `UPDATE seats SET held_by = $1 WHERE id = $2 AND held_by IS NULL`. One row changes or none does, at any isolation level, so two buyers can never both hold it."
 """
 
 [[checks]]
@@ -39,3 +207,122 @@ answer = "A lost update. Fix with an atomic UPDATE counter = counter + 1, with S
 [[checks]]
 prompt = "Why doesn't snapshot isolation prevent write skew?"
 answer = "Each transaction reads a consistent snapshot and writes different rows, so no write-write conflict is detected; the rule spans rows both read but neither locked, and only serializable checks catch that read-write dependency."
+
+[[checks]]
+prompt = "At repeatable read in Postgres, an UPDATE fails with 'could not serialize access due to concurrent update'. What happened, and what should the application do?"
+answer = "Another transaction changed and committed the same row after this transaction's snapshot was taken; updating it would overwrite a change this transaction never saw (a lost update), so Postgres aborts it. Roll back and retry the whole transaction, reads included, so its decision is made on current data."
+
+[[checks]]
+prompt = "Two users book the same meeting room for overlapping hours. Each transaction checks that no overlapping booking exists, then inserts. Why does FOR UPDATE not help, and what does?"
+answer = "The conflicting row does not exist yet, so there is nothing to lock: both checks find no overlap and both inserts succeed (it happened at read committed in Postgres 18). Use a constraint that the database enforces on insert, such as an exclusion constraint on (room, time range) or a unique index on (room, slot); or create a row per room and slot in advance and lock it; or run the transaction as serializable with retries."
+
+[[checks]]
+prompt = "Your Postgres session runs at READ UNCOMMITTED. Can it see another transaction's uncommitted write?"
+answer = "No. Postgres accepts READ UNCOMMITTED but behaves as read committed: with multiversion concurrency control a reader only sees committed row versions. A balance set to 0 by a transaction that later rolled back still read as 100."
+
+[[checks]]
+prompt = "A service moves from Postgres to MySQL with default settings, and a read-modify-write that used to fail and retry under repeatable read now silently loses updates. Why?"
+answer = "Postgres's repeatable read is snapshot isolation with first-updater-wins: the second writer of a changed row is aborted. MySQL InnoDB's repeatable read reads a snapshot for plain SELECTs but lets the UPDATE wait and then overwrite the latest row, so the lost update goes through (Hermitage shows it). Use an atomic update, SELECT … FOR UPDATE, or a version check."
+
+[[terms]]
+term = "Serializability"
+means = "Concurrent transactions give a result some one-at-a-time order could have given."
+section = "Why isolation levels exist"
+
+[[terms]]
+term = "Snapshot isolation"
+means = "Each transaction reads one consistent snapshot; a writer whose row changed since is aborted."
+section = "Why isolation levels exist"
+
+[[terms]]
+term = "Lost update"
+means = "Two read-modify-writes of the same value; the second overwrites the first."
+section = "The anomalies"
+
+[[terms]]
+term = "Phantom"
+means = "Rows matching a query appear or disappear because another transaction inserted or deleted them."
+section = "The anomalies"
+
+[[terms]]
+term = "Read skew"
+means = "Reading part of the data before another transaction commits and part after."
+section = "The anomalies"
+
+[[terms]]
+term = "Write skew"
+means = "Two transactions read the same rows, write different ones, and break a rule together."
+section = "Write skew, in one example"
+
+[[terms]]
+term = "Exclusion constraint"
+means = "A Postgres constraint that no two rows overlap on the given operators, such as the same room and overlapping times."
+section = "Write skew, in one example"
+
+[[terms]]
+term = "MVCC"
+means = "Multiversion concurrency control: writers add row versions, readers read the versions their snapshot sees."
+section = "How databases implement the levels"
+
+[[terms]]
+term = "Serializable snapshot isolation"
+means = "Snapshot isolation plus tracking of read-write dependencies, aborting a transaction that could break serializability."
+section = "How databases implement the levels"
+
+[[terms]]
+term = "Serialization failure"
+means = "SQLSTATE 40001: the database aborted the transaction to keep its isolation promise; retry it."
+section = "Retrying serialization failures"
+
+[[sources]]
+title = "Berenson, Bernstein, Gray, Melton, O'Neil and O'Neil: A Critique of ANSI SQL Isolation Levels (SIGMOD 1995)"
+kind = "paper"
+url = "https://arxiv.org/abs/cs/0701157"
+note = "lost update, write skew, snapshot isolation"
+
+[[sources]]
+title = "Adya: Weak Consistency (PhD thesis, MIT, 1999)"
+kind = "paper"
+url = "https://pmg.csail.mit.edu/papers/adya-phd.pdf"
+note = "isolation levels as dependency cycles"
+
+[[sources]]
+title = "Cahill, Röhm and Fekete: Serializable isolation for snapshot databases (SIGMOD 2008)"
+kind = "paper"
+url = "https://doi.org/10.1145/1376616.1376690"
+
+[[sources]]
+title = "Ports and Grittner: Serializable Snapshot Isolation in PostgreSQL (VLDB 2012)"
+kind = "paper"
+url = "https://arxiv.org/abs/1208.4179"
+
+[[sources]]
+title = "PostgreSQL: transaction isolation"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/transaction-iso.html"
+
+[[sources]]
+title = "PostgreSQL: serialization failure handling"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/mvcc-serialization-failure-handling.html"
+
+[[sources]]
+title = "PostgreSQL: exclusion constraints"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-EXCLUSION"
+
+[[sources]]
+title = "MySQL 8.4: InnoDB transaction isolation levels"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html"
+
+[[sources]]
+title = "Hermitage: testing transaction isolation levels"
+kind = "guide"
+url = "https://github.com/ept/hermitage"
+note = "what each database's levels actually prevent (CC BY 4.0)"
+
+[[sources]]
+title = "Jepsen: consistency models"
+kind = "article"
+url = "https://jepsen.io/consistency"
