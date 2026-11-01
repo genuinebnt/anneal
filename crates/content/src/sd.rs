@@ -25,7 +25,7 @@ pub const SD_FIGURES: &[&str] = &["kafka-log", "consumer-groups", "hash-ring", "
 /// Figures added per group (each group's drawings live in `web/src/components/sdfigs/<group>.tsx`), kept apart so pages written in
 /// parallel never edit the same list.
 pub const SD_FIGURES_CORE: &[&str] = &[];
-pub const SD_FIGURES_DISTRIBUTED: &[&str] = &["count-min", "vector-clocks", "raft-log", "fencing-token", "geohash-cells", "watermark"];
+pub const SD_FIGURES_DISTRIBUTED: &[&str] = &["count-min", "vector-clocks", "raft-log", "fencing-token", "geohash-cells", "watermark", "trie-topk"];
 pub const SD_FIGURES_TECHNOLOGY: &[&str] = &[];
 pub const SD_FIGURES_DRILLS: &[&str] = &[];
 

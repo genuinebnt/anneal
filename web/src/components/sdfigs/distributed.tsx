@@ -2,6 +2,47 @@ import { Arrow, Box, type Fig } from "./parts";
 
 /** Figures for the distributed and advanced pages. Add each name to `SD_FIGURES_DISTRIBUTED` in `crates/content/src/sd.rs`. */
 export const FIGS_DISTRIBUTED: Record<string, Fig> = {
+    "trie-topk": {
+        steps: 5,
+        ms: 1300,
+        draw: (t) => {
+            // queries and how often they were searched: cat 90, dog 80, car 70, cart 40, cab 30, cot 10
+            const nodes: { id: string; x: number; y: number; parent?: string; top: string }[] = [
+                { id: "", x: 40, y: 110, top: "cat 90 · dog 80 · car 70" },
+                { id: "c", x: 150, y: 70, parent: "", top: "cat 90 · car 70 · cart 40" },
+                { id: "d", x: 150, y: 165, parent: "", top: "dog 80" },
+                { id: "ca", x: 260, y: 50, parent: "c", top: "cat 90 · car 70 · cart 40" },
+                { id: "co", x: 260, y: 105, parent: "c", top: "cot 10" },
+                { id: "do", x: 260, y: 165, parent: "d", top: "dog 80" },
+                { id: "cat", x: 370, y: 20, parent: "ca", top: "cat 90" },
+                { id: "car", x: 370, y: 60, parent: "ca", top: "car 70 · cart 40" },
+                { id: "cab", x: 370, y: 100, parent: "ca", top: "cab 30" },
+                { id: "cot", x: 370, y: 140, parent: "co", top: "cot 10" },
+                { id: "dog", x: 370, y: 180, parent: "do", top: "dog 80" },
+                { id: "cart", x: 470, y: 60, parent: "car", top: "cart 40" },
+            ];
+            const typed = ["", "c", "ca", "car", "cart"][t]!;
+            const at = (id: string) => nodes.find((n) => n.id === id)!;
+            const onPath = (id: string) => typed.startsWith(id);
+            const cur = at(typed);
+            return (
+                <>
+                    {nodes.filter((n) => n.parent !== undefined).map((n) => {
+                        const p = at(n.parent!);
+                        return <path key={`e${n.id}`} className={`sf-arrow${onPath(n.id) ? " on" : ""}`} d={`M${p.x + 11} ${p.y} L${n.x - 11} ${n.y}`} />;
+                    })}
+                    {nodes.map((n) => (
+                        <g key={n.id || "root"} className={n.id === typed ? "sf-new" : ""}>
+                            <circle className="sf-node" cx={n.x} cy={n.y} r={11} />
+                            <text className="sf-nl" x={n.x} y={n.y + 4}>{n.id ? n.id.slice(-1) : "·"}</text>
+                        </g>
+                    ))}
+                    <Box x={420} y={110} w={210} h={50} label={`typed "${typed}": ${typed.length} step${typed.length === 1 ? "" : "s"} down`} tone="grn" sub={cur.top} />
+                    <text className="sf-lab" x={14} y={212}>each node stores its best completions, so a request is a walk of the prefix and one read</text>
+                </>
+            );
+        },
+    },
     watermark: {
         steps: 12,
         ms: 900,

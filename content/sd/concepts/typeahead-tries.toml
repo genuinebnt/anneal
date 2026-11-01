@@ -1,15 +1,145 @@
 title = "Typeahead and tries"
 group = "advanced"
 order = 3
-minutes = 8
+minutes = 17
 lede = "Suggesting completions as someone types: a trie keyed by prefix with the top results stored at each node, built offline from what people search, served from memory in milliseconds."
 say = "Each trie node stores its top 10 completions, so a lookup is a walk down the prefix and a read; the trie is rebuilt hourly from search logs and served from memory, sharded by prefix."
-related = ["caching", "scaling-reads", "elasticsearch"]
+related = ["caching", "scaling-reads", "elasticsearch", "probabilistic-structures", "stream-processing"]
+
+summary = [
+  "A **trie** turns \"completions of this prefix\" into a walk of a few nodes; the answer is the **subtree** under the last one.",
+  "**Short prefixes are the hard case**: ranking the subtree under one letter visited **134,000 nodes** (19 ms); a stored top-10 list answered in **under 100 ns**.",
+  "So **precompute the top K at every node**, offline, from counted search logs; requests only read.",
+  "Make it small with a **radix tree** or an FST (2.4 million trie nodes became 389,000), and serve it **from memory**, replicated or sharded by prefix.",
+  "Blend in a **real-time layer** for trending queries, filter unsafe suggestions before publishing, and **debounce and cache** on the client.",
+]
 
 [[sections]]
 heading = "The trie"
 body = """
 A tree where each edge is a character and each path from the root spells a prefix. To complete `ca`, walk `c → a` and look below. Walking below to rank every word under `ca` is too slow, so each node **stores its top K completions** (by search count), precomputed.
+
+The trie (from re*trie*val; Fredkin, 1960) shares every common prefix: all queries starting with `ca` hang under one node, so finding the node for a prefix costs one step per character, whatever the number of queries. The work that remains is choosing which of the queries below that node to show.
+
+```rust title=trie.rs hl=41-49,61-63
+use std::collections::BTreeMap;
+
+/// A trie over query strings in which every node keeps the ids of the `k` most searched queries below it.
+pub struct Trie {
+    nodes: Vec<Node>,
+    queries: Vec<(String, u64)>, // id -> (query, how often it was searched)
+    k: usize,
+}
+
+#[derive(Default)]
+struct Node {
+    children: BTreeMap<u8, u32>, // next byte -> node index
+    query: Option<u32>,          // a query ends here
+    top: Vec<u32>,               // the k best query ids in this subtree, best first
+}
+
+impl Trie {
+    pub fn build(queries: Vec<(String, u64)>, k: usize) -> Trie {
+        let mut t = Trie { nodes: vec![Node::default()], queries, k };
+        for id in 0..t.queries.len() {
+            let mut at = 0usize;
+            for &b in t.queries[id].0.as_bytes() {
+                at = match t.nodes[at].children.get(&b) {
+                    Some(&next) => next as usize,
+                    None => {
+                        t.nodes.push(Node::default());
+                        let next = t.nodes.len() - 1;
+                        t.nodes[at].children.insert(b, next as u32);
+                        next
+                    }
+                };
+            }
+            t.nodes[at].query = Some(id as u32);
+        }
+        t.fill_top(0);
+        t
+    }
+
+    /// Bottom up: a node's top k are the best of its own query and its children's top k lists.
+    fn fill_top(&mut self, at: usize) {
+        let kids: Vec<u32> = self.nodes[at].children.values().copied().collect();
+        let mut best: Vec<u32> = self.nodes[at].query.into_iter().collect();
+        for c in kids {
+            self.fill_top(c as usize);
+            best.extend_from_slice(&self.nodes[c as usize].top);
+        }
+        best.sort_by(|a, b| self.queries[*b as usize].1.cmp(&self.queries[*a as usize].1).then(a.cmp(b)));
+        best.truncate(self.k);
+        self.nodes[at].top = best;
+    }
+
+    fn find(&self, prefix: &str) -> Option<usize> {
+        let mut at = 0usize;
+        for b in prefix.bytes() {
+            at = *self.nodes[at].children.get(&b)? as usize;
+        }
+        Some(at)
+    }
+
+    /// A request: walk the prefix, read the stored list.
+    pub fn suggest(&self, prefix: &str) -> Vec<&str> {
+        self.find(prefix).map(|n| self.nodes[n].top.iter().map(|&q| self.queries[q as usize].0.as_str()).collect()).unwrap_or_default()
+    }
+
+    /// Without stored lists: visit the whole subtree under the prefix, then rank. Returns the answer and the nodes visited.
+    pub fn suggest_by_scan(&self, prefix: &str) -> (Vec<&str>, usize) {
+        let Some(start) = self.find(prefix) else { return (vec![], 0) };
+        let (mut stack, mut found, mut visited) = (vec![start], vec![], 0);
+        while let Some(n) = stack.pop() {
+            visited += 1;
+            found.extend(self.nodes[n].query);
+            stack.extend(self.nodes[n].children.values().map(|&c| c as usize));
+        }
+        found.sort_by(|a, b| self.queries[*b as usize].1.cmp(&self.queries[*a as usize].1).then(a.cmp(b)));
+        (found.iter().take(self.k).map(|&q| self.queries[q as usize].0.as_str()).collect(), visited)
+    }
+}
+```
+
+`build` inserts every query and then fills each node's list bottom up: a node's best K are the best of its own query and its children's lists, so the whole precomputation is one pass over the tree. `suggest` is the request path: walk the prefix, return the stored list.
+"""
+
+[[sections]]
+heading = "Precomputed top K, measured"
+body = """
+Run on a synthetic search log of **300,000** distinct queries (one to three made-up words, 4.9 MB of text) with Zipf-like popularity, K = 10, on one core (release build):
+
+| | Result |
+|---|---|
+| trie nodes | 2,408,479 |
+| build, including all top-10 lists | 1.3 to 1.5 s |
+| ids stored in top-10 lists | 3,081,472 (12 MB as 32-bit ids) |
+
+Then 2,000 requests per prefix length, each answered both ways: from the stored lists, and by visiting the whole subtree and ranking it. The answers were identical every time; the cost was not:
+
+| Prefix length | Stored list | Scanning the subtree | Nodes visited by the scan |
+|---|---|---|---|
+| 1 | 48 ns | 18.9 ms | 134,443 |
+| 2 | 72 ns | 17.8 ms | 120,806 |
+| 3 | 271 ns | 948 µs | 6,761 |
+| 5 | 1.1 µs | 204 µs | 1,169 |
+| 8 | 1.4 µs | 103 µs | 636 |
+
+The scan is worst exactly where typeahead starts, at the first one or two letters, and those are the most frequent requests because everyone types them. Stored lists make every request a short walk and a copy of ten ids. (The stored lists answered in nanoseconds here because the trie was in memory and hot in cache; over a network the request costs the round trip, which is why the trie lives in the serving process, not behind a database.)
+
+The same lesson holds in a database. On Postgres 18 with 300,000 rows in an `en_US.utf8` database, `WHERE q LIKE 'ab1%'` could not use an ordinary B-tree index on `q` (a parallel scan of all 2,804 pages); an index with `text_pattern_ops` turned it into a range scan of 5 pages. But "top 10 by popularity for prefix `a`" still read 18,681 matching rows and sorted them: a range scan finds the prefix's rows, it does not rank them.
+"""
+
+[[sections]]
+heading = "Making it smaller"
+body = """
+Most trie nodes have exactly one child: in the log above only **389,126 of 2,408,479** nodes branch or end a query. Three standard ways to shrink it:
+
+- **Radix tree** (Patricia trie; Morrison, 1968): merge each chain of single-child nodes into one edge labelled with a string. Here that keeps the 389,126 nodes that matter, about a sixth.
+- **Store ids, not strings**: each node's top K are 4-byte ids into one array of query strings, so a popular query is stored once, not at every node above it.
+- **A finite-state transducer**: a minimised automaton that shares suffixes as well as prefixes, which Lucene uses for its term dictionaries and its suggesters. Elasticsearch's completion suggester is built on this kind of in-memory structure: its documentation describes it as fast to look up but costly to build, which is the same offline-build, read-only-serve trade.
+
+Cap the depth too: completions are only shown for prefixes up to some length, and nodes deeper than the longest useful prefix need no list.
 """
 
 [[sections]]
@@ -18,12 +148,42 @@ body = """
 - **Build offline**: aggregate search logs (counts per query, decayed over time), build the trie with top-K per node, publish it (a snapshot file).
 - **Serve from memory**: suggestion servers load the snapshot; a request is a walk of a few nodes. Shard by first character(s) if one server cannot hold it.
 - **Cache** popular prefixes at the edge; clients debounce keystrokes (~100 ms) and cache recent answers.
+
+**The pipeline**, end to end:
+
+:::steps From a search to a suggestion
+- search service | logs every submitted query | Only submitted searches count, not every keystroke, or half-typed prefixes would become suggestions.
+- aggregation job | counts queries per hour, decays older counts | A count from last month weighs less than one from today; the half-life is a tuning choice.
+- builder | filters, builds the trie and its top-K lists, writes a snapshot | Unsafe, personal or very rare queries are removed here, before anyone can see them.
+- suggestion servers | load the new snapshot beside the old, then swap | Requests never see a half-built trie; a bad snapshot can be rolled back.
+- client | debounces, calls, caches per prefix | Typing "cat" quickly sends one request, not three, and backspace hits the cache.
+:::
+
+**Sharding.** The trie above holds 300,000 queries in 4.9 MB of text plus 12 MB of top-K ids; tries of that order fit comfortably in one server's memory, so they are usually **replicated** to every server and not sharded at all. When it does not fit, shard by prefix, but not by one letter: query traffic and query counts are skewed (far more start with "s" than with "x"), so split ranges by measured load, for example `a-ca`, `cb-fz`, and so on, with a small routing table.
 """
 
 [[sections]]
 heading = "Freshness and filtering"
 body = """
 Trending queries need minutes, not hours: blend the offline trie with a small real-time counter of recent searches. Filter offensive or unsafe suggestions before publishing; personalise by re-ranking candidates per user on top of the global list.
+
+- **The real-time layer**: a stream job counts queries over the last few minutes (a count-min sketch or a Space-Saving summary keeps it small) and publishes the trending ones per prefix; the server merges them into the stored list with a boost.
+- **Decay**: score = count × 2^(−age / half-life), so last week's surge fades on its own.
+- **Personalisation**: fetch more candidates than you show (say 50), then re-rank with the user's history, language and location.
+- **Safety**: a blocklist and a classifier run in the builder, and the real-time layer goes through the same filter, because trending is exactly where abuse shows up first.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+1. **Numbers first**: queries per second (every keystroke after debounce), the size of the query set, the latency target (under 100 ms end to end, so a few milliseconds on the server).
+2. **Data structure**: a trie or radix tree with the top K stored at every node, ids into a string table.
+3. **Offline build** from logged searches with decayed counts, filtered, published as a snapshot; swap atomically.
+4. **Serving**: in memory, replicated; shard by load-balanced prefix ranges only if it does not fit.
+5. **Freshness**: a small real-time layer blended in; **client**: debounce, cache, CDN for the first letters.
+
+> [!INTERVIEW]
+> "The hard requests are one and two letters, because a subtree there is huge; storing the top ten at every node makes them as cheap as any other: a walk and a read of ten ids."
 """
 
 [[checks]]
@@ -33,3 +193,82 @@ answer = "Finding the best completions under a short prefix like 'a' would mean 
 [[checks]]
 prompt = "How do you get trending searches into suggestions within minutes if the trie is rebuilt hourly?"
 answer = "Keep a small real-time layer (a sliding-window counter of recent queries in a stream or Redis) and blend its top results with the offline trie's at serving time."
+
+[[checks]]
+prompt = "Which requests are the most expensive for a trie without stored lists, and why does that matter for typeahead in particular?"
+answer = "The shortest prefixes: one or two letters have the largest subtrees (measured: about 134,000 nodes and 19 ms to rank under one letter, against 636 nodes at eight letters). Typeahead sends exactly those first, and every user types them, so the worst case is also the most common request."
+
+[[checks]]
+prompt = "A trie of your query log has 2.4 million nodes, but only 389,000 of them branch or end a query. What does that suggest?"
+answer = "Most nodes sit in single-child chains spelling out the rest of one query. A radix (Patricia) tree merges each chain into one edge labelled with a string, keeping only the branching and terminal nodes, about a sixth here, with the same lookups. Storing query ids rather than strings in the top-K lists, or an FST that also shares suffixes, shrinks it further."
+
+[[checks]]
+prompt = "How would you shard a typeahead service whose trie no longer fits on one server?"
+answer = "By prefix ranges chosen from measured load, not one shard per first letter: traffic and query counts are skewed across letters. A small routing table maps prefix ranges to shards; each shard holds the subtrees for its range with their top-K lists, and popular short prefixes are also cached at the edge. If the trie fits, replicate it whole instead."
+
+[[terms]]
+term = "Trie"
+means = "A tree keyed by characters, where each path from the root spells a prefix."
+section = "The trie"
+
+[[terms]]
+term = "Top-K list"
+means = "The K most searched completions under a node, precomputed when the trie is built."
+section = "The trie"
+
+[[terms]]
+term = "text_pattern_ops"
+means = "A Postgres operator class that lets a B-tree serve LIKE 'prefix%' in a non-C collation."
+section = "Precomputed top K, measured"
+
+[[terms]]
+term = "Radix tree"
+means = "A trie whose single-child chains are merged into string-labelled edges."
+section = "Making it smaller"
+
+[[terms]]
+term = "FST"
+means = "A finite-state transducer: a minimised automaton sharing prefixes and suffixes, used by Lucene."
+section = "Making it smaller"
+
+[[terms]]
+term = "Debounce"
+means = "Waiting until typing pauses briefly before sending a request."
+section = "Building and serving"
+
+[[terms]]
+term = "Decayed count"
+means = "A count that loses weight with age, so old surges fade."
+section = "Freshness and filtering"
+
+[[sources]]
+title = "Fredkin: Trie memory (CACM, 1960)"
+kind = "paper"
+url = "https://doi.org/10.1145/367390.367400"
+
+[[sources]]
+title = "Morrison: PATRICIA, practical algorithm to retrieve information coded in alphanumeric (JACM, 1968)"
+kind = "paper"
+url = "https://doi.org/10.1145/321479.321481"
+note = "the radix tree"
+
+[[sources]]
+title = "Elasticsearch: completion suggester"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/search-suggesters.html#completion-suggester"
+
+[[sources]]
+title = "PostgreSQL: operator classes and operator families (text_pattern_ops)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-opclass.html"
+
+[[sources]]
+title = "Redis: ZRANGEBYLEX"
+kind = "docs"
+url = "https://redis.io/docs/latest/commands/zrangebylex/"
+note = "lexicographic ranges in a sorted set, the building block for simple autocomplete"
+
+[[figures]]
+name = "trie-topk"
+after = "The trie"
+caption = "Typing walks one node per letter; the node reached already holds its best completions."
