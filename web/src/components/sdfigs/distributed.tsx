@@ -2,6 +2,33 @@ import { Arrow, Box, type Fig } from "./parts";
 
 /** Figures for the distributed and advanced pages. Add each name to `SD_FIGURES_DISTRIBUTED` in `crates/content/src/sd.rs`. */
 export const FIGS_DISTRIBUTED: Record<string, Fig> = {
+    "raft-log": {
+        steps: 10,
+        ms: 900,
+        draw: (t) => {
+            // the leader appends one entry a step (4 to 7); followers trail it by 1, 2 and 3 steps; S5 is down
+            const leaderLen = (s: number) => 3 + Math.max(0, Math.min(4, s));
+            const lens = [leaderLen(t), leaderLen(t - 1), leaderLen(t - 2), leaderLen(t - 3), 3];
+            const commit = [...lens].sort((a, b) => b - a)[2]!;
+            const names = ["S1 leader", "S2", "S3", "S4", "S5"];
+            return (
+                <>
+                    {lens.map((len, r) => (
+                        <g key={r}>
+                            <text className="sf-lab" x={14} y={r * 40 + 27}>{names[r]}</text>
+                            {Array.from({ length: 8 }, (_, i) => (
+                                <rect key={i} className={`sf-cell${i < Math.min(len, commit) ? " full" : ""}${i >= commit && i < len ? " new" : ""}`} x={110 + i * 30} y={r * 40 + 10} width={26} height={26} rx={5} />
+                            ))}
+                            {r === 4 && <text className="sf-lab" x={360} y={r * 40 + 27}>down</text>}
+                        </g>
+                    ))}
+                    <Box x={420} y={60} w={190} label={`commit index ${commit}`} tone="grn" sub="held by 3 of 5" />
+                    <text className="sf-lab" x={420} y={130}>{t >= 1 && t <= 4 ? "client command appended" : t > 4 && commit < 7 ? "followers catch up" : "all caught up"}</text>
+                    <text className="sf-lab" x={14} y={214}>an entry commits once a majority of logs hold it; S5 being down changes nothing</text>
+                </>
+            );
+        },
+    },
     "vector-clocks": {
         steps: 9,
         ms: 1100,
