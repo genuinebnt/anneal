@@ -1,0 +1,68 @@
+/* The query plan view (components/PlanView.tsx): a plan as a tree of steps with a bar per step, drawn on SQL course pages and in the
+   plan explorer. Steps are listed root first, indented by depth; the bars grow in the order the database runs them (--o). */
+.pv{margin:18px 0;padding:16px 18px 14px;border-radius:14px;background:var(--inset);display:grid;gap:12px;min-width:0;max-width:100%;box-sizing:border-box}
+.pv-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.pv-engine{font:600 10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--fn)}
+.pv-stats{display:flex;gap:8px;flex-wrap:wrap}
+.pv-stats>span{display:inline-flex;align-items:baseline;gap:7px;padding:6px 10px;border-radius:9px;background:var(--panel)}
+.pv-stats small{font:600 9.5px var(--mono);letter-spacing:.12em;color:var(--dim)}
+.pv-stats b{font:600 13px var(--mono);font-variant-numeric:tabular-nums}
+.pv-stats em{font:500 11px var(--mono);font-style:normal;color:var(--warn)}
+.pv-sql{margin:0;padding:12px 14px;border-radius:10px;background:var(--bg);font:400 13px/1.65 var(--code);color:var(--fg);white-space:pre-wrap;overflow-wrap:anywhere}
+.pv-setup{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pv-setup code{font:500 11.5px var(--code);padding:4px 9px;border-radius:7px;background:var(--panel);color:var(--mut)}
+.pv-setup span{font:500 11.5px var(--mono);color:var(--dim)}
+.pv-bar-top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.pv-seg{display:inline-flex;gap:3px;padding:3px;border-radius:9px;background:var(--panel)}
+.pv-seg button{border:0;border-radius:7px;padding:5px 12px;background:transparent;color:var(--dim);font:500 12px var(--mono);transition:background .2s,color .2s}
+.pv-seg button:hover{color:var(--fg)}
+.pv-seg button.on{background:var(--raise);color:var(--fg);font-weight:600}
+
+.pv-tree{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.pv-node{border-radius:10px}
+.pv-row{display:grid;grid-template-columns:22px minmax(150px,1.1fr) minmax(70px,1.4fr) auto auto;gap:10px;align-items:center;width:100%;border:0;border-radius:10px;padding:9px 12px 9px calc(10px + var(--d) * 20px);background:var(--panel);color:var(--fg);text-align:left;cursor:pointer;transition:background .2s,transform .2s var(--ease)}
+.pv-row:hover{background:var(--raise)}
+.pv-row:focus-visible{outline:2px solid color-mix(in oklab,var(--acc) 60%,transparent);outline-offset:1px}
+.pv-n{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--inset);color:var(--dim);font:600 10.5px var(--mono)}
+.pv-op{display:grid;gap:1px;min-width:0}
+.pv-op b{font:600 13px var(--sans)}
+.pv-op em{font:500 11.5px var(--mono);font-style:normal;color:var(--dim);overflow-wrap:anywhere}
+.pv-bar{height:8px;border-radius:4px;background:var(--line2);overflow:hidden}
+.pv-bar i{display:block;height:100%;border-radius:4px;background:color-mix(in oklab,var(--fn) 70%,var(--panel));transform-origin:left;animation:pv-grow .7s var(--ease) both;animation-delay:calc(var(--o) * 90ms)}
+.pv-node.hot .pv-bar i{background:var(--acc)}
+.pv-val{font:500 12px var(--mono);color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;min-width:78px}
+.pv-tags{display:flex;gap:6px;align-items:center;min-width:0}
+.pv-hot{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:3px 8px;border-radius:6px;background:var(--acc-bg);color:var(--acc);animation:pv-pulse 2.4s ease-in-out infinite}
+.pv-flag{display:grid;place-items:center;min-width:19px;height:19px;border-radius:50%;font:700 10.5px var(--mono);color:var(--bg)}
+.pv-flag.warn{background:var(--warn)}.pv-flag.bad{background:var(--bad)}
+.pv-node.hot>.pv-row{background:color-mix(in oklab,var(--acc) 11%,var(--panel))}
+.pv-node.open>.pv-row{background:var(--raise)}
+
+.pv-more{margin:4px 0 8px;padding:12px 14px 12px calc(14px + var(--d) * 20px);border-radius:10px;background:var(--panel);display:grid;gap:10px;animation:pv-open .28s var(--ease)}
+.pv-facts{display:flex;gap:8px 16px;flex-wrap:wrap;font:500 12px var(--mono);color:var(--dim)}
+.pv-facts b{color:var(--fg);font-variant-numeric:tabular-nums}
+.pv-details{margin:0;display:grid;gap:5px}
+.pv-details>div{display:grid;grid-template-columns:130px minmax(0,1fr);gap:10px;align-items:baseline}
+.pv-details dt{font:600 10.5px var(--mono);letter-spacing:.08em;color:var(--dim)}
+.pv-details dd{margin:0;min-width:0}
+.pv-details code{font:400 12px/1.5 var(--code);color:var(--fg);overflow-wrap:anywhere}
+.pv-note{margin:0;padding:8px 11px;border-radius:8px;font-size:13px;line-height:1.5;color:var(--fg);background:var(--inset)}
+.pv-note.bad{background:var(--bad-bg)}.pv-note.warn{background:var(--warn-bg)}
+.pv-info{display:grid;gap:6px;padding-top:2px}
+.pv-info p{margin:0;font-size:13.5px;line-height:1.6;color:var(--mut)}
+.pv-info b{color:var(--fg)}
+.pv-info a{font:600 12.5px var(--sans);color:var(--acc);text-decoration:none}
+.pv-raw{margin:0;padding:12px 14px;border-radius:10px;background:var(--bg);font:400 12px/1.6 var(--code);color:var(--mut);white-space:pre;overflow-x:auto;scrollbar-width:none}
+.pv-raw::-webkit-scrollbar{display:none}
+.pv figcaption{font-size:12px;line-height:1.5;color:var(--dim)}
+
+@keyframes pv-grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes pv-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+@keyframes pv-open{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.pv-bar i,.pv-hot,.pv-more{animation:none}}
+@media (max-width:760px){
+  .pv-row{grid-template-columns:20px minmax(0,1fr) auto;grid-template-areas:"n op val" "bar bar bar";row-gap:6px;padding-left:calc(8px + var(--d) * 12px)}
+  .pv-n{grid-area:n}.pv-op{grid-area:op}.pv-val{grid-area:val;min-width:0}.pv-bar{grid-area:bar}.pv-tags{display:none}
+  .pv-details>div{grid-template-columns:1fr;gap:2px}
+  .pv-more{padding-left:calc(12px + var(--d) * 12px)}
+}

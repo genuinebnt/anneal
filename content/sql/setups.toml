@@ -1,0 +1,48 @@
+# The indexes (and other changes) a captured plan runs with. tools/sqlperf/capture.py applies a plan's setups in order
+# before running it and undoes them in reverse afterwards, so the example schema (tools/sqlperf/schema.sql) is the same
+# for every plan and a page always says exactly which indexes existed.
+
+[[setup]]
+id = "orders-customer"
+sql = "CREATE INDEX orders_customer ON orders (customer_id);"
+undo = "DROP INDEX orders_customer;"
+
+[[setup]]
+id = "orders-created-customer"
+sql = "CREATE INDEX orders_created_customer ON orders (created_at, customer_id);"
+undo = "DROP INDEX orders_created_customer;"
+
+[[setup]]
+id = "orders-customer-created"
+sql = "CREATE INDEX orders_customer_created ON orders (customer_id, created_at);"
+undo = "DROP INDEX orders_customer_created;"
+
+[[setup]]
+id = "orders-customer-created-cover"
+sql = "CREATE INDEX orders_customer_created_cover ON orders (customer_id, created_at) INCLUDE (id, total_cents); VACUUM orders;"
+undo = "DROP INDEX orders_customer_created_cover;"
+
+[[setup]]
+id = "orders-status-created"
+sql = "CREATE INDEX orders_status_created ON orders (status, created_at);"
+undo = "DROP INDEX orders_status_created;"
+
+[[setup]]
+id = "orders-status"
+sql = "CREATE INDEX orders_status ON orders (status);"
+undo = "DROP INDEX orders_status;"
+
+[[setup]]
+id = "customers-email"
+sql = "CREATE INDEX customers_email ON customers (email);"
+undo = "DROP INDEX customers_email;"
+
+[[setup]]
+id = "customers-lower-email"
+sql = "CREATE INDEX customers_lower_email ON customers (lower(email)); ANALYZE customers;"
+undo = "DROP INDEX customers_lower_email;"
+
+[[setup]]
+id = "orders-created-day"
+sql = "CREATE INDEX orders_created ON orders (created_at);"
+undo = "DROP INDEX orders_created;"

@@ -672,6 +672,22 @@ async fn reading_has_its_own_schedule(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
+async fn a_sql_course_page_carries_the_plans_it_shows(db: PgPool) {
+    let app = test_app_with(db, &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"));
+    let (status, v) = call(&app, Method::GET, "/api/sd/concepts/sql-anatomy", None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let plans = v["plans"].as_object().expect("a plans object");
+    for id in ["m1-pk-lookup", "m1-customer-lookup", "m1-customer-no-index"] {
+        let p = plans.get(id).unwrap_or_else(|| panic!("plan {id} missing"));
+        assert!(p["json"]["Plan"]["Node Type"].is_string(), "{id} has a plan tree");
+        assert!(p["query"].as_str().unwrap().contains("orders"));
+    }
+    // a page with no plan blocks sends none
+    let (_, other) = call(&app, Method::GET, "/api/sd/concepts/caching", None).await;
+    assert!(other["plans"].as_object().unwrap().is_empty());
+}
+
+#[sqlx::test(migrator = "anneal_api::MIGRATOR")]
 async fn ai_help_says_plainly_when_it_is_off(db: PgPool) {
     let app = test_app(db);
     let (status, s) = call(&app, Method::GET, "/api/ai", None).await;

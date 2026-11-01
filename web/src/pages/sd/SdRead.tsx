@@ -4,7 +4,7 @@ import type { SdConceptView, SdOverview } from "../../api";
 import { AskPanel } from "../../components/AskPanel";
 import { HowFound, ListCard, Page3, Panel } from "../../components/layout";
 import { SdFigure } from "../../components/SdFigure";
-import { SdMd, countNotes } from "../../components/SdMd";
+import { PlansContext, SdMd, countNotes } from "../../components/SdMd";
 import { getPref, setPref } from "../../prefs";
 import { groupOf } from "./SdHome";
 
@@ -202,6 +202,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
     );
     const style = { "--rd-w": WIDTH[prefs.width], "--rd-fs": SIZE[prefs.size], "--rd-lh": SPACE[prefs.space] } as CSSProperties;
     const center = (
+        <PlansContext.Provider value={v.plans ?? {}}>
         <div className={`rd-wrap${hasNotes ? " has-sn" : ""}`} style={style}>
             <article className="ly-pn sd-art rd-art">
                 <span className="sd-k" style={{ color: g.color }}>{g.name.toUpperCase()}</span>
@@ -254,6 +255,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
             </article>
             <div id="checks">{checks}</div>
         </div>
+        </PlansContext.Provider>
     );
     const right = (
         <>

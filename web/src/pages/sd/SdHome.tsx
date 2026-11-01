@@ -15,6 +15,8 @@ export const SD_GROUPS: { id: string; name: string; blurb: string; color: string
     { id: "distributed", name: "Distributed systems", blurb: "clocks, consensus, quorums, isolation", color: "var(--acc)" },
     { id: "lld", name: "Low-level design", blurb: "SOLID, patterns, concurrency", color: "var(--vio)" },
     { id: "rust", name: "Rust", blurb: "patterns, async architecture, Rust design questions", color: "var(--warn)" },
+    // the SQL performance course (docs/SQL_COURSE.md); its other parts are added here as they are written
+    { id: "sql-indexes", name: "SQL performance: indexes", blurb: "how an index is laid out, and what makes a query fast", color: "var(--fn)" },
 ];
 
 export const groupOf = (id: string) => SD_GROUPS.find((g) => g.id === id) ?? SD_GROUPS[0]!;

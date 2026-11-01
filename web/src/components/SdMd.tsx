@@ -1,6 +1,9 @@
 import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
+import { createContext, useContext } from "react";
 import { CODE_LANGS, highlightLines } from "../highlight";
+import { fromPostgresJson, type PlanFile } from "../plan";
+import { PlanView } from "./PlanView";
 
 /** The callouts a system design page can use: `> [!NOTE]` and the like at the start of a quote. */
 const CALLOUTS: Record<string, { label: string; icon: string }> = {
@@ -12,7 +15,7 @@ const CALLOUTS: Record<string, { label: string; icon: string }> = {
 };
 const icon = (paths: string) => `<svg class="sd-ci" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
-type CodeSeg = { k: "code"; lang: string; title?: string; hl: Set<number>; group?: string; code: string };
+type CodeSeg = { k: "code"; lang: string; title?: string; hl: Set<number>; group?: string; code: string; id?: string };
 type Seg = { k: "md"; text: string } | CodeSeg | { k: "math"; tex: string } | { k: "steps"; title: string; items: { who: string; what: string; say?: string }[] } | { k: "deeper"; title: string; meta?: string; text: string };
 
 /** `hl=13,15-16` as a set of line numbers. */
@@ -44,7 +47,7 @@ export function segments(text: string): Seg[] {
             const body: string[] = [];
             for (i++; i < lines.length && !/^```\s*$/.test(lines[i]!); i++) body.push(lines[i]!);
             const meta = Object.fromEntries([...(fence[2] ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
-            out.push({ k: "code", lang: fence[1] || "text", title: meta.title, hl: lineSet(meta.hl), group: meta.group, code: body.join("\n") });
+            out.push({ k: "code", lang: fence[1] || "text", title: meta.title, hl: lineSet(meta.hl), group: meta.group, code: body.join("\n"), id: meta.id });
             continue;
         }
         const one = /^\$\$(.+)\$\$\s*$/.exec(line);
@@ -200,6 +203,18 @@ function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
     );
 }
 
+/** The plans a page shows, by id (the page's API response carries them). */
+export const PlansContext = createContext<Record<string, PlanFile>>({});
+
+/** A ```plan block: the plan captured for its id, drawn with the plan view. */
+function PlanBlock({ id }: { id?: string }) {
+    const plans = useContext(PlansContext);
+    const file = id ? plans[id] : undefined;
+    const plan = useMemo(() => (file ? fromPostgresJson(file.json) : null), [file]);
+    if (!file || !plan) return <p className="sd-dim">This plan has not been captured yet ({id ?? "no id"}).</p>;
+    return <PlanView plan={plan} query={file.query} setup={file.setup} version={file.version} text={file.text} json={file.json} />;
+}
+
 /** The controls the Idea tab's lab uses: back, next, play or pause, restart, the step count and a tick per step. */
 export function StepControls({ i, n, playing, set, play }: { i: number; n: number; playing: boolean; set: (i: number) => void; play: (on: boolean) => void }) {
     return (
@@ -290,6 +305,7 @@ function Blocks({ text, id, start }: { text: string; id: string; start: number }
             out.push(<Deeper key={i} title={s.title} meta={s.meta} text={s.text} id={`${id}-${i}`} start={notes} />);
             notes += countNotes(s.text);
         }
+        else if (s.lang === "plan") out.push(<PlanBlock key={i} id={s.id} />);
         else {
             // consecutive code blocks that name the same group are one block with a tab per language
             const group: CodeSeg[] = [s];

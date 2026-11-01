@@ -161,3 +161,25 @@ test("with AI help on, moving between problem pages inside the app never crashes
     await expect(page.locator(".rd-art")).toBeVisible();
     await expect(page.getByText("This page ran into a problem")).toHaveCount(0);
 });
+
+test("a SQL course page draws its captured plans: the hottest step marked, bars by pages or time, text and JSON views", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto("/sd/learn/sql-anatomy");
+    const plan = page.locator(".pv").filter({ hasText: "Gather" });
+    await plan.scrollIntoViewIfNeeded();
+    // the full table scan is the costly step, and it says why
+    await expect(plan.locator(".pv-hot")).toHaveCount(1);
+    await expect(plan.locator(".pv-node.hot .pv-op b")).toContainText("Parallel Seq Scan");
+    await expect(plan.locator(".pv-node.hot .pv-more")).toContainText("removed by filter");
+    await expect(plan.locator(".pv-node.hot .pv-more")).toContainText("thrown away by the filter");
+    await expect(plan.locator(".pv-engine")).toContainText("Postgres 18");
+    // bars can show time instead of pages
+    await plan.getByRole("radio", { name: "Time" }).click();
+    await expect(plan.locator(".pv-val").first()).toContainText("ms");
+    // the raw output is there too
+    await plan.getByRole("tab", { name: "Text" }).click();
+    await expect(plan.locator(".pv-raw")).toContainText("Parallel Seq Scan on orders");
+    await plan.getByRole("tab", { name: "JSON" }).click();
+    await expect(plan.locator(".pv-raw")).toContainText('"Node Type"');
+    await expect(page.getByText("has not been captured yet")).toHaveCount(0);
+});

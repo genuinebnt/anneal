@@ -73,6 +73,7 @@ import "./styles/analytics.css";
 import "./styles/graph.css";
 import "./styles/palette.css";
 import "./styles/sd.css";
+import "./styles/plan.css";
 
 const rootRoute = createRootRoute({
   component: () => (

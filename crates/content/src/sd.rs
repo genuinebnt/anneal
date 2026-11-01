@@ -1,5 +1,9 @@
 //! System design prep (docs/SYSTEM_DESIGN.md): concept pages and practice problems with written rubrics, loaded from
 //! `<root>/sd/concepts/*.toml` and `<root>/sd/problems/*.toml`. A missing `sd` directory is an empty catalog.
+//!
+//! The SQL performance course (docs/SQL_COURSE.md) uses the same page format: `<root>/sql/pages/*.toml`, filed under
+//! [`SQL_GROUPS`], with query plans captured from a real database into `<root>/sql/plans/<id>.json` by
+//! `tools/sqlperf/capture.py`. Its pages join the same catalog, so checks, review cards and search work unchanged.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,6 +14,8 @@ use crate::catalog::Issue;
 
 /// The groups concept pages are filed under, in the order the Learn tab shows them.
 pub const SD_GROUPS: &[&str] = &["fundamentals", "core", "pattern", "technology", "advanced", "distributed", "lld", "rust"];
+/// The parts of the SQL performance course, in course order; a SQL page's `group` is one of these.
+pub const SQL_GROUPS: &[&str] = &["sql-indexes", "sql-plans", "sql-shapes", "sql-covering", "sql-internals", "sql-writes", "sql-special", "sql-scale", "sql-rust", "sql-engines"];
 /// The levels a rubric point can be expected at.
 pub const SD_LEVELS: &[&str] = &["mid", "senior", "staff"];
 /// The kinds of practice problem.
@@ -22,6 +28,8 @@ pub struct SdCatalog {
     /// By id (the file name).
     pub concepts: BTreeMap<String, Concept>,
     pub problems: BTreeMap<String, SdProblem>,
+    /// Captured query plans by id, as `tools/sqlperf/capture.py` wrote them (the query, the setups, the JSON and text plans).
+    pub plans: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,7 +95,7 @@ pub struct Source {
 pub const SD_SOURCE_KINDS: &[&str] = &["paper", "docs", "guide", "book", "standard", "article"];
 
 /// The fence languages the web app highlights (`web/src/highlight.ts`).
-pub const SD_CODE_LANGS: &[&str] = &["rust", "rs", "python", "py", "sql", "http", "json", "redis", "sh", "bash", "text"];
+pub const SD_CODE_LANGS: &[&str] = &["rust", "rs", "python", "py", "sql", "http", "json", "redis", "sh", "bash", "text", "plan"];
 
 /// Checks the Markdown a page or a drill reference is written in against the grammar the web app reads (`web/src/components/SdMd.tsx`):
 /// fences closed and in a known language with known options, display math and `:::steps` / `:::deeper` blocks closed, step lines
@@ -106,9 +114,9 @@ pub fn check_markdown(text: &str) -> Vec<String> {
             }
             for w in words {
                 match w.split_once('=') {
-                    Some(("title" | "group", v)) if !v.is_empty() => {}
+                    Some(("title" | "group" | "id" | "setup", v)) if !v.is_empty() => {}
                     Some(("hl", v)) if !v.is_empty() && v.split(',').all(|p| p.split('-').all(|n| n.parse::<u32>().is_ok_and(|n| n > 0))) => {}
-                    _ => bad.push(format!("code fence option {w:?} is not title=…, group=… or hl=3,5-7")),
+                    _ => bad.push(format!("code fence option {w:?} is not title=…, group=…, hl=3,5-7, or for a plan id=… and setup=…")),
                 }
             }
             let start = i;
@@ -292,10 +300,15 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
     let dir = root.join("sd");
     let mut cat = SdCatalog::default();
     let blank = |s: &str| s.trim().is_empty();
-    for (id, path, mut c) in read_dir_toml::<Concept>(&dir.join("concepts"), issues) {
+    let pages = read_dir_toml::<Concept>(&dir.join("concepts"), issues).into_iter().map(|p| (p, SD_GROUPS, false));
+    let sql = read_dir_toml::<Concept>(&root.join("sql").join("pages"), issues).into_iter().map(|p| (p, SQL_GROUPS, true));
+    for ((id, path, mut c), groups, is_sql) in pages.chain(sql).collect::<Vec<_>>() {
         let mut bad = Vec::new();
-        if !SD_GROUPS.contains(&c.group.as_str()) {
-            bad.push(format!("group {:?} is not one of {}", c.group, SD_GROUPS.join(", ")));
+        if !groups.contains(&c.group.as_str()) {
+            bad.push(format!("group {:?} is not one of {}", c.group, groups.join(", ")));
+        }
+        if is_sql && !id.starts_with("sql-") {
+            bad.push("a SQL course page's file name starts with `sql-`, so its id never collides with a system design page".to_owned());
         }
         if blank(&c.title) || blank(&c.lede) || blank(&c.say) {
             bad.push("`title`, `lede` and `say` must not be empty".to_owned());
@@ -351,6 +364,33 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
             cat.concepts.insert(id, c);
         } else {
             issues.push(Issue { path, message: bad.join("; ") });
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("sql").join("plans")) {
+        let mut files: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+        files.sort();
+        for path in files {
+            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_owned();
+            match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(|e| e.to_string())) {
+                Ok(v) if v.get("json").is_some() && v.get("query").is_some() => {
+                    cat.plans.insert(id, v);
+                }
+                Ok(_) => issues.push(Issue { path, message: "a captured plan needs `query` and `json` (see tools/sqlperf/capture.py)".to_owned() }),
+                Err(message) => issues.push(Issue { path, message }),
+            }
+        }
+    }
+    // every plan a page shows must have been captured
+    for c in cat.concepts.values().filter(|c| c.id.starts_with("sql-")) {
+        for text in c.sections.iter().map(|s| &s.body).chain(c.checks.iter().map(|k| &k.answer)) {
+            for line in text.lines().filter(|l| l.starts_with("```plan")) {
+                let id = line.split_whitespace().find_map(|w| w.strip_prefix("id=")).unwrap_or_default();
+                if id.is_empty() {
+                    issues.push(Issue { path: root.join("sql").join("pages").join(format!("{}.toml", c.id)), message: "a ```plan block needs id=…".to_owned() });
+                } else if !cat.plans.contains_key(id) {
+                    issues.push(Issue { path: root.join("sql").join("pages").join(format!("{}.toml", c.id)), message: format!("plan {id} has not been captured: run tools/sqlperf/capture.py") });
+                }
+            }
         }
     }
     for (id, path, mut p) in read_dir_toml::<SdProblem>(&dir.join("problems"), issues) {

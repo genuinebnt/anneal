@@ -86,7 +86,18 @@ pub async fn concept(State(s): State<AppState>, Path(id): Path<String>) -> ApiRe
     let c = s.catalog.sd.concepts.get(&id).ok_or_else(|| ApiError::NotFound(format!("concept {id}")))?;
     let marked: Vec<(String, Option<String>)> = sqlx::query_as("SELECT card_id, last_grade FROM sd_cards WHERE card_id LIKE $1").bind(format!("check:{id}:%")).fetch_all(&s.db).await?;
     let used_in: Vec<Value> = s.catalog.sd.problems.values().filter(|p| p.uses.contains(&id)).map(|p| json!({ "id": p.id, "title": p.title, "kind": p.kind })).collect();
-    Ok(Json(json!({ "concept": c, "marked": marked.into_iter().map(|(k, _)| k).collect::<Vec<_>>(), "used_in": used_in })))
+    // the captured plans the page shows (a SQL course page's ```plan blocks), sent with it
+    let plans: serde_json::Map<String, Value> = c
+        .sections
+        .iter()
+        .map(|x| &x.body)
+        .chain(c.checks.iter().map(|k| &k.answer))
+        .flat_map(|t| t.lines())
+        .filter(|l| l.starts_with("```plan"))
+        .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("id=")))
+        .filter_map(|pid| s.catalog.sd.plans.get(pid).map(|v| (pid.to_owned(), v.clone())))
+        .collect();
+    Ok(Json(json!({ "concept": c, "marked": marked.into_iter().map(|(k, _)| k).collect::<Vec<_>>(), "used_in": used_in, "plans": plans })))
 }
 
 /// `GET /api/sd/problems/{id}`: the problem with its rubric and references (the page hides them until a drill is finished)

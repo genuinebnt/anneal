@@ -1,0 +1,292 @@
+title = "Anatomy of an index"
+group = "sql-indexes"
+order = 1
+minutes = 22
+lede = "An index is a second, sorted copy of some columns, kept in fixed-size pages and arranged as a shallow tree, with a pointer from every entry to its row in the table. Everything else in this course follows from that layout: why lookups are fast, why some indexed queries are still slow, and what every index costs a write."
+say = "A B-tree lookup is three or four page reads down the tree, then a walk along the leaf pages, then one table page per matching row; the walk and the table visits are what make an indexed query slow."
+related = ["indexes", "storage-engines"]
+
+summary = [
+  "Tables (the **heap**) store rows in no particular order in 8 KB pages; every row has an address, its **TID**.",
+  "A B-tree's **leaf pages** hold every key in order, each with a TID, and link to their neighbours both ways.",
+  "**Internal pages** above the leaves are a small directory: 2 million orders need just 3 levels.",
+  "A lookup costs **tree depth + the leaf walk + one table page per row**; the last two make indexes slow.",
+  "Splits, deduplication, bottom-up deletion and VACUUM keep the tree compact as rows change.",
+]
+
+[[sections]]
+heading = "Pages, the heap and row addresses"
+body = """
+Postgres stores everything in **pages** of 8 KB (the block size, fixed when Postgres is compiled). A table, which Postgres calls the **heap**, is a file of pages holding rows in roughly the order they were inserted, with no sort order at all. In the course's example schema the `orders` table is 14,960 pages (117 MB) holding 2 million rows, about 134 rows per page.
+
+Every row has a physical address, its **TID** (tuple identifier): the page number and the slot within the page. You can see it as the hidden column `ctid`:
+
+```sql title=ctid.sql
+SELECT ctid, id, customer_id FROM orders WHERE id <= 3;
+--  ctid  | id | customer_id
+-- -------+----+-------------
+--  (0,1) |  1 |       ...
+--  (0,2) |  2 |       ...
+--  (0,3) |  3 |       ...
+```
+
+A TID is all an index needs to find a row: read page 0, take slot 2. It is also why an index is cheap to look up but not free: the index gives addresses, and each address is a page of the table that must be read.
+
+> [!NOTE]
+> A row's TID changes when an UPDATE writes a new version of it in another place (Postgres never updates rows in place; see Part V on MVCC). That is why every index on a table usually needs a new entry when any column of a row changes, unless the update is a HOT update.
+"""
+
+[[sections]]
+heading = "The leaf level: a sorted, doubly linked list"
+body = """
+A B-tree index keeps a sorted list of `(key, TID)` entries. The list is far too large for one page, so it is split across **leaf pages**, and each leaf page links to the one before and after it. Reading a range means finding its first entry and then following the links sideways.
+
+Measured on the example schema with the `pageinspect` extension, a leaf page of the orders primary key (a `bigint`):
+
+| Fact | Value |
+|---|---|
+| entries on the page | 367 |
+| average entry size | 16 bytes (an 8-byte key and the TID, with a small header) |
+| free space left | 808 bytes, about 10% |
+| previous and next page | page 0 (none) and page 2 |
+
+The free 10% is deliberate: B-tree leaf pages are filled to a **fillfactor** of 90 when the index is built, so that a few later inserts fit without splitting the page. An index on a column that only ever grows (an identity or a timestamp) can use `fillfactor = 100`; a heavily updated one may want less.
+
+The first entry on every leaf page except the rightmost is not a row at all: it is the page's **high key**, an upper bound for the keys on the page (here 367, the first key of the next page). A search that lands on the page while another session is splitting it compares against the high key and moves right if needed. This is the Lehman and Yao design Postgres's B-tree follows, and it is why searches never need to lock the whole path down the tree.
+
+```sql title=leaf_page.sql
+CREATE EXTENSION IF NOT EXISTS pageinspect;   -- needs superuser; use a throwaway database
+SELECT live_items, avg_item_size, free_size, btpo_prev, btpo_next
+FROM bt_page_stats('orders_pkey', 1);
+```
+"""
+
+[[sections]]
+heading = "The tree above the leaves"
+body = """
+To find the right leaf page quickly, the B-tree keeps **internal pages** above the leaves. Each internal entry holds a separator key and a pointer (a *downlink*) to a page one level down. The top internal page is the **root**; a fixed **metapage** at the start of the index file says where the root is.
+
+The orders primary key on 2 million rows:
+
+| Level | Pages | What they hold |
+|---|---|---|
+| 2 (root) | 1 | 19 downlinks |
+| 1 | 19 | downlinks to leaf pages |
+| 0 (leaves) | 5,465 | 2 million `(id, TID)` entries |
+
+The internal pages are 20 of the 5,486 pages, about 0.4%. Postgres's own documentation says that typically over 99% of a B-tree's pages are leaf pages, and these indexes are small enough that the internal levels stay in memory.
+
+Because each page holds hundreds of entries, depth grows with the logarithm of the row count in base f, the entries per page (the *fanout*):
+
+$$\\text{levels} \\approx \\lceil \\log_{f} N \\rceil \\qquad f \\approx 300\\text{–}400$$
+
+With a fanout around 360, three levels index up to about 47 million rows and four levels about 17 billion. Doubling a table almost never adds a level; a lookup stays at three or four page reads from a thousand rows to billions.
+
+:::steps A lookup for order 1,234,567
+- metapage | where is the root? page 412 | Postgres reads the metapage, which is almost always cached, to find the root.
+- root | 1,234,567 falls between two separators | The root's 19 entries are separator keys; the search picks the downlink whose range holds the key.
+- level 1 | pick the leaf | One more internal page narrows it to a single leaf page.
+- leaf | entry (1234567, TID) | Binary search inside the leaf page finds the entry and its TID.
+- heap | read the row's page | The TID names one table page; reading it returns the row. Four pages in all.
+:::
+"""
+
+[[sections]]
+heading = "What a lookup really costs"
+body = """
+Walking down the tree is cheap. What decides whether an indexed query is fast is what happens after:
+
+1. **The leaf walk**: if many entries match, the scan follows leaf pages sideways. Thousands of matching entries means many leaf pages.
+2. **Table access**: every matching entry is a TID, and each TID can be a different table page. A thousand matching rows spread across the table can be a thousand page reads, each one a random read if the page is not cached.
+
+A primary-key lookup, one row:
+
+```plan id=m1-pk-lookup
+SELECT * FROM orders WHERE id = 1234567;
+```
+
+A customer's orders through an index on `customer_id`: about 40 rows, spread over about 40 table pages, because orders were inserted over time and one customer's orders are scattered:
+
+```plan id=m1-customer-lookup setup=orders-customer
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+The same query with no index: Postgres reads every page of the table, splitting the work between parallel workers:
+
+```plan id=m1-customer-no-index
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+> [!TIP]
+> Count **pages**, not milliseconds. `EXPLAIN (ANALYZE, BUFFERS)` reports how many 8 KB pages each step touched (`shared hit` from memory, `read` from the operating system or disk). Pages do not depend on how fast your laptop is, and they are what grows when data grows.
+"""
+
+[[sections]]
+heading = "Keeping the tree in shape"
+body = """
+- **Page splits**: when an insert does not fit on its leaf page, Postgres moves part of the page's entries to a new page and adds a downlink to the parent, which may split in turn. When the root itself splits, the tree gains a level. Inserts at the right end (a growing id or timestamp) split the rightmost page in a way that leaves the old page full, which is why sequential keys pack tightly.
+- **Deduplication** (Postgres 13 and later, on by default): when several entries share a key, the leaf stores the key once followed by a sorted list of TIDs (a *posting list*). On the example schema an index on `orders (customer_id)` is **14 MB with deduplication and 43 MB without**, because each customer has about 40 orders.
+- **Suffix truncation** (Postgres 12 and later): separator keys in internal pages keep only as many leading columns as needed to tell two pages apart, so multi-column indexes have smaller internal levels.
+- **Bottom-up deletion** (Postgres 14 and later): an UPDATE that cannot be a HOT update adds a new entry to every index on the table, even indexes on columns it did not change. Before splitting a page, Postgres now looks for such obsolete versions and removes them, so indexes on heavily updated tables stop bloating between VACUUMs.
+- **VACUUM** removes entries that point to dead row versions and marks empty pages for reuse. An index that has grown far beyond its data (bloat) can be rebuilt without blocking writes with `REINDEX INDEX CONCURRENTLY`.
+
+:::deeper Why entries have a size limit | 1 min
+A B-tree entry cannot exceed roughly a third of a page (about 2.7 KB with 8 KB pages), after compression: each page must be able to hold at least three entries for splits to work. Indexing a long text column directly can therefore fail on unusually long values; index a hash of it, a prefix, or use a different index type.
+:::
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+| Engine | Table storage | Secondary index points to | Consequence |
+|---|---|---|---|
+| Postgres | heap: rows in insertion order | the row's TID (physical address) | any index reaches the row in one more page read; a row move needs new index entries |
+| MySQL InnoDB | the table *is* a B-tree on the primary key (a **clustered index**), 16 KB pages | the row's primary key | a secondary lookup walks two trees; rows stay sorted by primary key, so range scans on it are cheap |
+| SQLite | each table is a B-tree keyed by its 64-bit `rowid` (or by its primary key in a `WITHOUT ROWID` table) | the rowid | close to InnoDB's model, in a single file |
+| ClickHouse | columns stored separately, sorted by the table's `ORDER BY` key | (none: a sparse index has one entry per granule of 8,192 rows) | built for scanning millions of rows, not finding one |
+| DuckDB | columns stored in large row groups, each keeping the min and max of every column | (zone maps skip row groups; ART indexes exist for keys and constraints) | analytical scans skip data by min/max instead of looking it up |
+
+Row stores (Postgres, MySQL, SQLite) use B-trees to *find* a few rows fast. Analytical column stores (ClickHouse, DuckDB) are built to *scan* many rows fast and skip what they can; Part X covers when that is the better tool.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Look at your own indexes the way this page did. From Rust with sqlx, the depth and size of an index (with `pageinspect` installed, on a database you may experiment on):
+
+```rust title=index_shape.rs
+let (levels, pages): (i32, i64) = sqlx::query_as(
+    "SELECT (bt_metap($1)).level, pg_relation_size($1::regclass) / current_setting('block_size')::int",
+)
+.bind("orders_pkey")
+.fetch_one(&pool)
+.await?;
+println!("orders_pkey: {} levels above the leaves, {pages} pages", levels);
+```
+
+And without any extension, the size of every index on a table, largest first:
+
+```sql title=index_sizes.sql
+SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS size, idx_scan
+FROM pg_stat_user_indexes
+WHERE relname = 'orders'
+ORDER BY pg_relation_size(indexrelid) DESC;
+```
+
+`idx_scan` counts how often each index was used since statistics were last reset: a large index with zero scans is a write cost with no benefit.
+"""
+
+[[checks]]
+prompt = "The orders primary key has 3 levels on 2 million rows. Roughly how many levels would it have on 200 million rows, and why?"
+answer = "Probably 4. Each internal page holds hundreds of downlinks, so every level multiplies capacity by the fanout (about 360 here): 3 levels hold up to roughly 47 million entries and 4 levels billions. A hundredfold more rows needs only one more level."
+
+[[checks]]
+prompt = "An indexed lookup returns 2,000 rows and is slow, although the tree is only three levels deep. Where is the time going?"
+answer = "Not in the tree walk (three pages) but in the leaf walk and above all the table access: 2,000 TIDs can point to up to 2,000 different table pages, each a separate page read and possibly a random disk read. Reading fewer table pages (a covering index, or rows stored together) is what fixes it."
+
+[[checks]]
+prompt = "Why does an index on orders(customer_id) shrink from 43 MB to 14 MB with deduplication, and why would deduplication do nothing for the primary key?"
+answer = "Each customer has about 40 orders, so the index holds about 40 entries per key; deduplication stores each key once with a list of TIDs, cutting the repeated keys. The primary key has exactly one entry per key, so there are no duplicates to merge."
+
+[[checks]]
+prompt = "In MySQL InnoDB, a query finds 100 rows through a secondary index. How does the work differ from Postgres?"
+answer = "In InnoDB the secondary index stores the primary key, so each of the 100 entries leads to a second B-tree descent through the clustered primary-key index to reach the row. In Postgres the index stores the row's physical address, so each entry costs one table page read. InnoDB in return keeps rows sorted by primary key, which makes primary-key range scans cheap."
+
+[[terms]]
+term = "Page"
+means = "The unit Postgres reads and writes: 8 KB, holding rows or index entries."
+section = "Pages, the heap and row addresses"
+
+[[terms]]
+term = "Heap"
+means = "Postgres's table storage: rows in no particular order."
+section = "Pages, the heap and row addresses"
+
+[[terms]]
+term = "TID / ctid"
+means = "A row's physical address: page number and slot."
+section = "Pages, the heap and row addresses"
+
+[[terms]]
+term = "Leaf page"
+means = "The bottom level of a B-tree, holding every key with its row's TID, in order."
+section = "The leaf level: a sorted, doubly linked list"
+
+[[terms]]
+term = "Fillfactor"
+means = "How full pages are packed when built; 90 for B-tree leaves by default."
+section = "The leaf level: a sorted, doubly linked list"
+
+[[terms]]
+term = "High key"
+means = "An upper bound for the keys on a leaf page, stored as its first entry."
+section = "The leaf level: a sorted, doubly linked list"
+
+[[terms]]
+term = "Fanout"
+means = "How many downlinks an internal page holds; sets how slowly the tree grows deeper."
+section = "The tree above the leaves"
+
+[[terms]]
+term = "Buffers"
+means = "Pages a query touched, from memory (hit) or read from the OS (read)."
+section = "What a lookup really costs"
+
+[[terms]]
+term = "Posting list"
+means = "One key stored once with the sorted TIDs of all its rows (deduplication)."
+section = "Keeping the tree in shape"
+
+[[terms]]
+term = "Clustered index"
+means = "A table stored as a B-tree on its primary key (InnoDB, SQLite)."
+section = "The same idea in other engines"
+
+[[sources]]
+title = "PostgreSQL: B-tree indexes (structure, bottom-up deletion, deduplication)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/btree.html"
+
+[[sources]]
+title = "PostgreSQL: pageinspect"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pageinspect.html"
+
+[[sources]]
+title = "PostgreSQL: database page layout"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/storage-page-layout.html"
+
+[[sources]]
+title = "PostgreSQL source: the nbtree README"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README"
+note = "Lehman and Yao, high keys, page splits, from the people who wrote it"
+
+[[sources]]
+title = "MySQL: clustered and secondary indexes"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html"
+
+[[sources]]
+title = "SQLite: database file format"
+kind = "docs"
+url = "https://www.sqlite.org/fileformat2.html"
+note = "tables and indexes as B-trees"
+
+[[sources]]
+title = "ClickHouse: a practical introduction to primary indexes"
+kind = "docs"
+url = "https://clickhouse.com/docs/guides/best-practices/sparse-primary-indexes"
+
+[[sources]]
+title = "DuckDB: indexing"
+kind = "docs"
+url = "https://duckdb.org/docs/stable/guides/performance/indexing"
+note = "zone maps and ART indexes"
+
+[[sources]]
+title = "Use The Index, Luke: anatomy of an index"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/anatomy"
+note = "further reading"
