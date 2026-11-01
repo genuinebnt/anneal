@@ -87,4 +87,46 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    "visibility-timeout": {
+        steps: 9,
+        ms: 1200,
+        draw: (t) => {
+            // m7 is received by A (t1), A crashes (t3), the timeout ends (t5), B receives it (t6) and acks (t8)
+            const holder = t >= 1 && t < 5 ? "A" : t >= 6 && t < 8 ? "B" : "";
+            const gone = t >= 8;
+            const timer = t >= 1 && t < 5 ? (t - 1) * 10 : t >= 6 && t < 8 ? (t - 6) * 10 : 0;
+            const say = [
+                "m7 waits in the queue",
+                "worker A receives m7: it is hidden, not deleted",
+                "A charges the card…",
+                "…and crashes before it acks",
+                "nobody acks: the timeout keeps running",
+                "30 s without an ack: m7 is visible again",
+                "worker B receives m7, its second delivery",
+                "B must not charge again: the handler is idempotent",
+                "B acks: m7 is deleted for good",
+            ][t]!;
+            return (
+                <>
+                    <text className="sf-lab" x={14} y={22}>queue</text>
+                    {["m7", "m8", "m9", "m10"].map((m, i) => (
+                        <g key={m}>
+                            {!(i === 0 && gone) && <rect className={`sf-cell${i > 0 || !holder ? " full" : ""}`} x={14 + i * 52} y={34} width={44} height={36} rx={6} strokeDasharray={i === 0 && holder ? "4 3" : undefined} />}
+                            {!(i === 0 && gone) && <text className="sf-off" x={36 + i * 52} y={56}>{m}</text>}
+                        </g>
+                    ))}
+                    <text className="sf-lab" x={14} y={96}>{holder ? `m7 in flight with ${holder}, hidden from others` : gone ? "m7 acked and deleted" : "m7 visible: any worker may take it"}</text>
+                    <text className="sf-lab" x={14} y={130}>visibility timeout 30 s</text>
+                    <rect className="sf-cell" x={14} y={140} width={200} height={14} rx={7} />
+                    {timer > 0 && <rect className="sf-bar" x={14} y={140} width={(timer / 30) * 200} height={14} rx={7} />}
+                    <text className="sf-off" x={234} y={151}>{holder ? `${timer} s` : ""}</text>
+                    <Box x={440} y={30} w={150} label="worker A" tone={t >= 3 && t < 6 ? "bad" : holder === "A" ? "acc" : "line"} sub={t >= 3 ? "crashed" : holder === "A" ? "charging m7" : "idle"} />
+                    <Box x={440} y={130} w={150} label="worker B" tone={gone ? "grn" : holder === "B" ? "acc" : "line"} sub={gone ? "acked m7" : holder === "B" ? "m7, delivery 2" : "idle"} />
+                    <Arrow d="M232 52 L438 48" on={t === 1} />
+                    {t === 8 ? <Arrow d="M438 146 L232 62" on dash /> : <Arrow d="M232 58 L438 146" on={t === 6} />}
+                    <text className="sf-lab" x={14} y={212}>{say}</text>
+                </>
+            );
+        },
+    },
 };
