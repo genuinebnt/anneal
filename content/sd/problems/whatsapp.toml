@@ -16,11 +16,36 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and the estimate that shapes the design."
 reference = """
-**Functional**: send and receive messages in 1:1 and group chats (up to ~100 members); messages to offline users are delivered when they reconnect; sent, delivered and read receipts; history on the device.
+**Functional**:
 
-**Non-functional**: delivery under 500 ms when both are online; no message lost once the server accepted it; per-chat order preserved; 1B users, ~20B messages a day.
+1. Send and receive text messages in **1:1** and **group** chats (up to a few hundred members).
+2. A message to an **offline** user is delivered when they come back.
+3. **Receipts**: sent (the server has it), delivered (the recipient's device has it), read.
+4. Message **history** lives on the device; a user can have several devices (phone, desktop).
 
-**Estimate**: ~230k messages a second on average, ~500k at peak; ~100M concurrent connections, spread over thousands of gateway servers.
+Out of scope unless asked: media (a separate upload path to object storage, with only a reference in the message), calls, status/stories, search.
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Latency | delivered under ~500 ms when both are online |
+| Durability | once the server acknowledges a message (one tick), it is **never lost** |
+| Order | every member of a chat sees the chat's messages in **the same order** |
+| Availability | high; a gateway failure costs a reconnect, not messages |
+| Scale | 1B daily users, ~20B messages a day (assumptions) |
+
+**Estimate** (assumptions labelled):
+
+```text
+messages       20B/day ≈ 231,000/s average, ~2.2× at peak ≈ 510,000/s
+deliveries     an average of ~5 recipient devices per message → ~1.2M deliveries/s
+connections    ~100M devices connected at once
+gateways       at 100,000-500,000 connections per server → 200-1,000 servers
+keepalives     100M connections × 1 ping per 30 s ≈ 3.3M tiny frames/s
+```
+
+The estimate names the real problem: not message volume, which a partitioned store absorbs, but **100 million long-lived connections** and finding, for each message, the one server that holds the recipient's. For scale reference, WhatsApp wrote in 2012 that it pushed single servers past **2 million** TCP connections (Erlang on FreeBSD), so the connection count per box is an engineering choice, not a law.
 """
 [[steps.points]]
 id = "req-offline"
@@ -39,7 +64,19 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`User`, `Chat` (participants), `Message` (chat, sender, sequence number, body, sent time), `Inbox` entries (undelivered messages per device), `Receipt`."
+reference = """
+| Entity | Fields | Keyed by |
+|---|---|---|
+| `User` / `Device` | user id, device ids, keys (for encryption), last seen | user |
+| `Chat` | id, kind (1:1 or group), members, **next sequence number** | chat |
+| `Message` | chat_id, **seq** (per chat), msg_id, sender, client_msg_id, body (ciphertext), sent_at | **(chat_id, seq)** |
+| `Inbox` entry | device_id, chat_id, seq (a pointer to an undelivered message) | device |
+| `Receipt` state | per member per chat: last delivered seq, last read seq | (chat, member) |
+
+The **inbox** is separate from the message history because the questions differ: "what does this device still need?" (per device, emptied as it acks) against "what was said in this chat?" (per chat, ordered). A message to a group of 50 is stored **once** and referenced by up to 50 × devices inbox entries.
+
+**Retention is a product choice**: WhatsApp keeps a message on its servers only until it is delivered (up to 30 days for an undelivered one) and history lives on the devices; Discord or Slack keep full history server-side. The first stores far less (about 400 GB a day of undelivered messages if 10% wait, at 200 B each, against 4 TB a day for all history) and holds less user data; the second makes new devices and search easy.
+"""
 [[steps.points]]
 id = "ent-inbox"
 text = "A per-device inbox of undelivered messages, apart from chat history"
@@ -50,12 +87,21 @@ name = "API"
 minutes = 5
 prompt = "How clients and servers talk, in both directions."
 reference = """
-A WebSocket per device carries events both ways:
+**One WebSocket (or similar long-lived TLS connection) per device** carries events both ways, because the server must push messages the moment they arrive and polling 100M devices would be ruinous.
+
+```text
+→ { "type": "send", "chat_id": "c_9", "client_msg_id": "dev3-000417", "body": "<ciphertext>" }
+← { "type": "ack", "client_msg_id": "dev3-000417", "msg_id": "m_5521", "seq": 1042 }          (one tick)
+← { "type": "message", "chat_id": "c_9", "seq": 1042, "msg_id": "m_5521", "sender": "u_7", "body": "..." }
+→ { "type": "delivered", "chat_id": "c_9", "up_to_seq": 1042 }                                (two ticks)
+→ { "type": "read", "chat_id": "c_9", "up_to_seq": 1042 }
+→ { "type": "sync", "since": { "c_9": 1038, "c_12": 77 } }                                    (on reconnect)
 ```
-→ send {chat_id, client_msg_id, body}        ← ack {client_msg_id, msg_id, seq}
-← message {chat_id, msg_id, seq, sender, body} → delivered / read {msg_id}
-```
-REST for the rest: `GET /chats`, `GET /chats/{id}/messages?before=seq`. The client's `client_msg_id` makes resends idempotent.
+
+- **`client_msg_id`** is made on the device before sending. If the ack is lost and the device resends, the server sees the same id and returns the original `msg_id` and `seq` instead of storing a second message.
+- The **ack means durable**: the server sends it only after the message is written, which is what makes "one tick" a promise.
+- Receipts are **cumulative** (`up_to_seq`): one event covers every earlier message.
+- Plain HTTPS for everything that is not real time: `GET /chats`, `GET /chats/{id}/messages?before_seq=1000` (if history is kept server-side), media upload URLs.
 """
 [[steps.points]]
 id = "api-ws"
@@ -71,10 +117,32 @@ name = "High-level design"
 minutes = 15
 prompt = "A design that works: sending, routing to the recipient's connection, and offline delivery."
 reference = """
-- **Gateways** hold the WebSocket connections. A **session registry** (Redis) maps user/device to the gateway that holds it.
-- **Chat service** receives a message, assigns the next **sequence number for that chat**, writes it to the **message store** (Cassandra, partitioned by chat id, clustered by seq), then fans out to each recipient device.
-- For an online device, publish to its gateway (look up the registry, or a pub/sub channel per gateway); for an offline one, append to its **inbox**.
-- On reconnect the device asks for its inbox (or messages after its last seen seq per chat), then acks so they are removed.
+**The diagram**:
+
+```text
+device A ═══ gateway 1 ─► chat svc (owner of chat c_9) ─► message store
+                               │  assign seq, write     (chat_id, seq)
+                               │
+                  session registry: device → gateway
+                               │
+                 online ───────┴─────── offline
+                   ▼                       ▼
+             gateway 7 ═══ device B    inbox:B + push notification
+```
+
+1. **Gateways** terminate the connections and hold nothing else: authenticate the device, keep the socket, forward events. On connect, a device registers in the **session registry** (Redis or a sharded in-memory map): `device → gateway, connection id`, with a TTL refreshed by keepalives.
+2. **Chat service**: the message goes to the service instance that **owns the chat** (chats are partitioned by `chat_id` with consistent hashing). It checks `client_msg_id` for a duplicate, assigns the chat's **next `seq`**, writes the message to the **message store**, and acks the sender.
+3. **Message store**: a wide-column store (Cassandra, ScyllaDB) partitioned by chat and clustered by seq, so "messages of c_9 after 1038" is one partition read in order. Bound partition size by adding a time bucket to the key: Discord's message store uses `((channel_id, bucket), message_id)` with roughly 10-day buckets for exactly this reason.
+4. **Fan-out**: for each recipient device, look it up in the registry. Online: send the event to its gateway (directly, or through a per-gateway queue). Offline: append to its **inbox** and send a **push notification** (APNs/FCM) to wake the app.
+5. **Reconnect**: the device connects to any gateway, registers, and sends `sync` with its last seq per chat; the server returns everything after it from the inbox and the store; the device acks and the inbox entries are removed.
+
+:::steps A message to someone who is offline, then comes back
+- device A | send c_9 "hi", client_msg_id dev3-417 | Gateway 1 forwards it to the owner of c_9.
+- chat svc | seq 1042, write, ack A | A sees one tick: the message is durable.
+- chat svc | registry: B has no live connection | Append (c_9, 1042) to inbox:B; push notification to B's phone.
+- device B | connects to gateway 7, sync since 1038 | Gets 1039..1042 in order.
+- device B | delivered up_to 1042 | Inbox entries removed; A sees two ticks.
+:::
 """
 [[steps.points]]
 id = "hld-registry"
@@ -88,18 +156,27 @@ level = "senior"
 id = "hld-offline"
 text = "Inbox per offline device, drained and acknowledged on reconnect"
 level = "mid"
+[[steps.points]]
+id = "hld-push"
+text = "A push notification wakes an offline device; the message itself waits in the inbox"
+level = "mid"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "Ordering, failures, groups, and scale."
 reference = """
-- **Ordering**: one sequencer per chat (the chat's partition owner, or an atomic counter keyed by chat), so all members see the same order; clients sort by seq and fill gaps.
-- **Exactly-once display**: at-least-once delivery plus dedupe by msg id on the device.
-- **Gateway dies**: devices reconnect elsewhere and resume from their last seq; the registry entry expires.
-- **Groups**: fan out per member device at send time (fine up to ~100s); for huge channels, members pull.
-- **Receipts**: small events through the same path, batched; read state per member per chat.
-- **End-to-end encryption** (if asked): the server routes ciphertext it cannot read; keys per device.
+**1. Ordering.** Clocks on phones and servers disagree, and two senders can reach different servers at the same instant. Give each chat **one sequencer**: the chat service instance that owns the chat's partition assigns `seq` from a counter (persisted with the message, so a new owner after failover continues from the stored maximum). Every client orders by `seq`. A gap (it has 1040 and 1042) tells the client to fetch 1041; it never guesses. One sequencer per chat is not a bottleneck: even a busy group sends a few messages a second, and there are millions of chats spread over the owners.
+
+**2. At-least-once, shown once.** Every hop can retry: the sender resends without an ack, the server redelivers without a delivered receipt. Duplicates are removed by id: the server by `client_msg_id`, the device by `msg_id`/`seq`. Together that is exactly-once **display** on top of at-least-once **delivery**.
+
+**3. A gateway dies** with 200,000 connections. Those devices notice the dropped socket (or a missed keepalive), reconnect through the load balancer to other gateways, register again and `sync` from their last seq. Messages sent to them in the gap found a stale or expired registry entry (or a failed forward) and went to their inboxes. Nothing is lost because **the message was written before fan-out**. Spread reconnects with jittered backoff so 200,000 devices do not arrive in the same second.
+
+**4. Groups.** Fan out per member device **at send time** for groups of up to a few hundred: 1 write of the message, N small inbox or gateway events. For very large broadcast channels (100,000 members), switch to **pull**: members fetch the channel's latest seq when they open it, as in the news feed's hybrid.
+
+**5. Receipts at scale.** Receipts would double the traffic if sent per message per member. Send them cumulatively (`up_to_seq`), batch them on the device for a second or two, store only the last delivered and read seq per member per chat, and for large groups show aggregated read state.
+
+**6. Multiple devices and end-to-end encryption.** Each device is its own recipient with its own inbox. With end-to-end encryption the server only routes ciphertext. WhatsApp's security whitepaper describes the Signal protocol with pairwise sessions per device and, for groups, **Sender Keys**: the sender encrypts the message once with a group key distributed over the pairwise sessions, and the server does the fan-out, so group messages are not encrypted N times.
 """
 [[steps.points]]
 id = "dd-seq"
@@ -113,6 +190,10 @@ level = "senior"
 id = "dd-reconnect"
 text = "Gateway failure handled: reconnect anywhere and resume from the last seq"
 level = "staff"
+[[steps.points]]
+id = "dd-groups"
+text = "Groups fanned out at send time up to a size, large channels pulled"
+level = "senior"
 
 [[probes]]
 question = "Two people in a group send a message at the same instant to different servers. How do all members see the same order?"
@@ -125,3 +206,31 @@ answer = "Sends find no live connection (the registry entry is stale or expires)
 [[probes]]
 question = "How do you show 'delivered' and 'read' without doubling the traffic?"
 answer = "Receipts are tiny events sent over the same socket, batched (one per chat for the newest message, which implies all earlier ones), stored as the last delivered and read seq per member, and only shown to the sender."
+
+[[probes]]
+question = "The chat service instance that owns chat c_9 dies. How does the new owner continue the sequence without reusing a number?"
+answer = "The sequence is not only in memory: every message is written with its seq before it is acknowledged, so the new owner reads the highest stored seq for c_9 (one query at the end of the partition) and continues from it. Ownership moves through a lease, so the old owner, if it was only slow, can no longer write once the lease is gone."
+
+[[sources]]
+title = "WhatsApp: 1 million is so 2011"
+kind = "article"
+url = "https://blog.whatsapp.com/1-million-is-so-2011"
+note = "over 2 million TCP connections on one server (2012)"
+
+[[sources]]
+title = "Discord: How Discord stores billions of messages"
+kind = "article"
+url = "https://discord.com/blog/how-discord-stores-billions-of-messages"
+note = "partition key (channel_id, bucket), Snowflake message ids as the clustering key"
+
+[[sources]]
+title = "WhatsApp security whitepaper"
+kind = "paper"
+url = "https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf"
+note = "the Signal protocol, per-device sessions, Sender Keys for groups"
+
+[[sources]]
+title = "WhatsApp privacy policy"
+kind = "docs"
+url = "https://www.whatsapp.com/legal/privacy-policy"
+note = "delivered messages deleted from servers; undelivered kept up to 30 days"

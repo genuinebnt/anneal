@@ -7,6 +7,7 @@ import { HowFound, Page3, Panel, Tile, PageLoading, LoadFailed } from "../../com
 import { SdMd } from "../../components/SdMd";
 import { mmss } from "../../focusStore";
 import { SdFrame } from "./SdHome";
+import { KIND_COLOR, sourceKind } from "./SdRead";
 
 type Phase = "brief" | "drill" | "compare";
 type Answers = Record<string, { answer: string; seconds: number }>;
@@ -312,6 +313,23 @@ export function SdPractice({ id }: { id: string }) {
                     <section className="ly-pn sd-cmp">
                         <h4>The follow-ups, answered</h4>
                         {p.probes.map((pr) => <div key={pr.question} className="sd-ref"><b>{pr.question}</b><SdMd text={pr.answer} /></div>)}
+                    </section>
+                )}
+                {(p.sources?.length ?? 0) > 0 && (
+                    <section className="ly-pn sd-cmp">
+                        <h4>Sources and further reading</h4>
+                        <div className="rd-srcs">
+                            {p.sources!.map((x) => {
+                                const k = sourceKind(x);
+                                return (
+                                    <a key={x.url} href={x.url} target="_blank" rel="noreferrer">
+                                        <small style={{ color: KIND_COLOR[k] }}>{k.toUpperCase()}</small>
+                                        <b>{x.title}</b>
+                                        {x.note && <span>{x.note}</span>}
+                                    </a>
+                                );
+                            })}
+                        </div>
                     </section>
                 )}
                 <div className="sd-row sd-submit">

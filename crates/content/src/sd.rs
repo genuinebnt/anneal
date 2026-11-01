@@ -259,6 +259,10 @@ pub struct SdProblem {
     /// What an interviewer pushes on in the deep dives, one at a time.
     #[serde(default)]
     pub probes: Vec<Probe>,
+    /// Where the reference solutions' facts and numbers come from (engineering write-ups, papers, official documentation);
+    /// Compare lists them after the follow-ups, each opening in a new tab.
+    #[serde(default)]
+    pub sources: Vec<Source>,
 }
 
 /// A step of the delivery framework, with what to do, a reference answer, and the rubric points it is marked on.
@@ -435,6 +439,19 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
         if p.probes.iter().any(|q| blank(&q.question) || blank(&q.answer)) {
             bad.push("every probe needs a question and an answer".to_owned());
         }
+        for (n, q) in p.probes.iter().enumerate() {
+            for m in check_markdown(&q.answer) {
+                bad.push(format!("probe {}: {m}", n + 1));
+            }
+        }
+        for src in &p.sources {
+            if blank(&src.title) || !src.url.starts_with("https://") {
+                bad.push(format!("source {:?} needs a title and an https:// url", src.title));
+            }
+            if src.kind.as_deref().is_some_and(|k| !SD_SOURCE_KINDS.contains(&k)) {
+                bad.push(format!("source {:?} has kind {:?}, not one of {}", src.title, src.kind, SD_SOURCE_KINDS.join(", ")));
+            }
+        }
         if bad.is_empty() {
             p.id = id.clone();
             cat.problems.insert(id, p);
@@ -459,6 +476,35 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> SdCatalog {
 #[cfg(test)]
 mod tests {
     use super::check_markdown;
+
+    const DRILL: &str = "title = \"T\"\nkind = \"hld\"\norder = 1\nminutes = 5\nprompt = \"P\"\nuses = []\n\
+                         [[steps]]\nname = \"S\"\nminutes = 1\nprompt = \"p\"\nreference = \"r\"\n";
+
+    fn load_drill(extra: &str) -> (super::SdCatalog, Vec<crate::catalog::Issue>) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sd/problems")).unwrap();
+        std::fs::write(dir.path().join("sd/problems/t.toml"), format!("{DRILL}{extra}")).unwrap();
+        let mut issues = Vec::new();
+        let cat = super::load(dir.path(), &mut issues);
+        (cat, issues)
+    }
+
+    #[test]
+    fn a_drill_may_list_its_sources() {
+        let (cat, issues) = load_drill("[[sources]]\ntitle = \"Paper\"\nurl = \"https://example.org/p\"\nkind = \"paper\"\n");
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(cat.problems["t"].sources[0].title, "Paper");
+        let (cat, _) = load_drill("");
+        assert!(cat.problems["t"].sources.is_empty(), "sources are optional");
+    }
+
+    #[test]
+    fn a_drill_source_needs_https_and_a_known_kind() {
+        let (cat, issues) = load_drill("[[sources]]\ntitle = \"Paper\"\nurl = \"http://example.org/p\"\nkind = \"blog\"\n");
+        assert!(cat.problems.is_empty());
+        let message = &issues[0].message;
+        assert!(message.contains("https://") && message.contains("kind"), "{message}");
+    }
 
     #[test]
     fn well_formed_markdown_passes() {

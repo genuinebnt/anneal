@@ -16,11 +16,35 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and an estimate."
 reference = """
-**Functional**: upload videos; watch with playback that adapts to the network; video metadata, search and view counts.
+**Functional**:
 
-**Non-functional**: playback starts fast (under 2 s) and rarely stalls; uploads are durable and resumable; processing finishes within minutes; global audience.
+1. Creators **upload** videos (up to hours long, up to 4K).
+2. Viewers **watch** on any device, with quality that **adapts** to their network.
+3. Video **metadata** (title, description, channel), **search**, and **view counts**.
 
-**Estimate**: 500 hours uploaded a minute; billions of views a day; egress, not storage, is the big cost.
+Out of scope unless asked: recommendations (a separate system that only needs view events), comments, live streaming (name the difference: segments produced in real time), monetisation.
+
+**Non-functional**:
+
+| Requirement | Target |
+|---|---|
+| Start time | playback starts in under ~2 s |
+| Smoothness | rare rebuffering, even when bandwidth drops mid-video |
+| Upload | durable and resumable; a 10 GB upload survives a dropped connection |
+| Processing | watchable within minutes of upload (low resolutions first) |
+| Reach | a global audience; a viral video must not melt anything |
+
+**Estimate** (assumptions labelled):
+
+```text
+uploads    500 hours of video a minute (the figure YouTube has cited publicly) = 720,000 hours/day
+renditions ~10 Mbit/s summed over the whole ladder (assumption) → 4.5 GB per video hour
+           720,000 h × 4.5 GB ≈ 3.2 PB/day of renditions, + originals at ~20 Mbit/s ≈ 6.5 PB/day
+views      5B a day (assumption) ≈ 58,000 starts/s; 5 min average at ~2.5 Mbit/s
+egress     5B × 300 s × 2.5 Mbit/s ÷ 8 ≈ 470 PB/day ≈ 43 Tbit/s on average
+```
+
+The comparison is the answer: **storage grows by ~10 PB a day, but egress is ~470 PB a day**, about fifty times more bytes leaving than arriving. Delivery (the CDN), not storage or processing, is the cost and the scale problem.
 """
 [[steps.points]]
 id = "req-adaptive"
@@ -35,7 +59,17 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Video` (metadata, status, owner), the original file, `Rendition`s (resolution × codec), segments and manifests, `User`, view counts."
+reference = """
+| Entity | Fields | Store |
+|---|---|---|
+| `Video` | id, owner, title, description, **status** (`uploading`, `processing`, `ready`, `failed`), duration, created_at | metadata DB |
+| Original | the uploaded file, exactly as received | object storage (kept: re-encode later with better codecs) |
+| `Rendition` | video_id, resolution, codec, bitrate, status | metadata DB |
+| Segments and manifests | 2-6 s pieces of each rendition; a manifest (HLS `.m3u8` or DASH `.mpd`) listing them | object storage, served through the CDN |
+| View counts | per video: a counter fed by events | a stream plus a counter store |
+
+The original and the renditions are separate: the original is the source of truth that is rarely read; renditions are derived, re-creatable, and read billions of times. A typical ladder (assumption) is 240p, 360p, 480p, 720p and 1080p (plus 1440p and 4K for sources that have them), each in one or two codecs (H.264 for every device, VP9 or AV1 where supported for fewer bits at the same quality).
+"""
 [[steps.points]]
 id = "ent-rendition"
 text = "Renditions and segments, apart from the original upload"
@@ -46,15 +80,29 @@ name = "API"
 minutes = 5
 prompt = "Uploading and watching."
 reference = """
+```http
+POST /v1/videos   { "title": "Keynote", "size": 8589934592, "content_type": "video/mp4" }
+-> 201 { "video_id": "v_19", "upload_id": "up_3", "part_size": 67108864,
+         "part_urls": ["https://storage…/v_19/orig?partNumber=1&uploadId=…&X-Signature=…", "…"] }
+
+PUT  <part url>   (each 64 MiB part straight to object storage; retry a failed part alone)
+POST /v1/videos/v_19/complete   { "parts": [ { "n": 1, "etag": "…" }, … ] }   -> 202 { "status": "processing" }
+
+GET  /v1/videos/v_19   -> { "title": "…", "status": "ready", "manifest_url": "https://cdn…/v_19/master.m3u8" }
+GET  https://cdn…/v_19/master.m3u8        (the CDN; lists one playlist per rendition)
+GET  https://cdn…/v_19/720p/seg_00042.m4s (the player picks a rendition per segment)
 ```
-POST /videos {title, size} -> {video_id, upload_urls[]}     (multipart, presigned, straight to storage)
-GET  /videos/{id} -> {title, status, manifest_url}
-GET  <manifest_url>  (HLS/DASH from the CDN)  -> segment list per quality
-```
+
+- **Uploads bypass the API servers** as multipart uploads with presigned URLs: an 8 GiB file is 128 parts of 64 MiB, each retried alone. `complete` returns **202**: processing takes minutes.
+- **Playback is plain HTTP GETs of a manifest and segments**, which is exactly what CDNs cache best. HLS is standardised in RFC 8216; Apple's authoring specification for its devices asks for target segment durations of 6 seconds.
 """
 [[steps.points]]
 id = "api-manifest"
 text = "Playback through a manifest (HLS/DASH) served from a CDN"
+level = "mid"
+[[steps.points]]
+id = "api-multipart"
+text = "Uploads as presigned multipart parts straight to storage, completed with a 202"
 level = "mid"
 
 [[steps]]
@@ -62,10 +110,39 @@ name = "High-level design"
 minutes = 15
 prompt = "Upload, processing, playback."
 reference = """
-- **Upload** straight to object storage (multipart, presigned); a completion event puts a job on a **queue**.
-- **Processing pipeline**: split the original into chunks, **transcode in parallel** into several resolutions and codecs, cut into 2-6 s **segments**, write a **manifest** per video; mark the video ready.
-- **Playback**: the player fetches the manifest and segments from a **CDN**, switching quality per segment based on measured bandwidth (adaptive bitrate).
-- Metadata in a database; view counts aggregated asynchronously.
+**The diagram**:
+
+```text
+creator ─► object storage (original) ─► "uploaded" event ─► queue
+                                                              │
+               ┌─────────────── processing DAG ◄─────────────┘
+               │ split → transcode ×N (parallel) → package → manifest
+               ▼
+object storage (segments, manifests) ─► CDN edges ─► viewers
+                                           ▲
+metadata DB (videos, status) ◄── API ◄─────┘ (player asks for manifest_url)
+```
+
+**Upload**: multipart, presigned, straight to object storage. Completion publishes an event to a **queue**; the API never touches the bytes.
+
+**Processing pipeline** (asynchronous, a DAG of tasks):
+
+1. **Inspect** the original (codec, resolution, duration); reject or flag what is broken.
+2. **Split** it into chunks at keyframes (GOP boundaries) so each can be encoded independently.
+3. **Transcode** each chunk into every rendition of the ladder, in parallel across many workers.
+4. **Package**: cut into 2-6 s **segments** and write a **manifest** per rendition and a master manifest.
+5. Mark the video `ready`; publish the manifest URL. Thumbnails, captions and content checks run as sibling tasks.
+
+**Playback**: the player fetches the master manifest, picks a rendition, and downloads segments from the **CDN**. After each segment it measures throughput and buffer level and picks the next segment's rendition: that is **adaptive bitrate (ABR)**. A drop from fibre to 3G changes the quality at the next segment boundary instead of stalling.
+
+:::steps Bandwidth drops mid-video
+- player | 1080p segment 41 in 1.2 s for 6 s of video | Plenty of headroom; the buffer holds 20 s.
+- network | throughput falls to 2 Mbit/s | Segment 42 at 1080p takes 7 s: slower than real time.
+- player | buffer falling → request 480p for segment 43 | A smaller segment downloads in 2 s.
+- viewer | sees a softer picture, no spinner | The manifest made the switch possible at a segment boundary.
+:::
+
+**Metadata** (titles, status, renditions) in a sharded relational or wide-column store; it is small next to the video bytes. **Search** in a search index fed from it. **View counts** through a stream (deep dives).
 """
 [[steps.points]]
 id = "hld-pipeline"
@@ -81,10 +158,23 @@ name = "Deep dives"
 minutes = 15
 prompt = "Speed, cost, and the long tail."
 reference = """
-- **Parallel transcoding**: chunk the source (by GOP) so hundreds of workers transcode at once; stitch the results. A DAG of tasks (Temporal or a workflow engine) handles retries.
-- **CDN strategy**: popular videos pushed/pre-warmed at the edge; the long tail served from regional caches or origin.
-- **Cost**: cheaper storage for old, rarely watched renditions; generate rare renditions on demand.
-- **View counts**: increments through a stream, batched; approximate in real time, exact later.
+**1. Fast processing by parallelism.** A 3-hour video in 10 s chunks is 3 × 3,600 ÷ 10 = **1,080 chunks**. Encoded serially it takes hours; spread over 1,000 workers, the wall time is roughly one chunk's encode plus splitting and stitching. Run it as a **DAG** in a workflow engine (each task retried alone, a failed chunk re-encoded without redoing the rest). Do the **low renditions first** and publish the manifest as renditions complete: the video is watchable at 360p in minutes while 4K finishes. At YouTube's scale the encoding itself moved to hardware: Google's ASPLOS 2021 paper describes a video coding unit (VCU) accelerator deployed in its data centres, reporting 20-33× the efficiency of a well-tuned software baseline.
+
+**2. Encode smarter, not only faster.** A fixed ladder wastes bits on simple content (a slide deck at 5 Mbit/s) and starves complex content (sport). **Per-title** (and per-shot) encoding chooses each video's ladder from test encodes, a technique Netflix pioneered in 2015. Spend the most encoding effort where it is watched most: re-encode popular videos with costlier codecs (AV1), because every bit saved is multiplied by millions of views.
+
+**3. The CDN and the long tail.** Popularity is extremely skewed:
+
+| Tier | Holds | Serves |
+|---|---|---|
+| edge caches (in or near ISPs) | the currently popular segments | the bulk of the 43 Tbit/s |
+| regional caches | the warm middle | edge misses |
+| origin (object storage) | everything, every rendition | the long tail and first requests |
+
+Pre-position (push) a video's segments to edges when it starts trending, or for scheduled premieres. Netflix's Open Connect is the extreme case: appliances embedded **inside ISPs**, filled proactively during off-peak hours, so the busiest traffic never crosses the internet. Request coalescing at each tier (one fetch upstream for many concurrent misses on the same segment) keeps a viral video's first minutes from stampeding the origin.
+
+**4. Cost of storage.** Renditions of videos nobody watches are cold: move them to cheaper storage classes, or delete rare renditions of cold videos and **re-create on demand** from the original (a few seconds of delay for a very rare viewer, against storing petabytes forever).
+
+**5. View counts.** 58,000 view starts a second must not be 58,000 row updates on hot rows. Players send view events to a log (Kafka); a stream job **filters** (a "view" needs some seconds watched; duplicate and bot views dropped) and **aggregates** per video per minute, then adds the batch to a counter store. The count shown is approximate and a little behind; the exact count (for creators' payments) is recomputed in batch from the log.
 """
 [[steps.points]]
 id = "dd-parallel"
@@ -98,6 +188,14 @@ level = "senior"
 id = "dd-counts"
 text = "View counts batched through a stream, not a row update per view"
 level = "staff"
+[[steps.points]]
+id = "dd-per-title"
+text = "Encoding effort spent where views are (per-title ladders, better codecs for popular videos)"
+level = "staff"
+[[steps.points]]
+id = "dd-coalesce"
+text = "Request coalescing at cache tiers so a viral video's misses do not stampede the origin"
+level = "senior"
 
 [[probes]]
 question = "Why cut videos into 2 to 6 second segments?"
@@ -110,3 +208,49 @@ answer = "Split the source into chunks at keyframes and transcode them in parall
 [[probes]]
 question = "A video goes viral in one country. What keeps the origin from melting?"
 answer = "The CDN: segments are cached at edges near viewers, so after the first requests the origin is barely touched; pre-warm or push the video's segments to edges in that region once its views spike."
+
+[[probes]]
+question = "Your estimate says 43 Tbit/s of egress on average. Where does the next 10% saving come from?"
+answer = "From the bits, not the servers: better codecs (VP9, AV1) and per-title ladders for the most-watched videos, since a saving on a popular video is multiplied by every view; and from where the bits travel: higher cache hit ratios at edges inside ISPs, so less traffic crosses paid transit."
+
+[[sources]]
+title = "RFC 8216: HTTP Live Streaming"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc8216"
+note = "playlists, segments and variant streams"
+
+[[sources]]
+title = "Apple: HLS authoring specification for Apple devices"
+kind = "docs"
+url = "https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices"
+note = "6-second target durations, codecs, the variant ladder"
+
+[[sources]]
+title = "Ranganathan et al.: Warehouse-scale video acceleration, co-design and deployment in the wild (ASPLOS 2021)"
+kind = "paper"
+url = "https://research.google/pubs/warehouse-scale-video-acceleration-co-design-and-deployment-in-the-wild/"
+note = "YouTube's video coding unit: 20-33x the efficiency of software encoding"
+
+[[sources]]
+title = "Netflix Open Connect overview"
+kind = "docs"
+url = "https://openconnect.netflix.com/Open-Connect-Overview.pdf"
+note = "appliances inside ISPs, proactive caching, off-peak fill"
+
+[[sources]]
+title = "Streaming Learning Center: How Netflix pioneered per-title video encoding optimization"
+kind = "article"
+url = "https://streaminglearningcenter.com/articles/how-netflix-pioneered-per-title-video-encoding-optimization.html"
+note = "per-title ladders from test encodes and the convex hull"
+
+[[sources]]
+title = "Tubefilter: more than 500 hours of content uploaded to YouTube every minute"
+kind = "article"
+url = "https://www.tubefilter.com/2019/05/07/number-hours-video-uploaded-to-youtube-per-minute/"
+note = "the figure YouTube gave at press events in 2019"
+
+[[sources]]
+title = "Amazon S3: multipart upload limits"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html"
+note = "parts of 5 MiB to 5 GiB, up to 10,000"

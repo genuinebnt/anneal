@@ -16,11 +16,35 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, the non-functional ones made measurable, and an estimate if it matters."
 reference = """
-**Functional**: limit requests per client (API key, user or IP) by rules per endpoint; reject over-limit requests with 429 and tell the client when to retry.
+**Functional**:
 
-**Non-functional**: adds under a few milliseconds per request; works across all servers (a global limit, not per server); highly available; a little overshoot is acceptable.
+1. Limit requests **per client**, identified by API key (best), user id (after login) or IP address (for anonymous traffic, knowing that one office or mobile carrier can share an IP).
+2. Limits come from **rules** per plan and per endpoint: 100 a minute on `POST /charges`, 1,000 a minute on reads, 5 a minute on `POST /login`.
+3. A limited request is rejected with **429** and the client is told when to retry; allowed requests learn how much quota is left.
 
-**Estimate**: 1M requests a second at peak, one counter update each: memory-speed storage is needed.
+Out of scope unless asked: billing quotas over months (a different, durable system), DDoS protection at the network edge (packet-level, before any of this runs).
+
+**Non-functional**:
+
+| Requirement | Target | Consequence |
+|---|---|---|
+| Added latency | under 1-2 ms at p99 | one in-memory round trip at most; no database on the path |
+| Global limit | the limit holds across all 50 gateways | per-server counting would allow 50 × the limit |
+| Availability | the API must not go down because the limiter did | a failure policy decided in advance |
+| Accuracy | a small overshoot (a few percent) is acceptable | lets us trade exactness for speed and availability |
+
+**Estimate** (assumptions labelled):
+
+```text
+peak traffic        1,000,000 requests/s (assumption), one check each
+active clients      10M keys a day (assumption)
+state per client    ~100 B in Redis (two fields + key + overhead)
+memory              10M × 100 B = 1 GB: fits one node; sharding is for throughput
+throughput          1M checks/s ÷ ~100k scripts/s per Redis node
+                    (assumption; measure it) ≈ 10 shards, more with replicas
+```
+
+The estimate says: memory is trivial, **operations per second** are the constraint, so the design is about where the counter lives and how many round trips each request pays.
 """
 [[steps.points]]
 id = "req-identity"
@@ -39,7 +63,15 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Rule` (who, which endpoint, limit, window), the per-client counter or bucket state, and the request being checked."
+reference = """
+| Entity | Fields | Where it lives | Changes |
+|---|---|---|---|
+| `Rule` | match (plan, endpoint, method), limit, window or refill rate, burst, failure mode | a config store (a table, or a file in git), cached in every gateway | rarely; pushed or polled every few seconds |
+| `Bucket` (counter state) | key `rl:{client}:{rule}`, tokens, last refill time | Redis, with a TTL | on every request |
+| `Request` | client id, endpoint, cost (usually 1; an expensive search can cost 10) | nowhere: it is checked, not stored | |
+
+Rules and state are kept apart because they differ in every way that matters: a few hundred rules read on every request and changed by people, against millions of counters written a million times a second and safe to lose (losing a bucket only resets a client's quota). The TTL means idle clients cost nothing: a bucket nobody touches expires once it would be full again anyway.
+"""
 [[steps.points]]
 id = "ent-rule"
 text = "Rules kept apart from per-client counter state"
@@ -50,7 +82,33 @@ name = "API"
 minutes = 5
 prompt = "How do services call it, and what does a client see when it is limited?"
 reference = """
-An internal check `allow(client_id, endpoint) -> { allowed, remaining, reset_at }`, usually inside the gateway rather than a network hop. Clients see `429 Too Many Requests` with `Retry-After` and `X-RateLimit-Remaining` headers.
+**Inside the system**, a function the gateway calls, not a service with its own network hop:
+
+```rust title=limiter.rs
+pub struct Decision { pub allowed: bool, pub limit: u32, pub remaining: u32, pub reset_after: Duration }
+
+/// One check: finds the rule for the request, then takes `cost` tokens from the client's bucket.
+async fn check(&self, client: &ClientId, route: &Route, cost: u32) -> Decision;
+```
+
+Running it inside the gateway (or as a sidecar on the same host) keeps the cost to the one Redis round trip it needs. A separate rate-limit service is also common (Envoy's global rate limit service is one): it centralises rules, at the price of an extra hop, so it must be close and fast.
+
+**What the client sees** when limited:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 12
+Content-Type: application/json
+
+{ "error": "rate_limited", "message": "100 requests per minute; retry in 12 s" }
+```
+
+429 is defined in RFC 6585, with `Retry-After` to say when to come back. Allowed responses carry the remaining quota too, so a well-behaved client slows down before it is cut off. The `X-RateLimit-*` names are a convention many APIs share, not a standard (some send the reset as seconds, some as a Unix time: document which); the IETF is standardising `RateLimit` and `RateLimit-Policy` fields, still a draft, so say which convention you follow.
+
+Never return 503 for a client's own excess: 503 says the **server** is in trouble, and clients and load balancers react to it by retrying elsewhere.
 """
 [[steps.points]]
 id = "api-429"
@@ -66,9 +124,52 @@ name = "High-level design"
 minutes = 15
 prompt = "Choose an algorithm and draw where the check and the counts live."
 reference = """
-- **Algorithm**: a **token bucket** per client (capacity = burst, refill rate = limit) allows short bursts and holds the average; a sliding-window counter is the alternative. A fixed window is simplest but lets double the limit through at a window edge.
-- **Where**: the API gateway calls the limiter on every request; rules are loaded from a config store and cached in the gateway.
-- **State**: Redis, keyed by client (and endpoint), shared by all gateways. The check and update run atomically in a Lua script (read tokens, refill by elapsed time, take one, write back with an expiry).
+**The algorithms compared** (limit 100 a minute):
+
+| Algorithm | State per client | Bursts | Accuracy | Verdict |
+|---|---|---|---|---|
+| Fixed window | one counter per minute | up to **2×** at a window edge: 100 at 0:59.9 and 100 at 1:00.1 | exact per window, wrong across edges | rejected for public APIs; fine for coarse daily quotas |
+| Sliding log | every request's timestamp | none | exact | rejected: 100 entries per client, 10M clients × 100 × 16 B = 16 GB, and a sorted-set trim on every request |
+| Sliding window counter | this minute's and last minute's counters | smoothed | approximate (assumes last minute's requests were spread evenly) | good; Cloudflare's choice |
+| **Token bucket** | tokens left, last refill time | up to the capacity, then the average | exact for its model | **kept**: two numbers, bursts are an explicit setting |
+| Leaky bucket | a queue | none: output is smoothed | exact | for shaping outgoing traffic, not for rejecting requests |
+
+**Sliding window counter**, worked: 84 requests last minute, 36 so far this minute, 15 s into it. Estimated rate = 84 × (1 − 15/60) + 36 = 63 + 36 = **99**: one more request is allowed.
+
+**Token bucket**: capacity 20 (the burst), refill 100/60 ≈ 1.67 tokens a second. A client that has been idle can send 20 at once; the 21st is refused with `Retry-After` 0.6 s (the time to refill one token); after that it gets one every 0.6 s, which is 100 a minute.
+
+```python title=token_bucket.py
+def take(state, now, capacity, rate, cost=1):
+    # state is (tokens, last) or None for a new client; returns (allowed, new_state, retry_after_s)
+    tokens, last = state if state else (capacity, now)
+    tokens = min(capacity, tokens + (now - last) * rate)  # refill for the time since the last call
+    if tokens >= cost:
+        return True, (tokens - cost, now), 0.0
+    return False, (tokens, now), (cost - tokens) / rate   # when enough will have refilled
+```
+
+**The diagram**:
+
+```text
+client ──► LB ──► gateway (×50) ──────────► API services
+                   │  rules cached
+                   │  EVALSHA bucket.lua
+                   ▼
+             Redis Cluster (shards by key)
+                   ▲
+     rules store ──┘ (gateways poll it, not Redis)
+```
+
+- Every gateway runs the check before forwarding. Rules are cached in memory and refreshed every few seconds.
+- The bucket lives in **Redis**, shared by all gateways, so the limit is global.
+- The read, refill, take and write run as **one Lua script** (`EVALSHA`): Redis runs a script to completion before any other command, so two gateways cannot both see "one token left". Stripe published exactly this pattern: a token bucket in a Lua script that stores tokens and a timestamp, with a TTL of twice the time to fill the bucket.
+
+:::steps Why the script must be atomic
+- gateway A | GET bucket → 1 token | A plans to take it.
+- gateway B | GET bucket → 1 token | B reads before A writes.
+- gateway A | SET bucket 0, allow | A forwards its request.
+- gateway B | SET bucket 0, allow | B forwards too: two requests for one token. In one script, B's read happens after A's write.
+:::
 """
 [[steps.points]]
 id = "hld-algo"
@@ -82,17 +183,36 @@ level = "mid"
 id = "hld-atomic"
 text = "Check and update done atomically (Lua script or one command), no read-then-write race"
 level = "senior"
+[[steps.points]]
+id = "hld-ttl"
+text = "Buckets expire (TTL about the time to refill), so idle clients cost no memory"
+level = "mid"
 
 [[steps]]
 name = "Deep dives"
 minutes = 10
 prompt = "Scale, failure, and fairness."
 reference = """
-- **Scale**: shard counters across a Redis cluster by client id; one client's key stays on one node.
-- **Redis down**: **fail open** (let requests through) for most APIs, fail closed for abuse-sensitive ones such as login; keep a local in-memory limiter as a fallback.
-- **Latency**: local pre-check plus periodic sync for very hot clients; batch updates.
-- **Hot clients**: a single huge customer's key is hot; give it its own shard or a local token allowance synced every few hundred ms.
-- **Multi-region**: per-region limits, or accept that a global limit is approximate.
+**1. Scale: shard by client.** A Redis Cluster maps every key to one of 16,384 hash slots (CRC16 of the key), and slots to nodes. Keep everything one check touches in one slot with a **hash tag**: `rl:{key_42}:tokens` and `rl:{key_42}:ts` hash only `key_42`, so the Lua script can touch both. One client's check is one round trip to one node; adding nodes adds throughput linearly. With the estimate's 1M checks a second and an assumed 100k a node, that is about 10 primaries, each with a replica for failover.
+
+**2. Redis down: decide per rule, in advance.**
+
+| Endpoint kind | Failure mode | Why |
+|---|---|---|
+| ordinary reads and writes | **fail open**: allow, and log it | an outage of the limiter must not become an outage of the API |
+| login, password reset, signup, SMS sends | **fail closed**: refuse with 503 | abuse is costlier than a few minutes of refusals |
+| all | fall back to a **local** limiter per gateway, at limit ÷ number of gateways | keeps a rough cap while Redis is away |
+
+Bound the call with a short timeout (a few ms) so a slow Redis fails fast instead of adding latency to every request. Envoy's rate limit service, for one, returns an error at the deadline and leaves the failure mode to the caller.
+
+**3. Hot clients and latency.** A single customer sending 50,000 requests a second makes one key hot on one node.
+
+- **Cache "blocked" locally**: once a gateway learns a client is over its limit, it refuses that client from memory until the reset time, without asking Redis. A flood from one abusive key then never reaches Redis at all.
+- **Local allowance, synced**: each gateway takes tokens in batches (say 100 at a time) or counts locally and syncs every 100-200 ms. The cost is overshoot: with a 200 ms sync, a client at 10,000 requests a second can get up to 10,000 × 0.2 = 2,000 requests past the limit before every gateway learns of it. Use it for very large limits, where 2,000 is a small percentage, not for 100 a minute.
+
+**4. Fairness and cost.** Not all requests cost the same: charge an expensive search 10 tokens. Separate buckets per endpoint class stop a client's bulk reads from starving its writes. Stripe describes running, besides the per-client rate limiter, a **concurrency limiter** (only so many requests in flight per client) and **load shedders** that drop low-priority traffic when the fleet itself is overloaded: limits protect fairness between clients; load shedding protects the service.
+
+**5. Multi-region.** A truly global limit would put a cross-region round trip (tens of ms) on every request. Instead give each region its own share of the limit (by its traffic share) and rebalance shares every few minutes from aggregated counts: approximate, fast, and each region survives the others' outages.
 """
 [[steps.points]]
 id = "dd-shard"
@@ -106,6 +226,14 @@ level = "senior"
 id = "dd-local"
 text = "Local limiting or batching to cut latency for hot clients"
 level = "staff"
+[[steps.points]]
+id = "dd-overlimit-cache"
+text = "An over-limit client is refused from a local cache until its reset, so a flood never reaches Redis"
+level = "staff"
+[[steps.points]]
+id = "dd-region"
+text = "Multi-region limits split per region instead of a cross-region round trip per request"
+level = "staff"
 
 [[probes]]
 question = "With a fixed one-minute window and a limit of 100, how can a client send 200 requests in two seconds?"
@@ -118,3 +246,49 @@ answer = "Make the read-modify-write atomic in Redis: a Lua script (or a single 
 [[probes]]
 question = "Redis has a 30-second outage. What do your users see?"
 answer = "That depends on the choice made in advance: fail open, so traffic continues unlimited (with a local per-server limiter as a rough guard), or fail closed for sensitive endpoints like login, where blocking is safer than abuse."
+
+[[probes]]
+question = "Your token bucket script stores two keys per client. In Redis Cluster the script fails with CROSSSLOT. Why, and what is the fix?"
+answer = "A script may only touch keys in one hash slot, and the two keys hash to different slots. Put the client id in a hash tag (`rl:{key_42}:tokens`, `rl:{key_42}:ts`) so only the tag is hashed, or store both fields in one hash key."
+
+[[sources]]
+title = "Stripe: Scaling your API with rate limiters"
+kind = "article"
+url = "https://stripe.com/blog/rate-limiters"
+note = "request rate and concurrency limiters, two load shedders"
+
+[[sources]]
+title = "Stripe's example limiters (gist)"
+kind = "guide"
+url = "https://gist.github.com/ptarjan/e38f45f2dfe601419ca3af937fff574d"
+note = "the token bucket as a Redis Lua script, TTL twice the fill time"
+
+[[sources]]
+title = "Cloudflare: Counting things, a lot of different things"
+kind = "article"
+url = "https://blog.cloudflare.com/counting-things-a-lot-of-different-things/"
+note = "the sliding window counter and why it is an approximation"
+
+[[sources]]
+title = "Envoy rate limit service"
+kind = "guide"
+url = "https://github.com/envoyproxy/ratelimit"
+note = "a global limiter on Redis, a local cache of over-limit keys, errors left to the caller's failure mode"
+
+[[sources]]
+title = "RFC 6585: Additional HTTP status codes (429)"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc6585#section-4"
+note = "429 Too Many Requests and Retry-After"
+
+[[sources]]
+title = "IETF draft: RateLimit header fields for HTTP"
+kind = "standard"
+url = "https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-ratelimit-headers"
+note = "RateLimit and RateLimit-Policy; still a draft"
+
+[[sources]]
+title = "Redis: cluster specification"
+kind = "docs"
+url = "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/"
+note = "16,384 hash slots, CRC16, hash tags for multi-key operations"

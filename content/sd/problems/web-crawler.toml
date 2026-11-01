@@ -16,11 +16,36 @@ name = "Requirements"
 minutes = 6
 prompt = "Functional requirements, the non-functional ones made measurable, and an estimate."
 reference = """
-**Functional**: from seed URLs, fetch pages, extract links, add new URLs, store raw HTML for the indexer; recrawl changed pages; respect `robots.txt`.
+**Functional**:
 
-**Non-functional**: politeness (at most one request at a time per host, crawl-delay honoured); robust to traps, huge pages and dead servers; scalable to billions; fault tolerant (a crashed worker loses nothing).
+1. Start from **seed URLs**; fetch each page, **extract its links**, and add the new ones to the crawl.
+2. **Store the raw HTML** (and headers) for the indexer, which is a separate system downstream.
+3. **Recrawl** pages as they change, important and fast-changing pages more often.
+4. Obey **`robots.txt`** and never overload a site.
 
-**Estimate**: 1B pages / 30 days ≈ **400 pages a second**, peaks around 1,000. At ~100 KB per page: 40 MB/s, about **100 TB a month** of raw HTML (compressed to roughly a quarter). The URL frontier holds tens of billions of URLs over time.
+Out of scope: rendering JavaScript-heavy pages (a separate, far costlier headless-browser pool; mention it), indexing and ranking, images and video.
+
+**Non-functional**:
+
+| Requirement | Made measurable |
+|---|---|
+| Politeness | at most one connection per host at a time; a gap of at least the host's `crawl-delay` (or a default, say 1-2 s) between requests to it |
+| Robustness | a trap, a 50 MB page or a server that never answers costs a bounded amount: a timeout (say 10-30 s) and a size cap |
+| Scale | 1B pages a month now; the design grows by adding machines |
+| Fault tolerance | a crashed worker loses no URLs; work is retried |
+| Freshness | important pages recrawled within hours to days |
+
+**Estimate** (the arithmetic):
+
+```text
+fetch rate    1B pages / (30 × 86,400 s) ≈ 386 pages/s; peaks ~1,000/s
+bandwidth     386/s × 100 KB average page (assumption) ≈ 39 MB/s ≈ 310 Mbit/s
+storage       1B × 100 KB = 100 TB a month raw; ~25 TB compressed (HTML compresses ~4×)
+concurrency   ~1,000 fetches/s × ~1 s per fetch (assumption) ≈ 1,000 open connections
+URLs known    tens of billions over time (each page links to dozens)
+```
+
+What it decides: the fetch rate is modest, so the hard parts are **politeness across many workers**, **not fetching the same thing twice** among tens of billions of URLs, and **storage** that grows by 100 TB a month (object storage, not a database).
 """
 [[steps.points]]
 id = "req-polite"
@@ -39,7 +64,17 @@ level = "senior"
 name = "Core entities"
 minutes = 3
 prompt = "Name the things the system stores."
-reference = "`URL` (normalised, with priority, last crawled, next due), `Host` (robots rules, crawl delay, next allowed time, IP), `Page` (content hash, fetched at, location of the HTML in object storage, outlinks)."
+reference = """
+| Entity | Fields | Store |
+|---|---|---|
+| `Url` | normalised URL, host, priority, depth, last crawled, next due, last content hash, last status | a wide-column or key-value store keyed by URL hash; the frontier holds the ones due |
+| `Host` | name, IP (cached DNS), `robots.txt` rules and when fetched, crawl delay, **next allowed fetch time**, error count | small, hot: in the frontier node's memory, persisted |
+| `Page` | URL, fetched at, status, headers, content hash, SimHash, object-storage key of the HTML, outlinks | metadata in the URL store; the body in object storage |
+
+**Host** state is kept apart from URL state because politeness is a per-host decision: "may anyone fetch from `example.com` now?" is asked thousands of times a second and must be answered from one place, while a single host can have millions of URLs.
+
+Metadata size: 10B URLs × ~200 B = 2 TB, a key-value store's job; bodies are 100 TB a month, an object store's.
+"""
 [[steps.points]]
 id = "ent-host"
 text = "Per-host state (robots rules, next allowed fetch time) kept separately"
@@ -50,7 +85,17 @@ name = "API and interfaces"
 minutes = 3
 prompt = "This is a pipeline, not a user API: what goes in and out of each stage?"
 reference = """
-Frontier: `enqueue(url, priority)`, `next_batch(worker) -> urls` (only hosts that are allowed now). Fetcher → parser: `(url, status, headers, body_location)`. Parser → frontier: new normalised URLs. Output to the indexer: a stream of `PageFetched` events with the object-storage key.
+Each stage is a service that reads one stream or queue and writes the next, so each scales and fails on its own.
+
+| Stage | In | Out |
+|---|---|---|
+| Frontier | `enqueue(url, priority, depth)` | `next_batch(worker, n) -> [url]`, only URLs whose **host is allowed now**, each leased for a time |
+| Fetcher | a leased URL | `Fetched { url, status, headers, body_key, fetched_at }`; `ack(url)` to the frontier, or `retry_after(url, t)` |
+| Parser | `Fetched` | `Discovered { from_url, [normalised url] }`, `Parsed { url, content_hash, simhash, outlinks }` |
+| Dedup / URL filter | `Discovered` | URLs never seen before → `enqueue` |
+| Output | `Parsed` (new or changed content) | `PageFetched { url, body_key, hash }` to the indexer's stream |
+
+The lease on `next_batch` is what makes a crash harmless: a URL that is not acked before its lease ends goes back to the frontier.
 """
 [[steps.points]]
 id = "api-stages"
@@ -62,13 +107,35 @@ name = "High-level design"
 minutes = 15
 prompt = "Draw the crawl loop and explain how a URL travels through it."
 reference = """
-1. **URL frontier**: priority queues (front queues by importance: PageRank, freshness) feeding **per-host back queues**; each back queue is served by one worker at a time and has a next-allowed time, so one host is never fetched in parallel.
-2. **Fetchers**: many async workers; DNS results cached (DNS is a hidden bottleneck); robots.txt fetched and cached per host; timeouts and a max page size.
-3. **Store raw pages** in object storage (S3), compressed, keyed by URL hash; metadata in a wide-column store (URL → last fetch, hash, status).
-4. **Parser**: extracts links, normalises them (lowercase host, drop fragments, resolve relative links, strip tracking parameters).
-5. **Seen-URL check**: a **Bloom filter** (≈10 bits per URL: a few GB for billions) in front of the URL store; a false positive only skips a page.
-6. **Content dedup**: hash the content (and a **SimHash** for near-duplicates); skip pages already seen under another URL.
-7. Queues (Kafka) between stages so each scales separately and survives crashes.
+**The diagram** (a loop):
+
+```text
+seeds ─► FRONTIER ─────────► FETCHERS ─────► object storage
+         priority queues     DNS cache         (raw HTML)
+         per-host queues     robots cache          │
+            ▲                                      ▼
+            │                                   PARSER
+            │                                      │ links
+            └──── seen-URL filter ◄── normalise ◄──┘
+                                       content dedup ─► indexer
+```
+
+**1. URL frontier**: two layers of queues, the Mercator design described in Manning, Raghavan and Schütze's *Introduction to Information Retrieval*:
+
+- **Front queues** (F of them) implement **priority**: a prioritiser gives each URL a level from its importance (link-based rank, the site's importance) and change history; a biased selector pulls more often from high-priority queues.
+- **Back queues** (B of them) implement **politeness**: each holds URLs of **one host only**, and a heap keyed by "earliest time this host may be contacted again" says which back queue to serve next. A worker takes the queue at the top of the heap, fetches one URL, and puts the host back on the heap at now + delay. The Mercator recommendation is about three times as many back queues as fetcher threads, so a thread always has a host it is allowed to fetch from.
+
+**2. Fetchers**: many asynchronous workers (one machine holds thousands of open connections). Before fetching, the fetcher checks the cached `robots.txt` for the host and the **DNS cache**: a resolver round trip is tens to hundreds of milliseconds, and at hundreds of fetches a second an uncached resolver becomes the bottleneck. Every fetch has a timeout and a byte cap.
+
+**3. Storage**: the raw HTML, compressed, goes to **object storage** keyed by URL hash and fetch time (cheap, durable, unlimited, read in bulk by the indexer); metadata goes to a wide-column store keyed by URL hash (last fetch, status, hash).
+
+**4. Parser**: extracts links and **normalises** them: lowercase scheme and host, remove the default port and `#fragment`, resolve relative links against the base URL, sort query parameters and drop known tracking ones (`utm_*`), apply the site's canonical link if declared. Without it, one page enters the frontier under dozens of spellings.
+
+**5. Seen-URL check**: tens of billions of URLs cannot be looked up in a database once per link. A **Bloom filter** answers "definitely new" or "probably seen" from memory: at a 1% false-positive rate it needs −ln(0.01) ÷ (ln 2)² ≈ **9.6 bits per URL** and 7 hash functions, so 10B URLs take 10B × 9.6 ÷ 8 ≈ **12 GB**. A false positive skips one new page (acceptable); it never causes a refetch.
+
+**6. Content dedup**: the same page under different URLs (mirrors, `www.` and bare host, session ids). An exact hash (e.g. SHA-256 of the normalised text) catches copies; **SimHash** catches near-copies that differ by an ad or a date. Google's crawler work (Manku, Jain and Das Sarma, WWW 2007) found 64-bit SimHash fingerprints with a Hamming distance of at most 3 practical for near-duplicate detection over 8 billion pages.
+
+**7. Queues between stages** (Kafka or similar): each stage scales separately, and a crash at any stage leaves its input in the log to be read again.
 """
 [[steps.points]]
 id = "hld-frontier"
@@ -90,17 +157,35 @@ level = "mid"
 id = "hld-dns"
 text = "DNS caching and robots.txt caching named as needed for throughput"
 level = "senior"
+[[steps.points]]
+id = "hld-bloom-size"
+text = "Bloom filter sized from the false-positive rate (about 10 bits per URL, ~12 GB for 10B)"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 13
 prompt = "Traps, recrawl scheduling, failure and scale-out."
 reference = """
-- **Traps**: infinite calendars, session ids in URLs, endless generated links. Cap depth and URLs per host, detect repeating path patterns, and limit URL length.
-- **Recrawl**: estimate each page's change rate from history (content hash changed or not) and schedule the next visit accordingly; news homepages hourly, static pages monthly; honour `Last-Modified` and ETag with conditional GETs.
-- **Partitioning**: shard the frontier and workers **by host hash**, so all of a host's URLs land on one node and politeness stays local; discovered links for other hosts are routed to their shard.
-- **Failure**: frontier state is durable (Kafka or a database); a worker that dies leaves its leased URLs to time out and be reissued; idempotent writes keyed by URL.
-- **Priority**: important and fresh pages first, so a partial crawl is still useful.
+**1. Traps.** Some sites generate infinite URLs: a calendar with a "next month" link forever, session ids appended to every link, faceted search producing every combination of filters, or deliberately hostile link farms.
+
+- Cap **depth** from the seed and **URLs per host** per crawl cycle (a budget proportional to the host's importance).
+- Cap **URL length** and the number of path segments; detect **repeating path patterns** (`/a/b/a/b/a/b`).
+- Drop known session parameters in normalisation; prefer the page's canonical link.
+- Content dedup is a backstop: a trap's pages are usually near-identical, so SimHash stops them being stored even if fetched.
+
+**2. Recrawl scheduling.** Each page gets a **next due** time from its history: if the content hash changed on most recent visits, shorten the interval (halve it, down to a floor such as an hour); if it did not, lengthen it (double it, up to a ceiling such as a month); weight by importance. A news front page settles at hourly, a static manual at monthly.
+
+- Use **conditional GETs**: send `If-Modified-Since` (from `Last-Modified`) and `If-None-Match` (from the `ETag`); an unchanged page answers `304 Not Modified` with no body, which saves the site's bandwidth and ours.
+- Sitemaps with `lastmod` let a site say what changed.
+
+**3. robots.txt properly.** RFC 9309 (2022) standardised the Robots Exclusion Protocol. Google's announcement of the draft named two rules worth knowing: parse at least the first 500 KiB of the file, and cache it for at most 24 hours unless cache headers say otherwise (longer only when the server is failing, so pages known to be disallowed are not crawled). Fetch it once per host per day, not per page.
+
+**4. Partitioning: by host.** Shard the frontier and its fetchers by **hash of the host**, so all of a host's URLs, its back queue and its politeness timer live on one node: politeness needs no global lock, and the DNS and robots caches are local. A parser that discovers a link to another host routes it to that host's shard. Rebalance with consistent hashing when nodes are added.
+
+**5. Failure.** The frontier is durable (a log or database, not just memory). Fetchers lease URLs; an unacked lease expires and the URL is reissued, so a crashed worker loses nothing. Writes are keyed by URL and fetch time, so a retried fetch overwrites rather than duplicates. A host that keeps failing is backed off exponentially and eventually parked.
+
+**6. Priority.** Crawl the most important pages first, so a crawl cut short is still useful and fresh where it matters.
 """
 [[steps.points]]
 id = "dd-traps"
@@ -114,6 +199,10 @@ level = "senior"
 id = "dd-partition"
 text = "Work partitioned by host so politeness needs no global coordination"
 level = "staff"
+[[steps.points]]
+id = "dd-lease"
+text = "URLs leased to fetchers and reissued when a lease expires, so a crash loses nothing"
+level = "senior"
 
 [[probes]]
 question = "Why is a Bloom filter acceptable for the seen-URL set even though it has false positives?"
@@ -126,3 +215,37 @@ answer = "The frontier keeps a back queue per host served by one worker at a tim
 [[probes]]
 question = "How do you decide when to recrawl a page?"
 answer = "Track whether its content hash changed on past visits and estimate a change rate; schedule the next crawl sooner for pages that change often or matter more, later for static ones; use conditional GETs (If-Modified-Since, ETag) so an unchanged page costs a tiny 304."
+
+[[probes]]
+question = "The Bloom filter has to survive a restart, and the crawl keeps adding URLs. What do you do?"
+answer = "Snapshot it to disk periodically and replay the URLs discovered since the snapshot from the log; size it for the expected number of URLs, because a Bloom filter cannot grow in place (the false-positive rate climbs as it fills). When it nears capacity, start a new, larger filter and check both, or rebuild it from the URL store."
+
+[[sources]]
+title = "Heydon and Najork: Mercator, a scalable, extensible web crawler (1999)"
+kind = "paper"
+url = "https://courses.cs.washington.edu/courses/cse454/13wi/papers/mercator.pdf"
+note = "the crawler whose frontier design is the standard answer"
+
+[[sources]]
+title = "Manning, Raghavan and Schütze: Introduction to Information Retrieval, 20.2.3 The URL frontier"
+kind = "book"
+url = "https://nlp.stanford.edu/IR-book/html/htmledition/the-url-frontier-1.html"
+note = "front queues for priority, back queues and a heap for politeness"
+
+[[sources]]
+title = "Manku, Jain and Das Sarma: Detecting near-duplicates for web crawling (WWW 2007)"
+kind = "paper"
+url = "https://www.www2007.cpsc.ucalgary.ca/papers/paper215.pdf"
+note = "64-bit SimHash, Hamming distance 3, 8 billion pages"
+
+[[sources]]
+title = "RFC 9309: Robots Exclusion Protocol"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9309"
+note = "the standardised robots.txt"
+
+[[sources]]
+title = "Google: Formalizing the Robots Exclusion Protocol specification"
+kind = "article"
+url = "https://developers.google.com/search/blog/2019/07/rep-id"
+note = "parse at least 500 KiB; cache for at most 24 hours"

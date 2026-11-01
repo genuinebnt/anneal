@@ -16,11 +16,41 @@ name = "Requirements"
 minutes = 5
 prompt = "List 3 to 4 functional requirements ('Users should be able to…'), the non-functional ones made measurable, and a quick estimate if it changes a decision."
 reference = """
-**Functional**: users can create a short link from a long URL (optionally a custom alias and an expiry); anyone can open a short link and be redirected.
+**Functional** (in scope):
 
-**Non-functional**: redirects are fast (under 100 ms p99) and highly available; codes are unique; links are durable once created; scale to about 100M new links a month.
+1. Users can create a short link from a long URL, optionally with a **custom alias** and an **expiry** time.
+2. Anyone who opens a short link is **redirected** to the long URL.
+3. (If time) the owner sees click counts for their links.
 
-**Estimate**: about 40 writes a second, about 4,000 redirects a second (100× reads); about 3 TB over five years. Read-heavy, small enough for one database with a cache in front.
+Out of scope, said aloud so the interviewer can object: accounts and sign-up, link editing, spam and malware scanning (a real service needs it; name it and park it).
+
+**Non-functional**, each with a number:
+
+| Requirement | Target | Why it matters |
+|---|---|---|
+| Redirect latency | under 100 ms p99 at the server (excluding the user's network) | a redirect sits in front of every page view the link leads to |
+| Redirect availability | 99.99% (about 52 minutes of downtime a year) | a dead short link breaks every place it was pasted |
+| Uniqueness | a code maps to exactly one URL, forever | two links sharing a code send people to the wrong site |
+| Durability | a created link is never lost | links are printed on posters and in books |
+| Scale | 100M new links a month (assumption) | sets the code length and the storage |
+
+Creation can be slower (a few hundred ms is fine) and the click counts can lag by minutes: both are said now because they let the deep dives move work off the redirect path.
+
+**Estimate** (assumptions labelled; the arithmetic is the point):
+
+```text
+writes   100M links / month / (30 × 86,400 s)   ≈ 39 /s
+reads    100 redirects per write (assumption)   ≈ 3,900 /s
+peak     3 × average (assumption)               ≈ 11,600 /s
+storage  500 B per row × 100M × 12 × 5 years    = 3 TB
+year 1   500 B × 1.2B links                     = 600 GB
+egress   11,600 /s × ~500 B per redirect        ≈ 6 MB/s
+```
+
+What the numbers decide: the system is **read-heavy (100:1)**, so effort goes into the redirect path and its cache; 39 writes a second is nothing for one database, so the write path needs uniqueness more than scale; 3 TB over five years is large for one Postgres node but easy to shard by code later, and year one fits on one primary.
+
+> [!INTERVIEW]
+> "It's about 40 creates and 4,000 redirects a second, 100 to 1, so I'll design the redirect path first and keep it in memory; the write path's hard part is unique codes, not throughput."
 """
 [[steps.points]]
 id = "req-core"
@@ -39,7 +69,17 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Link` (short code, long URL, owner, created, expires), `User`; optionally `Click` events for analytics."
+reference = """
+| Entity | Fields | Notes |
+|---|---|---|
+| `Link` | `short_code` (7 chars, the key), `long_url` (up to ~2 KB), `user_id`, `created_at`, `expires_at` (nullable) | one row per link; ~500 B with indexes |
+| `User` | `id`, `email`, plan | only for ownership and quotas |
+| `Click` (optional) | `short_code`, `at`, country, referrer, user agent | an **event**, not a row on `Link`: it is written 100× more often |
+
+Keep clicks **apart from links**. A counter column on `links` would turn every redirect into a write on the same row, which is exactly the hot row the read path must avoid. Clicks are an append-only stream that is aggregated later.
+
+Why 7 characters: with base62 (`0-9a-zA-Z`) there are 62^6 ≈ 56.8 billion six-character codes and 62^7 ≈ 3.52 trillion seven-character ones. Five years of links is 6 billion: six characters would already be 11% full, seven is 0.17% full, which leaves room for growth and for random codes to rarely collide.
+"""
 [[steps.points]]
 id = "ent-link"
 text = "Link with code, long URL, owner and expiry; clicks kept apart from links"
@@ -50,11 +90,35 @@ name = "API"
 minutes = 5
 prompt = "Write the endpoints: method, path, what goes in, what comes back."
 reference = """
+```http
+POST /api/links
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "long_url": "https://example.com/a/very/long/path", "alias": "spring-sale", "expires_at": "2027-01-01T00:00:00Z" }
+
+201 Created
+{ "short_code": "spring-sale", "short_url": "https://sho.rt/spring-sale", "expires_at": "2027-01-01T00:00:00Z" }
 ```
-POST /links            { long_url, alias?, expires_at? } -> 201 { short_code, short_url }
-GET  /{short_code}     -> 302 Location: long_url   (404 if unknown or expired)
+
+```http
+GET /spring-sale
+
+302 Found
+Location: https://example.com/a/very/long/path
+Cache-Control: private, max-age=0
 ```
-302 rather than 301: a 301 is cached by browsers forever, so expiry, edits and click counts stop working. The owner comes from the auth token. A taken alias returns 409.
+
+| Case | Response |
+|---|---|
+| unknown code, or expired | `404 Not Found` (or `410 Gone` for expired, if the product wants to say so) |
+| alias already taken | `409 Conflict` |
+| `long_url` not a valid http(s) URL | `400 Bad Request` |
+| too many creates from one user | `429 Too Many Requests` with `Retry-After` |
+
+**302, not 301.** HTTP defines 301 (Moved Permanently) as heuristically cacheable: a browser or proxy may keep it with no expiry header and never ask again. 302 (Found) is not heuristically cacheable, so it is stored only if the response says so. With 301 the service loses every repeat click (analytics), cannot expire or re-point a link, and cannot take down a link that turned out to be malicious. Pick 301 only if the business explicitly wants browsers to stop asking (it saves a round trip on repeat visits).
+
+The owner comes from the auth token, never from the body. The redirect is a plain `GET` on the root path so the short URL stays short; the API lives under `/api` so the two never collide (reserve `api` and similar words as aliases).
 """
 [[steps.points]]
 id = "api-shape"
@@ -74,11 +138,56 @@ name = "High-level design"
 minutes = 15
 prompt = "Draw the boxes and arrows that satisfy each requirement, one endpoint at a time. Note the key table next to the database."
 reference = """
-Client → load balancer → **write service** (validates the URL, gets a unique code, stores the link) and **redirect service** (looks the code up, returns 302).
+**The diagram**, drawn one endpoint at a time:
 
-- **Database**: `links(short_code PK, long_url, user_id, created_at, expires_at)`. Postgres is fine at this scale; a unique key on the code enforces uniqueness.
-- **Unique codes**: a counter turned into base62 (each write server reserves a range of ids, so there is no per-request coordination), or hash the URL and check for a collision.
-- **Cache**: Redis in front of the redirect lookup, keyed by code; most redirects never reach the database.
+```text
+                 ┌──────────────► redirect svc ──► Redis
+client ──► LB ───┤                      │  miss       │
+                 │                      ▼             │
+                 │                 PG replica ◄───────┘
+                 └──────────────► write svc ──► PG primary
+                                     │
+                                id allocator
+```
+
+- **Load balancer**: terminates TLS, routes `GET /{code}` to the redirect service and `POST /api/links` to the write service. Two services because they scale differently (100× the traffic on one) and fail differently (a write outage must not take redirects down).
+- **Write service**: validates the URL, takes a code (an alias, or one from its block of ids), inserts the row, returns 201. Stateless.
+- **Redirect service**: looks the code up in Redis; on a miss, reads a Postgres replica and fills Redis; checks `expires_at`; returns 302. Stateless.
+- **Postgres**: the source of truth.
+
+```sql
+CREATE TABLE links (
+    short_code  text PRIMARY KEY,      -- uniqueness enforced here, not in code
+    long_url    text NOT NULL,
+    user_id     bigint NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    expires_at  timestamptz
+);
+CREATE INDEX links_by_user ON links (user_id, created_at DESC);  -- "my links"
+```
+
+**Where codes come from** (the decision the interviewer is waiting for):
+
+| Option | How | Kept or rejected |
+|---|---|---|
+| Counter + base62 | a unique integer, written in base62 (`125` → `21`) | **kept**: no collisions, no read-before-write |
+| Hash of the URL | first 41 bits of SHA-256(url) (2^41 ≈ 2.2 trillion fits in 7 base62 chars) | rejected as the default: a collision check on every write, and the same URL from two users gets one code (shared analytics, shared expiry) |
+| Random 7 chars | a uniform random code from the 3.52 trillion | fine with `INSERT … ON CONFLICT DO NOTHING` and a retry; collisions are rare (0.17% at five years' fill) but grow as the space fills |
+| UUID | 128 bits | rejected: 22 base62 characters is not short |
+
+A plain counter makes codes **guessable**: anyone can walk `…a1`, `…a2` and read every link. Pass the counter through a fixed bijection before encoding (multiply by a large odd constant modulo 62^7, or a small Feistel network): still unique, no longer sequential.
+
+**Datastore**: Postgres, because the access pattern is a primary-key lookup, the volume is modest (600 GB in year one), and a unique key gives uniqueness for free. A key-value store (DynamoDB, Cassandra) would also fit the lookup and shards itself; it is the answer if writes were 100× higher. Not chosen now because one primary with replicas is simpler to run and reason about.
+
+**Cache**: Redis, cache-aside, key `link:{code}` → `long_url|expires_at`, a TTL of a day plus jitter. Sizing: if the 20M most-clicked links take most redirects, 20M × 500 B = 10 GB, one Redis node. At a 99% hit ratio, 11,600 redirects a second send about 116 a second to the replicas.
+
+:::steps A redirect, cache hit and miss
+- browser | GET /aZ3kQ9x | The load balancer routes it to any redirect server.
+- redirect svc | Redis GET link:aZ3kQ9x | A hit costs well under a millisecond inside the data centre.
+- redirect svc | miss: SELECT … WHERE short_code = $1 | One primary-key lookup on a replica, a few ms.
+- redirect svc | SET link:aZ3kQ9x EX 86400+jitter | The next reader hits the cache.
+- browser | 302 Location: long URL | The browser follows it; the service is out of the path.
+:::
 """
 [[steps.points]]
 id = "hld-split"
@@ -92,17 +201,43 @@ level = "mid"
 id = "hld-store"
 text = "Datastore chosen with a reason, and the links table sketched"
 level = "mid"
+[[steps.points]]
+id = "hld-guessable"
+text = "Noticed that sequential codes can be enumerated, and scrambled them with a bijection"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 10
 prompt = "Meet the non-functional requirements: scale the hot path, remove the single points of failure, handle the awkward cases."
 reference = """
-- **Code generation at scale**: no single counter on the hot path; hand each server a block of ids from a coordinator (or a Redis `INCRBY 1000`), refill before it runs out. Gaps are fine.
-- **Hot links**: cache with a TTL, add a CDN or edge cache for the most popular codes; a stampede guard on expiry.
-- **Availability**: replicas behind the database, several redirect servers, the cache as a buffer if the database blips.
-- **Expiry**: check `expires_at` on read; a background job removes expired links later.
-- **Analytics**: write click events to a stream, aggregate asynchronously; never on the redirect's critical path.
+**1. Code generation without a central bottleneck.** A single Postgres sequence called on every create works at 39 a second but puts every create on one primary and one round trip. Hand out **blocks**:
+
+- Each write server asks an allocator for 1,000 ids at a time (`UPDATE counters SET next = next + 1000 RETURNING next`, or Redis `INCRBY id 1000`) and serves them from memory.
+- At 39 creates a second the allocator sees one request every 26 s; at 10,000 creates a second, 10 a second. The allocator is no longer on the hot path.
+- A crashed server loses the rest of its block: gaps, never duplicates. Gaps are harmless for codes. Postgres's own `CACHE` option on a sequence does the same per session, with the same holes.
+- The same idea at larger scale is Flickr's ticket servers (two MySQL servers handing out odd and even ids) or a Snowflake-style id (timestamp, machine id, sequence: no allocator at all, but 64 bits is 11 base62 characters).
+
+**2. Hot links.** One viral code can get 200,000 redirects a second, more than one Redis node serves for one key.
+
+| Layer | What it does | Cost |
+|---|---|---|
+| CDN or edge cache | caches the 302 for 30-60 s (`Cache-Control: public, max-age=60` on hot codes only) | a deleted link lives on for up to a minute; clicks seen at the edge must be counted from CDN logs |
+| in-process LRU on redirect servers | the top few thousand codes, a few seconds' TTL | each server holds its own copy |
+| Redis replicas | reads spread across replicas of the hot shard | replicas can lag by milliseconds: fine here |
+
+On expiry of a hot key, a **stampede guard** (a short lock or lease on refill, or refreshing early) stops thousands of misses reaching the database at once.
+
+**3. Availability.** Several stateless redirect servers across zones; Postgres primary with a synchronous standby (no created link is lost on failover) and async read replicas; Redis as a buffer that keeps answering hits if the database blips. The redirect path does not depend on the write path or the allocator at all.
+
+**4. Expiry.** Check `expires_at` on every read (in the cached value too); a TTL on the cache entry never longer than the time left. A nightly job marks expired rows and, after a grace period, frees their custom aliases. Code space is not reused for random codes: 3.5 trillion is plenty, and reuse risks sending an old poster to a new site.
+
+**5. Analytics off the critical path.** The redirect server emits a click event (code, time, country, referrer) to a log such as Kafka, fire-and-forget with a small in-memory buffer, and returns the 302 at once. Consumers aggregate per code per minute into an analytics store. At 11,600 events a second × ~200 B, that is about 2.3 MB/s, which one stream partition set handles easily. Losing a few events in a crash is acceptable; making the user wait for a counter write is not.
+
+**6. Growth past one node.** At 3 TB, shard `links` by a hash of `short_code` (every lookup has the code, so every query hits one shard). Do not shard by `user_id`: the redirect does not know the user.
+
+> [!WARNING]
+> Abuse is the real operational cost of a public shortener: phishing links hide behind short codes. Check new URLs against a blocklist asynchronously and keep the ability to disable a code instantly, which is one more reason for 302 and short cache TTLs.
 """
 [[steps.points]]
 id = "dd-counter"
@@ -120,15 +255,59 @@ level = "mid"
 id = "dd-analytics"
 text = "Click analytics moved off the redirect path, through a stream"
 level = "staff"
+[[steps.points]]
+id = "dd-shard-key"
+text = "Shard key is the short code (the only thing a redirect knows), not the user"
+level = "senior"
 
 [[probes]]
 question = "Your counter is a single Postgres sequence. What breaks at 10,000 creates a second, and what do you change?"
-answer = "Every create waits on one sequence on one primary; it becomes the bottleneck and a single point of failure. Give each write server a block of ids (say 1,000) from a coordinator and hand them out from memory; a crash only leaves a gap."
+answer = "Every create waits on one sequence on one primary; it becomes the bottleneck and a single point of failure. Give each write server a block of ids (say 1,000) from a coordinator and hand them out from memory; a crash only leaves a gap. At 10,000 creates a second that is 10 block requests a second to the coordinator instead of 10,000."
 
 [[probes]]
 question = "A link goes viral: 200,000 redirects a second for one code. Walk through what happens."
-answer = "The cache key for that code becomes hot. Serve it from a CDN or edge cache with a short TTL, keep a small in-process copy on redirect servers, and replicate the hot key, so the cache node and the database are protected."
+answer = "The cache key for that code becomes hot. Serve it from a CDN or edge cache with a short TTL, keep a small in-process copy on redirect servers, and replicate the hot key, so the cache node and the database are protected. Count the clicks from the CDN's logs, since those requests never reach the service."
 
 [[probes]]
 question = "A user deletes a link but people still land on the old page. Why?"
 answer = "Caches still hold it: the Redis entry until its TTL, the CDN, and browsers if a 301 was used. Delete the cache key on delete, purge the CDN, and use 302 so browsers ask every time."
+
+[[probes]]
+question = "Two users shorten the same long URL. Do they get the same code?"
+answer = "With counter codes, no: each create is its own link with its own owner, expiry and click counts. Deduplicating by URL (a hash, or a unique index on `long_url`) saves a little storage but makes one user's expiry or deletion affect the other's link; offer it only per user, as 'you already shortened this'."
+
+[[sources]]
+title = "RFC 9110: HTTP Semantics, 301 and 302"
+kind = "standard"
+url = "https://www.rfc-editor.org/rfc/rfc9110#section-15.4"
+note = "301 is heuristically cacheable, 302 is not"
+
+[[sources]]
+title = "PostgreSQL: CREATE SEQUENCE"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createsequence.html"
+note = "CACHE preallocates numbers per session; unused ones become holes"
+
+[[sources]]
+title = "Flickr: Ticket servers, distributed unique primary keys on the cheap"
+kind = "article"
+url = "https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-the-cheap/"
+note = "two MySQL servers handing out odd and even ids"
+
+[[sources]]
+title = "Twitter Snowflake (2010 README)"
+kind = "guide"
+url = "https://github.com/twitter-archive/snowflake/tree/snowflake-2010"
+note = "41 bits of time, 10 of machine, 12 of sequence"
+
+[[sources]]
+title = "Instagram: Sharding and IDs at Instagram"
+kind = "article"
+url = "https://instagram-engineering.com/1cf5a71e5a5c"
+note = "41 bits of time, 13 of logical shard, 10 of sequence, generated in Postgres"
+
+[[sources]]
+title = "Scaling Memcache at Facebook (NSDI 2013)"
+kind = "paper"
+url = "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala"
+note = "leases against stampedes on hot keys"

@@ -64,7 +64,7 @@ function useCurrentSection(ids: string[]): number {
 const go = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
 
 /** What a source is, from its own `kind` or, failing that, its address. */
-function sourceKind(s: { url: string; kind?: string | null }): string {
+export function sourceKind(s: { url: string; kind?: string | null }): string {
     if (s.kind) return s.kind;
     if (/usenix|vldb|acm\.org|arxiv|\.pdf$|research\.google|static\.googleusercontent/.test(s.url)) return "paper";
     if (/rfc-editor|ietf\.org|w3\.org/.test(s.url)) return "standard";
@@ -72,7 +72,7 @@ function sourceKind(s: { url: string; kind?: string | null }): string {
     if (/docs?\.|\/docs\/|developer\.mozilla|redis\.io|postgresql\.org|kafka\.apache/.test(s.url)) return "docs";
     return "article";
 }
-const KIND_COLOR: Record<string, string> = { paper: "var(--vio)", docs: "var(--fn)", guide: "var(--grn)", book: "var(--acc)", standard: "var(--ty)", article: "var(--mut)" };
+export const KIND_COLOR: Record<string, string> = { paper: "var(--vio)", docs: "var(--fn)", guide: "var(--grn)", book: "var(--acc)", standard: "var(--ty)", article: "var(--mut)" };
 
 function Seg<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, ReactNode][]; onChange: (v: T) => void }) {
     return (
