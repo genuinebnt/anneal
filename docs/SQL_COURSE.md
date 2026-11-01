@@ -1,0 +1,98 @@
+# The SQL performance course (owner asked 2026-11-01)
+
+**Goal (the owner's words):** "as high quality or better, with more content, than Use The Index, Luke ... a one-for-all reference for
+query performance optimisation and everything about SQL performance. If multiple databases are needed, use them; if an analytical load
+needs an analytical engine, use it." The content must be **researched** (official docs, source, papers), with the best breadth and depth.
+
+**Status:** pilot started, **1 of about 47 modules written**. The pipeline (plan capture, loader, reader, plan view) works end to end
+for that one page. Everything below the "Built" section is still to do. Mockup (approved: "ok"):
+https://claude.ai/artifact/2m75DYbPU1u4v5j2GjQTx2 (private to the owner's account; the course map, a reference page, a lab, the plan explorer).
+
+Use Use The Index, Luke (use-the-index-luke.com, Markus Winand, all rights reserved) and the book *SQL Performance Explained* for
+**topics only**: never copy its text or figures. Link to it under "Sources and further reading". Everything here is written for anneal
+and measured on a real database.
+
+## What is built
+
+| Piece | Where | Notes |
+|---|---|---|
+| Example schema | `tools/sqlperf/schema.sql` | customers 50k, products 10k, orders 2M, order_items ~6M, deterministic (`setseed`); `psql -v scale=N` multiplies orders. Throwaway databases only. |
+| Setups | `content/sql/setups.toml` | each plan's indexes are applied before and undone after (`sql`, `undo`), so the schema stays the same for every plan |
+| Plan capture | `tools/sqlperf/capture.py` | finds ```` ```plan id=… setup=… ```` blocks in pages, runs them on a real Postgres (warm, one session), writes `content/sql/plans/<id>.json` (query, setups, JSON plan, text plan, server version). `--check` re-runs and fails if a plan's **shape** changed or a plan is unused. |
+| Pages | `content/sql/pages/sql-*.toml` | the same format as System design pages (sections, checks, terms, sources, summary, figures); file names start with `sql-`; `group` is one of `SQL_GROUPS` in `crates/content/src/sd.rs` |
+| Loader | `crates/content/src/sd.rs` | SQL pages join the System design catalog (so checks, review cards, ⌘K and search work unchanged); plans load into `catalog.plans`; a ```` ```plan ```` block without a captured plan is a content error |
+| API | `crates/api/src/sd.rs` | `GET /api/sd/concepts/{id}` returns `plans` (the ones the page shows) |
+| Reader | `web/src/pages/sd/SdRead.tsx`, `web/src/components/SdMd.tsx` | the reading view; `PlansContext` hands the plans to `PlanBlock` |
+| Plan view | `web/src/plan.ts`, `web/src/components/PlanView.tsx`, `web/src/styles/plan.css` | parsers for Postgres JSON and text, MySQL `EXPLAIN ANALYZE` / `FORMAT=TREE`, SQLite `EXPLAIN QUERY PLAN`; per-step own time and pages; flags (misestimates, rows discarded by a filter, disk sorts, hash batches, heap fetches, missing workers); an operation knowledge base (`KB` in plan.ts); bars grow in run order; hottest step marked. Unit tests in `plan.test.ts` run against the captured plans. |
+| Module 1 | `content/sql/pages/sql-anatomy.toml` | anatomy of an index, measured with `pageinspect`: 3 plans, 4 checks, 10 terms, 9 sources. **The quality bar for every other module.** |
+
+The only Postgres in the loop is a throwaway container: `docker run -d --name anneal-sqlperf -e POSTGRES_USER=anneal -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=sqlperf -p 5418:5432 postgres:18-alpine -c shared_buffers=256MB -c max_parallel_workers_per_gather=2`, then
+`psql -h 127.0.0.1 -p 5418 -U anneal sqlperf -f tools/sqlperf/schema.sql` (about 75 s) and
+`python3 tools/sqlperf/capture.py --db postgres://anneal@127.0.0.1:5418/sqlperf`. **Never run any of this against the dev or production
+database.** Production runs Postgres 18, so capture on 18 (the pilot's plans were taken on 18.3).
+
+## The quality bar (read module 1 first)
+
+1. **Measured, never invented.** Every plan, size, page count and timing on a page comes from `capture.py` or from a query you ran and
+   quote with its output (like the `pageinspect` numbers in module 1). Never type a plan by hand. Numbers that are version-specific
+   say so ("Postgres 18 added skip scan").
+2. **Researched.** Read the official docs for the feature (the Postgres docs for the version, the relevant source file or README when the
+   docs are thin, the paper when there is one). Check each source URL opens (`curl -sL -o /dev/null -w '%{http_code}'`); some sites
+   (O'Reilly, Medium, DuckDB's docs) block or render client-side: link them only if you can state the fact from another source.
+   Facts you could not confirm are left out, not softened.
+3. **Same sections, same pieces:** `summary` (5 lines), long-form `[[sections]]` with a section on **other engines** where it differs
+   (MySQL InnoDB, SQLite, ClickHouse, DuckDB), a section **In real code** (Rust with sqlx, and SQL), `[[checks]]` that are open questions
+   (predict the plan, write the index, explain why the planner skipped it: **never multiple choice**), `[[terms]]` tied to sections,
+   `[[sources]]` with `kind`, figures where a picture beats prose.
+4. **Markdown pieces** (all checked by `check_markdown` in `crates/content/src/sd.rs`): ```` ```sql ````/```` ```rust ```` fences with
+   `title=`, `group=` (tabs) and `hl=`; ```` ```plan id=… setup=… ````; `:::steps` step-throughs; `:::deeper` folds; `^[margin note]`;
+   `$$…$$` and `\( … \)` math; callouts `> [!NOTE|TIP|WARNING|INTERVIEW|ASIDE]`.
+5. **ANSI SQL notes** where Postgres differs from the standard (`FETCH FIRST` vs `LIMIT`, `INCLUDE`, `IS DISTINCT FROM`, `FILTER`).
+6. **Code you show must run.** Run every SQL and Rust snippet you print against the schema (or `cargo check` it) before you commit it,
+   as was done for the consistent-hashing page.
+7. **Credit and licences.** Text adapted from an open-licence source gets `credit` (and an entry in `content/sd/NOTICE.md`). Nothing from
+   all-rights-reserved or no-derivatives sources (Use The Index, Luke; ByteByteGo; DDIA; Hello Interview).
+8. **Owner's UI rules:** no scrollbars, underlines or separator lines (pills and spacing), 4-space indent, do not run prettier, mockup and
+   approval before new screens or big UI, long jobs in the background, never touch the owner's data (see CLAUDE.md).
+
+## The course map (47 modules, 10 parts)
+
+File name = `content/sql/pages/<id>.toml`; `group` in brackets. The order is the reading order; numbers are the mockup's.
+
+**I · Indexes** `[sql-indexes]`: 1 `sql-anatomy` **done** · 2 `sql-equality` (equality, primary keys, verifying index use) · 3 `sql-multicolumn` (concatenated keys, column order, Postgres 18 **skip scan**; the mockup's centrepiece: `(created_at, customer_id)` 1,483 pages vs `(customer_id, created_at)` 4) · 4 `sql-functions` (functions, case-insensitive search, expression indexes, bind parameters) · 5 `sql-ranges` (greater, less, BETWEEN, LIKE and `text_pattern_ops`, collations, index combine/bitmap) · 6 `sql-partial-null` (partial indexes, NULL in indexes, NOT NULL) · 7 `sql-obfuscated` (conditions that hide a column: dates, numeric strings, redundant clauses, smart logic, maths).
+
+**II · Reading plans** `[sql-plans]`: 8 `sql-explain` (EXPLAIN, ANALYZE, BUFFERS, SETTINGS, FORMAT JSON; reading the tree) · 9 `sql-access-filter` (access vs filter conditions, `Index Searches`, `Rows Removed`) · 10 `sql-statistics` (pg_stats, MCVs, histograms, `CREATE STATISTICS`, n_distinct) · 11 `sql-planner-wrong` (misestimates, correlated columns, parameterised plans, generic vs custom, `plan_cache_mode`, hints via settings) · 12 `sql-parallel` (parallel query, `JIT`, `work_mem`).
+
+**III · Query shapes** `[sql-shapes]`: 13 `sql-joins` (nested loop, hash, merge; which index each wants) · 14 `sql-n-plus-one` (the ORM problem, `= ANY($1)`, joins) · 15 `sql-sort-group` (ORDER BY and GROUP BY from an index, ASC/DESC, NULLS FIRST/LAST, incremental sort) · 16 `sql-pagination` (top-N, OFFSET vs keyset, row-value comparison) · 17 `sql-subqueries` (EXISTS vs IN, CTEs and inlining, LATERAL) · 18 `sql-windows` (window functions, frames, pagination with them) · 19 `sql-aggregates` (count(*), count(DISTINCT), approximate counts, FILTER, ROLLUP).
+
+**IV · Covering and clustering** `[sql-covering]`: 20 `sql-covering-indexes` (index-only scans, INCLUDE) · 21 `sql-visibility-map` (why heap fetches happen, VACUUM) · 22 `sql-clustering` (physical order, CLUSTER, BRIN, correlation).
+
+**V · Postgres internals** `[sql-internals]`: 23 `sql-mvcc` (tuple versions, xmin/xmax, snapshots) · 24 `sql-vacuum` (VACUUM, bloat, HOT updates, fillfactor, autovacuum tuning) · 25 `sql-toast` (wide rows, TOAST, jsonb) · 26 `sql-wal` (WAL, checkpoints, `synchronous_commit`, what a write costs).
+
+**VI · Writes and concurrency** `[sql-writes]`: 27 `sql-write-cost` (what each index costs INSERT/UPDATE/DELETE, measured) · 28 `sql-batching` (multi-row INSERT, `UNNEST`, `COPY`, pipeline mode) · 29 `sql-upsert` (`ON CONFLICT`, `MERGE`) · 30 `sql-locks` (row locks, `SKIP LOCKED` job queues, deadlocks, advisory locks) · 31 `sql-long-transactions` (idle in transaction, what they block, timeouts).
+
+**VII · Special indexes** `[sql-special]`: 32 `sql-gin` (arrays and jsonb) · 33 `sql-fulltext` (tsvector, ranking, GIN vs GiST) · 34 `sql-trigrams` (`pg_trgm`, `LIKE '%x%'`) · 35 `sql-gist` (ranges, exclusion constraints, PostGIS) · 36 `sql-vectors` (pgvector: HNSW and IVFFlat, recall vs speed).
+
+**VIII · At scale** `[sql-scale]`: 37 `sql-partitioning` (declarative partitioning, pruning, partition-wise joins) · 38 `sql-matviews` (materialized views, refresh) · 39 `sql-pooling` (PgBouncer, pool sizing, prepared statements through a pooler) · 40 `sql-replicas` (read replicas, lag, caches; link the System design pages).
+
+**IX · From Rust, and in production** `[sql-rust]`: 41 `sql-sqlx` (binds, prepared statements and the statement cache, pools, transactions, `query_as`, batching, **plan assertions in tests**: fail when a plan gains a Sort node or a Seq Scan) · 42 `sql-monitoring` (`pg_stat_statements`, `auto_explain`, `pg_stat_activity` waits, `pg_locks`, slow query log, `pg_stat_user_indexes`).
+
+**X · Other engines and analytics** `[sql-engines]` (added after the owner's note: "if analytical load needed use it"): 43 `sql-mysql` (InnoDB clustered indexes, the optimizer, `EXPLAIN ANALYZE`, differences from Postgres) · 44 `sql-sqlite` (rowid tables, covering indexes, `EXPLAIN QUERY PLAN`) · 45 `sql-columnar` (column stores: ClickHouse sparse indexes and granules, DuckDB zone maps, vectorised execution, compression) · 46 `sql-olap-vs-oltp` (when to leave Postgres: the same aggregate on Postgres vs DuckDB/ClickHouse over a big dataset, measured; materialised rollups; `pg_duckdb`/foreign data only if verified) · 47 `sql-engine-compare` (one query, four engines, four plans).
+
+**Back matter:** `sql-myths` ("most selective column first", "indexes degenerate", "SELECT * is bad": each checked against real plans) · glossary · the example schema page. Part X and the big-data module need **large datasets**: use generated data at a higher `scale`, or public datasets (NYC taxi trips, GitHub Archive, IMDb dumps; check each licence and note it on the page); keep downloads out of git (a script fetches them).
+
+## Still to build around the content
+
+1. **Frame and route.** Today SQL pages appear as a group inside System design Learn (`SD_GROUPS` in `web/src/pages/sd/SdHome.tsx` has `sql-indexes`; add the other nine as their pages arrive) and open at `/sd/learn/sql-…`. The mockup's course map (parts, modules, progress) is a **new page** (`/sql`, mockup A): build it from the mockup, with its own header entry only after the owner approves where it lives. Keep ids stable: review cards are keyed by page id and check index.
+2. **The plan explorer** (mockup D): a page where you paste any plan (`parsePlan` already guesses the format) and get `PlanView`; plus "open in explorer" from any plan on a page. Needs: the operation knowledge base grown to every common node in Postgres, MySQL and SQLite; hints that link to the module that explains a problem; a compare view for two plans (before/after an index); tests with captured plans from each engine (capture MySQL and SQLite plans with a script like `capture.py`; both run in containers or locally).
+3. **Labs** (mockup C): stages the learner runs on their laptop, like BusTub: the CLI starts a throwaway Postgres in a container, loads the schema, and runs tests that assert **plans** (buffers read, no Sort node, an index-only scan) and results (same rows as the slow version, with a property test). A lab must never run on the server. Design the CLI part (`anneal sql ...`) with the owner before building; follow `docs/COURSE_STANDARDS.md` for stage rules (open checks, performance section, hints at BusTub's level, tests that explain themselves).
+4. **CI.** Add `python3 tools/sqlperf/capture.py --check` against a Postgres 18 service container once there are enough plans (it needs the schema loaded first, about 75 s); `anneal validate` already fails a page whose plan is not captured. Re-capture plans when production's Postgres major version changes.
+5. **Search and discoverability.** ⌘K already finds SQL pages as System design pages (they are in the same catalog). Add a "SQL performance" lens when `/sql` exists.
+
+## Gotchas
+
+- The shell's default Node (fnm) may fail with "Bad CPU type in executable"; use `export PATH=/opt/homebrew/bin:$PATH` before `pnpm` or `node`.
+- `capture.py` needs `psql` on the path and the schema loaded; plans differ between runs only in timings and buffer counts, which is why `--check` compares **shapes**.
+- If a plan you wanted does not appear (the planner chose a different one), do not edit the JSON: change the setup or the query until Postgres chooses it, or say on the page what it chose and why.
+- Module ids are `sql-<topic>`; the loader rejects other prefixes in `content/sql/pages`.
+- `psql` here is 14; the container is 18. Use the container's server for plans (any client works).
