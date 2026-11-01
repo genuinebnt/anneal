@@ -16,11 +16,33 @@ name = "Requirements"
 minutes = 5
 prompt = "Functional requirements, measurable non-functional ones, and what makes it hard."
 reference = """
-**Functional**: browse and search events; view the seat map with availability; hold seats for a few minutes; pay and get tickets.
+**Functional**:
 
-**Non-functional**: **no seat sold twice** (strong consistency on booking); browsing and search highly available and fast (can be slightly stale); survive on-sale spikes of millions of users in minutes.
+1. **Browse and search** events (by artist, city, date).
+2. See an event's **seat map** with what is available.
+3. **Hold** chosen seats for a few minutes while paying.
+4. **Pay** and receive tickets.
 
-**Shape**: reads (browse, seat maps) dwarf writes, except at on-sale moments when writes on a few events spike.
+Out of scope unless asked: resale, dynamic pricing, the venue-side tools, ticket scanning at the door.
+
+**Non-functional**, two different consistency needs in one product:
+
+| Part | Need | Why |
+|---|---|---|
+| Booking (hold, buy) | **strong consistency: no seat sold twice** | two people at the door with one seat is the failure that matters |
+| Browse, search, seat map | **high availability, low latency**, may be seconds stale | a stale "available" costs one failed hold, which the hold step reports |
+| On-sale moments | survive **millions of users in minutes** on one event | the load is concentrated on a few thousand rows |
+
+**Estimate** (assumptions labelled), the hard case:
+
+```text
+arrivals        10M users at 10:00 for 50,000 seats (assumption)
+orders          50,000 seats ÷ ~4 per order ≈ 12,500 orders can succeed
+seat map        50,000 seats × ~50 B ≈ 2.5 MB per event (cacheable)
+naive polling   10M users refreshing every 5 s = 2M requests/s at one event
+```
+
+Over 99% of the people who arrive cannot buy a ticket. The design's job is to say "no" or "wait" to them cheaply and fairly, while 12,500 orders go through a strongly consistent path. Real on-sales are this lopsided: Ticketmaster reported 3.5 billion system requests, four times its previous peak, during the 2022 presale for Taylor Swift's Eras Tour, and 3.5 million people had registered for its Verified Fan presale.
 """
 [[steps.points]]
 id = "req-double"
@@ -39,7 +61,17 @@ level = "senior"
 name = "Core entities"
 minutes = 2
 prompt = "Name the things the system stores."
-reference = "`Event`, `Venue`, `Seat` (or ticket: event, section, row, number, status, held_until, held_by), `Booking` (user, seats, payment status), `User`."
+reference = """
+| Entity | Fields | Notes |
+|---|---|---|
+| `Event` | id, performer, venue, start time, on-sale time | read-mostly; also indexed for search |
+| `Venue` | id, name, layout (sections, rows, seats) | static |
+| `Ticket` (one per seat per event) | event_id, seat (section, row, number), price, **status** (`free`, `held`, `sold`), **held_by**, **held_until**, booking_id | the row that contention is about |
+| `Booking` | id, user, ticket ids, total, payment status, idempotency key | created at payment |
+| `User` | id, verified status | |
+
+The ticket row carries its **hold expiry** (`held_until`). That one column is what lets a hold end by itself: a hold whose time has passed is treated as free by the next attempt, so nothing has to run for an abandoned hold to be released.
+"""
 [[steps.points]]
 id = "ent-ticket"
 text = "A ticket/seat row with a status and a hold expiry"
@@ -50,11 +82,23 @@ name = "API"
 minutes = 5
 prompt = "Endpoints for browsing, holding and buying."
 reference = """
+```http
+GET  /events?q=taylor&city=london&from=2027-06-01        -> 200 { events: [...] }
+GET  /events/{id}                                         -> 200 { event }        (cacheable)
+GET  /events/{id}/seats                                   -> 200 { sections: [...] } (cacheable for seconds)
+
+POST /events/{id}/holds        { "seat_ids": ["A-12-7", "A-12-8"] }
+-> 201 { "hold_id": "h_81", "expires_at": "2027-03-01T10:10:00Z" }
+-> 409 { "error": "seats_taken", "taken": ["A-12-8"] }
+
+POST /bookings                 Idempotency-Key: 2b7e...   { "hold_id": "h_81", "payment_method": "pm_tok_..." }
+-> 201 { "booking_id": "b_9", "tickets": [...] }
+-> 410 { "error": "hold_expired" }
 ```
-GET  /events?q=&city=&date=           GET /events/{id}/seats
-POST /holds   { event_id, seat_ids }  -> 201 { hold_id, expires_at }   (409 if taken)
-POST /bookings { hold_id, payment }   Idempotency-Key  -> 201 { booking_id, tickets }
-```
+
+- **Holding is its own step** with an explicit `expires_at`, so the client can show a countdown, and with `409 Conflict` naming the seats that were taken, so the client can offer others.
+- **Booking takes an idempotency key**: if the response to a booking is lost, the retry must return the same booking, not charge the card a second time.
+- During an on-sale, holds and bookings also require an **admission token** from the waiting room (see the deep dives); requests without one are refused before they reach the booking service.
 """
 [[steps.points]]
 id = "api-hold"
@@ -70,9 +114,43 @@ name = "High-level design"
 minutes = 15
 prompt = "Browsing, holding and booking."
 reference = """
-- **Event service + search**: events in Postgres, indexed into Elasticsearch for search; seat maps cached (CDN/Redis) for browsing.
-- **Booking service** on Postgres: a hold is a **conditional update**: `UPDATE tickets SET status='held', held_by=u, held_until=now()+10min WHERE id IN (…) AND (status='free' OR held_until < now())`, checked by row count, in one transaction. All seats or none.
-- **Payment** through a provider with an idempotency key; on success the booking service marks the tickets sold; on expiry the hold lapses by the condition itself (no cleanup needed for correctness).
+**The diagram**:
+
+```text
+users ─► CDN (event pages, seat-map snapshots)
+  │
+  └─► waiting room ─► API gateway (checks admission token)
+                         ├─► event svc ─► Postgres + Elasticsearch
+                         └─► booking svc ─► Postgres: tickets, bookings
+                                   └─► payment provider
+```
+
+**Browsing** (the read path, kept apart): events live in Postgres and are indexed into **Elasticsearch** for search by text, place and date. Event pages and seat-map snapshots are cached at the **CDN** and in Redis, refreshed every few seconds. Browsing never touches the ticket rows that bookings lock.
+
+**Holding** (the contended write): one statement, all seats or none:
+
+```sql
+BEGIN;
+UPDATE tickets
+   SET status = 'held', held_by = $user, held_until = now() + interval '10 minutes'
+ WHERE event_id = $event AND seat_id = ANY($seats)
+   AND (status = 'free' OR (status = 'held' AND held_until < now()));
+-- rows updated must equal the number of seats asked for; otherwise ROLLBACK and answer 409
+COMMIT;
+```
+
+Why it is safe: in Postgres's Read Committed mode, a second transaction updating the same row **waits** for the first to finish, then re-checks its `WHERE` against the new row version; it finds `status = 'held'` and updates nothing. Exactly one of two clicks wins, with no lock held beyond a few milliseconds.
+
+:::steps Two users click seat A-12-8 at once
+- user 1 | UPDATE … WHERE status = 'free' | Locks the row, sets held, commits.
+- user 2 | same UPDATE, waits on the row lock | It blocks for the few ms user 1's transaction takes.
+- user 2 | re-checks WHERE on the new version | status is held and not expired: 0 rows.
+- booking svc | rows 0 < 1 asked → ROLLBACK, 409 | User 2 is told at once and picks another seat.
+:::
+
+**Buying**: `POST /bookings` checks the hold is still the user's and not expired, charges through the payment provider with an idempotency key, and in one transaction marks the tickets `sold` and writes the booking. If payment fails or the user leaves, the hold simply expires.
+
+**Alternatives rejected**: `SELECT … FOR UPDATE` held while the user pays (a database lock for minutes, across a user's think time: connections pile up); a Redis lock per seat (`SET seat NX EX 480`) as the source of truth (fast, but the booking must still be recorded durably and atomically for several seats, and two stores that can disagree is the bug we are trying to avoid; Redis is fine as a cache of availability in front).
 """
 [[steps.points]]
 id = "hld-atomic"
@@ -86,16 +164,34 @@ level = "senior"
 id = "hld-read"
 text = "Browsing and search served from caches and a search index, apart from booking"
 level = "mid"
+[[steps.points]]
+id = "hld-why-safe"
+text = "Explained why the conditional update is safe: the second updater waits and re-checks the condition"
+level = "senior"
 
 [[steps]]
 name = "Deep dives"
 minutes = 15
 prompt = "The on-sale rush, real-time seat maps, and failures."
 reference = """
-- **Virtual waiting room**: users join a queue (Redis sorted set by arrival), and are admitted at the rate the booking path can serve, with a token that the booking API checks. The database never sees the stampede.
-- **Hot event**: the event's tickets on one Postgres; shard tickets by event if needed, but one event's seats stay together so holds stay transactional.
-- **Seat map freshness**: push changes over SSE to people looking at the map, or poll every few seconds; the hold is the real check.
-- **Payment failures**: idempotency keys; a booking stuck in 'paying' is reconciled with the provider.
+**1. The virtual waiting room.** Nobody reaches the booking service without passing it.
+
+- At on-sale, users land on a **static page** served from the CDN: it costs nothing to serve 10M of them.
+- Each gets a **position** (a Redis sorted set by arrival time, or a random order for everyone who arrived before the start, which removes the advantage of bots refreshing at 9:59:59). Cloudflare's Waiting Room, for example, offers both first-in-first-out and random ordering.
+- The room **admits users at the rate the booking path can serve**, measured, not guessed: say 2,000 a minute. 12,500 successful orders at 2,000 admissions a minute is about 6 minutes, if every admitted user buys (many will not, so admission continues until seats run out).
+- An admitted user gets a short-lived **signed token** (user, event, expiry) that the gateway checks on every hold and booking.
+- Positions are polled slowly (every 20-30 s) or pushed, so the queue itself is cheap: 10M users polling every 20 s is 500,000 small requests a second, served at the edge from a counter, not by the database.
+- When the seats are gone, the room says so at once to everyone still waiting.
+
+Ticketmaster's real defence went further: its Verified Fan presale registered fans in advance and sent codes to only part of them, which is admission control before the day.
+
+**2. Keep one event's tickets together.** A hold for several seats must be one transaction, so all of an event's tickets live on **one database (shard)**. Shard by `event_id` across events if the total grows, never one event across shards. One event's rows are a few thousand to 100,000: one Postgres handles thousands of short updates a second on them, which is why the waiting room's admission rate, not the database, is the limit.
+
+**3. Seat-map freshness.** Admitted users see a map that changes every second. Options: poll a cached per-section summary every few seconds; or push changes over SSE or WebSockets to the few thousand admitted users. Either way the map is advisory: **the hold is the real check**, and a 409 offers the next best seats.
+
+**4. Payment failures.** The booking moves through `paying` → `paid` with an idempotency key to the provider. A booking stuck in `paying` (the server died after charging) is found by a sweeper and **reconciled** with the provider: if the charge went through, mark the tickets sold; if not, release them. Never release seats a user has paid for because a response was lost.
+
+**5. Bots and fairness.** Rate limits per account and per device, verified accounts, purchase limits per user per event, and the randomised queue. They are product rules as much as engineering.
 """
 [[steps.points]]
 id = "dd-queue"
@@ -109,6 +205,10 @@ level = "staff"
 id = "dd-reconcile"
 text = "Payment failures and stuck bookings reconciled with the provider"
 level = "staff"
+[[steps.points]]
+id = "dd-token"
+text = "Admitted users carry a signed, expiring token that the booking path checks"
+level = "senior"
 
 [[probes]]
 question = "A user holds two seats and their browser crashes. What happens to the seats?"
@@ -121,3 +221,25 @@ answer = "You can (SET seat NX EX 600) as a fast first gate, but the booking sti
 [[probes]]
 question = "Ten million users arrive at 10:00 for 50,000 seats. Walk through the first minute."
 answer = "They land in the waiting room (a static page plus a queue), get a position, and are admitted a few thousand a minute with a signed token; admitted users see the cached seat map and hold seats with conditional updates; the rest keep their place or are told it sold out, and the booking database only sees the admitted rate."
+
+[[probes]]
+question = "A user's payment succeeds at the provider at 10:10:05, but their hold expired at 10:10:00 and someone else now holds the seat. What do you do?"
+answer = "Prevent it first: check the hold and extend it briefly when payment starts, so a hold being paid cannot expire mid-payment. If it still happens, the booking transaction sees the seat is no longer the user's; refund the charge at once (with an idempotency key) and tell the user, rather than selling the seat twice."
+
+[[sources]]
+title = "Ticketmaster: Taylor Swift | The Eras Tour onsale explained"
+kind = "article"
+url = "https://business.ticketmaster.com/press-release/taylor-swift-the-eras-tour-onsale-explained/"
+note = "3.5 billion system requests, four times the previous peak; Verified Fan registration"
+
+[[sources]]
+title = "Cloudflare Waiting Room: queueing methods"
+kind = "docs"
+url = "https://developers.cloudflare.com/waiting-room/reference/queueing-methods/"
+note = "first-in-first-out or random admission"
+
+[[sources]]
+title = "PostgreSQL: transaction isolation, Read Committed"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED"
+note = "a second updater waits, then re-checks its WHERE on the updated row"
