@@ -1,0 +1,90 @@
+{
+ "id": "m4-cast-numeric",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE customer_id = 4242::numeric;",
+ "setup": [
+  {
+   "id": "orders-customer",
+   "sql": "CREATE INDEX orders_customer ON orders (customer_id);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Gather",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 1000.0,
+   "Total Cost": 29460.0,
+   "Plan Rows": 10000,
+   "Plan Width": 8,
+   "Actual Startup Time": 26.227,
+   "Actual Total Time": 181.824,
+   "Actual Rows": 44.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Workers Planned": 2,
+   "Workers Launched": 2,
+   "Single Copy": false,
+   "Shared Hit Blocks": 14960,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": true,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.0,
+     "Total Cost": 27460.0,
+     "Plan Rows": 4167,
+     "Plan Width": 8,
+     "Actual Startup Time": 18.527,
+     "Actual Total Time": 164.299,
+     "Actual Rows": 14.67,
+     "Actual Loops": 3,
+     "Disabled": false,
+     "Filter": "((customer_id)::numeric = '4242'::numeric)",
+     "Rows Removed by Filter": 666652,
+     "Shared Hit Blocks": 14960,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Workers": []
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.114,
+  "Triggers": [],
+  "Execution Time": 181.883
+ },
+ "text": "Gather  (cost=1000.00..29460.00 rows=10000 width=8) (actual time=22.898..233.268 rows=44.00 loops=1)\n  Workers Planned: 2\n  Workers Launched: 2\n  Buffers: shared hit=14960\n  ->  Parallel Seq Scan on orders  (cost=0.00..27460.00 rows=4167 width=8) (actual time=11.013..213.009 rows=14.67 loops=3)\n        Filter: ((customer_id)::numeric = '4242'::numeric)\n        Rows Removed by Filter: 666652\n        Buffers: shared hit=14960\nPlanning Time: 0.115 ms\nExecution Time: 233.325 ms"
+}

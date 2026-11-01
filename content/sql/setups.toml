@@ -66,3 +66,13 @@ undo = "DROP INDEX orders_status_customer;"
 id = "orders-customer-status"
 sql = "CREATE INDEX orders_customer_status ON orders (customer_id, status);"
 undo = "DROP INDEX orders_customer_status;"
+
+[[setup]]
+id = "customers-lower-email-nostats"
+sql = "CREATE INDEX customers_lower_email ON customers (lower(email));"
+undo = "DROP INDEX customers_lower_email;"
+
+[[setup]]
+id = "orders-day-utc"
+sql = "CREATE INDEX orders_day_utc ON orders (((created_at AT TIME ZONE 'UTC')::date));"
+undo = "DROP INDEX orders_day_utc;"
