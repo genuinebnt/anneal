@@ -73,4 +73,34 @@ export const FIGS_CORE: Record<string, Fig> = {
             );
         },
     },
+    /** unique-ids: a Snowflake id is time, machine and sequence side by side; the sequence counts within a millisecond. */
+    "snowflake-bits": {
+        steps: 8,
+        ms: 900,
+        draw: (t) => {
+            // three ids in millisecond 1000, two in 1001, one in 1002; then the clock steps back and the generator refuses
+            const ISSUED: [number, number][] = [[1000, 0], [1000, 1], [1000, 2], [1001, 0], [1001, 1], [1002, 0]];
+            const refused = t >= 6;
+            const ms = refused ? [999, 1001][t - 6]! : ISSUED[t]![0];
+            const seq = refused ? 0 : ISSUED[t]![1];
+            const issued = ISSUED.slice(0, Math.min(t + 1, ISSUED.length));
+            const fresh = !refused && seq === 0 && t > 0;
+            return (
+                <>
+                    <Box x={14} y={20} w={26} h={40} r={4} label="0" />
+                    <Box x={44} y={20} w={300} h={40} r={4} label={refused ? `clock reads ${ms} ms: behind 1002` : `${ms} ms since the epoch`} tone={refused ? "bad" : fresh ? "warn" : "acc"} />
+                    <Box x={348} y={20} w={110} h={40} r={4} label="machine 7" tone="vio" />
+                    <Box x={462} y={20} w={150} h={40} r={4} label={refused ? "–" : `sequence ${seq}`} tone={refused ? "line" : "grn"} />
+                    <text className="sf-lab" x={14} y={78}>1</text>
+                    <text className="sf-lab" x={44} y={78}>41 bits: time (69 years)</text>
+                    <text className="sf-lab" x={348} y={78}>10 bits: 1,024</text>
+                    <text className="sf-lab" x={462} y={78}>12 bits: 4,096 a ms</text>
+                    <text className="sf-lab" x={14} y={110}>ids issued (time · machine · sequence), each larger than the last</text>
+                    {issued.map(([m, q], k) => <Box key={k} x={14 + k * 102} y={120} w={96} h={30} r={6} label={`${m}·7·${q}`} tone={k === t ? "grn" : "line"} />)}
+                    <text className="sf-lab" x={14} y={190}>{refused ? "the clock is behind the last id's time (1002): refuse, or wait until it passes" : fresh ? "a new millisecond: the sequence restarts at 0" : "same millisecond: the sequence counts up"}</text>
+                    <text className="sf-lab" x={14} y={208}>no coordination: another machine has its own id, so its ids never collide with these</text>
+                </>
+            );
+        },
+    },
 };
