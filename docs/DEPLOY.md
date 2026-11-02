@@ -82,6 +82,25 @@ If the new app isn't healthy within 3 minutes, `up --wait` fails and so does the
 replaced the old container by then, so roll back with `deploy/deploy.sh <previous sha>` (the image of the last good
 commit is kept until the next successful deploy's cleanup).
 
+## Deploying without CI (manual)
+
+When Actions can't run (billing, an outage) or you want a deploy now, build and ship master on the VM itself:
+
+```sh
+ssh deploy@46.224.108.227
+cd ~/anneal
+deploy/deploy-manual.sh            # fetch origin/master, build the images here, back up, preflight, deploy
+deploy/deploy-manual.sh <sha>      # the same for one commit
+```
+
+It builds the app and runner images with the same Dockerfiles and tags CI uses (`anneal:<sha>`, `anneal-runner:<sha>`),
+generates `courses/bustub/solutions.json` from the checkout's reference, then runs `deploy/deploy.sh <sha>` with
+`ANNEAL_SKIP_PULL=1`, so the backup, the progress-safety preflight and the health wait are exactly the CI path. Nothing
+goes to the registry. The macOS CLI installers are carried over from the running release (only CI builds them); the
+Linux one is rebuilt. Afterwards the build cache is trimmed to the newest 4 GB (`BUILD_CACHE_KEEP=6GB` changes it).
+Push to master first: the script deploys what is on `origin/master`, not local edits. The first build on a box with a
+cold cache compiles all of Rust and the web app and takes a while; run it in `tmux` or with `nohup`.
+
 ## One-time setup (done 2026-09-28)
 
 1. DNS: a Cloudflare record `anneal` → `46.224.108.227`, proxied like the other subdomains.
