@@ -25,11 +25,15 @@ A partitioned table has no rows of its own: it is a definition (`PARTITION BY RA
 
 One month of data, summed:
 
-{b('flat-month')}
+```plan id=m37-flat-month setup=pa-flat,no-parallel
+SELECT count(*), sum(val) FROM ev_f WHERE ts >= '2025-03-01' AND ts < '2025-04-01';
+```
 
 The index on `ts` finds the 101,918 March rows in 1,033 buffers. The partitioned table:
 
-{b('part-month')}
+```plan id=m37-part-month setup=pa-flat,pa-part,no-parallel
+SELECT count(*), sum(val) FROM ev_p WHERE ts >= '2025-03-01' AND ts < '2025-04-01';
+```
 
 Only `ev_p_2025_03` is mentioned in the plan; the planner proved from the bounds that the other 23 cannot contain a March row (they are pruned) and read the partition with a sequential scan, 650 buffers, because a whole month is most of that small table. The saving over the single table is a third of the reads and half the time. Both numbers come from a query that returns 4% of the table.
 """
@@ -39,17 +43,25 @@ heading = "When partitioning does nothing for a query"
 body = """
 Take a narrow query, one day in the same month:
 
-{b('flat-day')}
+```plan id=m37-flat-day setup=pa-flat,no-parallel
+SELECT count(*), sum(val) FROM ev_f WHERE ts >= '2025-03-10' AND ts < '2025-03-11';
+```
 
-{b('part-day')}
+```plan id=m37-part-day setup=pa-flat,pa-part,no-parallel
+SELECT count(*), sum(val) FROM ev_p WHERE ts >= '2025-03-10' AND ts < '2025-03-11';
+```
 
 37 buffers against 33, 0.62 ms against 0.58. An index on a time column already reads just the day, so there is little left for partitioning to skip. The usual reasoning 'the table is big, so split it' skips the question of whether an index already does the job. Measure the query's buffers before and after on your own data.
 
 A query that does not mention the partition key is worse off:
 
-{b('flat-device')}
+```plan id=m37-flat-device setup=pa-flat,no-parallel
+SELECT count(*), sum(val) FROM ev_f WHERE device = 17;
+```
 
-{b('part-device')}
+```plan id=m37-part-device setup=pa-flat,pa-part,no-parallel
+SELECT count(*), sum(val) FROM ev_p WHERE device = 17;
+```
 
 Single table: one bitmap index scan, 2,405 buffers. Partitioned: 24 of them under an Append, 2,448 buffers and a slightly longer run. Nothing is pruned, and each partition adds its own index descent and plan node. Here the cost is a few buffers; with a thousand partitions it would be a thousand descents, which was not measured on this page.
 """
@@ -59,7 +71,9 @@ heading = "Keep the key bare"
 body = """
 Pruning works by comparing the query's condition on the key column with the partition bounds. Wrapping the column in a function hides that comparison:
 
-{b('part-func')}
+```plan id=m37-part-func setup=pa-flat,pa-part,no-parallel
+SELECT count(*), sum(val) FROM ev_p WHERE date_trunc('month', ts) = timestamptz '2025-03-01';
+```
 
 The condition asks for March, and the answer is the same rows, but the planner cannot turn `date_trunc('month', ts) = ...` into bounds on `ts`, so all 24 partitions are scanned: 15,306 buffers and 343 ms, against 650 and 15 ms with `ts >= '2025-03-01' AND ts < '2025-04-01'`. This is the same rule as module 4 for indexes on plain columns. Check the plan for a list of partitions as long as the table's partition count.
 """
