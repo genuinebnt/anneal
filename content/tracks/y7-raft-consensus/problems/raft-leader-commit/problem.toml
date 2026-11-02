@@ -1,0 +1,32 @@
+slug = "raft-leader-commit"
+title = "When a Raft leader may commit: majorities and the Figure 8 rule"
+mode = "write"
+level = "hard"
+stage = "rules"
+order = 3
+status = "ready"
+tags = ["Raft", "commit index", "quorum", "majority", "Figure 8", "match index", "safety"]
+teaches = [
+  "An entry is committed once a **majority** of servers store it: with `n` servers that is `n / 2 + 1` (3 of 4, 3 of 5), counting the leader itself.",
+  "The subtle rule: a leader may only commit by counting replicas an entry **from its own term**. Entries from earlier terms become committed indirectly, when a later entry on top of them is. Counting old-term entries can lose committed data (Raft paper, Figure 8).",
+  "Committing index `N` commits every entry before it, so the answer is the *largest* qualifying index.",
+]
+follow_up = "1) Make it O(followers log followers): sort the match indexes (with the leader's own last index) and take the median-like element, then check its term. Prove it equals the loop version. 2) Build the Figure 8 scenario as a test with five servers S1..S5 and show a committed-by-counting entry that a later leader overwrites; then show the same schedule is safe with this rule. 3) Add the leader's `next_index` / `match_index` bookkeeping on `AppendReply` (success: raise match; failure: back next_index off) and drive it from the previous problem's follower. 4) Add joint-consensus style *two majorities* (old and new configuration must each have one) and extend the function. 5) Why does a leader append a no-op on election?"
+related = ["Y7", "C2", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "For each candidate index `N` above the current commit index: skip it unless its entry has the current term; count the followers whose match index is at least `N`, add one for the leader, compare with the majority. Keep the largest passing `N`."
+
+[[hints]]
+kind = "rust"
+text = "`follower_match.iter().filter(|&&m| m >= idx).count()` counts replicas; the cluster size is `follower_match.len() + 1` and the majority is `cluster / 2 + 1` (integer division: 5 servers need 3, 4 need 3, 1 needs 1). Iterate `(commit_index + 1)..=len` and remember that `log_terms[idx - 1]` is the term of entry `idx`."
+
+[[hints]]
+kind = "edge"
+text = "The term check is only on the entry at `N` itself, not on the ones below it: committing `N` commits all earlier entries regardless of their terms. And the result never drops below `commit_index`: if nothing new qualifies, return what you were given."
+
+[solution]
+explanation = "This is the rule that Figure 8 of the Raft paper exists to justify, and the one that most home-grown implementations get wrong: etcd's `maybeCommit` checks `term == current term` for exactly this reason. Leaders commonly append a no-op entry at the start of their term so that earlier entries become committed quickly once it replicates."
+time = "O(log length * followers)"
+space = "O(1)"
