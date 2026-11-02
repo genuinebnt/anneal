@@ -32,7 +32,7 @@ The algorithm for precedence (climbing with a minimum level, two functions, a sh
 ## If this is new
 
 - S5 Enums and pattern matching: ranks as a `match`.
-- Y2 Functions and tooling: small private helpers.
+- [Y2 Functions and tooling](/t/y2-unsafe-rust): small private helpers.
 
 ## Tests
 
