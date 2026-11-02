@@ -1,0 +1,134 @@
+title = "Long transactions and what they block"
+group = "sql-writes"
+order = 31
+minutes = 12
+lede = "A transaction that is open but doing nothing looks harmless. It is not: it can stop VACUUM from removing a single dead row on a table it never touches, and one ALTER TABLE that queues behind it can freeze every query on the table. This page measures both on throwaway tables, and ends with the three timeouts that bound the damage."
+say = "With a session that had only called txid_current() and then sat idle, ten rounds of 'update every row, then VACUUM' grew a 100,000-row table from 8,656 kB to 47,568 kB (4.3 MB per round, 300,000 dead row versions 'not yet removable' after three rounds); without that session the table stayed at 8,656 kB. Space is not returned when the session ends. An ALTER TABLE that waited behind an idle transaction's read lock blocked a plain SELECT for the full 3 s the transaction stayed open; with lock_timeout = 500ms the ALTER failed at 501 ms and the SELECT waited 304 ms. idle_in_transaction_session_timeout ended an idle session with IdleInTransactionSessionTimeout."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**What 'old' means:** VACUUM may remove a dead row version only if no transaction could still see it. The oldest transaction that holds an xid or a snapshot sets that horizon for the whole database (module 24), including tables it never touches.",
+  "**Bloat test:** table `lt_t`, 100,000 rows, autovacuum off. Ten rounds of `UPDATE lt_t SET n = n + 1` followed by `VACUUM lt_t`. With no other transaction: heap **8,656 kB after every round**. With another session that ran `BEGIN; SELECT txid_current();` and then did nothing: **8,656, 12,976, 17,304 ... 47,568 kB**, a growth of 4.3 MB per round. The `VACUUM VERBOSE` line after three rounds read `tuples: 0 removed, 400000 remain, 300000 are dead but not yet removable`.",
+  "**It does not undo itself:** when the idle session rolled back and VACUUM ran again, it removed the 300,000 dead tuples (`300000 removed, 100000 remain`) but the heap stayed at its high-water size (**47,568 kB**): the space is free inside the file for new versions, and only `VACUUM FULL` or a rebuild gives it back (module 24).",
+  "**Not every idle transaction does it.** At read committed, a transaction that has only run a `SELECT` holds no xid and takes a new snapshot per statement: with such a session idle, VACUUM reported `100000 removed, ... 0 are dead but not yet removable`. What holds the horizon back: an assigned xid (any write, `txid_current()`), a repeatable read or serializable snapshot, a long-running query, an open cursor, a replication slot, a prepared transaction.",
+  "**The lock queue:** an idle transaction that has read `lt_t` holds an `ACCESS SHARE` lock on it until it ends. `ALTER TABLE lt_t ADD COLUMN x int` needs `ACCESS EXCLUSIVE` so it waits, and every later query on `lt_t`, even a plain `SELECT`, queues behind the waiting `ALTER`. With the idle transaction open for 3 s: the `ALTER` waited **3,500 ms** and a `SELECT count(*)` started half a second after it waited **3,003 ms**, until the transaction ended. The table was unreadable for as long as the idle session stayed.",
+  "**The timeouts (all 0, meaning off, by default):** `lock_timeout` makes a statement give up waiting for a lock: the same `ALTER` with `lock_timeout = '500ms'` failed with `LockNotAvailable` at **501 ms** and the `SELECT` waited only **304 ms**. `idle_in_transaction_session_timeout` ends a session that sits idle inside a transaction: a session with `'500ms'` was terminated (`IdleInTransactionSessionTimeout`). `statement_timeout` bounds a single statement.",
+]
+
+[[sections]]
+heading = "The horizon that VACUUM cannot pass"
+body = """
+Module 23 showed that an `UPDATE` leaves the old row version in place, and module 24 that `VACUUM` reclaims those versions once nobody can see them. 'Nobody' is decided against the **oldest xid or snapshot still in use in the cluster**: a version is removable only if its deleting transaction committed before that. One long transaction therefore holds back cleanup on every table in the database, not just the ones it touches.
+
+The test: table `lt_t`, 100,000 rows, autovacuum off so the result is not confounded. Session A runs `BEGIN; SELECT txid_current();` and then sits idle. Session B runs ten rounds of 'update every row, then `VACUUM`':
+
+| Round | Heap, no long transaction | Heap, session A idle |
+|---|---|---|
+| 1 | 8,656 kB | 8,656 kB |
+| 2 | 8,656 kB | 12,976 kB |
+| 3 | 8,656 kB | 17,304 kB |
+| 5 | 8,656 kB | 25,952 kB |
+| 10 | 8,656 kB | 47,568 kB |
+
+Without A, each `VACUUM` frees the previous round's versions and the next `UPDATE` reuses the space. With A, none can be freed, so every round needs fresh pages: the table gains 4.3 MB per round, about the size of one more copy of the data, and queries scan all of it. The `VACUUM VERBOSE` line says it directly: `300000 are dead but not yet removable`. Indexes bloat the same way.
+
+When A rolled back, one `VACUUM` removed all 300,000 dead tuples, but the file stayed 47,568 kB. Future updates reuse that space; the file only shrinks with `VACUUM FULL`, `CLUSTER` or a rebuild (which take an exclusive lock).
+
+What counts as 'long' is a transaction holding an xid or snapshot, not just an idle one. In the same test a session that ran only a `SELECT` at read committed and then sat idle did *not* hold the horizon back (VACUUM removed 100,000 and 0 were 'not yet removable'), because it had no xid and its snapshot belongs to a finished statement. Look for these in `pg_stat_activity` (`xact_start`, `backend_xid`, `backend_xmin`, `state = 'idle in transaction'`), for forgotten rows in `pg_prepared_xacts` and for stale slots in `pg_replication_slots`.
+"""
+
+[[sections]]
+heading = "The lock queue"
+body = """
+Locks are granted in order. A request that conflicts with a held lock waits, and **requests that arrive after it queue behind it** even if they would not conflict with the held lock. That makes a harmless-looking schema change dangerous:
+
+1. Session A: `BEGIN; SELECT count(*) FROM lt_t;` and then idle. It holds `ACCESS SHARE` on `lt_t`.
+2. Session B: `ALTER TABLE lt_t ADD COLUMN x int;` needs `ACCESS EXCLUSIVE`, conflicts with A, waits.
+3. Session C: `SELECT count(*) FROM lt_t;` needs only `ACCESS SHARE`, which does not conflict with A's, but conflicts with B's pending request, so it queues behind B.
+
+Measured with A idle for 3.5 s: B's `ALTER` took **3,500 ms**, C's `SELECT` (started 0.5 s later) **3,003 ms**; both finished the moment A rolled back. For the whole interval every reader of the table was blocked by a statement that had not done anything yet. In production the idle session is a forgotten `psql`, a stuck application connection or a long report.
+
+The defence is for the migration, not the table: run DDL with a short `lock_timeout` and retry.
+
+```sql
+SET lock_timeout = '500ms';
+ALTER TABLE lt_t ADD COLUMN x int;   -- fails fast if it cannot get the lock
+```
+
+With 500 ms the `ALTER` failed (`LockNotAvailable`) at **501 ms** and C's `SELECT`, queued behind it, waited **304 ms** instead of seconds. The migration tool retries; no one else notices. `ADD COLUMN` without a default is fast once it has the lock; the lock itself is the risk.
+"""
+
+[[sections]]
+heading = "Bounding the damage"
+body = """
+Three settings, all off by default (the test server showed `0` for each). Set them where they cannot hurt a legitimate long job: per role or per connection, not blindly cluster-wide.
+
+| Setting | What it does | Where to set it |
+|---|---|---|
+| `idle_in_transaction_session_timeout` | Terminates a session that has been idle inside a transaction for that long. A session with `'500ms'` was ended and its next statement raised `IdleInTransactionSessionTimeout`. | The application role: seconds to a minute. A web request should never sit idle in a transaction. |
+| `lock_timeout` | A statement gives up when it waits that long for a lock. | Migration sessions, and queue workers. |
+| `statement_timeout` | Cancels a statement that runs longer than that. | The application role for web requests; not for reporting or maintenance roles. |
+
+Also: keep transactions short (do slow non-database work, such as an HTTP call, outside them); never leave a transaction open around user input; and in the pool, make sure a connection is returned with its transaction ended. A session killed by the idle timeout loses its transaction, so the application must handle the error and retry like any other failure.
+
+`pg_stat_activity` shows the offenders:
+
+```sql
+SELECT pid, usename, state, now() - xact_start AS xact_age,
+       backend_xid, left(query, 60) AS last_query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL
+ORDER BY xact_start
+LIMIT 10;
+```
+
+A row with a small `xact_age` is normal; one with `state = 'idle in transaction'` and an age in minutes or hours is a problem to find and fix.
+"""
+
+[[checks]]
+prompt = "A table that is updated heavily keeps growing although autovacuum runs and logs 'dead but not yet removable' for hundreds of thousands of tuples. What do you look for, and in which views?"
+answer = "Something holds the cleanup horizon back. Look in pg_stat_activity for old xact_start or backend_xmin (idle in transaction sessions, long queries), in pg_prepared_xacts for forgotten prepared transactions, and in pg_replication_slots for a slot whose xmin or catalog_xmin is old or that nobody consumes. End or fix the oldest and VACUUM then removes the versions; the file keeps its size until rewritten."
+
+[[checks]]
+prompt = "You run 'ALTER TABLE orders ADD COLUMN note text' during a quiet period and the site stops answering for a minute. Nothing else was running. What happened and how do you avoid it?"
+answer = "An idle-in-transaction session (or a long query) held ACCESS SHARE on orders, so the ALTER waited for ACCESS EXCLUSIVE, and every later query on orders queued behind the pending ALTER even though it would not have conflicted with the old holder. Run migrations with a short lock_timeout and retry on LockNotAvailable, and set idle_in_transaction_session_timeout for the application role."
+
+[[checks]]
+prompt = "Is a session at read committed that ran one SELECT and went idle inside BEGIN a problem for VACUUM? And one that ran an UPDATE?"
+answer = "The SELECT-only session is mostly not: it has no xid and its snapshot belonged to the finished statement, so it does not hold the horizon back (it does still hold an ACCESS SHARE lock, which matters for DDL). The session that wrote has an xid, which holds the horizon back until the transaction ends, and it also keeps the row locks it took."
+
+[[terms]]
+term = "Idle in transaction"
+means = "The pg_stat_activity state of a session that has started a transaction and is waiting for the next command, holding its locks and any xid or snapshot."
+section = "The horizon that VACUUM cannot pass"
+
+[[terms]]
+term = "Dead but not yet removable"
+means = "Row versions VACUUM found dead but cannot remove because an older transaction might still see them; the sign of a long transaction, a slot or a prepared transaction."
+section = "The horizon that VACUUM cannot pass"
+
+[[terms]]
+term = "ACCESS EXCLUSIVE"
+means = "The strongest table lock, taken by most ALTER TABLE forms, DROP and VACUUM FULL; it conflicts with every other lock including a plain SELECT's, and later requests queue behind it."
+section = "The lock queue"
+
+[[terms]]
+term = "idle_in_transaction_session_timeout"
+means = "A setting that terminates a session after it has been idle inside an open transaction for that long."
+section = "Bounding the damage"
+
+[[sources]]
+title = "PostgreSQL: routine vacuuming (what holds back cleanup)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"
+
+[[sources]]
+title = "PostgreSQL: explicit locking (table-level lock modes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"
+
+[[sources]]
+title = "PostgreSQL: client connection defaults (timeouts)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-client.html"
