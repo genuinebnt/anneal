@@ -1,0 +1,132 @@
+title = "Batching writes: multi-row INSERT, UNNEST and COPY"
+group = "sql-writes"
+order = 28
+minutes = 12
+lede = "Loading 50,000 rows one statement at a time with a commit after each took 14.3 seconds here. The same rows in one COPY took 0.2 seconds, and COPY followed by the index build 0.09. This page measures the steps between: what a commit costs, what a round trip costs, and how much each batching method buys, so you can choose by number instead of habit."
+say = "On a local Postgres 18.6 with a 50,000-row load into a table with a primary key and one more index: one INSERT and one commit per row 14,303 ms (0.29 ms per row); the same statements inside one transaction 4,426 ms (0.089 per row); pipelined (psycopg executemany) 572 ms; multi-row INSERT of 1,000 rows 863 ms; UNNEST of arrays 564 ms; COPY 204 ms; COPY with the secondary index created afterwards 92 ms. Three costs are being removed in turn: the commit flush, the per-statement round trip and parse, and the per-row index insertion. This server is on the same machine, so a network database makes the first two much larger."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The test:** 50,000 rows (`id bigint primary key`, `customer_id`, `status`, `total_cents`) loaded into a throwaway table `bt_t` that has the primary key and an index on `customer_id`. Python with psycopg 3, Postgres 18.6 on the same machine over TCP loopback. Medians of 3 runs (5 for the batch-size sweep), table dropped and recreated before each.",
+  "**Commit per row:** **14,303 ms** for 50,000 autocommit INSERTs (0.286 ms per row). Inside **one transaction** the same statements took **4,426 ms** (0.089 per row): the saving is 10 seconds of commit flushes (module 26). 5,000 rows took 1,430 ms in autocommit and 474 ms in one transaction, the same ratio.",
+  "**Round trips and parsing:** with the commits gone, each statement still costs a client-to-server round trip and a parse and plan. Sending them **pipelined** (psycopg 3 `executemany` uses pipeline mode) took **572 ms**, 8 times faster than 4,426, with no change to the SQL. On a network database with a 1 ms round trip the un-pipelined loop would add 50 seconds; I did not measure that, only the loopback case.",
+  "**One statement for many rows:** a multi-row `INSERT ... VALUES (...), (...)` of 1,000 rows per statement took **863 ms**; the batch size barely mattered from 10 rows per statement up (953, 1,110, 991 and 951 ms for 10, 100, 1,000 and 5,000) while 1 row per statement was 4,850 ms. Past about ten rows the time is dominated by something else: here, formatting thousands of parameters on the client and parsing the statement. A statement can carry at most 65,535 bind parameters.",
+  "**`UNNEST` of arrays:** `INSERT INTO t SELECT * FROM unnest($1::bigint[], $2::int[], $3::text[], $4::int[])` sends one array per column, so the statement has four parameters whatever the number of rows, took **564 ms** for 5 statements of 10,000 rows, and avoids the parameter limit.",
+  "**`COPY`:** **204 ms** for the 50,000 rows, 70 times faster than autocommit, and the WAL was 8.6 MB against 11.0 MB for the INSERT methods (COPY writes multi-row log records). With the secondary index created *after* the load: **92 ms** in total and 5.9 MB of WAL.",
+  "**Rules:** put many rows in each transaction; send many rows per round trip; for a bulk load use `COPY` and build secondary indexes afterwards. `COPY` is all-or-nothing: one bad row fails the whole load, so load into a staging table when the data is untrusted.",
+]
+
+[[sections]]
+heading = "Where the time goes in a loop of INSERTs"
+body = """
+A client that inserts 50,000 rows one at a time, committing each, pays three separate costs per row:
+
+1. **The commit.** Each transaction waits for its WAL to be flushed to disk (module 26).
+2. **The statement.** A round trip from the client to the server and back, plus parsing and planning the INSERT.
+3. **The row.** Building the tuple and inserting into the primary key and into every other index (module 27).
+
+Only the third is work that has to be done. The measurements remove them in turn, on a throwaway table `bt_t` with a primary key and one index (the example `orders` table is never altered):
+
+| Method (50,000 rows) | Time | Per row |
+|---|---|---|
+| 1 INSERT, 1 commit, per row | 14,303 ms | 0.286 ms |
+| 1 INSERT per row, all in one transaction | 4,426 ms | 0.089 ms |
+| same, pipelined (`executemany` in psycopg 3) | 572 ms | 0.011 ms |
+| multi-row INSERT, 1,000 rows per statement | 863 ms | 0.017 ms |
+| `unnest` of 4 arrays, 10,000 rows per statement | 564 ms | 0.011 ms |
+| `COPY` | 204 ms | 0.004 ms |
+| `COPY`, then `CREATE INDEX (customer_id)` | 92 ms | 0.002 ms |
+
+(In the last row the secondary index does not exist during the load and its build is included in the time; the primary key is maintained throughout.) Going from the first row to the second removes the commit flushes: 10 seconds of the 14. Going to the third removes the round trips on a connection that is as close as possible to the server, the same machine. Over a network the round-trip cost is added once per statement, which is why the un-pipelined loop is the one that gets much slower on a remote database; the batched ones send a few large messages.
+"""
+
+[[sections]]
+heading = "Many rows per statement"
+body = """
+Two ways to put several rows in one statement.
+
+**Multi-row `VALUES`.** `INSERT INTO t VALUES (1, ...), (2, ...), (3, ...)`. Simple and portable. Measured with the same 50,000 rows:
+
+| Rows per statement | Time |
+|---|---|
+| 1 | 4,850 ms |
+| 10 | 953 ms |
+| 100 | 1,110 ms |
+| 1,000 | 991 ms |
+| 5,000 | 951 ms |
+
+Ten rows per statement already removes most of the cost, and larger batches do not help further. The remaining second is not the server's row work (COPY does the same rows in 0.2 seconds): with this driver it is formatting 4 parameters per row on the client and parsing a statement with hundreds or thousands of parameters. I did not separate the two. A single statement cannot carry more than **65,535 bind parameters**, so a four-column row limits one statement to 16,383 rows.
+
+**`UNNEST`.** Send one array per column and let Postgres turn them into rows:
+
+```sql
+INSERT INTO bt_t
+SELECT * FROM unnest($1::bigint[], $2::int[], $3::text[], $4::int[]);
+```
+
+The statement has four parameters whatever the row count, so there is no parameter limit, the statement text is the same for every batch (one plan, easy to reuse) and it took 564 ms for the 50,000 rows in batches of 10,000. It is also the way to do a batched `UPDATE ... FROM unnest(...)` or an `ON CONFLICT` upsert (next module).
+
+**Pipelining** reaches the same place without changing the SQL: the client sends the next statement without waiting for the reply to the last. psycopg 3's `executemany` does this, and so do the pipeline modes of libpq and of other drivers. It took 572 ms for 50,000 single-row INSERTs.
+"""
+
+[[sections]]
+heading = "COPY and indexes after the load"
+body = """
+`COPY` streams rows to the server in a bulk format with no per-row statement at all. It took 204 ms, and wrote less WAL (8.6 MB against 11.0 MB for the INSERT methods) because it logs rows in bulk.
+
+For a large initial load there is one more saving, from module 27: maintaining an index one row at a time costs more than building it once from sorted data. Loading with `COPY` into a table that has only its primary key and creating the secondary index after took **92 ms and 5.9 MB of WAL**, against 204 ms and 8.6 MB with the index in place. The primary key is usually kept, because a duplicate should fail the load, but secondary indexes, and the foreign keys you validate afterwards, can wait.
+
+Cautions:
+
+- `COPY` runs as one statement: a malformed row or a unique violation aborts everything loaded so far in that statement. Load into a staging table without constraints, check it, then `INSERT ... SELECT` into the real table when the data comes from outside.
+- It has no `ON CONFLICT`. For an upsert, copy into a staging table and merge (next module).
+- Freshly loaded pages are not yet marked all-visible, so the first queries pay for it (module 21) until a `VACUUM`; run `VACUUM ANALYZE` after a big load so that the statistics and visibility map are right.
+"""
+
+[[checks]]
+prompt = "An importer inserts 200,000 rows one INSERT at a time with autocommit on, and takes minutes. Name the two cheapest changes in order, and say which cost each removes."
+answer = "First wrap the work in transactions of thousands of rows (or one): that removes the commit flush per row. Second send many rows per round trip: pipelining, multi-row VALUES or UNNEST, or COPY: that removes the per-statement round trip and parse. Both are changes to how the client sends the rows, not to the table."
+
+[[checks]]
+prompt = "You build a multi-row INSERT with 5,000 rows of 20 columns and Postgres rejects it. Why, and what are two fixes?"
+answer = "A statement can carry at most 65,535 bind parameters and 5,000 rows times 20 columns is 100,000. Fixes: smaller batches (3,276 rows maximum), or send one array per column and INSERT ... SELECT FROM unnest(...), which has 20 parameters whatever the row count, or use COPY."
+
+[[checks]]
+prompt = "You load 50 million rows with COPY into a table with six indexes and it is slow. What do you change and what do you still do afterwards?"
+answer = "Create the table with only the primary key (or none if the data is trusted), COPY, then CREATE INDEX for the others, so each is built once from sorted data instead of being maintained row by row. Afterwards run VACUUM ANALYZE so the statistics and visibility map are correct, and validate any foreign keys or constraints you deferred."
+
+[[terms]]
+term = "Round trip"
+means = "One message from the client to the server and its reply. Each separate statement costs at least one, which is why many small statements are slow on a networked database."
+section = "Where the time goes in a loop of INSERTs"
+
+[[terms]]
+term = "Pipeline mode"
+means = "Sending several statements without waiting for each reply, so their round trips overlap. Supported by libpq and by drivers such as psycopg 3."
+section = "Many rows per statement"
+
+[[terms]]
+term = "COPY"
+means = "A bulk load and export command that streams rows in a compact format with no per-row statement, the fastest way to insert many rows."
+section = "COPY and indexes after the load"
+
+[[terms]]
+term = "unnest"
+means = "A function that turns arrays into rows; used with one array per column to insert, update or merge many rows with a fixed number of parameters."
+section = "Many rows per statement"
+
+[[sources]]
+title = "PostgreSQL: populating a database (bulk loading advice)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/populate.html"
+
+[[sources]]
+title = "PostgreSQL: COPY"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-copy.html"
+
+[[sources]]
+title = "psycopg 3: pipeline mode"
+kind = "docs"
+url = "https://www.psycopg.org/psycopg3/docs/advanced/pipeline.html"
