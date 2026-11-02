@@ -167,3 +167,18 @@ session = "SET random_page_cost = 1.1;"
 [[setup]]
 id = "generic-status"
 session = "SET plan_cache_mode = force_generic_plan; PREPARE by_status (text) AS SELECT id FROM orders WHERE status = $1;"
+
+# module 12: parallel query
+[[setup]]
+id = "parallel-4"
+session = "SET max_parallel_workers_per_gather = 4;"
+
+[[setup]]
+id = "plus1-unsafe"
+sql = "CREATE FUNCTION plus1(x int) RETURNS int LANGUAGE sql IMMUTABLE PARALLEL UNSAFE AS 'SELECT x + 1';"
+undo = "DROP FUNCTION plus1(int);"
+
+[[setup]]
+id = "plus1-safe"
+sql = "CREATE FUNCTION plus1(x int) RETURNS int LANGUAGE sql IMMUTABLE PARALLEL SAFE AS 'SELECT x + 1';"
+undo = "DROP FUNCTION plus1(int);"
