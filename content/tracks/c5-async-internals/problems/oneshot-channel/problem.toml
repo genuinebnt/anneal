@@ -1,0 +1,32 @@
+slug = "oneshot-channel"
+title = "A oneshot channel whose receiver is a Future"
+mode = "write"
+level = "medium"
+stage = "wake-and-poll"
+order = 2
+status = "ready"
+tags = ["Future", "Waker", "will_wake", "Mutex", "Drop", "oneshot", "async channels"]
+teaches = [
+  "The contract every leaf future follows: on `Pending`, store `cx.waker()`; whoever makes progress possible calls `wake`.",
+  "Why you must replace the stored waker on every poll (the task can move between executors or be re-polled with a different waker).",
+  "Closing: a receiver waiting on a dropped sender must be woken and told, or it hangs forever.",
+]
+follow_up = "1) Replace the `Mutex` with an atomic state machine (EMPTY / WAITING / READY / CLOSED) and a `UnsafeCell<Option<T>>`: which transitions need Acquire/Release? 2) Add `Receiver::close()` and `Sender::closed()` (a future that completes when the receiver is dropped), which the tokio `select!` pattern uses. 3) Why must the waker be woken outside the lock, and what does `will_wake` buy you? 4) Build an unbounded mpsc channel on top by keeping a `VecDeque<T>` and one waker: what goes wrong with several receivers? 5) What happens if `poll` is called again after it returned `Ready`? Make that a panic like `std`'s futures, or return `Pending` forever?"
+related = ["C2", "C4", "C3"]
+
+[[hints]]
+kind = "approach"
+text = "Shared state behind `Arc<Mutex<_>>`: `value: Option<T>`, `waker: Option<Waker>`, `tx_gone`, `rx_gone`. `poll`: value present → `Ready(Ok)`; sender gone → `Ready(Err)`; else store the waker and return `Pending`. `send`: store the value, take the waker, wake it."
+
+[[hints]]
+kind = "rust"
+text = "`cx.waker().clone()` is cheap (a refcount). `Waker::will_wake` tells you whether the stored waker is already equivalent, so you can skip the clone. Call `wake()` after the `MutexGuard` is dropped (put the lock in an inner block) so the woken task cannot immediately block on your lock."
+
+[[hints]]
+kind = "edge"
+text = "Implement `Drop` for `Sender`: set `tx_gone` and wake the receiver. `send(self, ..)` consumes the sender, so its `Drop` runs at the end of `send`: a value sent just before must still win over 'closed'. Check `value` before `tx_gone` in `poll`."
+
+[solution]
+explanation = "`tokio::sync::oneshot` is this plus an atomic-state fast path and a `close()` on the receiver; `futures::channel::oneshot` is the same shape. Almost every async primitive (mutex, semaphore, channel, timer) is 'a queue of wakers plus a condition': once you can write this one, `tokio::sync::Notify` and `Semaphore` are variations."
+time = "O(1)"
+space = "O(1)"

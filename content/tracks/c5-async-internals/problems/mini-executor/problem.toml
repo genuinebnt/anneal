@@ -1,0 +1,32 @@
+slug = "mini-executor"
+title = "A task executor with spawn, join handles and wakers"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 3
+status = "ready"
+tags = ["executor", "Waker", "Wake trait", "Pin<Box<dyn Future>>", "JoinHandle", "yield_now", "run queue", "Condvar"]
+teaches = [
+  "The shape of every async runtime: a run queue of tasks, a `Waker` that re-queues its task, and a loop that polls the front.",
+  "`Pin<Box<dyn Future + Send>>` as the type-erased task, and `Arc<Task>` + `Wake` as the way a waker owns its task.",
+  "Cooperative scheduling: `yield_now` is pending-once-and-wake-self, and FIFO order is what makes tasks take turns.",
+]
+follow_up = "1) Make `yield_now` fairer or unfair on purpose: what does a LIFO queue do to latency, and why does tokio use a LIFO slot for the task that was just woken? 2) Make `run` multi-threaded with N worker threads sharing the queue: what has to change (`pending` already atomic; one task must not be polled by two threads at once: the `Mutex<Option<future>>` slot)? 3) Add a timer: a `sleep(ms)` future backed by one timer thread with a `BinaryHeap` of deadlines instead of a thread per delay. 4) Add task cancellation (`JoinHandle::abort`) and say what must happen to the future's destructors. 5) Where is the `Pin` guarantee used here, and what would break if you moved a future out of its `Box` between polls?"
+related = ["C4", "C2", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "A `Task` holds `Mutex<Option<Pin<Box<dyn Future<Output = ()> + Send>>>>` and the shared queue. Its `Wake::wake` pushes `Arc<Task>` onto the queue and notifies a `Condvar`. `run` pops the front task, makes a waker from the task itself, polls it, puts the future back if `Pending`, and decrements a pending-count if `Ready`."
+
+[[hints]]
+kind = "rust"
+text = "`spawn` wraps your future in `async move { let out = fut.await; store out in the join state; wake the joiner }`, so every task has `Output = ()` and can live in one queue. `Waker::from(arc_task)` needs `impl Wake for Task` (`self: Arc<Self>`). The `JoinHandle` shares an `Arc<Mutex<{ result, waker }>>` with that wrapper."
+
+[[hints]]
+kind = "edge"
+text = "`run` must not return just because the queue is empty: wait on the `Condvar` while `pending > 0`. Increment `pending` in `spawn` before queueing. Wake the joiner after releasing the join-state lock. A task may be queued twice (woken twice before it ran): the second poll must simply find nothing to do or poll a still-live future harmlessly."
+
+[solution]
+explanation = "This is the skeleton of `async-task` + a single-threaded `smol`/`tokio::task::LocalSet`: tokio adds work stealing across threads, an I/O reactor (`epoll`/`mio`) that calls wakers when sockets are ready, and a timer wheel. What the toy shows is where the pieces meet: wakers re-queue tasks, the queue gives fairness, and a runtime that blocks inside a task (a long `thread::sleep`) stalls every other task on that thread."
+time = "O(1) per wake"
+space = "O(tasks)"
