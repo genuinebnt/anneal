@@ -331,3 +331,34 @@ undo = "DROP INDEX tg_gin;"
 id = "tg-gist"
 sql = "CREATE INDEX tg_gist ON tg_t USING gist (title gist_trgm_ops); ANALYZE tg_t;"
 undo = "DROP INDEX tg_gist;"
+
+# module 35: GiST. 1,000,000 bookings (1,000 rooms x 1,000 slots of 1.5 hours every 2 hours, no overlaps) and 1,000,000 random points; btree_gist built from the source tree's contrib
+[[setup]]
+id = "bk-t"
+sql = "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE TABLE bk_t AS SELECT i AS id, (i % 1000) AS room, tstzrange(timestamptz '2026-01-01 00:00:00+00' + (i / 1000) * interval '2 hours', timestamptz '2026-01-01 00:00:00+00' + (i / 1000) * interval '2 hours' + interval '90 minutes') AS during FROM generate_series(0, 999999) i; ALTER TABLE bk_t ADD PRIMARY KEY (id); ALTER TABLE bk_t SET (autovacuum_enabled = false); VACUUM ANALYZE bk_t;"
+undo = "DROP TABLE bk_t;"
+
+[[setup]]
+id = "bk-btree"
+sql = "CREATE INDEX bk_btree ON bk_t (room); ANALYZE bk_t;"
+undo = "DROP INDEX bk_btree;"
+
+[[setup]]
+id = "bk-gist-room"
+sql = "CREATE INDEX bk_gist_room ON bk_t USING gist (room, during); ANALYZE bk_t;"
+undo = "DROP INDEX bk_gist_room;"
+
+[[setup]]
+id = "bk-gist-time"
+sql = "CREATE INDEX bk_gist_time ON bk_t USING gist (during); ANALYZE bk_t;"
+undo = "DROP INDEX bk_gist_time;"
+
+[[setup]]
+id = "pt-t"
+sql = "SELECT setseed(0.31); CREATE TABLE pt_t AS SELECT i AS id, point(random() * 1000, random() * 1000) AS loc FROM generate_series(1, 1000000) i; ALTER TABLE pt_t ADD PRIMARY KEY (id); ALTER TABLE pt_t SET (autovacuum_enabled = false); VACUUM ANALYZE pt_t;"
+undo = "DROP TABLE pt_t;"
+
+[[setup]]
+id = "pt-gist"
+sql = "CREATE INDEX pt_gist ON pt_t USING gist (loc); ANALYZE pt_t;"
+undo = "DROP INDEX pt_gist;"

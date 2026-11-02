@@ -1,0 +1,132 @@
+{
+ "id": "m35-btree",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM bk_t WHERE room = 17 AND during && tstzrange('2026-02-10 00:00+00', '2026-02-11 00:00+00');",
+ "setup": [
+  {
+   "id": "bk-t",
+   "sql": "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE TABLE bk_t AS SELECT i AS id, (i % 1000) AS room, tstzrange(timestamptz '2026-01-01 00:00:00+00' + (i / 1000) * interval '2 hours', timestamptz '2026-01-01 00:00:00+00' + (i / 1000) * interval '2 hours' + interval '90 minutes') AS during FROM generate_series(0, 999999) i; ALTER TABLE bk_t ADD PRIMARY KEY (id); ALTER TABLE bk_t SET (autovacuum_enabled = false); VACUUM ANALYZE bk_t;"
+  },
+  {
+   "id": "bk-btree",
+   "sql": "CREATE INDEX bk_btree ON bk_t (room); ANALYZE bk_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 2759.87,
+   "Total Cost": 2759.88,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 1.412,
+   "Actual Total Time": 1.414,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 1003,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "bk_t",
+     "Alias": "bk_t",
+     "Startup Cost": 11.88,
+     "Total Cost": 2759.83,
+     "Plan Rows": 14,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.809,
+     "Actual Total Time": 1.408,
+     "Actual Rows": 12.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(room = 17)",
+     "Rows Removed by Index Recheck": 0,
+     "Filter": "(during && '[\"2026-02-10 00:00:00+00\",\"2026-02-11 00:00:00+00\")'::tstzrange)",
+     "Rows Removed by Filter": 988,
+     "Exact Heap Blocks": 1000,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 1003,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "bk_btree",
+       "Startup Cost": 0.0,
+       "Total Cost": 11.88,
+       "Plan Rows": 994,
+       "Plan Width": 0,
+       "Actual Startup Time": 0.167,
+       "Actual Total Time": 0.167,
+       "Actual Rows": 1000.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(room = 17)",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 3,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.094,
+  "Triggers": [],
+  "Execution Time": 1.453
+ },
+ "text": "Aggregate  (cost=2759.87..2759.88 rows=1 width=8) (actual time=1.456..1.457 rows=1.00 loops=1)\n  Buffers: shared hit=1003\n  ->  Bitmap Heap Scan on bk_t  (cost=11.88..2759.83 rows=14 width=0) (actual time=0.887..1.451 rows=12.00 loops=1)\n        Recheck Cond: (room = 17)\n        Filter: (during && '[\"2026-02-10 00:00:00+00\",\"2026-02-11 00:00:00+00\")'::tstzrange)\n        Rows Removed by Filter: 988\n        Heap Blocks: exact=1000\n        Buffers: shared hit=1003\n        ->  Bitmap Index Scan on bk_btree  (cost=0.00..11.88 rows=994 width=0) (actual time=0.251..0.251 rows=1000.00 loops=1)\n              Index Cond: (room = 17)\n              Index Searches: 1\n              Buffers: shared hit=3\nPlanning Time: 0.079 ms\nExecution Time: 1.493 ms"
+}

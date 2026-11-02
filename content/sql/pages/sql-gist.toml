@@ -1,0 +1,156 @@
+title = "GiST: ranges, nearest neighbours and no double bookings"
+group = "sql-special"
+order = 35
+minutes = 14
+lede = "A b-tree orders values on a line. Ranges of time, points on a plane and boxes do not fit on a line: two ranges can overlap without either being 'smaller'. GiST is a tree of bounding regions that lets Postgres ask 'which entries overlap this one?' and 'which are nearest?'. This page measures it on a million bookings and a million points, and shows the exclusion constraint, the one feature that makes the database refuse overlapping rows."
+say = "On 1,000,000 bookings (1,000 rooms, 1,000 slots each, no overlaps) the query 'room 17, any booking overlapping one day' (12 rows) read 7,360 buffers and about 124 ms as a sequential scan, 1,003 buffers and 1.5 ms with a b-tree on the room, and 6 buffers and 0.065 ms with a GiST index on (room, during). 'Which booking covers this instant' (1,000 rows) read 8 buffers in 0.28 ms. The five points nearest to (500, 500) among 1,000,000 took 6,400 buffers and 189 ms as a scan and 9 buffers and 0.078 ms with GiST; a 105-point box query went from 6,400 buffers to 6. Costs: the GiST index on (room, during) is 43 MB against 7 MB for the b-tree and took 3.2 s to build against 0.3 s; adding an exclusion constraint to the 1,000,000 rows took 53.8 s (single run), and it rejected a double booking with an error."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a throwaway table `bk_t` of 1,000,000 bookings: 1,000 rooms, each with 1,000 slots of 90 minutes starting every 2 hours (so none overlap), column `during tstzrange`; heap 58 MB, primary key 21 MB. `btree_gist` and the other extensions were built from the contrib directory of the Postgres source. Postgres 18.6; `max_parallel_workers_per_gather = 0`. A second table `pt_t` holds 1,000,000 random `point`s in a 1,000 by 1,000 square.",
+  "**Why not a b-tree:** `room = 17 AND during && [day]` (12 rows). Sequential scan **7,360 buffers, 124 ms**. A b-tree on `room` finds the room's 1,000 rows (**1,003 buffers, 1.5 ms**) and removes 988 of them by the time filter; it cannot use the range at all.",
+  "**GiST with a scalar column:** `gist (room, during)` needs the `btree_gist` extension so that `room` (an integer) has a GiST operator class. The same query became an Index Only Scan, **6 buffers, 0.065 ms**: the tree narrows on both columns together.",
+  "**Which range covers this instant:** `during @> timestamptz '...'` (1,000 rows, one per room): scan 7,360 buffers/114 ms; `gist (during)` **8 buffers, 0.28 ms**.",
+  "**Points, nearest first:** `ORDER BY loc <-> point(500, 500) LIMIT 5`: scan **6,400 buffers, 189 ms**; `gist (loc)` **9 buffers, 0.078 ms**. `loc <@ box(...)` (105 points): scan 6,400 buffers/45 ms, GiST **6 buffers, 0.047 ms**.",
+  "**Cost:** sizes: GiST (room, during) **43 MB**, GiST (during) 48 MB, b-tree on room 7 MB (heap 58 MB); builds 3.18 s, 1.06 s and 0.28 s (single runs). The write cost of a GiST index was not measured on this page; the manual describes it as more expensive to maintain than a b-tree.",
+  "**The exclusion constraint:** `EXCLUDE USING gist (room WITH =, during WITH &&)` on the 1,000,000 rows took **53.8 s** (single run) to build the index and check every row. After it, inserting room 17 from 00:00 to 01:00 on 2026-02-10 failed with `conflicting key value violates exclusion constraint \"no_overlap\"`, naming the existing booking [00:00, 01:30). A unique constraint cannot say this: two different ranges can overlap.",
+  "**Not measured here:** PostGIS (geometry types and geographic distance) is not available in this environment. Everything on points uses the built-in `point` and `box` types, which GiST supports in the same way; PostGIS indexes its geometries with the same GiST machinery, per its documentation.",
+]
+
+[[sections]]
+heading = "What a range or a point needs from an index"
+body = """
+A b-tree answers 'equal to', 'less than' and 'between', because values sort on a line. A booking is an interval and a location is a pair of coordinates. 'Does this interval overlap that one?' has no sorted order to walk: [10:00, 11:30) and [11:00, 12:00) overlap, and neither sorts clearly before the other. GiST (generalized search tree) stores, at every level of the tree, a bounding region that contains everything beneath it (for ranges, the smallest range covering the children; for points, the bounding box). A search descends only into the regions that could contain a match. The operator classes decide which operators that supports: `&&` (overlaps), `@>` and `<@` (contains and is contained by), `<->` (distance), and for `btree_gist` the ordinary `=`.
+
+The table: 1,000,000 bookings, 1,000 per room, no overlaps. The query is the typical one, 'what is booked in room 17 during this day?':
+
+```plan id=m35-seq setup=bk-t,no-parallel
+SELECT count(*) FROM bk_t WHERE room = 17 AND during && tstzrange('2026-02-10 00:00+00', '2026-02-11 00:00+00');
+```
+
+A sequential scan: 7,360 buffers, about 124 ms, 12 rows. A b-tree on `room` is the index most people would add first:
+
+```plan id=m35-btree setup=bk-t,bk-btree,no-parallel
+SELECT count(*) FROM bk_t WHERE room = 17 AND during && tstzrange('2026-02-10 00:00+00', '2026-02-11 00:00+00');
+```
+
+It reads the 1,000 bookings of the room (1,003 buffers, 1.5 ms) and discards 988 by the time condition, because a b-tree on `room` knows nothing about the range. Better than a scan, but the work grows with the number of bookings per room.
+"""
+
+[[sections]]
+heading = "One GiST index on both columns"
+body = """
+`room` is an integer, which GiST has no operator class for by default. The `btree_gist` extension supplies one, so both columns can sit in the same GiST index: `CREATE INDEX ON bk_t USING gist (room, during)`. The same query:
+
+```plan id=m35-gist-room setup=bk-t,bk-gist-room,no-parallel
+SELECT count(*) FROM bk_t WHERE room = 17 AND during && tstzrange('2026-02-10 00:00+00', '2026-02-11 00:00+00');
+```
+
+An Index Only Scan, 6 buffers, 0.065 ms: the tree is narrowed by room and by time at once, so only the matching leaves are read. The index is 43 MB against 7 MB for the b-tree on `room`, and took 3.18 s to build against 0.28 s (single runs); the primary key is 21 MB and the heap 58 MB. A single-column `gist (during)` answers 'what covers this instant', for which a b-tree has no answer either:
+
+```plan id=m35-time-seq setup=bk-t,no-parallel
+SELECT count(*) FROM bk_t WHERE during @> timestamptz '2026-02-10 12:00+00';
+```
+
+```plan id=m35-time-gist setup=bk-t,bk-gist-time,no-parallel
+SELECT count(*) FROM bk_t WHERE during @> timestamptz '2026-02-10 12:00+00';
+```
+
+7,360 buffers and 114 ms as a scan; 8 buffers, 0.28 ms with `gist (during)` for the 1,000 rows (one booking per room). The index is 48 MB, built in 1.06 s.
+"""
+
+[[sections]]
+heading = "Nearest points and boxes"
+body = """
+The same index type handles geometry. `pt_t` holds 1,000,000 random points. 'The five nearest to (500, 500)' is `ORDER BY loc <-> point(500, 500) LIMIT 5`. With no index Postgres computes a distance for every row:
+
+```plan id=m35-knn-seq setup=pt-t,no-parallel
+SELECT id FROM pt_t ORDER BY loc <-> point(500, 500) LIMIT 5;
+```
+
+6,400 buffers and 189 ms. With `gist (loc)` it can descend the tree in order of distance and stop after five rows (module 34 showed the same trick for strings):
+
+```plan id=m35-knn-gist setup=pt-t,pt-gist,no-parallel
+SELECT id FROM pt_t ORDER BY loc <-> point(500, 500) LIMIT 5;
+```
+
+9 buffers, 0.078 ms. A rectangular search works the same way:
+
+```plan id=m35-box-seq setup=pt-t,no-parallel
+SELECT count(*) FROM pt_t WHERE loc <@ box(point(100, 100), point(110, 110));
+```
+
+```plan id=m35-box-gist setup=pt-t,pt-gist,no-parallel
+SELECT count(*) FROM pt_t WHERE loc <@ box(point(100, 100), point(110, 110));
+```
+
+6,400 buffers and 45 ms as a scan, 6 buffers and 0.047 ms with the index, for 105 points. PostGIS is not available in this environment, so geographic types and distances on a sphere were not tried; its documentation says its geometry indexes are GiST indexes of this same kind, which is the reason to know them.
+"""
+
+[[sections]]
+heading = "Exclusion constraints: refuse the overlap"
+body = """
+A unique constraint rejects two rows with an equal value. A booking system needs 'no two rows with the same room and overlapping time', and overlapping is not equality. An exclusion constraint states it with the operators:
+
+```
+ALTER TABLE bk_t ADD CONSTRAINT no_overlap
+    EXCLUDE USING gist (room WITH =, during WITH &&);
+```
+
+It is backed by a GiST index and checked inside the database on every insert and update, so two sessions cannot both book the slot, which a check in the application ('select the overlaps, insert if none') cannot guarantee under concurrency (module 29 measured the same race for uniqueness). Adding it to the 1,000,000 existing rows took 53.8 s (single run): it builds the index and then checks every row against it, so on a big live table add it in a maintenance window or on a table that is not yet loaded. Afterwards, inserting room 17 from 00:00 to 01:00 on 2026-02-10 failed:
+
+```
+ERROR:  conflicting key value violates exclusion constraint "no_overlap"
+DETAIL:  Key (room, during)=(17, ["2026-02-10 00:00:00+00","2026-02-10 01:00:00+00")) conflicts with existing key (room, during)=(17, ["2026-02-10 00:00:00+00","2026-02-10 01:30:00+00")).
+```
+
+The message is the one Postgres printed (re-run on a small temporary table with the same constraint, whose generated name differs). The concurrent double-booking race was not run on this page.
+"""
+
+[[checks]]
+prompt = "You index bookings with a b-tree on (room, start_time, end_time) and the query 'is room 17 free between 10:00 and 11:00?' is still slow. Why, and what replaces it?"
+answer = "A b-tree can seek on room and on the start of the range, but 'overlaps' also depends on the end, and the end is not ordered with respect to the start, so many rows in the room are read and filtered. Store the interval as a tstzrange and use gist (room, during) with btree_gist; the overlap operator && then uses the tree. In the test: 6 buffers against 1,003 for the b-tree."
+
+[[checks]]
+prompt = "What does an exclusion constraint give you that a SELECT-then-INSERT check in the application does not?"
+answer = "The database checks it atomically against concurrent writers, using a GiST index, so two sessions cannot both insert overlapping rows; the application check has a window between the read and the write in which another session can insert. It costs an index to maintain and, added to a large table, a long build (53.8 s for 1,000,000 rows here)."
+
+[[checks]]
+prompt = "A table of 1,000,000 locations is queried with ORDER BY loc <-> $1 LIMIT 5 and takes 189 ms. What changes and by how much, and what did the test not cover?"
+answer = "Add gist (loc): the planner walks the tree in distance order and stops after five rows, 9 buffers and 0.078 ms against 6,400 buffers. The test used the built-in point type with planar distance; PostGIS geography and distance on a sphere were not available to test."
+
+[[terms]]
+term = "GiST"
+means = "Generalized Search Tree: an index whose nodes hold bounding regions, so it supports overlap, containment and distance searches that a b-tree cannot."
+section = "What a range or a point needs from an index"
+
+[[terms]]
+term = "btree_gist"
+means = "A contrib extension giving GiST operator classes for ordinary scalar types (integers, text, timestamps) so they can share a GiST index with ranges or be used with = in an exclusion constraint."
+section = "One GiST index on both columns"
+
+[[terms]]
+term = "Range type"
+means = "A value that is an interval, such as tstzrange; it supports && (overlaps), @> (contains) and the half-open [start, end) convention."
+section = "What a range or a point needs from an index"
+
+[[terms]]
+term = "Exclusion constraint"
+means = "A constraint declared with operators (EXCLUDE USING gist (room WITH =, during WITH &&)) saying no two rows may satisfy all of them at once; a generalization of UNIQUE."
+section = "Exclusion constraints: refuse the overlap"
+
+[[sources]]
+title = "PostgreSQL: GiST indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/gist.html"
+
+[[sources]]
+title = "PostgreSQL: range types"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/rangetypes.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE TABLE, exclusion constraints"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createtable.html#SQL-CREATETABLE-EXCLUDE"
