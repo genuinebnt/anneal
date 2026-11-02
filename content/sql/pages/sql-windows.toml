@@ -1,0 +1,160 @@
+title = "Window functions"
+group = "sql-shapes"
+order = 18
+minutes = 15
+lede = "A window function computes over related rows without collapsing them: a running total, the previous order, the first three per customer. The cost is a WindowAgg node that needs its input sorted by the partition and the order, so the plan question is whether that sort comes from an index or from a Sort node, and what the node does to a LIMIT."
+say = "A window function needs its input ordered by PARTITION BY then ORDER BY. A matching index removes the Sort (a covering one removes the heap fetches too: 6,166 buffers became 51 for 7,919 rows); without one the plan reads and sorts everything (109 ms against about 5). Run Condition lets row_number() <= n stop emitting per partition but does not stop the scan. count(*) OVER () in a paginated query makes the database compute every row before returning the first: about 0.03 ms became 500 to 800 ms."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "A `WindowAgg` reads its input **sorted by the PARTITION BY columns and then the window's ORDER BY**. Something has to provide that order: a `Sort` node, or an index whose columns match (`customer_id, created_at`).",
+  "Running total per customer for 200 customers (7,919 rows): with no index, `Seq Scan` + `Sort` + `WindowAgg` took **109 ms** and 14,960 buffers; with a plain index the planner still chose a Bitmap Heap Scan and a `Sort` (6,166 buffers, about 13 ms); with a **covering** index the sort disappeared (`Index Only Scan` straight into the `WindowAgg`, **51 buffers**, about 5 ms).",
+  "`row_number() ... <= 3` in the outer query becomes a **Run Condition** on the `WindowAgg`: it emitted 600 rows (3 per customer) while the scan below still produced all 7,919. It saves the work above the node, not the scan below it.",
+  "Frames (`ROWS BETWEEN 6 PRECEDING AND CURRENT ROW`) and `lag()` cost the same as a running total here, because they are computed in the same single pass over the sorted rows.",
+  "`count(*) OVER ()` to show 'page 1 of N' makes the `WindowAgg` count **every** matching row before the first one is returned: 1,221,501 rows through a 31 MB on-disk window store and a sort, **about 780 ms**, against 0.03 ms for the same page without it. This is the price of a total count on a paginated list (module 16).",
+]
+
+[[sections]]
+heading = "What a WindowAgg needs"
+body = """
+A window function does not collapse rows like `GROUP BY`; it adds a column computed over a window of related rows. The window is defined by `PARTITION BY` (which rows are related), `ORDER BY` (their order) and a frame (which of them to include). To compute it, the executor must see the rows grouped by partition and ordered inside each one. That is a sort order, so everything from module 15 applies: the order can come from a `Sort` node or from an index.
+
+A running total of each customer's orders, for the first 200 customers:
+
+```plan id=m18-running-sort setup=no-parallel
+SELECT id, customer_id, created_at,
+       sum(total_cents) OVER (PARTITION BY customer_id ORDER BY created_at) AS running
+FROM orders WHERE customer_id <= 200;
+```
+
+`Seq Scan` over 2,000,000 rows to keep 7,919, a `Sort` on `(customer_id, created_at)`, and the `WindowAgg` on top reading the sorted stream and keeping the running sum (`Storage: Memory`, 17 kB). 109 ms, almost all of it the scan. An index on `(customer_id, created_at)` should help:
+
+```plan id=m18-running-index setup=orders-customer-created,no-parallel
+SELECT id, customer_id, created_at,
+       sum(total_cents) OVER (PARTITION BY customer_id ORDER BY created_at) AS running
+FROM orders WHERE customer_id <= 200;
+```
+
+The scan is now a bitmap index scan (6,133 heap blocks, 6,166 buffers instead of 14,960, about 13 ms), but there is **still a `Sort`**. The index could deliver the rows in the right order, but each row would then need a random heap fetch for `id` and `total_cents`; the planner decided a bitmap scan followed by a sort of 7,919 rows was cheaper. This is module 7's covering idea again: an index that holds every column the query touches turns the heap fetches into nothing.
+
+```plan id=m18-running-cover setup=orders-customer-created-cover,no-parallel
+SELECT id, customer_id, created_at,
+       sum(total_cents) OVER (PARTITION BY customer_id ORDER BY created_at) AS running
+FROM orders WHERE customer_id <= 200;
+```
+
+`Index Only Scan` feeding the `WindowAgg` directly, **no Sort**, `Heap Fetches: 0`, 51 buffers, about 5 ms. The single-customer version (`WHERE customer_id = 42`, the window `ORDER BY created_at` only) reads 4 buffers:
+
+```plan id=m18-running-one setup=orders-customer-created-cover,no-parallel
+SELECT id, created_at,
+       sum(total_cents) OVER (ORDER BY created_at) AS running
+FROM orders WHERE customer_id = 42;
+```
+
+Rule of thumb: for a window query the useful index is `(partition columns, order columns) INCLUDE (the other columns it reads)`, and the planner is allowed to ignore a non-covering one.
+"""
+
+[[sections]]
+heading = "Frames and lag cost the same pass"
+body = """
+The frame decides which rows around the current one feed the function. The default with an `ORDER BY` is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, which includes rows tied with the current one; `ROWS` counts physical rows and is usually what you meant. A 7-order moving average:
+
+```plan id=m18-moving setup=orders-customer-created,no-parallel
+SELECT id, customer_id, created_at,
+       avg(total_cents) OVER (PARTITION BY customer_id ORDER BY created_at
+                              ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS avg7
+FROM orders WHERE customer_id <= 200;
+```
+
+The `Window:` line is the only difference from a running total, and the cost is the same shape: one pass over the sorted rows (the plain index gave the same bitmap scan and `Sort` as before; it would drop away with the covering index). `lag()` and `lead()` look at the previous or next row of the partition, also in the same pass:
+
+```plan id=m18-lag setup=orders-customer-created,no-parallel
+SELECT id, customer_id, created_at,
+       created_at - lag(created_at) OVER (PARTITION BY customer_id ORDER BY created_at) AS gap
+FROM orders WHERE customer_id <= 200;
+```
+
+Each of these is a different function over the same sorted stream. Several window functions with the **same** `PARTITION BY ... ORDER BY` share one `WindowAgg`; different orderings need another `Sort` and another `WindowAgg` each, which is where a query with six window functions gets slow.
+"""
+
+[[sections]]
+heading = "Top N per group and Run Condition"
+body = """
+The usual use of `row_number()`: the first three orders of each customer. You cannot filter on a window function in the same `WHERE`, so it goes in a subquery:
+
+```plan id=m18-top3 setup=orders-customer-created-cover,no-parallel
+SELECT id, customer_id, created_at FROM (
+    SELECT id, customer_id, created_at,
+           row_number() OVER (PARTITION BY customer_id ORDER BY created_at) AS rn
+    FROM orders WHERE customer_id <= 200
+) s WHERE rn <= 3;
+```
+
+The line to read is `Run Condition: (row_number() OVER w1 <= 3)`. Since Postgres 15, when the filter on a monotonic window function (`row_number()`, `rank()`, `count(*)` with a growing frame) is in the outer query, the `WindowAgg` applies it itself and stops producing rows for a partition as soon as the condition fails: 600 rows out (3 for each of 200 customers) from 7,919 in. Notice what it does not do: the `Index Only Scan` below still returned all 7,919 rows (and 51 buffers). The saving is in the work above the node. For a big partition where you want only the top few, a `LATERAL` subquery with `ORDER BY ... LIMIT 3` and a matching index reads only the rows it returns (module 14 compared the two on this table).
+"""
+
+[[sections]]
+heading = "count(*) OVER () and pagination"
+body = """
+A common request on a list endpoint is 'page 1 of N', and `count(*) OVER ()` looks like a free way to get N in the same query. Compare the same page with and without it (index on `(created_at, id)`, 61% of the 2,000,000 orders are `paid`):
+
+```plan id=m18-limit-only setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders WHERE status = 'paid' ORDER BY created_at, id LIMIT 20;
+```
+
+```plan id=m18-count-over setup=orders-created-id,no-parallel
+SELECT id, created_at, count(*) OVER () AS total
+FROM orders WHERE status = 'paid' ORDER BY created_at, id LIMIT 20;
+```
+
+The first reads 30 index entries and stops. The second cannot: the count is a window over the whole result, so the `WindowAgg` must consume **every** `paid` row (1,221,501), spilling its window store to disk (`Storage: Disk 31015kB`, `temp written`), and only then does the `Sort` pick the top 20. About 780 ms in this run against 0.03 ms. The ordering index is no longer used at all, because the window needs all the rows anyway.
+
+If the total is worth having, there are only honest options: a separate `count(*)` query (module 19 looks at what that costs), an approximate count from statistics, or not showing the total (module 16: keyset pagination gives that up on purpose). What you cannot have is the exact total for free.
+"""
+
+[[checks]]
+prompt = "A report query computes sum(x) OVER (PARTITION BY customer_id ORDER BY created_at) and takes 110 ms; an index on (customer_id, created_at) exists but the plan still shows Sort under the WindowAgg. Why, and what do you change?"
+answer = "The WindowAgg needs rows ordered by (customer_id, created_at). The index could supply that, but the query reads other columns, so each row needs a heap fetch and the planner judged a bitmap scan plus a Sort cheaper. Make the index cover the query, (customer_id, created_at) INCLUDE (id, total_cents): an Index Only Scan then feeds the WindowAgg directly with no Sort and no heap fetches."
+
+[[checks]]
+prompt = "The first three orders per customer, written as row_number() in a subquery with rn <= 3, show Run Condition on the WindowAgg. Did the query stop reading the table after 3 rows per customer?"
+answer = "No. Run Condition stops the WindowAgg emitting rows for a partition once the condition fails, so fewer rows go up the plan, but the node below it still produces all its rows (7,919 in the example). To read only the rows you return, use a LATERAL subquery with ORDER BY ... LIMIT 3 and a matching index."
+
+[[checks]]
+prompt = "A list endpoint adds count(*) OVER () to every page to show the total, and page 1 goes from 0.03 ms to 780 ms. Why?"
+answer = "A window over the whole result must see every row before it can produce any, so the plan reads and counts all 1.2 million matching rows (spilling to disk) before the Sort and LIMIT. Run a separate count, use an approximate count, or drop the total."
+
+[[checks]]
+prompt = "Three window functions in one query use PARTITION BY customer_id ORDER BY created_at, and a fourth uses ORDER BY total_cents. How many WindowAgg and Sort nodes do you expect?"
+answer = "Two WindowAgg nodes: functions with the same partition and order share one, and the different ordering needs its own WindowAgg with its own Sort (unless an index already provides one of the orders)."
+
+[[terms]]
+term = "WindowAgg"
+means = "The plan node that computes window functions over rows already sorted by partition and window order."
+section = "What a WindowAgg needs"
+
+[[terms]]
+term = "Frame"
+means = "The rows around the current row that a window function sees, such as ROWS BETWEEN 6 PRECEDING AND CURRENT ROW."
+section = "Frames and lag cost the same pass"
+
+[[terms]]
+term = "Run Condition"
+means = "A filter on row_number(), rank() or a growing count applied inside the WindowAgg, which stops emitting rows for a partition once it fails."
+section = "Top N per group and Run Condition"
+
+[[sources]]
+title = "PostgreSQL: window function tutorial"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/tutorial-window.html"
+
+[[sources]]
+title = "PostgreSQL: window function calls and frames"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-WINDOW-FUNCTIONS"
+
+[[sources]]
+title = "PostgreSQL 15 release notes: window function run conditions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/release/15.0/"
