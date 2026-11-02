@@ -1,0 +1,32 @@
+slug = "posting-list-codec"
+title = "Compress a sorted id list: deltas and bit-packing"
+mode = "write"
+level = "medium"
+stage = "encodings"
+order = 2
+status = "ready"
+tags = ["posting lists", "delta encoding", "bit packing", "varint", "search engines", "frame of reference", "bit streams", "tantivy"]
+teaches = [
+  "A sorted list of ids has small *gaps*: store the deltas, not the ids, and most of the 32 bits per number are wasted zeros that bit-packing removes.",
+  "Bit-packing at a per-block width (frame of reference) adapts to local density: a dense stretch costs 1 bit per id, a sparse one 20, and the width byte is the whole overhead.",
+  "A bit stream is an accumulator: OR the next value in at the current bit offset, flush whole bytes, keep the remainder; reading is the mirror image. Every off-by-one is in the padding.",
+]
+follow_up = "1) Add a skip table: for each block store its last id and byte offset, and write `advance(target)` that decodes only the block that can contain it. 2) Implement `PFor` patched coding: pick the width that fits 90% of the deltas and store the exceptions separately; measure the size win on a Zipf-like list. 3) Intersect two compressed lists without decoding fully (galloping over the skip tables). 4) Replace the byte-at-a-time loop with reading `u64`s and compare speed on a million ids. 5) Compare against plain varint deltas: when does each win in size and in speed?"
+related = ["F5", "F7", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Split into blocks of 128 with `ids.chunks(128)`. For each block compute the deltas (carrying `prev` across blocks), find the width from the largest delta (`32 - max.leading_zeros()`), then pack: keep a `u64` accumulator and a bit count; OR each delta in at the current bit offset, and whenever 8 or more bits are pending, emit a byte and shift them out. After the block, flush a final partial byte."
+
+[[hints]]
+kind = "rust"
+text = "Reading is the mirror: `while nbits < w { acc |= (next_byte as u64) << nbits; nbits += 8 }`, then `delta = acc & ((1 << w) - 1)`, `acc >>= w`, `nbits -= w`. Special-case `w == 0` (no bytes, delta 0). The payload length is `(n * w + 7) / 8` bytes for a block of `n` ids: check it exists with `bytes.get(at..at + len)` before reading."
+
+[[hints]]
+kind = "edge"
+text = "The first delta of the whole list is relative to 0, so ids may start anywhere. The last block has `count % 128` ids (or 128 if it divides evenly): derive it from the count, do not store it. A truncated input must be an `Err` at every prefix, never an index panic."
+
+[solution]
+explanation = "This is the **frame-of-reference** coding used for posting lists in Lucene (`PForDelta`/`FOR`, 128-int blocks), tantivy's bitpacker and Elasticsearch: SIMD versions unpack a 128-id block in tens of nanoseconds. Real formats also store each block's maximum id so a skip list can jump over blocks without decoding them, and use `PFor` exceptions so one huge delta doesn't widen the whole block."
+time = "O(n)"
+space = "O(n)"
