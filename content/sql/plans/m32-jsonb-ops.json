@@ -1,0 +1,130 @@
+{
+ "id": "m32-jsonb-ops",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM gin_t WHERE doc @> '{\"plan\":\"pro\",\"region\":\"eu\",\"beta\":true}';",
+ "setup": [
+  {
+   "id": "gin-t",
+   "sql": "CREATE TABLE gin_t AS SELECT i AS id, array_remove(array['t' || (i % 7), 't' || (10 + i % 101), 't' || (200 + i % 997), CASE WHEN i % 10000 = 0 THEN 'rare' END, CASE WHEN i % 2 = 0 THEN 'common' END], NULL) AS tags, jsonb_build_object('plan', (array['free','pro','team','enterprise'])[1 + i % 4], 'region', (array['eu','us','apac','latam','mea'])[1 + i % 5], 'n', i % 1000, 'beta', i % 49 = 0) AS doc FROM generate_series(1, 500000) i; ALTER TABLE gin_t ADD PRIMARY KEY (id); ALTER TABLE gin_t SET (autovacuum_enabled = false); VACUUM ANALYZE gin_t;"
+  },
+  {
+   "id": "gin-doc-idx",
+   "sql": "CREATE INDEX gin_doc ON gin_t USING gin (doc); ANALYZE gin_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 228.71,
+   "Total Cost": 228.72,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 9.232,
+   "Actual Total Time": 9.233,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 984,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "gin_t",
+     "Alias": "gin_t",
+     "Startup Cost": 64.67,
+     "Total Cost": 228.6,
+     "Plan Rows": 43,
+     "Plan Width": 0,
+     "Actual Startup Time": 8.649,
+     "Actual Total Time": 9.2,
+     "Actual Rows": 510.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(doc @> '{\"beta\": true, \"plan\": \"pro\", \"region\": \"eu\"}'::jsonb)",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 510,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 984,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "gin_doc",
+       "Startup Cost": 0.0,
+       "Total Cost": 64.66,
+       "Plan Rows": 43,
+       "Plan Width": 0,
+       "Actual Startup Time": 8.566,
+       "Actual Total Time": 8.567,
+       "Actual Rows": 510.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(doc @> '{\"beta\": true, \"plan\": \"pro\", \"region\": \"eu\"}'::jsonb)",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 474,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 1,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.097,
+  "Triggers": [],
+  "Execution Time": 9.254
+ },
+ "text": "Aggregate  (cost=228.71..228.72 rows=1 width=8) (actual time=8.805..8.806 rows=1.00 loops=1)\n  Buffers: shared hit=984\n  ->  Bitmap Heap Scan on gin_t  (cost=64.67..228.60 rows=43 width=0) (actual time=8.202..8.773 rows=510.00 loops=1)\n        Recheck Cond: (doc @> '{\"beta\": true, \"plan\": \"pro\", \"region\": \"eu\"}'::jsonb)\n        Heap Blocks: exact=510\n        Buffers: shared hit=984\n        ->  Bitmap Index Scan on gin_doc  (cost=0.00..64.66 rows=43 width=0) (actual time=8.133..8.133 rows=510.00 loops=1)\n              Index Cond: (doc @> '{\"beta\": true, \"plan\": \"pro\", \"region\": \"eu\"}'::jsonb)\n              Index Searches: 1\n              Buffers: shared hit=474\nPlanning:\n  Buffers: shared hit=1\nPlanning Time: 0.085 ms\nExecution Time: 8.825 ms"
+}

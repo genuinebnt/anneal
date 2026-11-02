@@ -272,3 +272,24 @@ undo = "DROP TABLE toast_t;"
 id = "toast-j"
 sql = "CREATE TABLE toast_j AS SELECT i AS id, (SELECT jsonb_object_agg('k' || g, md5(i::text || g::text)) FROM generate_series(1, 200) g) || jsonb_build_object('n', i % 100) AS payload FROM generate_series(1, 20000) i; ALTER TABLE toast_j ADD PRIMARY KEY (id); ALTER TABLE toast_j SET (autovacuum_enabled = false); VACUUM ANALYZE toast_j;"
 undo = "DROP TABLE toast_j;"
+
+# module 32: GIN on arrays and jsonb. 500,000 rows; the tag 'rare' is on 50 rows, 'common' on half; doc has plan, region, n and a rare beta flag
+[[setup]]
+id = "gin-t"
+sql = "CREATE TABLE gin_t AS SELECT i AS id, array_remove(array['t' || (i % 7), 't' || (10 + i % 101), 't' || (200 + i % 997), CASE WHEN i % 10000 = 0 THEN 'rare' END, CASE WHEN i % 2 = 0 THEN 'common' END], NULL) AS tags, jsonb_build_object('plan', (array['free','pro','team','enterprise'])[1 + i % 4], 'region', (array['eu','us','apac','latam','mea'])[1 + i % 5], 'n', i % 1000, 'beta', i % 49 = 0) AS doc FROM generate_series(1, 500000) i; ALTER TABLE gin_t ADD PRIMARY KEY (id); ALTER TABLE gin_t SET (autovacuum_enabled = false); VACUUM ANALYZE gin_t;"
+undo = "DROP TABLE gin_t;"
+
+[[setup]]
+id = "gin-tags-idx"
+sql = "CREATE INDEX gin_tags ON gin_t USING gin (tags); ANALYZE gin_t;"
+undo = "DROP INDEX gin_tags;"
+
+[[setup]]
+id = "gin-doc-idx"
+sql = "CREATE INDEX gin_doc ON gin_t USING gin (doc); ANALYZE gin_t;"
+undo = "DROP INDEX gin_doc;"
+
+[[setup]]
+id = "gin-doc-pp"
+sql = "CREATE INDEX gin_doc_pp ON gin_t USING gin (doc jsonb_path_ops); ANALYZE gin_t;"
+undo = "DROP INDEX gin_doc_pp;"

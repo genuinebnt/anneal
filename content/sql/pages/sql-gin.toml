@@ -1,0 +1,158 @@
+title = "GIN indexes for arrays and jsonb"
+group = "sql-special"
+order = 32
+minutes = 15
+lede = "A b-tree answers 'equal to' and 'between' on one value per row. It cannot answer 'this array contains the tag rare' or 'this document contains plan = pro and region = eu', because the row holds many keys at once. A GIN index inverts the table: for each key, the list of rows that contain it. This page measures what that buys on 500,000 rows, which of the two jsonb operator classes to pick, the queries a GIN index silently cannot serve, and what it costs every insert."
+say = "A tag on 50 of 500,000 rows: a sequential scan read 9,664 buffers (103 ms), the GIN index 53 (0.05 ms). A tag on half the rows read 9,696, as much as the scan: GIN does not help a condition that matches most of the table. For a jsonb containment query matching 510 rows the default jsonb_ops index read 984 buffers (8.8 ms) and jsonb_path_ops 585 (2.2 ms), against 9,664 (127 ms) for the scan; the path_ops index is also smaller (3.8 MB against 6.0). The same filter written with ->> uses neither (9,664 buffers). Writes pay: inserting 50,000 rows took 212 ms with only the primary key, 371 ms with a GIN index on the array (fastupdate on) and 905 ms with fastupdate off, which wrote 103 MB of WAL against 22."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a throwaway table `gin_t` of 500,000 rows (heap 76 MB, primary key 11 MB), a text array `tags` of 3 to 5 tags per row (the tag `rare` on 50 rows, `common` on 250,000) and a jsonb `doc` with `plan`, `region`, `n` and a `beta` flag. Postgres 18.6, `max_parallel_workers_per_gather = 0`. Buffers are the evidence; times are single runs from the plan files.",
+  "**What GIN stores:** a sorted tree of keys (each distinct tag, or each jsonb key and value) and, for each key, a compressed list of the rows that contain it (the posting list). A query for several keys intersects the lists. `@>` (contains), `<@`, `&&` (overlaps) and `=` work on arrays; `@>`, `?`, `?|`, `?&`, `@?` and `@@` on jsonb with the default operator class.",
+  "**Rare key:** `tags @> '{rare}'` (50 rows): sequential scan **9,664 buffers, 103 ms**; GIN `Bitmap Index Scan` **53 buffers (3 in the index, 50 table pages), 0.05 ms**. Two keys, `tags @> '{t3,rare}'` (7 rows): **34 buffers, 0.3 ms**, the two posting lists intersected before the table is touched.",
+  "**Common key:** `tags @> '{common}'` (250,000 rows, half the table): **9,696 buffers, 93 ms** for the GIN plan, as many as the sequential scan (9,664). An index finds rows; if you want half of them it saves nothing.",
+  "**jsonb containment:** `doc @> '{\"plan\":\"pro\",\"region\":\"eu\",\"beta\":true}'`, 510 rows: scan **9,664 buffers, 127 ms**; default `jsonb_ops` index **984 buffers, 8.8 ms** (474 in the index); `jsonb_path_ops` **585 buffers, 2.2 ms** (75 in the index). `jsonb_path_ops` stores one hash per path and value, so it is smaller (**3,848 kB against 5,968 kB**) and faster for `@>`, but it cannot answer `?` (key exists) or `?|` / `?&`.",
+  "**What a GIN index cannot serve:** `doc ->> 'plan' = 'pro' AND doc ->> 'region' = 'eu' AND (doc ->> 'beta')::boolean`, the same 510 rows, ran a sequential scan, **9,664 buffers, 111 ms**, with the `jsonb_path_ops` index present. The index is on `doc`, the operators in the query are on an expression of `doc`. Write it as `@>`, or give the expression its own b-tree.",
+  "**Write cost:** inserting 50,000 rows into `gin_t` (median of 3): primary key only **212 ms, 12.2 MB WAL**; plus GIN on `tags` **371 ms, 21.9 MB**; plus GIN on `doc` (`jsonb_ops`) **573 ms, 29.2 MB**; plus a b-tree on `((doc ->> 'n')::int)` for comparison **344 ms, 18.6 MB**. With `fastupdate = off` on the `tags` index: **905 ms and 103.4 MB of WAL**. Build times for the 500,000 rows: b-tree 235 ms (3.6 MB), GIN `tags` 560 ms (5.6 MB), `jsonb_ops` 937 ms (6.0 MB), `jsonb_path_ops` 326 ms (3.8 MB). These indexes are small because the generated data has about 1,100 distinct tags and four or five values per key; data with millions of distinct keys gives far larger GIN indexes.",
+]
+
+[[sections]]
+heading = "Why a b-tree cannot do this, and what GIN does instead"
+body = """
+A b-tree entry is one value from one row. A row with `tags = {t3, t17, rare}` would need three entries for a b-tree to find it by any one tag, and the b-tree does not do that: it indexes the array as a whole, so it can answer `tags = '{t3,t17,rare}'` and nothing about parts of the array. The same is true of a jsonb document and of the words of a text column (module 33).
+
+A **GIN** (Generalized Inverted Index) does what a book index does. The keys are extracted from each row: for an array, each element; for jsonb, each key and each value (or, in `jsonb_path_ops`, each path-and-value pair). The index maps each distinct key to a sorted, compressed **posting list** of the table rows that contain it. `tags @> '{t3,rare}'` looks up `t3` and `rare`, intersects the two lists and fetches only the rows in both.
+
+The operators an index can answer are fixed by its operator class: for arrays `@>` (contains), `<@` (is contained by), `&&` (shares any element) and `=`; for jsonb the default class adds `?`, `?|`, `?&` (key exists), `@?` and `@@` (jsonpath). A condition built from any other function or operator, however equivalent it looks, cannot use the index.
+"""
+
+[[sections]]
+heading = "Arrays: a rare tag, two tags, a common tag"
+body = """
+The table is `gin_t` (500,000 rows, `tags text[]`). The tag `rare` is on 50 rows. Without an index:
+
+```plan id=m32-seq-tags setup=gin-t,no-parallel
+SELECT count(*) FROM gin_t WHERE tags @> '{rare}';
+```
+
+A sequential scan: every one of the table's 9,664 buffers, 103 ms in this run, to find 50 rows. With `CREATE INDEX gin_tags ON gin_t USING gin (tags)`:
+
+```plan id=m32-gin-tags setup=gin-t,gin-tags-idx,no-parallel
+SELECT count(*) FROM gin_t WHERE tags @> '{rare}';
+```
+
+53 buffers: 3 in the index to read the posting list for `rare`, 50 table pages for the 50 rows (a `Bitmap Heap Scan`: GIN has no ordered scan, so it always hands the executor a bitmap), 0.05 ms. A second condition narrows further without touching the table:
+
+```plan id=m32-gin-two setup=gin-t,gin-tags-idx,no-parallel
+SELECT count(*) FROM gin_t WHERE tags @> '{t3,rare}';
+```
+
+7 rows, 34 buffers: 27 in the index, where both keys' lists were read and intersected, 7 in the table. A key that is on half the table is a different matter:
+
+```plan id=m32-gin-common setup=gin-t,gin-tags-idx,no-parallel
+SELECT count(*) FROM gin_t WHERE tags @> '{common}';
+```
+
+**9,696 buffers**, no better than the scan: 38 in the index and 9,658 table pages, because 250,000 matching rows are spread over nearly every page. The index did its job and found the rows; there were just too many. The rule from module 2 applies: an index helps in proportion to how much of the table it excludes.
+"""
+
+[[sections]]
+heading = "jsonb: two operator classes"
+body = """
+`doc` is a jsonb column with four keys. The query asks for the documents that contain a plan, a region and a flag:
+
+```plan id=m32-jsonb-seq setup=gin-t,no-parallel
+SELECT count(*) FROM gin_t WHERE doc @> '{"plan":"pro","region":"eu","beta":true}';
+```
+
+Sequential scan, 9,664 buffers, 127 ms, 510 rows. Postgres has two operator classes for jsonb in GIN. The default, `jsonb_ops`, makes one key per jsonb key and one per value:
+
+```plan id=m32-jsonb-ops setup=gin-t,gin-doc-idx,no-parallel
+SELECT count(*) FROM gin_t WHERE doc @> '{"plan":"pro","region":"eu","beta":true}';
+```
+
+984 buffers, 8.8 ms. Of those 474 are in the index: it looked up `plan`, `pro`, `region`, `eu`, `beta` and `true` as separate keys and intersected six lists, and the keys `plan`, `region` and `beta` are on every row so their lists are long. `jsonb_path_ops` (`CREATE INDEX ... USING gin (doc jsonb_path_ops)`) hashes each *path and value together*, so `plan = pro` is a single key:
+
+```plan id=m32-jsonb-pp setup=gin-t,gin-doc-pp,no-parallel
+SELECT count(*) FROM gin_t WHERE doc @> '{"plan":"pro","region":"eu","beta":true}';
+```
+
+585 buffers (75 in the index), 2.2 ms, and the index is 3,848 kB against 5,968 kB. The trade-off is in the operators: `jsonb_path_ops` supports `@>`, `@?` and `@@` only. It cannot answer 'does the key `beta` exist' (`?`, `?|`, `?&`), because it does not store keys on their own. Choose `jsonb_path_ops` when every query is a containment query, which is the common case, and the default when you also test for keys. If you query a few fixed paths, an expression b-tree on `((doc ->> 'plan'))` is smaller and faster than either; GIN is for queries you cannot predict.
+
+The trap is writing the same predicate another way:
+
+```plan id=m32-jsonb-extract setup=gin-t,gin-doc-pp,no-parallel
+SELECT count(*) FROM gin_t
+WHERE doc ->> 'plan' = 'pro' AND doc ->> 'region' = 'eu' AND (doc ->> 'beta')::boolean;
+```
+
+The same 510 rows, but a sequential scan of 9,664 buffers (111 ms) with the `jsonb_path_ops` index sitting there. `->>` produces a text value; the index knows only `@>`, `?` and `@?`/`@@` on `doc` itself. An ORM that builds `->>` filters gets no benefit from a GIN index, and the plan looks the same as having no index at all (module 4: an index is used only when the condition has the form the index was built for).
+"""
+
+[[sections]]
+heading = "What GIN costs to write and to build"
+body = """
+One new row with five tags adds five entries, each into a different posting list. That is slow to do row by row, so GIN has a buffer: with `fastupdate` on (the default) new entries go to a **pending list**, a plain append-only area that is merged into the main structure in bulk when it passes `gin_pending_list_limit` (4 MB), when `VACUUM` or autovacuum runs, or when `gin_clean_pending_list()` is called. Inserting 50,000 rows into `gin_t`, median of 3, the primary key present each time:
+
+| Indexes besides the primary key | Time | WAL |
+|---|---|---|
+| none | 212 ms | 12.2 MB |
+| b-tree on `((doc ->> 'n')::int)` | 344 ms | 18.6 MB |
+| GIN on `tags` | 371 ms | 21.9 MB |
+| GIN on `tags` with `fastupdate = off` | 905 ms | 103.4 MB |
+| GIN on `doc` (`jsonb_ops`) | 573 ms | 29.2 MB |
+
+The pending list makes the insert cost close to a b-tree's (371 against 344 ms). Without it, each entry is merged into its posting list at once: 2.4 times the time and 4.7 times the WAL. The bill for fastupdate arrives later: the merge itself, which a unlucky insert (the one that crosses the limit) or the autovacuum pays, and a **slower read**, since a query has to search the main index and then also scan the pending list. For read-mostly tables that is invisible; for an index with a heavy insert stream, keep autovacuum running often and consider a smaller `gin_pending_list_limit`. I did not measure the read slowdown.
+
+Building from scratch for 500,000 rows took (median of 3) 235 ms for the b-tree, 560 ms for GIN on `tags`, 937 ms on `doc` with `jsonb_ops` and 326 ms with `jsonb_path_ops`. The index sizes above come with a caveat: this data has about 1,100 distinct tags and a few values per jsonb key, so the posting lists are long and compress well. A column with millions of distinct values (free text, ids) gives a much larger GIN index, closer to the size of the data itself.
+
+Deletes and updates leave dead entries until `VACUUM`, like any index (module 27). An update that changes `tags` writes a new row version and new entries for all its tags, so GIN on a frequently updated column is the same trap as module 27 described.
+"""
+
+[[checks]]
+prompt = "You add a GIN index on a jsonb column and the query WHERE data ->> 'status' = 'open' is just as slow. Give two fixes and say when each is right."
+answer = "The index is on data but the condition is on an expression of it, so the planner cannot use it. Fix 1: rewrite the predicate as data @> '{\"status\":\"open\"}', which the GIN index (jsonb_ops or jsonb_path_ops) supports; right when queries vary in which keys they test. Fix 2: create a b-tree on the expression ((data ->> 'status')) and keep the query; right when one or a few fixed paths are queried, since it is smaller and faster than GIN."
+
+[[checks]]
+prompt = "A GIN index on a tags array makes the query for the tag 'new', which is on 60% of the rows, no faster than a scan. Why, and is it a bug?"
+answer = "Not a bug: the index finds the matching rows quickly, but 60% of the rows are spread over nearly every table page, so the bitmap heap scan reads as many pages as a sequential scan (the test with half the rows read 9,696 buffers against 9,664). An index helps in proportion to how much of the table it excludes; for common tags combine with a selective condition or use a different design (a boolean column, a partial index)."
+
+[[checks]]
+prompt = "A table with a GIN index takes 20,000 inserts a second and queries on it are occasionally slow. What mechanism of GIN explains both, and which settings are involved?"
+answer = "fastupdate: new entries go to a pending list that is merged into the main index when it exceeds gin_pending_list_limit or when vacuum runs. Inserts are cheap (close to a b-tree) but the insert that crosses the limit pays the merge, and queries must also scan the pending list. Keep autovacuum frequent for the table, and tune gin_pending_list_limit (smaller limits make merges shorter); fastupdate = off gives steady but much more expensive inserts (2.4 times the time and 4.7 times the WAL in the test)."
+
+[[terms]]
+term = "GIN"
+means = "Generalized Inverted Index: an index that maps each key extracted from a value (an array element, a jsonb key or value, a word) to the list of rows containing it."
+section = "Why a b-tree cannot do this, and what GIN does instead"
+
+[[terms]]
+term = "Posting list"
+means = "The sorted, compressed list of row pointers stored in a GIN index for one key."
+section = "Why a b-tree cannot do this, and what GIN does instead"
+
+[[terms]]
+term = "jsonb_path_ops"
+means = "A GIN operator class for jsonb that indexes a hash of each path and value together: smaller and faster for @>, but without key-exists operators."
+section = "jsonb: two operator classes"
+
+[[terms]]
+term = "fastupdate"
+means = "A GIN storage parameter (on by default) that buffers new entries in a pending list and merges them into the index in bulk, making inserts cheaper and some reads slower."
+section = "What GIN costs to write and to build"
+
+[[sources]]
+title = "PostgreSQL: GIN indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/gin.html"
+
+[[sources]]
+title = "PostgreSQL: jsonb indexing"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/datatype-json.html#JSON-INDEXING"
+
+[[sources]]
+title = "PostgreSQL: GIN implementation (fast update technique)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/gin-implementation.html"

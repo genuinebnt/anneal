@@ -1,0 +1,98 @@
+{
+ "id": "m32-jsonb-extract",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM gin_t\nWHERE doc ->> 'plan' = 'pro' AND doc ->> 'region' = 'eu' AND (doc ->> 'beta')::boolean;",
+ "setup": [
+  {
+   "id": "gin-t",
+   "sql": "CREATE TABLE gin_t AS SELECT i AS id, array_remove(array['t' || (i % 7), 't' || (10 + i % 101), 't' || (200 + i % 997), CASE WHEN i % 10000 = 0 THEN 'rare' END, CASE WHEN i % 2 = 0 THEN 'common' END], NULL) AS tags, jsonb_build_object('plan', (array['free','pro','team','enterprise'])[1 + i % 4], 'region', (array['eu','us','apac','latam','mea'])[1 + i % 5], 'n', i % 1000, 'beta', i % 49 = 0) AS doc FROM generate_series(1, 500000) i; ALTER TABLE gin_t ADD PRIMARY KEY (id); ALTER TABLE gin_t SET (autovacuum_enabled = false); VACUUM ANALYZE gin_t;"
+  },
+  {
+   "id": "gin-doc-pp",
+   "sql": "CREATE INDEX gin_doc_pp ON gin_t USING gin (doc jsonb_path_ops); ANALYZE gin_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 23414.01,
+   "Total Cost": 23414.02,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 93.186,
+   "Actual Total Time": 93.187,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 3124,
+   "Shared Read Blocks": 6540,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "gin_t",
+     "Alias": "gin_t",
+     "Startup Cost": 0.0,
+     "Total Cost": 23414.0,
+     "Plan Rows": 6,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.246,
+     "Actual Total Time": 93.069,
+     "Actual Rows": 510.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Filter": "(((doc ->> 'plan'::text) = 'pro'::text) AND ((doc ->> 'region'::text) = 'eu'::text) AND ((doc ->> 'beta'::text))::boolean)",
+     "Rows Removed by Filter": 499490,
+     "Shared Hit Blocks": 3124,
+     "Shared Read Blocks": 6540,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.075,
+  "Triggers": [],
+  "Execution Time": 93.214
+ },
+ "text": "Aggregate  (cost=23414.01..23414.02 rows=1 width=8) (actual time=94.912..94.914 rows=1.00 loops=1)\n  Buffers: shared hit=3218 read=6446\n  ->  Seq Scan on gin_t  (cost=0.00..23414.00 rows=6 width=0) (actual time=0.257..94.778 rows=510.00 loops=1)\n        Filter: (((doc ->> 'plan'::text) = 'pro'::text) AND ((doc ->> 'region'::text) = 'eu'::text) AND ((doc ->> 'beta'::text))::boolean)\n        Rows Removed by Filter: 499490\n        Buffers: shared hit=3218 read=6446\nPlanning Time: 0.077 ms\nExecution Time: 94.938 ms"
+}
