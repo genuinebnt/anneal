@@ -25,6 +25,7 @@ export const SD_GROUPS: { id: string; name: string; blurb: string; color: string
     { id: "sql-special", name: "SQL performance: special indexes", blurb: "GIN, full text search, trigrams, GiST and vectors", color: "var(--fn)" },
     { id: "sql-scale", name: "SQL performance: at scale", blurb: "Partitioning, materialized views, pooling and replicas", color: "var(--fn)" },
     { id: "sql-rust", name: "SQL performance: from Rust", blurb: "sqlx, plan assertions in tests and monitoring in production", color: "var(--fn)" },
+    { id: "sql-engines", name: "SQL performance: other engines", blurb: "SQLite, measured against the same indexing rules", color: "var(--fn)" },
 ];
 
 export const groupOf = (id: string) => SD_GROUPS.find((g) => g.id === id) ?? SD_GROUPS[0]!;
