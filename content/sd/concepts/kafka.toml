@@ -72,7 +72,7 @@ The ISR is not a majority quorum like Raft's. Kafka's controller runs on **KRaft
 [[sections]]
 heading = "Producing"
 body = """
-Producers batch records per partition and send a batch at a time: `linger.ms` (how long to wait for more records) and `batch.size` (bytes per partition batch) trade a little latency for far more throughput, and `compression.type` (lz4, zstd, snappy, gzip) shrinks the batches on the wire and on disk.
+Producers batch records per partition and send a batch at a time: `linger.ms` (how long to wait for more records; the default is 5 ms in current clients and was 0 before Kafka 4.0) and `batch.size` (bytes per partition batch) trade a little latency for far more throughput, and `compression.type` (lz4, zstd, snappy, gzip) shrinks the batches on the wire and on disk.
 
 - **Idempotent producer** (`enable.idempotence=true`, the default in current clients): each producer has an id and numbers its records per partition, so a retry after a timeout does not add a duplicate or reorder records. Turn it on for any producer that retries.
 - **Retries and order**: with several requests in flight and no idempotence, a retried batch can land after a later one. Idempotence keeps order with up to 5 in flight.
@@ -90,7 +90,10 @@ body = """
 How the transactional version works: a producer with a `transactional.id` writes to several partitions and sends the consumed offsets as part of one transaction, then commits; a consumer with `isolation.level=read_committed` sees records only from committed transactions. A read-process-write job (consume `orders`, write `invoices`) can therefore crash and restart without duplicates in `invoices`. The guarantee stops at Kafka's edge: a call to a payment API or a database write in the middle is outside the transaction, so keep those idempotent too.
 
 When one record cannot be processed (a malformed payload), do not let it block the partition forever: retry a few times, then publish it to a **dead letter topic** with the error, and move on. Ordered processing and skipping a bad record are in tension; decide which wins.
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** Checked against the apache/kafka source and docs on GitHub (November 2026): `session.timeout.ms` 45,000, `max.poll.interval.ms` 300,000, `enable.idempotence` true, `acks` all, `batch.size` 16,384, `linger.ms` 5, `min.insync.replicas` 1 by default (the 2 above is a recommendation), `unclean.leader.election.enable` false, 1 GiB segments rolled every 7 days, 7-day retention, records up to about 1 MiB, and ZooKeeper mode removed from Kafka 4.0. Not verified: the zero-copy remark with TLS and the throughput remarks."""
 
 [[sections]]
 heading = "Why it is fast"

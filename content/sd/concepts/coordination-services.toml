@@ -91,7 +91,10 @@ body = """
 
 > [!INTERVIEW]
 > Say what is stored (metadata, not data), why it needs a quorum, how a crashed holder is detected (lease timeout), and how you stop a stale holder from corrupting data (fencing token).
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** Checked against the etcd website repository and the Apache ZooKeeper source on GitHub: etcd's 1.5 MiB request limit, 2 GiB default and 8 GiB suggested storage quota, ZooKeeper's 1 MB (`jute.maxbuffer`) limit, session timeouts bounded between 2 and 20 ticks, and persistent watches. Not verified: typical lease lengths of 10 to 60 seconds, which are common practice rather than a documented default."""
 
 [[checks]]
 prompt = "In a ZooKeeper leader election, why does each candidate watch only its predecessor's node rather than the leader's?"

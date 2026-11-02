@@ -128,7 +128,10 @@ What each field does:
 - To tell a client to stop reconnecting for good, answer with **204 No Content**.
 
 **The limits.** SSE carries text only, one way: the client sends with ordinary `POST`s, which suits comments, notifications, prices and progress bars. Over HTTP/1.1 a browser opens only a few connections per server (six in common browsers, per MDN), and each open `EventSource` holds one, so several tabs of the same site can starve each other; over HTTP/2 the streams share one connection and the problem goes away.
-"""
+
+
+> [!NOTE]
+> **How these were checked.** The MDN documentation (GitHub: mdn/content) states that over HTTP/1.1 the limit is about six connections per browser and domain, that Chrome and Firefox treat it as won't-fix, and that HTTP/2 negotiates the stream count (commonly 100). Redis 7.0 added sharded pub/sub (`SPUBLISH`), present in the Redis source."""
 
 [[sections]]
 heading = "WebSockets"
