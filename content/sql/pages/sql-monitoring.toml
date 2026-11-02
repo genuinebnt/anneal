@@ -1,0 +1,135 @@
+title = "Monitoring: finding the slow query in a running system"
+group = "sql-rust"
+order = 42
+minutes = 14
+lede = "Everything so far assumed you knew which query to look at. In a running system you do not: you have a database that feels slow and thousands of statements. Postgres can tell you which ones cost the most, show the plan of a slow one as it happened, say what a stuck session is waiting for, and list the indexes nobody uses. This page runs each tool on the test database and shows what it reports, including the answer that is easy to get wrong: the query that matters is not the one that runs most often, and not necessarily the slowest."
+say = "A mixed workload ran 20,000 primary-key lookups, 200 per-customer latest-orders queries and 5 aggregates. pg_stat_statements ranked them by total time: the 200 customer queries took 18,108 ms (91.5% of all time, 90.5 ms each, 2,992,003 buffers), the 5 aggregates 1,347 ms (6.8%), and the 20,000 lookups 342 ms (1.7%), though they were 99% of the calls. auto_explain logged the plan of the slow one (a Seq Scan removing 1,999,956 rows, 81.6 ms) with no code change. pg_stat_activity showed an UPDATE waiting on a transactionid lock, blocked by a session that was idle in transaction. pg_stat_user_indexes showed two of four indexes on a test table with 0 scans, one of them a duplicate."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**What was enabled:** `shared_preload_libraries = 'pg_stat_statements,auto_explain'` (a restart is needed), `compute_query_id = on`, then `CREATE EXTENSION pg_stat_statements`. These come with Postgres (contrib), built from the source tree here. Postgres 18.6; the workload ran against the 2,000,000-row `orders` table, which has only its primary key.",
+  "**pg_stat_statements:** one row per normalised statement (constants replaced by `$1`), with calls, total and mean time, rows and buffers. Sorted by `total_exec_time` after a mixed run (the table is the real output, with the statements that share a text added together): the customer query `WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 20`, **200 calls, 18,108 ms total, 90.54 ms mean, 91.5%**, 2,992,003 buffers (14,960 a call); the status aggregate, **5 calls, 1,347 ms, 269 ms mean, 6.8%**, 74,800 buffers; the primary-key lookup, **20,000 calls, 342 ms, 0.017 ms mean, 1.7%**, 80,006 buffers.",
+  "**What it tells you:** sort by total time (calls x mean), not by mean and not by calls. The lookup is called a hundred times more than the customer query and costs 1/50 as much in total; the aggregate has the worst single run and a minor share. The customer query is the one worth an index (it reads 14,960 buffers for 20 rows; module 3 is about this shape). The counters accumulate since the last `pg_stat_statements_reset()` or restart, so reset before a measurement or take two snapshots and subtract.",
+  "**auto_explain:** logs the plan of any statement slower than a threshold, at the moment it ran, with real row counts, which is the information missing from a slow-query log line. With `auto_explain.log_min_duration = '50ms'`, `log_analyze = on` and `log_buffers = on` the customer query was logged as `duration: 81.554 ms plan:` followed by `Limit` / `Sort` (top-N heapsort) / `Seq Scan on orders` with `Rows Removed by Filter: 1999956` and `Buffers: shared hit=14960`. That is the whole diagnosis, from production, without anyone running EXPLAIN.",
+  "**What auto_explain costs:** 20,000 primary-key lookups took 1,950 ms with it off (runs 2,009, 1,930, 1,949), 2,175 ms with it loaded, `log_analyze = on` and `log_timing = on` but a 10 s threshold so that nothing is logged (runs 1,954, 2,235, 2,174), and 1,891 ms with `log_timing = off` (2,070, 1,865, 1,890). The runs vary by about as much as the differences, so an overhead of up to about 10% for per-node timing is the most this test can say; `log_timing = off` removed it in this run. Test on your own workload before turning analyze on everywhere.",
+  "**The slow query log:** `log_min_duration_statement = '50ms'` writes `duration: 167.093 ms  statement: SELECT id, total_cents FROM orders WHERE customer_id = 4242 ...` to the server log for every statement over the limit. It tells you which statement and how long, with the literal values, but not the plan, and it logs each execution separately, where pg_stat_statements adds them together.",
+  "**What a stuck session is waiting for:** one session did `UPDATE ... WHERE id = 1` in a transaction and stayed open; a second ran the same row's UPDATE. `pg_stat_activity` showed the first as `idle in transaction`, `ClientRead`, open 1.5 s; the second as `active`, wait_event_type **`Lock`**, wait_event **`transactionid`**, and `pg_blocking_pids(pid)` gave the first session's pid. `pg_locks` listed the waiting request as `ShareLock` on a `transactionid` with `granted = false`. This is the diagnosis of modules 30 and 31, now from the live system. The waiter ended with `canceling statement due to lock timeout` after the 4 s I set.",
+  "**Unused and duplicate indexes:** a test table of 500,000 rows with a primary key and three indexes (`a`, `b`, and a second index on `a`), after 300 queries on `a` and 100 on a column with no index. `pg_stat_user_indexes.idx_scan`: `mon42_a_dup` **300**, `mon42_a` **0**, `mon42_b` **0**, `mon42_pkey` **0**; sizes 3,600 kB, 3,600 kB, 3,520 kB and 11 MB. With two identical indexes the planner used one for all 300 scans, so the other cost its 3,600 kB and its write cost for nothing. A primary key with zero scans is normal (it enforces uniqueness); the counters count since the last stats reset, and only on the server you looked at.",
+  "**Not measured here:** the overhead of pg_stat_statements itself, `pg_stat_io`, `pg_stat_bgwriter` and checkpoint statistics, and `log_lock_waits`; I did not look at dashboards or exporters either (the Prometheus postgres_exporter reads these same views).",
+]
+
+[[sections]]
+heading = "Which statement costs the most"
+body = """
+`pg_stat_statements` keeps one row for each distinct statement shape, with the constants replaced by placeholders, and counts calls, time, rows and buffers. After the mixed workload, summed by statement text and ordered by total time:
+
+| statement | calls | total ms | mean ms | share | buffers |
+|---|---|---|---|---|---|
+| customer_id lookup, latest 20 | 200 | 18,108 | 90.54 | 91.5% | 2,992,003 |
+| status aggregate | 5 | 1,347 | 269.46 | 6.8% | 74,800 |
+| primary-key lookup | 20,000 | 342 | 0.017 | 1.7% | 80,006 |
+
+Look at the three columns calls, mean and total. The lookup is 99% of the calls and under 2% of the time. The aggregate is the slowest single statement and under 7% of the time. The customer query, 200 calls at 90 ms, is 91.5%: it reads the whole table (14,960 buffers per call) to return 20 rows, which is the missing-index shape of the earlier modules. The ranking by total time is what tells you where a fix pays off, and the buffer column tells you why: 2,992,003 buffers is the work the cache and disk did for that one statement.
+
+The counters run from the last reset, so for a before/after comparison, call `pg_stat_statements_reset()` before the change or keep two snapshots.
+"""
+
+[[sections]]
+heading = "Seeing the plan that was slow"
+body = """
+Once you know the statement, you need its plan, and EXPLAIN on a copy of the data may choose a different one. `auto_explain` writes the plan to the log when the statement exceeds a threshold. With `log_min_duration = 50ms`, `log_analyze` and `log_buffers` on, the customer query produced:
+
+```
+LOG:  duration: 81.554 ms  plan:
+Query Text: SELECT id, total_cents FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20
+Limit  (cost=39961.09..39961.14 rows=20 width=20) (actual rows=20.00 loops=1)
+  Buffers: shared hit=14963
+  ->  Sort  (cost=39961.09..39961.19 rows=41 width=20) (actual rows=20.00 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 27kB
+        Buffers: shared hit=14963
+        ->  Seq Scan on orders  (cost=0.00..39960.00 rows=41 width=20) (actual rows=44.00 loops=1)
+              Filter: (customer_id = 4242)
+              Rows Removed by Filter: 1999956
+              Buffers: shared hit=14960
+```
+
+It is the plan that module 3's (customer_id, created_at) index removes, read from the log. The slow query log alone would show only `duration: 167.093 ms  statement: ...`.
+
+Per-node timing (`log_analyze` with `log_timing`) makes every statement a little slower, whether or not it is logged. In the test, 20,000 lookups took 1,950 ms with the module off and 2,175 ms with analyze and timing on, 1,891 with timing off; the run-to-run spread was as big as those differences. A common setting is a threshold of a few hundred milliseconds with `log_timing = off`; measure your own workload.
+"""
+
+[[sections]]
+heading = "What a session is waiting for"
+body = """
+When a query is slow because it is waiting, not working, the time is not in the plan. `pg_stat_activity` has the answer in two columns. In the test, session A updated a row and stayed in its transaction; session B ran an update of the same row:
+
+```
+  pid  | state               | wait_event_type | wait_event    | xact_s | blocked_by
+ 24611 | idle in transaction | Client          | ClientRead    |    1.5 | {}
+ 24613 | active              | Lock            | transactionid |    1.5 | {24611}
+```
+
+B waits on the lock for A's transaction to end, and `pg_blocking_pids(pid)` names A, which is idle: it is not running anything, it just never committed. `pg_locks` shows the other side, a lock request with `granted = false`. A `Client` / `ClientRead` wait on the blocker says the database is waiting for the application, which is where to look next. This is the stuck-transaction problem of module 31 found on a running system. A `lock_timeout` makes the waiter give up instead of queueing: here B ended with `canceling statement due to lock timeout`.
+"""
+
+[[sections]]
+heading = "Indexes nobody uses"
+body = """
+Every index costs write work and disk. `pg_stat_user_indexes` counts how often each has been scanned. On a 500,000-row test table with a primary key and three more indexes, after 300 queries on `a`:
+
+| index | scans | size |
+|---|---|---|
+| mon42_a_dup (on a) | 300 | 3,600 kB |
+| mon42_a (on a) | 0 | 3,600 kB |
+| mon42_b (on b) | 0 | 3,520 kB |
+| mon42_pkey | 0 | 11 MB |
+
+`mon42_a` and `mon42_a_dup` are the same index created twice (a common accident after a migration); the planner picked one, so the other is pure cost. `mon42_b` was never needed by the workload. The primary key has zero scans because no query looked rows up by it, but it enforces uniqueness, so scan counts do not decide whether to drop it. Before dropping anything: look at how long the counters have been running (a reset or a restart zeroes them), check any replica that serves reads, and remember reports that run once a month. Drop in a transaction on a staging copy first, because an index that backs a constraint cannot be dropped as an ordinary index.
+"""
+
+[[checks]]
+prompt = "pg_stat_statements shows one statement with 2 million calls at 0.02 ms and another with 40 calls at 2,000 ms. Which do you look at first, and why?"
+answer = "Compare total time: 2,000,000 x 0.02 ms is 40 s; 40 x 2,000 ms is 80 s. The second is the larger share, but both are candidates; in the test, the 20,000 lookups were 99% of the calls and 1.7% of the time, while 200 customer queries were 91.5%. Sort by total_exec_time, then use the buffers column and auto_explain to see why."
+[[checks]]
+prompt = "Users report that a page hangs for 30 seconds sometimes, but the slow query log shows nothing over 100 ms. Where do you look?"
+answer = "At what the session was waiting for, which is not query time: pg_stat_activity for wait_event_type and wait_event (Lock / transactionid with pg_blocking_pids pointing to an idle in transaction session, as in the test), or the application holding a transaction open. A lock_timeout and log_lock_waits would show it in the log; they were not measured on this page."
+[[checks]]
+prompt = "pg_stat_user_indexes shows idx_scan = 0 for an index on a table. Is it safe to drop it?"
+answer = "Not necessarily. The counters restart on a stats reset or a restart; the index may serve a monthly job or a replica's queries; and an index that backs a primary key or unique constraint has zero scans yet enforces uniqueness (the test table's primary key had 0 scans). Check how long the stats have been running, which constraints depend on it, and where queries run; a duplicate pair (one with 300 scans, one with 0 in the test) is the safe case."
+
+[[terms]]
+term = "pg_stat_statements"
+means = "An extension that aggregates statistics (calls, time, buffers) per normalised statement across all executions."
+section = "Which statement costs the most"
+
+[[terms]]
+term = "auto_explain"
+means = "A module that logs the execution plan of statements slower than a threshold, optionally with actual row counts and buffers."
+section = "Seeing the plan that was slow"
+
+[[terms]]
+term = "Wait event"
+means = "What a backend is waiting for (a lock, I/O, the client), shown in pg_stat_activity as wait_event_type and wait_event."
+section = "What a session is waiting for"
+
+[[terms]]
+term = "idle in transaction"
+means = "A session whose transaction is open but running nothing; it holds its locks and its snapshot until it ends."
+section = "What a session is waiting for"
+
+[[sources]]
+title = "PostgreSQL: pg_stat_statements"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgstatstatements.html"
+
+[[sources]]
+title = "PostgreSQL: auto_explain"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/auto-explain.html"
+
+[[sources]]
+title = "PostgreSQL: the cumulative statistics system (pg_stat_activity, pg_stat_user_indexes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/monitoring-stats.html"
