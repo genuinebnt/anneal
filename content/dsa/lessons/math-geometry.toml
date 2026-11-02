@@ -122,6 +122,7 @@ pitfalls = [
 
 [[technique]]
 id = "Math & Geometry:matrix-inplace"
+walk = "math-rotate"
 group = "Matrix on grids"
 signals = [
     "rotate or flip a square matrix without a second matrix",
@@ -278,6 +279,7 @@ pitfalls = [
 
 [[technique]]
 id = "Math & Geometry:fast-pow"
+walk = "math-pow"
 group = "Exponentiation and roots"
 signals = [
     "x to the power n for a huge n",

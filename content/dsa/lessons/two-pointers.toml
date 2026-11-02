@@ -13,6 +13,7 @@ groups = ["Opposite-end pointers", "Same-direction pointers (reader / writer, fa
 
 [[technique]]
 id = "Two Pointers:in-place"
+walk = "pointers-same"
 group = "String pointers"
 signals = [
     "remove or compact items inside the array, using no extra array",
@@ -37,6 +38,7 @@ pitfalls = [
 
 [[technique]]
 id = "Two Pointers:opposite"
+walk = "pointers-opposite"
 group = "String pointers"
 signals = [
     "a palindrome, or a pair that depends on both ends",
@@ -117,6 +119,7 @@ pitfalls = [
 
 [[technique]]
 id = "Two Pointers:ksum"
+walk = "pointers-opposite"
 group = "Opposite-end pointers"
 signals = [
     "find all unique pairs, triples or quadruples that sum to a target",
@@ -741,6 +744,7 @@ def num_friend_requests(ages):
 
 [[extra]]
 id = "Two Pointers:k-sum-pairs"
+walk = "pointers-opposite"
 name = "Pair up for a target: sort, then two ends"
 group = "Pointers and greedy"
 signals = [
@@ -941,6 +945,7 @@ def compressed_string(word):
 
 [[extra]]
 id = "Two Pointers:shrink-ends"
+walk = "pointers-opposite"
 name = "Shrink matching ends"
 group = "Opposite-end pointers"
 signals = [

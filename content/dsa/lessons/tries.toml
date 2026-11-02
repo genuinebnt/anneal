@@ -13,6 +13,7 @@ groups = ["Basic trie", "Wildcards and approximate matching (DFS through the tri
 
 [[technique]]
 id = "Tries:trie"
+walk = "trie-insert"
 group = "Aho-Corasick multi-pattern matching"
 signals = [
     "does this word, or any word with this prefix, exist?",

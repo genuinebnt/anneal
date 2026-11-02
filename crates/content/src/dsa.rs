@@ -214,6 +214,9 @@ pub struct Extra {
     pub template_name: Option<String>,
     #[serde(default, rename = "variant", skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Variant>,
+    /// The animation of the Walk through view, from [`IDEA_DEMOS`] (the same simulators as the Idea tab).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk: Option<String>,
     pub pitfalls: Vec<String>,
     /// Slugs of problems in the lists that use the technique (they are `lc-<slug>` in `problems.json`).
     pub examples: Vec<String>,
@@ -266,6 +269,9 @@ pub struct Lesson {
     pub template_name: Option<String>,
     #[serde(default, rename = "variant", skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Variant>,
+    /// The animation of the Walk through view, from [`IDEA_DEMOS`] (the same simulators as the Idea tab).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walk: Option<String>,
 }
 
 /// `<root>/dsa/lessons/<pattern>.toml`: the lessons of one pattern.
@@ -770,6 +776,7 @@ fn load_lessons(root: &Path, techniques: &[Technique], by_id: &BTreeMap<&str, &R
                 Some(_) if lesson.signals.is_empty() || lesson.pitfalls.is_empty() || lesson.template.trim().is_empty() => {
                     issues.push(problem("needs signals, a template and pitfalls".into()));
                 }
+                Some(_) if lesson.walk.as_deref().is_some_and(|w| !IDEA_DEMOS.contains(&w)) => issues.push(problem(format!("the walk {:?} isn't an animation the web app can draw", lesson.walk.as_deref().unwrap_or("")))),
                 Some(_) if lesson.group.as_deref().is_some_and(|g| !group_ok(g)) => issues.push(problem(format!("the group {:?} is not declared in `groups`", lesson.group.as_deref().unwrap_or("")))),
                 Some(_) if variants_ok(&lesson.template_name, &lesson.variants).is_some() => {
                     issues.push(problem(variants_ok(&lesson.template_name, &lesson.variants).unwrap_or_default()));
@@ -791,6 +798,8 @@ fn load_lessons(root: &Path, techniques: &[Technique], by_id: &BTreeMap<&str, &R
                 issues.push(problem("needs a name, signals, a template and pitfalls".into()));
             } else if extra.examples.is_empty() {
                 issues.push(problem("needs at least one example problem (use `listed` for a technique with no lesson)".into()));
+            } else if extra.walk.as_deref().is_some_and(|w| !IDEA_DEMOS.contains(&w)) {
+                issues.push(problem(format!("the walk {:?} isn't an animation the web app can draw", extra.walk.as_deref().unwrap_or(""))));
             } else if !group_ok(&extra.group) {
                 issues.push(problem(format!("the group {:?} is not declared in `groups`", extra.group)));
             } else if let Some(m) = variants_ok(&extra.template_name, &extra.variants) {

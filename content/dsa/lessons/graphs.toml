@@ -56,6 +56,7 @@ pitfalls = [
 
 [[technique]]
 id = "Graphs:flood"
+walk = "grid-islands"
 group = "Traversal"
 signals = [
     "a 2-D grid of cells",
@@ -380,6 +381,7 @@ pitfalls = [
 
 [[technique]]
 id = "Graphs:bfs-implicit"
+walk = "graph-bfs"
 group = "Graph modeling and state-space search"
 signals = [
     "fewest moves, steps or changes to get from one state to another",
@@ -472,6 +474,7 @@ def dfs_iterative(graph, start):
 
 [[extra]]
 id = "Graphs:bfs-levels"
+walk = "graph-bfs"
 name = "Breadth-first search by levels"
 group = "Traversal"
 signals = [

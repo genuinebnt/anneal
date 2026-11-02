@@ -135,6 +135,7 @@ pitfalls = [
 
 [[technique]]
 id = "Greedy:kadane"
+walk = "greedy-kadane"
 template_name = "Maximum subarray"
 signals = [
     "the best contiguous subarray (sum, product, or a circular version)",
@@ -189,6 +190,7 @@ def max_product(nums):
 
 [[technique]]
 id = "Greedy:reach"
+walk = "greedy-jump"
 group = "Jump game family"
 signals = [
     "can you get to the end when each position says how far you may jump?",

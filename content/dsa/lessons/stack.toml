@@ -45,6 +45,7 @@ pitfalls = [
 
 [[technique]]
 id = "Stack:matching"
+walk = "stack-brackets"
 group = "Matching and nesting"
 signals = [
     "brackets, tags or any open and close pairs",
@@ -173,6 +174,7 @@ pitfalls = [
 
 [[technique]]
 id = "Stack:mono-stack"
+walk = "stack-mono"
 group = "Monotonic stack"
 signals = [
     "for each item, the next greater (or smaller) item to its right or left",
@@ -293,6 +295,7 @@ pitfalls = [
 
 [[extra]]
 id = "Stack:next-greater"
+walk = "stack-mono"
 name = "Next greater element, also around a circle"
 group = "Monotonic stack"
 signals = [

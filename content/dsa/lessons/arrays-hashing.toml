@@ -87,6 +87,7 @@ pitfalls = [
 
 [[technique]]
 id = "Arrays & Hashing:complement"
+walk = "hash-complement"
 group = "Two-sum family"
 signals = [
     "find two items that add up to a target",
@@ -144,6 +145,7 @@ pitfalls = [
 
 [[technique]]
 id = "Arrays & Hashing:signature"
+walk = "hash-signature"
 group = "Grouping by canonical key"
 signals = [
     "group items that are equivalent in some sense (anagrams, same shape)",
