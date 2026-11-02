@@ -1,10 +1,18 @@
 title = "etcd and ZooKeeper"
 group = "technology"
 order = 8
-minutes = 10
+minutes = 20
 lede = "Small, strongly consistent stores replicated by consensus, used to coordinate other systems: leader election, locks with leases, configuration, service discovery and membership. Kubernetes keeps all its state in etcd; older Kafka and HBase used ZooKeeper."
 say = "The scheduler instances elect a leader through an etcd lease: whoever holds the key runs the dispatch loop, the lease expires if it dies, and every write it makes carries the lease revision as a fencing token."
-related = ["consensus-raft", "leases-and-fencing", "replication"]
+related = ["consensus-raft", "leases-and-fencing", "replication", "quorums"]
+
+summary = [
+  "etcd and ZooKeeper are **small, strongly consistent stores** run by a Raft or ZAB quorum, used by other systems for leader election, locks, service discovery and configuration.",
+  "The primitives are a **lease or session** (liveness), **ordered revisions**, **watches** and **compare-and-set transactions**; recipes are built from them.",
+  "They are for **kilobytes of critical metadata**, thousands of writes a second, not user data.",
+  "A lock held through a lease can be **wrongly held** after a pause; protect the resource with a **fencing token**.",
+  "Run **3 or 5** nodes (odd). Losing the quorum makes the service unavailable for writes, by design.",
+]
 
 [[sections]]
 heading = "What they give you"
@@ -40,6 +48,51 @@ body = """
 > When a design needs exactly one active worker or a lock that survives crashes, name etcd or ZooKeeper, a lease, and a fencing token.
 """
 
+[[sections]]
+heading = "How the quorum behaves"
+body = """
+A write goes to the leader, is appended to the log and acknowledged once a **majority** has stored it, so with three nodes one failure is tolerated and with five two are. Fewer than a majority alive means **no writes** (and, for linearizable reads, no reads): the service chooses consistency over availability, exactly what you want for leader election, where two leaders is worse than none.
+
+- **Why not four or six?** A quorum of 4 is 3, so four nodes tolerate one failure, the same as three, with more messages. Even sizes add cost without adding tolerance.
+- **Latency.** A write costs a round trip to a majority plus a disk fsync on each; across regions that is tens of milliseconds, so keep the quorum in one region or close ones. A single etcd cluster stretched across oceans is slow and fragile.
+- **Reads.** etcd reads are linearizable by default (confirmed with the leader); `serializable` reads are served by any member and can be stale but are faster. ZooKeeper reads are served by the connected server and may lag; `sync` before a read gets the latest.
+- **Membership changes** (adding or removing a node) go through the same consensus; do one at a time and keep a majority healthy.
+
+The consensus and leases pages explain the protocols; here the point is what to expect from the service.
+"""
+
+[[sections]]
+heading = "Sessions, leases and time"
+body = """
+A client proves it is alive by keeping a **session** (ZooKeeper) or **lease** (etcd) alive with heartbeats. If the heartbeats stop for the timeout (etcd leases are typically 10 to 60 seconds; ZooKeeper session timeouts between 2 and 20 times the tick time), the server deletes everything tied to it: the leader key, the lock, the service registration. Choosing the timeout trades speed of failover against false failovers when a node is merely slow (GC pause, network blip).
+
+The server decides expiry by its own clocks, but the **client** only learns it lost the lease the next time it talks to the server. During that gap a paused leader can still act. That is the fencing problem: attach a monotonically increasing number to each grant (etcd's key revision, ZooKeeper's `zxid` or the sequential node number) and make the protected store reject writes with a lower number than the highest it has seen.
+"""
+
+[[sections]]
+heading = "Where you meet them"
+body = """
+- **Kubernetes** stores all cluster state in etcd; the API server is the only client, and the control plane stalls when etcd is unhealthy.
+- **Kafka** used ZooKeeper for controller election and metadata until KRaft (its own Raft quorum) replaced it; Kafka 4.0 removed ZooKeeper entirely. Older clusters still run it.
+- **HBase, ClickHouse (Keeper), Solr, older Hadoop** use ZooKeeper for coordination; **Consul** offers service discovery and a KV store over Raft; **Chubby** is Google's original lock service whose paper started the field.
+- **Application use.** A cron job that must run on exactly one instance, a cluster-wide feature flag with instant propagation, shard-to-node assignment tables: small, rare changes that every node must agree on.
+
+If you only need a lock for efficiency (avoiding duplicate work), a row in the database with a unique constraint or a Redis `SET NX` is simpler. Reach for etcd or ZooKeeper when correctness depends on one active owner and you already run them, or when you need the watch stream.
+"""
+
+[[sections]]
+heading = "Failure modes and operations"
+body = """
+- **Disk latency kills the cluster.** Every write fsyncs; a slow or shared disk makes heartbeats miss, elects new leaders repeatedly and stalls clients. Give etcd fast, dedicated SSDs and watch `wal_fsync_duration`.
+- **Database size.** etcd keeps a history of revisions: compact it and defragment, or it hits its space quota (2 GiB by default; 8 GiB suggested maximum) and goes read-only until cleaned.
+- **Watch storms.** Thousands of clients watching the same key all wake on one change; ZooKeeper's herd effect on a lock is avoided by having each waiter watch only its predecessor sequential node rather than the lock itself.
+- **Too many small keys or writes.** A service that writes a heartbeat key every second per instance turns the quorum into a metrics database.
+- **Backups.** Snapshot regularly; restoring from snapshot creates a new cluster and loses newer writes.
+
+> [!INTERVIEW]
+> Say what is stored (metadata, not data), why it needs a quorum, how a crashed holder is detected (lease timeout), and how you stop a stale holder from corrupting data (fencing token).
+"""
+
 [[checks]]
 prompt = "In a ZooKeeper leader election, why does each candidate watch only its predecessor's node rather than the leader's?"
 answer = "If everyone watched the leader's node, its deletion would wake every candidate at once and they would all rush to check (a herd). Watching only the node just before yours means one deletion wakes one candidate, which checks whether it is now the lowest."
@@ -47,3 +100,94 @@ answer = "If everyone watched the leader's node, its deletion would wake every c
 [[checks]]
 prompt = "Why not use etcd to store per-user session data for a web app with ten million users?"
 answer = "etcd is built for small coordination data: every write goes through consensus on a leader, throughput is thousands of writes a second and the recommended total size is a few GB. Session data is large and write-heavy; use Redis or a database."
+
+[[checks]]
+prompt = "Why is a ZooKeeper ensemble of four servers no better than three?"
+answer = "A majority of four is three, so it still tolerates only one failure, the same as three nodes, while needing more messages per write. Odd sizes give the most tolerance for the cost; five tolerate two failures."
+
+[[checks]]
+prompt = "A leader holding an etcd lease pauses for 20 seconds in a garbage collection with a 10-second lease. When it wakes up, what can go wrong and what prevents the damage?"
+answer = "The lease expired and another node became leader, but the old leader may still believe it leads and write to the shared resource. Include the lease key's revision (a fencing token) in every write and have the resource reject tokens lower than the highest it has seen; the old leader's writes are then refused."
+
+[[checks]]
+prompt = "A lock built on one ZooKeeper node causes a stampede of 5,000 waiters every time it is released. How do you fix it?"
+answer = "Use the sequential-ephemeral recipe: each waiter creates /lock/n- as an ephemeral sequential node and watches only the node immediately before it. When the lock holder's node disappears, only the next waiter wakes, so each release notifies one client."
+
+[[terms]]
+term = "Quorum"
+means = "A majority of the nodes; a write must be stored by a quorum to be acknowledged."
+section = "How the quorum behaves"
+
+[[terms]]
+term = "Lease"
+means = "A grant that expires unless renewed; keys attached to it vanish with it."
+section = "Sessions, leases and time"
+
+[[terms]]
+term = "Ephemeral znode"
+means = "A ZooKeeper node that exists only as long as its client session."
+section = "What they give you"
+
+[[terms]]
+term = "Revision / zxid"
+means = "The global, increasing number that orders changes in etcd / ZooKeeper."
+section = "What they give you"
+
+[[terms]]
+term = "Watch"
+means = "A subscription to changes of a key or prefix."
+section = "What they give you"
+
+[[terms]]
+term = "Fencing token"
+means = "A number that grows with each grant, checked by the resource to refuse stale holders."
+section = "Sessions, leases and time"
+
+[[terms]]
+term = "Linearizable read"
+means = "A read that reflects every write acknowledged before it began."
+section = "How the quorum behaves"
+
+[[sources]]
+title = "etcd documentation: API guarantees"
+kind = "docs"
+url = "https://etcd.io/docs/latest/learning/api_guarantees/"
+note = "linearizable and serializable reads, revisions"
+
+[[sources]]
+title = "etcd documentation: FAQ (cluster size, disk, space quota)"
+kind = "docs"
+url = "https://etcd.io/docs/latest/faq/"
+
+[[sources]]
+title = "etcd documentation: leases and concurrency recipes"
+kind = "docs"
+url = "https://etcd.io/docs/latest/learning/api/#lease-api"
+
+[[sources]]
+title = "Apache ZooKeeper: programmer's guide"
+kind = "docs"
+url = "https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html"
+note = "znodes, sessions, watches"
+
+[[sources]]
+title = "Apache ZooKeeper: recipes and solutions"
+kind = "docs"
+url = "https://zookeeper.apache.org/doc/current/recipes.html"
+note = "locks and leader election"
+
+[[sources]]
+title = "Hunt et al.: ZooKeeper, wait-free coordination for Internet-scale systems (USENIX ATC 2010)"
+kind = "paper"
+url = "https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf"
+
+[[sources]]
+title = "Burrows: The Chubby lock service for loosely-coupled distributed systems (OSDI 2006)"
+kind = "paper"
+url = "https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/"
+
+[[sources]]
+title = "Ongaro and Ousterhout: In search of an understandable consensus algorithm (Raft, USENIX ATC 2014)"
+kind = "paper"
+url = "https://raft.github.io/raft.pdf"
+
