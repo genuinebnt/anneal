@@ -1,0 +1,32 @@
+slug = "opaque-handle-api"
+title = "A C-style API around a Rust object: opaque handles"
+mode = "write"
+level = "hard"
+stage = "build"
+order = 4
+status = "ready"
+tags = ["FFI", "opaque pointer", "Box::into_raw", "Box::from_raw", "status codes", "caller-allocated buffers", "null handling", "snprintf"]
+teaches = [
+  "The C idiom for hiding an object: `new` returns a pointer, other functions take it, `free` destroys it. In Rust that is `Box::into_raw` and `Box::from_raw`, and the ownership rule must be written in the docs.",
+  "No exceptions cross the boundary: failure is a status code, and every pointer argument is checked for null before it is used.",
+  "Returning a string with no allocation of your own: the caller supplies the buffer, you copy at most `cap - 1` bytes, always terminate, and report the full length so truncation is detectable.",
+]
+follow_up = "1) Add `counter_name_alloc` that returns a `CString` pointer for C to free, plus `counter_string_free`, and explain why the second function must exist (allocator mismatch). 2) Add a `counter_set_callback(c, fn(i64, *mut c_void), user_data)` that fires on every change; what must the docs say about threads and lifetimes? 3) Make the handle thread-safe (`Mutex<Counter>` behind the pointer) and say what C callers may now do. 4) Generate the C header with `cbindgen` mentally: write the `.h` by hand. 5) Add a generation counter to the handle to make most double-frees detectable in debug builds."
+related = ["Y2", "Y3", "C2"]
+
+[[hints]]
+kind = "approach"
+text = "`Box::into_raw(Box::new(obj))` leaks the box and returns the raw pointer: that is 'giving ownership to C'. `Box::from_raw(ptr)` rebuilds the box so it drops normally: that is `free`. Everything in between borrows through the pointer (`ptr.as_mut()` and `as_ref()` turn null into `None`)."
+
+[[hints]]
+kind = "rust"
+text = "`let Some(c) = c.as_mut() else { return ERR_NULL };` is the compact null check. `i64::checked_add` returns `None` on overflow without changing anything. For `counter_name`: `n = bytes.len().min(cap - 1)`, `std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, n)`, then `*buf.add(n) = 0`, and always return `bytes.len()`."
+
+[[hints]]
+kind = "edge"
+text = "Only write to `buf` when it is non-null and `cap > 0`; `cap - 1` underflows when `cap` is 0. A double `counter_free` is undefined behaviour in C-land and cannot be caught here: say so in the safety docs. Never let a Rust panic escape these functions: the checked arithmetic and the null checks are what keep them panic-free."
+
+[solution]
+explanation = "This is how SQLite, libgit2, OpenSSL and every Rust crate built as a `cdylib` (`ring`, `rustls-ffi`, `tantivy-ffi`) look from the outside. The `snprintf` convention (return the needed length, never write past `cap`) is the standard answer to 'who allocates the string?', and the status-code-plus-out-pointer shape is what `cbindgen` generates headers for."
+time = "O(name length) per call"
+space = "O(1) besides the object"

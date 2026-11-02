@@ -1,0 +1,32 @@
+slug = "qsort-callback"
+title = "Sort with C's qsort_r and a Rust closure"
+mode = "write"
+level = "medium"
+stage = "understand"
+order = 3
+status = "ready"
+tags = ["FFI", "callbacks", "extern \"C\" fn", "trampoline", "context pointer", "catch_unwind", "panic safety", "qsort_r"]
+teaches = [
+  "C callbacks cannot capture: the usual trick is a `void *context` argument, and a generic `extern \"C\"` trampoline that casts it back to your closure.",
+  "A Rust panic must never unwind through C frames. Catch it in the trampoline, remember it, and re-raise with `resume_unwind` once control is back in Rust.",
+  "`qsort_r` moves elements as raw bytes, so `T: Copy` and `size_of::<T>()` are what make it sound.",
+]
+follow_up = "1) Make a version for non-`Copy` types and explain why moving elements with `memcpy` while Rust still owns them is unsound if a comparison panics (double drop). 2) Use `bsearch`-style callback APIs the same way: write `binary_search_c`. 3) Replace the trampoline's `catch_unwind` with a `Drop` guard that aborts, and compare the failure behaviour. 4) Write the same wrapper for `pthread_create` and discuss what the lifetime of the closure must be. 5) Benchmark against `slice::sort_by`: why is the C version usually slower despite being 'C'?"
+related = ["Y2", "C5", "Y3"]
+
+[[hints]]
+kind = "approach"
+text = "Put the closure and a `panic: Option<Box<dyn Any + Send>>` slot in a context struct on the stack; pass its address as the `void *` argument. The trampoline is a generic `extern \"C\" fn trampoline<T>(a, b, arg)` that casts `arg` back to `&mut Ctx<T>`, casts `a` and `b` to `&T`, calls the closure inside `catch_unwind`, and maps `Ordering` to `c_int` (`order as c_int` is -1/0/1)."
+
+[[hints]]
+kind = "rust"
+text = "`catch_unwind(AssertUnwindSafe(|| (ctx.cmp)(a, b)))`. Store `Err(payload)` in `ctx.panic` and return 0; at the top of the trampoline, if `ctx.panic.is_some()` return 0 immediately. After `qsort_r` returns, `resume_unwind(payload)` re-raises it with the original payload (a plain `panic!` would replace it). Pass `trampoline::<T>` as the function pointer and `std::mem::size_of::<T>()` as the element size."
+
+[[hints]]
+kind = "edge"
+text = "Since Rust 1.81 a panic that escapes an `extern \"C\" fn` aborts the process; before that it was undefined behaviour. Either way you must catch it. After a panic the comparison function is inconsistent, so `qsort_r` may produce any order, but it still only moves whole elements, so the slice stays a permutation: that is what `T: Copy` buys."
+
+[solution]
+explanation = "This is the standard way to expose a Rust closure to a C API that has a context parameter (`pthread_create`, `sqlite3_create_function`, `curl` callbacks, GLib). The panic-parking trick is what `pyo3`, `napi-rs` and `cxx` do at every boundary. Without a context argument (plain `qsort`) there is no safe way to pass a closure: you would need a global or thread-local, which is exactly why `qsort_r` exists."
+time = "O(n log n) comparisons"
+space = "O(1) extra"
