@@ -56,3 +56,5 @@ a.rt-row:hover{border-color:var(--line);background:var(--raise)}
     .rt-row{grid-template-columns:24px minmax(0,1fr) auto !important;gap:6px 10px}
     .rt-row>:nth-child(2),.rt-row>:nth-child(4),.rt-row>:nth-child(6){display:none}
 }
+.rt-list,.fbar~.rt-list{min-width:0}
+.fbar .sortsel{display:block}

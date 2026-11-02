@@ -88,7 +88,7 @@ export function TrackPage({ slug }: { slug: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = document.activeElement as HTMLElement | null;
+      const el = e.target as HTMLElement | null; // the element the key went to, not the focus now: an input's own Escape blurs it first
       const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       const rows = shownRef.current;
