@@ -1,0 +1,32 @@
+slug = "blocking-queue"
+title = "A bounded blocking queue with Condvar"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["Condvar", "Mutex", "wait loop", "wait_timeout", "close semantics"]
+teaches = [
+  "Wait in a `while` loop on the condition, never an `if`: wake-ups can be spurious or stolen.",
+  "Two condition variables (not empty, not full) over one mutex, and `notify_all` when the state change is for everyone (close).",
+  "A total timeout across wake-ups: compute a deadline once, wait for the time left.",
+]
+follow_up = "1) Why can `notify_one` be wrong here if producers and consumers shared a single condvar? 2) What would `Mutex` poisoning do to every waiter if a consumer panics while holding the lock, and how would you handle it? 3) Why must `drop` of the last `Arc` happen after `close` for a clean shutdown, and how does `std::sync::mpsc` signal the same thing? 4) Replace the mutex with `parking_lot`: what changes (no poisoning, fair unlock)? 5) How would you add priorities (a second queue, or a `BinaryHeap`) without starving low-priority items?"
+related = ["C2", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "One mutex around `{ items, cap, closed }`, two condvars: `not_empty` (consumers wait on it) and `not_full` (producers wait on it). Every wait is `while <cannot proceed> && !closed { guard = cv.wait(guard)? }`."
+
+[[hints]]
+kind = "rust"
+text = "`Condvar::wait` takes the guard and returns it: `s = cv.wait(s).unwrap()`. For the timeout compute `deadline = Instant::now() + timeout` once, loop, and wait `deadline - now` with `wait_timeout` (or use `wait_timeout_while`)."
+
+[[hints]]
+kind = "edge"
+text = "`close` must `notify_all` on both condvars: waiters of both kinds have to re-check `closed`. After taking an item, notify the *other* side that its condition may now hold."
+
+[solution]
+explanation = "A condition variable carries no state: the state is the data under the mutex, and `wait` only means 'something changed, look again'. That is why the loop re-checks the condition after every wake-up (spurious wake-ups happen, and with several consumers another thread may take the item first). The deadline in `pop_timeout` is computed once, otherwise every wake-up would restart the full timeout."
+time = "O(1) per operation"
+space = "O(capacity)"
