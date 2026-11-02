@@ -1,0 +1,141 @@
+title = "Partitioning: what it speeds up and what it only moves"
+group = "sql-scale"
+order = 37
+minutes = 14
+lede = "Declarative partitioning splits one big table into many smaller ones by a key, usually time. It is often proposed as a speed-up for big tables. This page measures what it does to queries (less than people expect when an index exists, a lot when it lets Postgres skip most of the data), what breaks the skipping, what it costs (one extra index scan per partition, a primary key that must contain the partition key) and what it is genuinely good at: removing old data without a DELETE."
+say = "On 2,400,000 events over 24 months, a one-month aggregate (101,918 rows) read 1,033 buffers through the index in 31 ms on the single table and 650 buffers in 15 ms on the partitioned one, which scanned only the March partition (the other 23 were pruned). A one-day query was the same either way: 37 buffers against 33. A lookup by device, which is not the partition key, read 2,405 buffers on the single table and 2,448 on the partitioned one, which probed all 24 partitions (3.2 ms against 2.5). Hiding the key in date_trunc('month', ts) defeated pruning: 15,306 buffers, 343 ms. Removing the oldest month with DELETE took 102 ms and 11 MB of WAL and left the table at 138 MB; detaching and dropping its partition took 15 ms and 143 kB, and the 23 remaining partitions total 115 MB."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** two tables with the same 2,400,000 rows: `ev_f` (one table) and `ev_p` (`PARTITION BY RANGE (ts)`, 24 monthly partitions from 2024-01 to 2025-12, about 100,000 rows each). Columns `id`, `ts`, `device` (1,000 values), `val`. Both have indexes on `ts` and on `device`. `ev_f` is 206 MB with indexes, the partitions 189 MB in total. Postgres 18.6; `max_parallel_workers_per_gather = 0`.",
+  "**Pruning:** when the query's condition on the partition key allows it, the planner leaves out partitions that cannot match; the plan shows only the partitions that are read. One month (`ts` in March 2025): single table, index scan, **1,033 buffers, 31 ms**; partitioned, a scan of one partition, **650 buffers, 15 ms**. The saving is real but modest, because the index on the single table already limited the read to that month.",
+  "**A narrow query gains nothing:** one day (about 3,300 rows): single table **37 buffers**, partitioned **33**. If an index already makes the query small, partitioning has little left to remove.",
+  "**A condition not on the key:** `device = 17` (2,400 rows). Single table: one bitmap scan, **2,405 buffers, 2.5 ms**. Partitioned: nothing can be pruned, so the plan has 24 index scans under an Append, **2,448 buffers, 3.2 ms**. Every query without the key pays for all the partitions; with 1,000 partitions that would be 1,000 index probes (not measured here).",
+  "**Defeating pruning:** `WHERE date_trunc('month', ts) = '2025-03-01'` means the same thing as the March condition, but the planner cannot reason from a function of the key to a partition, so all 24 partitions are read: **15,306 buffers, 343 ms**, against 650 and 15 ms. Write conditions on the bare key column.",
+  "**Retention:** removing the oldest month. `DELETE` of its 101,917 rows: **102 ms, 11 MB of WAL**, and the table stays **138 MB** (the dead rows are reclaimed for reuse by vacuum, not returned to the system). `ALTER TABLE ... DETACH PARTITION` then `DROP TABLE`: **2.9 ms + 11.7 ms, 143 kB of WAL**, and the space is gone at once; the remaining 23 partitions total 115 MB. This is the main reason to partition a table that holds a time window.",
+  "**The primary key:** `ALTER TABLE ev_p ADD PRIMARY KEY (id)` failed with `unique constraint on partitioned table must include all partitioning columns`. A unique index is checked partition by partition, so it must contain `ts`; `PRIMARY KEY (id, ts)` worked (869 ms on the 2,300,000 rows left). Other tables cannot have a foreign key to `id` alone.",
+  "**Not measured here:** partition-wise joins and aggregates (settings that are off by default), planning time with hundreds or thousands of partitions, and the effect of partitioning on vacuum duration. The manual says planning time and memory grow with the number of partitions; check the manual's partitioning chapter for its current guidance on how many partitions to use.",
+]
+
+[[sections]]
+heading = "One table or twenty-four"
+body = """
+A partitioned table has no rows of its own: it is a definition (`PARTITION BY RANGE (ts)`) and a set of child tables, each with a range of the key (`FOR VALUES FROM ('2025-03-01') TO ('2025-04-01')`). Inserts are routed to the right child; queries see the parent. Each partition has its own heap and its own copy of every index created on the parent. The test table `ev_f` holds 2,400,000 events spread over two years; `ev_p` is the same rows in 24 monthly partitions.
+
+One month of data, summed:
+
+{b('flat-month')}
+
+The index on `ts` finds the 101,918 March rows in 1,033 buffers. The partitioned table:
+
+{b('part-month')}
+
+Only `ev_p_2025_03` is mentioned in the plan; the planner proved from the bounds that the other 23 cannot contain a March row (they are pruned) and read the partition with a sequential scan, 650 buffers, because a whole month is most of that small table. The saving over the single table is a third of the reads and half the time. Both numbers come from a query that returns 4% of the table.
+"""
+
+[[sections]]
+heading = "When partitioning does nothing for a query"
+body = """
+Take a narrow query, one day in the same month:
+
+{b('flat-day')}
+
+{b('part-day')}
+
+37 buffers against 33, 0.62 ms against 0.58. An index on a time column already reads just the day, so there is little left for partitioning to skip. The usual reasoning 'the table is big, so split it' skips the question of whether an index already does the job. Measure the query's buffers before and after on your own data.
+
+A query that does not mention the partition key is worse off:
+
+{b('flat-device')}
+
+{b('part-device')}
+
+Single table: one bitmap index scan, 2,405 buffers. Partitioned: 24 of them under an Append, 2,448 buffers and a slightly longer run. Nothing is pruned, and each partition adds its own index descent and plan node. Here the cost is a few buffers; with a thousand partitions it would be a thousand descents, which was not measured on this page.
+"""
+
+[[sections]]
+heading = "Keep the key bare"
+body = """
+Pruning works by comparing the query's condition on the key column with the partition bounds. Wrapping the column in a function hides that comparison:
+
+{b('part-func')}
+
+The condition asks for March, and the answer is the same rows, but the planner cannot turn `date_trunc('month', ts) = ...` into bounds on `ts`, so all 24 partitions are scanned: 15,306 buffers and 343 ms, against 650 and 15 ms with `ts >= '2025-03-01' AND ts < '2025-04-01'`. This is the same rule as module 4 for indexes on plain columns. Check the plan for a list of partitions as long as the table's partition count.
+"""
+
+[[sections]]
+heading = "What partitioning is for: removing old data"
+body = """
+Deleting the oldest month from the single table:
+
+```
+DELETE FROM ev_f WHERE ts >= '2024-01-01' AND ts < '2024-02-01';   -- 101,917 rows, 102 ms, 11 MB of WAL
+```
+
+The table stays 138 MB: the space is marked reusable and is returned to the operating system only by a rewrite (module 24). The partitioned version:
+
+```
+ALTER TABLE ev_p DETACH PARTITION ev_p_2024_01;   -- 2.9 ms
+DROP TABLE ev_p_2024_01;                          -- 11.7 ms, 143 kB of WAL in total
+```
+
+The file is gone, with no dead rows, no vacuum work and almost no WAL. The 23 remaining partitions total 115 MB. For a log, metrics or events table with a retention window this is the reason to partition, and it holds even when no query speeds up. The delete was a single run, not a median, and on a table with fewer rows per month the gap is smaller in absolute terms.
+
+The price: a primary key (or any unique index) has to include the partition key, because uniqueness is enforced inside each partition:
+
+```
+ALTER TABLE ev_p ADD PRIMARY KEY (id);
+ERROR:  unique constraint on partitioned table must include all partitioning columns
+DETAIL:  PRIMARY KEY constraint on table "ev_p" lacks column "ts" which is part of the partition key.
+```
+
+`PRIMARY KEY (id, ts)` worked. It means the database no longer guarantees that `id` is unique across the table, only that `(id, ts)` is.
+"""
+
+[[checks]]
+prompt = "A 500-million-row table has a b-tree on created_at and the dashboards query one hour at a time. A colleague proposes monthly partitions 'to make the queries faster'. What do you measure first, and what is the better reason to partition?"
+answer = "Measure the existing hour query: with an index on the time column it should read a few buffers, and the test showed 37 against 33 for a one-day query, so partitioning would change little. The stronger reason is retention: dropping an old partition took 15 ms and 143 kB of WAL against 102 ms and 11 MB for the DELETE, and returns the space. Also check which other queries lack the time condition, because they pay for all partitions."
+
+[[checks]]
+prompt = "After partitioning by month, a report with WHERE date_trunc('month', created_at) = '2025-03-01' got slower than before. Why, and how do you fix it?"
+answer = "The function of the key column prevents pruning, so every partition is scanned (15,306 buffers, 343 ms in the test against 650 buffers and 15 ms). Rewrite it as created_at >= '2025-03-01' AND created_at < '2025-04-01', which the planner can compare with the partition bounds."
+
+[[checks]]
+prompt = "You partition orders by created_at and the migration fails on the PRIMARY KEY (id). What are the options and what do you give up?"
+answer = "A unique constraint on a partitioned table must contain the partition key, so the key becomes (id, created_at). id alone is then no longer enforced unique by the database, and a foreign key from another table to id alone is not possible. Either accept that (ids from a sequence are unique in practice), partition by something already in the key, or do not partition this table."
+
+[[terms]]
+term = "Partition pruning"
+means = "The planner skipping the partitions whose bounds show they cannot contain rows matching the query's condition on the partition key."
+section = "One table or twenty-four"
+
+[[terms]]
+term = "Declarative partitioning"
+means = "Postgres syntax (PARTITION BY RANGE, LIST or HASH) that defines a table as a set of child tables, each holding a part of the key space, with inserts routed automatically."
+section = "One table or twenty-four"
+
+[[terms]]
+term = "Detach partition"
+means = "ALTER TABLE ... DETACH PARTITION: turns a partition into an ordinary table, which can then be dropped or archived without scanning or deleting rows."
+section = "What partitioning is for: removing old data"
+
+[[terms]]
+term = "Append"
+means = "The plan node that runs each of its children (here the partitions that survived pruning) and returns their rows in turn."
+section = "When partitioning does nothing for a query"
+
+[[sources]]
+title = "PostgreSQL: table partitioning"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-partitioning.html"
+
+[[sources]]
+title = "PostgreSQL: partition pruning (EXPLAIN and the planner)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-partitioning.html#DDL-PARTITION-PRUNING"
+
+[[sources]]
+title = "PostgreSQL: ALTER TABLE (DETACH PARTITION)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-altertable.html"
