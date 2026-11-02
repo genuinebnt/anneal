@@ -1,0 +1,223 @@
+title = "Access and filter conditions"
+group = "sql-plans"
+order = 9
+minutes = 18
+lede = "Every condition in a WHERE clause is applied somewhere: some steer the index to the right place, some are checked on entries as the index is walked, and the rest are checked on rows after the table was read. The plan prints which is which, and one number, the rows removed by a filter, tells you how much work was thrown away on the way."
+say = "A condition that shapes the index walk (Index Cond) costs only the pages it needs; a condition checked after the row is fetched (Filter) costs a table visit for every row it rejects, and Rows Removed by Filter counts them."
+related = ["indexes", "postgres"]
+
+summary = [
+  "`Index Cond` conditions steer the index walk; `Filter` conditions run on rows **after** they were fetched; `Recheck Cond` repeats the index test on a bitmap's rows.",
+  "The same lookup cost **46 pages** with the status condition as a filter and **4** once it was part of the index.",
+  "`Rows Removed by Filter` is the waste meter: a plan that removes 2 million rows to return 1 is a sequential scan asking for an index.",
+  "`Index Searches` (Postgres 18) counts descents of the index: 1 for a range, 3 for an `IN` list of three scattered values.",
+  "A bitmap that outgrows `work_mem` turns **lossy** (whole pages instead of rows) and `Rows Removed by Index Recheck` counts the rows rechecked, 297,696 in the example.",
+]
+
+[[sections]]
+heading = "Three places a condition can be applied"
+body = """
+When a plan node reads a table, each condition of the `WHERE` clause lands in one of three places, and the plan prints each in its own line:
+
+- **`Index Cond`** (on an Index Scan, Index Only Scan or Bitmap Index Scan): the condition is part of the index walk. A condition on the leading columns picks where to start and stop; conditions on later columns are checked against index entries as the walk passes them. Nothing is fetched from the table for an entry the index rejects.
+- **`Filter`**: the condition is checked on the *row*, after it was fetched. Every row it rejects has already cost a table page (unless that page was already read for another row).
+- **`Recheck Cond`** (Bitmap Heap Scan only): the index condition repeated on the rows of the pages the bitmap named, needed when the bitmap is lossy (the last section).
+
+Take a customer's orders, with an index on `(customer_id, created_at)` and a question about refunded orders under 10 dollars:
+
+```plan id=m9-fetch-then-filter setup=orders-customer-created
+SELECT id FROM orders WHERE customer_id = 4242 AND status = 'refunded' AND total_cents < 1000;
+```
+
+The index can only be searched by `customer_id` (the other two columns are not in it). It returns 44 entries; Postgres fetches all 44 rows (43 table pages, 46 pages in total) and **then** applies the filter, which rejects all 44 (`Rows Removed by Filter: 44`) and returns none. Forty-three table pages were read to learn that nothing matches.
+
+If the condition is part of the index, the index rejects entries before any table page is read. With an index on `(customer_id, status)` and the query on those two columns:
+
+```plan id=m9-condition-in-index setup=orders-customer-status,no-bitmap
+SELECT id FROM orders WHERE customer_id = 4242 AND status = 'refunded';
+```
+
+`Index Cond` holds both conditions and the plan reads **4 pages** for the one matching order. (Bitmap scans are switched off for this plan: with so few rows an index scan and a bitmap scan cost almost the same, and the planner's pick depends on the sampled statistics, which differ a little from one `ANALYZE` to the next. The conditions in `Index Cond` are the same either way.) The answer to "which orders were refunded for customer 4242" cost 4 pages instead of 46 because the status test moved from the table to the index. This is the point of module 3's column-order rules, from the other side: a column you filter by often belongs in the index.
+
+> [!NOTE]
+> Postgres puts every condition that *can* use an index column into `Index Cond`, whether or not it narrows the walk. A condition on the second column after a *range* on the first is listed in `Index Cond` but only discards entries, it does not skip ahead (module 5). So `Index Cond` tells you what the index checks; the buffer count tells you how much it had to walk to do it.
+"""
+
+[[sections]]
+heading = "Rows Removed by Filter: the waste meter"
+body = """
+Whenever a node has a `Filter`, the plan adds `Rows Removed by Filter: N`. It is the cleanest signal in a plan that work is being thrown away. Compare it with the rows the node returned:
+
+```plan id=m9-seq-filter
+SELECT id FROM orders WHERE customer_id = 4242 AND status = 'refunded';
+```
+
+With no index the planner reads the whole table, three workers sharing it. Each worker removed 666,666 rows, and together they returned one: about **2 million rows read and rejected to return a single order**, 14,960 pages. (Remember from module 8 that the numbers are per loop: 666,666 removed per worker, three workers.) That ratio is what an index is for.
+
+A practical rule when scanning a plan: for every node, divide `Rows Removed by Filter` (times loops) by the rows returned. A ratio near 0 means the node did useful work. A ratio in the thousands is a candidate for an index that includes the filtered column. A node that removes a *few* rows (like the 44 above) is not worth a new index by itself; the cost is the table pages it reads, and the plan shows them.
+
+What counts as waste depends on the plan:
+
+| Node | The waste shows up as |
+|---|---|
+| Seq Scan | `Rows Removed by Filter`, and pages read for rows nobody wanted |
+| Index Scan with a Filter | `Rows Removed by Filter`: table pages fetched for entries the index could not reject |
+| Index Scan, conditions in `Index Cond` | index pages walked per row returned (compare `Buffers` with `rows`) |
+| Bitmap Heap Scan | `Rows Removed by Filter` and `Rows Removed by Index Recheck` |
+| Index Only Scan | `Heap Fetches` (module 21): visits to the table the visibility map could not skip |
+"""
+
+[[sections]]
+heading = "Index Searches: how many descents"
+body = """
+Postgres 18 added one line to every index scan: **`Index Searches: N`**, the number of times the scan descended the B-tree from the root. A range or an equality is one search. A list of values is one search *per value* when the values are far apart, because each one needs its own descent:
+
+```plan id=m9-in-list setup=orders-customer-created
+SELECT id FROM orders WHERE customer_id IN (10, 20000, 40000) AND created_at >= '2026-01-01';
+```
+
+`Index Searches: 3` for three customers whose entries sit in three different places of the index, 9 index pages (3 per search). The same `IN` with three *adjacent* ids (4242, 4243, 4244) showed `Index Searches: 1` when I measured it, because one descent reaches the first and the entries of the others are on the same page.
+
+This line answers a question the buffers alone could not: whether a lot of index pages were read because the walk was **long** (one search, many pages: a wide range) or because there were **many descents** (many searches, few pages each: a long `IN` list, or a skip scan over the distinct values of a leading column, module 3). The two have different cures: for the first, narrow the range or add a column; for the second, send fewer values or give the planner an index that does not need to skip.
+"""
+
+[[sections]]
+heading = "Lossy bitmaps and Rows Removed by Index Recheck"
+body = """
+A bitmap heap scan (module 5) collects the matching positions into a bitmap in memory, as `(page, row)` pairs. The memory it may use is `work_mem`. When there are more matches than the bitmap can hold as exact row positions, Postgres keeps only the **page** for some of them. Those pages are called **lossy**: when the scan visits one, it no longer knows which rows matched, so it rechecks the index condition on every row of the page. Rows that fail are counted in `Rows Removed by Index Recheck`.
+
+To see it, shrink `work_mem` to 64 kB and ask for three days of orders:
+
+```plan id=m9-lossy setup=orders-created-day,small-work-mem
+SELECT id FROM orders WHERE created_at >= '2026-03-01' AND created_at < '2026-03-04';
+```
+
+`Heap Blocks: exact=198 lossy=2366`: of the pages visited, 2,366 were lossy, and the scan rechecked and **rejected 297,696 rows** to return 10,060. The query still gives the right answer, and here the pages are in cache so it ran in 41 ms, but the recheck is CPU work proportional to the rows on all those pages. Two things to remember:
+
+- Lossy blocks are not an error. They are the bitmap trading precision for memory. The cure is more `work_mem` for that query, or fewer matching rows; the Postgres default of 4 MB holds the three days exactly (the same query with the default setting showed `Heap Blocks: exact=7371` and no lossy blocks).
+- When `Heap Blocks` shows `lossy` and `Rows Removed by Index Recheck` is large, the plan's rows-per-page assumptions are the issue, not the index.
+
+Parallel bitmap scans split the work: the plan prints each worker's own `Heap Blocks` line below the totals.
+"""
+
+[[sections]]
+heading = "The same distinction in other engines"
+body = """
+| Engine | Where to see "index condition" vs "filter" |
+|---|---|
+| MySQL | `EXPLAIN` marks `Using index condition` (the condition is evaluated on the index entry, before the row is fetched; index condition pushdown) and `Using where` (the condition is evaluated on the row); the `key_len` column tells how many leading columns of the index narrow the search. From the manual; not run here |
+| SQLite | `EXPLAIN QUERY PLAN` lists the narrowing columns: `SEARCH o USING INDEX oc (customer_id=?)` is an index search on `customer_id`; a plan with no parenthesised columns, such as `SCAN o`, reads everything. Measured on 3.53.1. It does not print rows removed |
+| ClickHouse, DuckDB | A condition on the sort key (ClickHouse) or on min/max statistics (DuckDB) skips whole blocks (the `Granules` or `row groups` counts in their `EXPLAIN` output are the equivalent of buffers); any other condition is applied row by row as the block is read |
+
+In every engine the useful question is the same: how many rows or blocks did the engine **look at** per row it **returned**? Postgres is unusually direct about it; in others you compare an estimate of rows examined with the rows returned.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+The waste meter can be automated. In a test that runs a query on realistic data (module 41 makes this a habit), look for nodes whose removed rows dwarf their returned rows, from `EXPLAIN (ANALYZE, FORMAT JSON)`:
+
+```rust title=wasteful_nodes.rs
+use serde_json::Value;
+
+/// (node type, rows removed by filter, rows returned) for every node that discarded more than it kept
+fn wasteful(node: &Value, out: &mut Vec<(String, f64, f64)>) {
+    let loops = node["Actual Loops"].as_f64().unwrap_or(1.0);
+    let removed = node["Rows Removed by Filter"].as_f64().unwrap_or(0.0) * loops;
+    let kept = node["Actual Rows"].as_f64().unwrap_or(0.0) * loops;
+    if removed > 1000.0 && removed > 100.0 * kept.max(1.0) {
+        out.push((node["Node Type"].as_str().unwrap_or("?").to_string(), removed, kept));
+    }
+    for child in node["Plans"].as_array().into_iter().flatten() {
+        wasteful(child, out);
+    }
+}
+```
+
+The `Actual Rows` and `Rows Removed by Filter` in the JSON are per loop, as in the text, so the helper multiplies by `Actual Loops`. On the sequential scan above it reports about 2,000,000 removed against 1 kept; on the 44-row case it stays quiet, which is the right call.
+
+By hand, the quick check for any slow query is two greps in the plan: `Rows Removed` and `Buffers`. A big number in the first tells you to add a column to an index; a big number in the second with no removed rows tells you the index walk itself is long.
+"""
+
+[[checks]]
+prompt = "A query returns 3 rows but its plan shows Rows Removed by Filter: 480,000 on an Index Scan. What does that tell you, and what would you try?"
+answer = "The index narrowed the search to 480,003 rows, then fetched each row from the table and rejected 480,000 by a condition the index does not contain. That is 480,000 table visits for 3 rows. Try adding the filtered column to the index (after the equality columns), so the index rejects them before the table is read, or a partial index if the filter is a fixed condition."
+
+[[checks]]
+prompt = "Two plans for the same query both show Index Cond with all three conditions. One reads 4 index pages and the other 3,000. How can that be, and where do you look to tell?"
+answer = "Index Cond lists every condition the index can check, but only conditions on the leading columns (equalities, then one range) narrow the walk. In the 3,000-page plan a condition sits on a column after a range, or the leading column is not constrained at all, so the scan walks a long stretch of entries and discards most of them. The Buffers line and the rows returned show it; the column order of the index explains it (modules 3 and 5)."
+
+[[checks]]
+prompt = "What does 'Index Searches: 3' say, and why can an IN list of 3 values give 1 in one query and 3 in another?"
+answer = "The scan descended the index from the root three times. A search is one descent; the values of an IN list are looked up in order, and a value whose entries are on the same leaf page as the previous one's needs no new descent, so adjacent values can be one search while scattered values need one each. The count separates a long walk (one search, many pages) from many descents."
+
+[[checks]]
+prompt = "A Parallel Bitmap Heap Scan shows 'Heap Blocks: exact=198 lossy=2366' and 'Rows Removed by Index Recheck: 297696'. Is something broken, and what is the cheapest fix?"
+answer = "Nothing is broken: the bitmap did not fit in work_mem, so Postgres kept only page numbers for many matches, and has to recheck the condition on every row of those pages. The cheapest fix is more work_mem for that query (SET LOCAL work_mem), which makes the bitmap exact; reducing the number of matching rows also works. It is a cost to know about, not an error."
+
+[[terms]]
+term = "Index Cond"
+means = "A condition the index checks while it is walked; only leading-column conditions narrow the walk."
+section = "Three places a condition can be applied"
+
+[[terms]]
+term = "Filter"
+means = "A condition checked on rows after they were fetched from the table."
+section = "Three places a condition can be applied"
+
+[[terms]]
+term = "Rows Removed by Filter"
+means = "How many rows a node fetched and then rejected by its Filter, per loop; the waste meter."
+section = "Rows Removed by Filter: the waste meter"
+
+[[terms]]
+term = "Index Searches"
+means = "How many times an index scan descended the B-tree from the root (Postgres 18)."
+section = "Index Searches: how many descents"
+
+[[terms]]
+term = "Lossy bitmap"
+means = "A bitmap that keeps only page numbers for some matches because it outgrew work_mem; those pages are rechecked row by row."
+section = "Lossy bitmaps and Rows Removed by Index Recheck"
+
+[[terms]]
+term = "Recheck Cond"
+means = "The index condition repeated on the rows of a bitmap heap scan's pages."
+section = "Lossy bitmaps and Rows Removed by Index Recheck"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
+
+[[sources]]
+title = "PostgreSQL: multicolumn indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+
+[[sources]]
+title = "PostgreSQL: resource consumption (work_mem)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-resource.html#GUC-WORK-MEM"
+
+[[sources]]
+title = "PostgreSQL 18 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/18/release-18.html"
+note = "index search counts in EXPLAIN, skip scan"
+
+[[sources]]
+title = "MySQL: EXPLAIN output format (Extra column)"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/explain-output.html"
+
+[[sources]]
+title = "SQLite: EXPLAIN QUERY PLAN"
+kind = "docs"
+url = "https://www.sqlite.org/eqp.html"
+
+[[sources]]
+title = "Use The Index, Luke: index access and filter predicates"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/explain-plan/postgresql/filter-predicates"
+note = "further reading"

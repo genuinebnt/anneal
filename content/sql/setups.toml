@@ -134,3 +134,12 @@ session = "SET work_mem = '1MB'; SET max_parallel_workers_per_gather = 0;"
 [[setup]]
 id = "sort-big-mem"
 session = "SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0;"
+
+[[setup]]
+id = "small-work-mem"
+session = "SET work_mem = '64kB';"
+
+# for plans where two scans cost nearly the same, so which one wins depends on the sampled statistics
+[[setup]]
+id = "no-bitmap"
+session = "SET enable_bitmapscan = off;"
