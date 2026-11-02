@@ -1,0 +1,167 @@
+title = "Trigrams: LIKE '%x%', typos and nearest names"
+group = "sql-special"
+order = 34
+minutes = 14
+lede = "A b-tree can answer LIKE 'abc%' because the matches are next to each other in sorted order; LIKE '%abc%' has no such order to walk, so it reads every row. The pg_trgm extension indexes every three-letter piece of each string, which turns the substring search, the case-insensitive one and the 'close to this spelling' search into index lookups. This page measures it on a million titles, shows the pattern lengths where it stops working, and puts the price on each of the three index types."
+say = "On 1,000,000 titles a search for the 5-letter fragment jfpnf (975 rows) read the whole table, 7,360 buffers and about 120 ms, with or without a b-tree on the column; a pg_trgm GIN index read 919 buffers in 1.2 ms (the same for ILIKE), and a 3-letter fragment 1,515. A 2-letter fragment (54,354 rows) is below one trigram and ran the sequential scan again. A prefix search on a text_pattern_ops b-tree read 6 buffers. Nearest-title ordering took 4,582 ms as a scan and 563 ms with a GiST trigram index. The costs: GIN 63 MB and 5.1 s to build, GiST 136 MB and 15.2 s, b-tree 42 MB and 0.65 s; inserting 50,000 rows took 82 ms with only the primary key, 357 with the b-tree, 768 with GIN and 1,012 with GiST."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a throwaway table `tg_t` of 1,000,000 titles, each three invented words (5 to 9 letters, from a skewed vocabulary of 2,000, e.g. `ojfpnfk edkiinnjk iphlpna`), heap 58 MB, primary key 21 MB. `CREATE EXTENSION pg_trgm` (built from the contrib directory of the Postgres source, since the build here has no packaged extensions). Postgres 18.6; `max_parallel_workers_per_gather = 0`.",
+  "**What a trigram is:** a three-character sequence of a word, with two spaces in front and one behind: `show_trgm('cat')` is `{\"  c\",\" ca\",\"at \",cat}`. A string is the set of its trigrams; `LIKE '%jfpnf%'` needs the trigrams `jfp`, `fpn` and `pnf` to be present, which an index of trigram to rows can answer, and the rows it returns are then checked against the real pattern.",
+  "**Substring search:** `title LIKE '%jfpnf%'` (975 rows): sequential scan **7,360 buffers, 120 ms**. A b-tree with `text_pattern_ops` does not help (the same scan: the pattern starts with `%`). With `gin (title gin_trgm_ops)`: **919 buffers (13 in the index, 906 table pages), 1.2 ms**. `ILIKE '%JFPNF%'` used the same index, 919 buffers, 1.7 ms; the b-tree cannot do case-insensitive matching at all.",
+  "**Where it stops:** a 3-letter fragment `'%ghk%'` (1,716 rows): **1,515 buffers, 2.0 ms**. A 2-letter fragment `'%gh%'` (54,354 rows) contains no complete trigram, so the index cannot narrow it, and the plan was the **sequential scan, 7,360 buffers, 115 ms**. A short pattern also matches so many rows that nothing would help. Patterns of fewer than three characters need a different design.",
+  "**The b-tree still wins at its own job:** the prefix `title LIKE 'ojfpn%'` (340 rows) on a `text_pattern_ops` b-tree: an `Index Only Scan`, **6 buffers, 0.08 ms**, far under any trigram plan. Use `text_pattern_ops` (or the `C` collation) for prefix searches and trigrams for the rest; both indexes can coexist.",
+  "**Typos:** `similarity(a, b)` is the share of trigrams two strings have in common (`similarity('postgres', 'postgrse')` = 0.5, `('postgres', 'mysql')` = 0). The operator `%` is true above `pg_trgm.similarity_threshold` (0.3 by default). `title % 'ojfpnfk edkiinnjx'` (a title with its last letter changed) on the GIN index: **1,810 buffers, about 20 to 28 ms**, 1,848 candidates from the index, 29 rows above the threshold after the recheck, best five by similarity.",
+  "**Nearest first:** `ORDER BY title <-> 'ojfpnfk edkiinnjx' LIMIT 5` (the distance operator, 1 minus similarity). With no index: a scan that computes a distance for every row, **4,582 ms**. With `gist (title gist_trgm_ops)`: **563 ms**, an `Index Scan` that walks the tree in distance order (17,469 buffers). GIN cannot return rows in distance order; only GiST can.",
+  "**Cost:** index sizes: b-tree **42 MB**, GIN **63 MB**, GiST **136 MB** (the heap is 58 MB); builds: b-tree 0.65 s, GIN 5.1 s, GiST 15.2 s (single runs). Inserting 50,000 existing titles again (median of 3, after a checkpoint): primary key only **82 ms, 7.7 MB WAL**; plus b-tree **357 ms, 51.8 MB**; plus GIN **768 ms, 62.9 MB**; plus GiST **1,012 ms, 27.5 MB**.",
+]
+
+[[sections]]
+heading = "Why % at the front defeats a b-tree"
+body = """
+A b-tree keeps strings in sorted order. `LIKE 'ojfpn%'` asks for a contiguous range of that order (everything from `ojfpn` up to just below `ojfpo`), so the index walks one leaf run. `LIKE '%jfpnf%'` asks for strings containing `jfpnf` anywhere; they are scattered through the whole order, and there is nothing to seek. Module 4 showed a related limit, functions on a column; this one is about the shape of the pattern.
+
+The table has 1,000,000 titles. With no useful index:
+
+```plan id=m34-seq setup=tg-t,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE '%jfpnf%';
+```
+
+7,360 buffers, 120 ms, 975 rows. A b-tree on the column, built with `text_pattern_ops` so that it can serve `LIKE` at all (the default operator class only helps `LIKE` in the `C` collation), changes nothing for this pattern:
+
+```plan id=m34-btree-infix setup=tg-t,tg-btree,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE '%jfpnf%';
+```
+
+The same sequential scan. For the anchored pattern it is the right tool:
+
+```plan id=m34-btree-prefix setup=tg-t,tg-btree,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE 'ojfpn%';
+```
+
+An `Index Only Scan`, 6 buffers, 0.08 ms for 340 rows. Keep this index if you search by prefix.
+"""
+
+[[sections]]
+heading = "Trigrams: the index that finds pieces"
+body = """
+`pg_trgm` splits a string into its trigrams: each word is padded with two spaces in front and one behind, and every three consecutive characters become one key. `show_trgm('cat')` is `{"  c"," ca","at ",cat}`; `show_trgm('hello world')` has twelve. A GIN index on the trigrams (`USING gin (title gin_trgm_ops)`, module 32 with trigrams as the keys) lets Postgres answer `LIKE '%jfpnf%'` by requiring the string's trigrams `jfp`, `fpn` and `pnf`, intersecting their posting lists and then checking the surviving rows against the real pattern:
+
+```plan id=m34-gin-five setup=tg-t,tg-gin,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE '%jfpnf%';
+```
+
+919 buffers: 13 in the index and 906 table pages for the 975 rows, 1.2 ms against 120. The `Recheck Cond` is the real `LIKE`, because the trigrams being present is necessary but not sufficient. The index also serves `ILIKE`, `~` and `~*` (regular expressions, as long as they contain literal runs of three characters), which a b-tree never can:
+
+```plan id=m34-gin-ilike setup=tg-t,tg-gin,no-parallel
+SELECT count(*) FROM tg_t WHERE title ILIKE '%JFPNF%';
+```
+
+Same 919 buffers. The shorter the fragment, the fewer trigrams it contributes and the more rows they match:
+
+```plan id=m34-gin-three setup=tg-t,tg-gin,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE '%ghk%';
+```
+
+One trigram, 1,716 rows, 1,515 buffers. And below three characters there is no trigram to look up:
+
+```plan id=m34-gin-two setup=tg-t,tg-gin,no-parallel
+SELECT count(*) FROM tg_t WHERE title LIKE '%gh%';
+```
+
+A sequential scan, 7,360 buffers, with the trigram index present: the planner knows the index cannot narrow a two-character pattern (and 54,354 matching rows would be 5% of the table anyway). A search box that fires on the first keystroke has to wait for the third character, or use a different method for the short strings (a prefix index, a limit on the result, a lookup table of popular strings).
+"""
+
+[[sections]]
+heading = "Typos and nearest neighbours"
+body = """
+The same trigram sets measure how alike two strings are. `similarity('postgres', 'postgrse')` is 0.5 (a transposed pair shares half the trigrams) and `similarity('postgres', 'mysql')` is 0. The `%` operator is true when the similarity exceeds `pg_trgm.similarity_threshold` (0.3 by default), and a GIN or GiST trigram index serves it:
+
+```plan id=m34-sim-gin setup=tg-t,tg-gin,no-parallel
+SELECT title, similarity(title, 'ojfpnfk edkiinnjx') AS sim
+FROM tg_t
+WHERE title % 'ojfpnfk edkiinnjx'
+ORDER BY sim DESC
+LIMIT 5;
+```
+
+The query is a title with its last letter changed. The index returned 1,848 candidates that share enough trigrams, 1,819 of which the recheck (`Rows Removed by Index Recheck`) removed, leaving 29 above the threshold, and a top-N sort kept five: 1,810 buffers, 20 to 28 ms in two runs. The threshold is a session setting (`SET pg_trgm.similarity_threshold = 0.5`): a higher one asks the index for fewer candidates. I ran only the default 0.3.
+
+To ask for 'the five nearest' without choosing a threshold, order by the distance operator `<->`, which is 1 minus the similarity. Without an index every row's distance is computed:
+
+```plan id=m34-knn-seq setup=tg-t,no-parallel
+SELECT title FROM tg_t ORDER BY title <-> 'ojfpnfk edkiinnjx' LIMIT 5;
+```
+
+1,000,000 distances, 4,582 ms. A GiST trigram index (`USING gist (title gist_trgm_ops)`) can return rows in distance order, a nearest-neighbour search:
+
+```plan id=m34-knn-gist setup=tg-t,tg-gist,no-parallel
+SELECT title FROM tg_t ORDER BY title <-> 'ojfpnfk edkiinnjx' LIMIT 5;
+```
+
+563 ms and 17,469 buffers: eight times faster, but not instant, since trigram signatures are coarse and the walk has to visit many pages before it can be sure which five are nearest. GIN cannot do this at all (it has no ordering), which is the one capability that decides GiST over GIN here.
+"""
+
+[[sections]]
+heading = "What the indexes cost"
+body = """
+All three indexes on the same column, for the 1,000,000 titles (heap 58 MB, primary key 21 MB):
+
+| Index | Size | Build | Insert 50,000 rows (median of 3) | WAL |
+|---|---|---|---|---|
+| none (primary key only) | | | 82 ms | 7.7 MB |
+| b-tree `text_pattern_ops` | 42 MB | 0.65 s | 357 ms | 51.8 MB |
+| GIN `gin_trgm_ops` | 63 MB | 5.1 s | 768 ms | 62.9 MB |
+| GiST `gist_trgm_ops` | 136 MB | 15.2 s | 1,012 ms | 27.5 MB |
+
+(Build times are single runs. The inserts re-insert 50,000 existing titles after a checkpoint; the b-tree's WAL is large because each title lands on a random leaf and the first change to every page after a checkpoint writes a full page image, module 26.) The GIN index is the default for substring and similarity searches: about as big as a second copy of the column, and the manual recommends it over GiST for plain `LIKE` and similarity searches (I did not run those on GiST here). GiST costs more than twice the space and the build, and earns it only when you need `ORDER BY <->`. Every one of these is a price paid on every write to the table (module 27), so index only the columns that are searched this way, and drop the plain b-tree if nothing needs a prefix search.
+"""
+
+[[checks]]
+prompt = "A customer search box runs WHERE name ILIKE '%' || $1 || '%' on 2 million rows and is slow. You add a pg_trgm GIN index and the query is fast for 'smith' but still slow for 'sm'. Why, and what do you do?"
+answer = "A trigram needs three characters; 'sm' contains no complete trigram, so the index cannot narrow the search and the planner falls back to a sequential scan (and 'sm' would match a large share of the table anyway). Require three or more characters before searching, or for short input use a prefix search with a text_pattern_ops b-tree (name ILIKE would need lower(name) in the index) and cap the result."
+
+[[checks]]
+prompt = "Which trigram index type do you create to serve ORDER BY name <-> 'jon smyth' LIMIT 10, and what does it cost compared with the other type?"
+answer = "GiST (gist_trgm_ops): only GiST can return rows in distance order (a nearest-neighbour index scan); GIN has no ordering. In the test it cut the time from 4.6 s to 0.56 s, but the index was 136 MB against 63 MB for GIN, and took three times as long to build."
+
+[[checks]]
+prompt = "A table already has a b-tree on email for equality lookups. A teammate adds a pg_trgm GIN index on the same column to support LIKE '%@gmail.com'. Is the b-tree redundant?"
+answer = "No. The b-tree serves equality and ordering far more cheaply (a lookup of a few buffers) and prefix patterns with text_pattern_ops; the trigram index serves substring, case-insensitive and similarity matching. They answer different questions, but each adds write cost, so keep both only if both kinds of query exist. Note also that for a suffix search an index on the reversed string with a prefix pattern is a cheaper alternative."
+
+[[terms]]
+term = "Trigram"
+means = "A sequence of three consecutive characters of a word (with the word padded by two spaces in front and one behind); pg_trgm represents a string as the set of its trigrams."
+section = "Trigrams: the index that finds pieces"
+
+[[terms]]
+term = "similarity"
+means = "The pg_trgm measure, from 0 to 1, of the share of trigrams two strings have in common; the % operator tests it against pg_trgm.similarity_threshold."
+section = "Typos and nearest neighbours"
+
+[[terms]]
+term = "text_pattern_ops"
+means = "A b-tree operator class that compares strings character by character so the index can serve LIKE 'prefix%' in any collation."
+section = "Why % at the front defeats a b-tree"
+
+[[terms]]
+term = "Nearest-neighbour index scan"
+means = "An ordered index scan that returns rows by increasing distance from a given value, supported by GiST for the <-> operator, so ORDER BY ... LIMIT k does not need to score every row."
+section = "Typos and nearest neighbours"
+
+[[sources]]
+title = "PostgreSQL: pg_trgm"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgtrgm.html"
+
+[[sources]]
+title = "PostgreSQL: operator classes and indexes (text_pattern_ops)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-opclass.html"
+
+[[sources]]
+title = "PostgreSQL: GiST indexes (nearest-neighbour searching)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/gist.html"

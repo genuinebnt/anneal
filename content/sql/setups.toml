@@ -310,3 +310,24 @@ undo = "DROP INDEX ft_gin;"
 id = "ft-gist"
 sql = "CREATE INDEX ft_gist ON ft_t USING gist (tsv); ANALYZE ft_t;"
 undo = "DROP INDEX ft_gist;"
+
+# module 34: trigrams (pg_trgm, built from the contrib directory of the source tree). 1,000,000 titles of three invented words from a skewed vocabulary of 2,000
+[[setup]]
+id = "tg-t"
+sql = "CREATE EXTENSION IF NOT EXISTS pg_trgm; SELECT setseed(0.17); CREATE TABLE tg_t AS WITH v AS (SELECT array_agg(translate(substr(md5(n::text), 1, 5 + (n % 5)), '0123456789', 'ghijklmnop') ORDER BY n) AS vocab FROM generate_series(1, 2000) n) SELECT i AS id, vocab[1 + floor(2000 * power(random(), 2))::int] || ' ' || vocab[1 + floor(2000 * power(random(), 2))::int] || ' ' || vocab[1 + floor(2000 * power(random(), 2))::int] AS title FROM generate_series(1, 1000000) i, v; ALTER TABLE tg_t ADD PRIMARY KEY (id); ALTER TABLE tg_t SET (autovacuum_enabled = false); VACUUM ANALYZE tg_t;"
+undo = "DROP TABLE tg_t;"
+
+[[setup]]
+id = "tg-btree"
+sql = "CREATE INDEX tg_btree ON tg_t (title text_pattern_ops); ANALYZE tg_t;"
+undo = "DROP INDEX tg_btree;"
+
+[[setup]]
+id = "tg-gin"
+sql = "CREATE INDEX tg_gin ON tg_t USING gin (title gin_trgm_ops); ANALYZE tg_t;"
+undo = "DROP INDEX tg_gin;"
+
+[[setup]]
+id = "tg-gist"
+sql = "CREATE INDEX tg_gist ON tg_t USING gist (title gist_trgm_ops); ANALYZE tg_t;"
+undo = "DROP INDEX tg_gist;"
