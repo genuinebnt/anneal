@@ -154,3 +154,16 @@ undo = "DROP STATISTICS places_dep;"
 [[setup]]
 id = "no-bitmap"
 session = "SET enable_bitmapscan = off;"
+
+# module 11: planner settings used as experiments
+[[setup]]
+id = "no-index-scans"
+session = "SET enable_seqscan = off; SET enable_bitmapscan = off;"
+
+[[setup]]
+id = "ssd-cost"
+session = "SET random_page_cost = 1.1;"
+
+[[setup]]
+id = "generic-status"
+session = "SET plan_cache_mode = force_generic_plan; PREPARE by_status (text) AS SELECT id FROM orders WHERE status = $1;"
