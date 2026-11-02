@@ -1,0 +1,16 @@
+code = "C1"
+name = "Threads & shared state"
+section = "C"
+tier = "core"
+order = 1
+summary = "Threads, mutexes and condition variables, by building the blocking primitives yourself: a queue, a fair semaphore and a readers-writer lock."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

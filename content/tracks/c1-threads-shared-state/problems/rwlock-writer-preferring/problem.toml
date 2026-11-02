@@ -1,0 +1,32 @@
+slug = "rwlock-writer-preferring"
+title = "A writer-preferring RwLock"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 3
+status = "ready"
+tags = ["RwLock", "Condvar", "writer starvation", "RAII guards", "Sync bounds"]
+teaches = [
+  "The state machine of a readers-writer lock: readers count, writer flag, writers waiting.",
+  "Writer preference: a waiting writer blocks new readers, so a steady stream of readers cannot starve it.",
+  "`Sync` for a lock needs `T: Send + Sync` (readers share `&T`), unlike a mutex (`T: Send`).",
+]
+follow_up = "1) Why can `read` called twice on the same thread deadlock with writer preference? 2) What is `RwLock` poisoning and should you reproduce it? 3) Make it fair for both sides with a ticket (see the fair semaphore). 4) When is a `Mutex` plus short critical sections faster than an `RwLock` (reader count bookkeeping is a shared write: cache line bouncing)? Compare `parking_lot::RwLock` and `arc-swap` for read-mostly data. 5) Upgradable reads: why do they exist and what deadlock do they avoid?"
+related = ["S7", "C3"]
+
+[[hints]]
+kind = "approach"
+text = "State under one mutex: `readers: usize`, `writer: bool`, `writers_waiting: usize`. Readers enter when `!writer && writers_waiting == 0`; a writer first increments `writers_waiting`, then waits for `!writer && readers == 0`, then decrements and sets `writer = true`."
+
+[[hints]]
+kind = "rust"
+text = "One `Condvar` and `notify_all` on every state change that could unblock someone: the last reader leaving, a writer leaving. Guards hold `&RwLock<T>` and reach the data through `UnsafeCell::get`."
+
+[[hints]]
+kind = "edge"
+text = "`unsafe impl<T: Send + Sync> Sync`: a read guard shares `&T` between threads, so `T` must be `Sync` (a `Mutex<T>` only needs `Send`). `Send` needs just `T: Send`."
+
+[solution]
+explanation = "Readers-preferring locks starve writers under steady read traffic; writer preference fixes that at the price of readers waiting behind a queued writer (and, if readers re-enter the lock recursively while holding a guard, a deadlock: a classic reason `std`'s `RwLock` documents that recursive reads may deadlock). The `writers_waiting` count is what turns 'a writer is blocked' into a state that new readers can see."
+time = "O(1) per operation"
+space = "O(1) extra"

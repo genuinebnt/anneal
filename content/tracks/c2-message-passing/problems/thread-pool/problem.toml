@@ -1,0 +1,32 @@
+slug = "thread-pool"
+title = "A thread pool with results and graceful shutdown"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 1
+status = "ready"
+tags = ["thread pool", "Condvar", "catch_unwind", "JoinHandle", "graceful shutdown", "Drop"]
+teaches = [
+  "Workers sleeping on a condvar over a shared queue; closed-and-drained is the only exit condition.",
+  "Running jobs outside the lock under `catch_unwind` so one panic does not shrink the pool.",
+  "Returning results through a channel: a dropped sender (panic) becomes `Err` at `join`. `Drop` that shuts down cleanly.",
+]
+follow_up = "1) Why does every worker contend on one mutex, and how does per-worker queues with work stealing (rayon, crossbeam-deque) remove that? 2) What happens if a job submits to the same pool and then blocks on the result (nested `join`)? Construct the deadlock with one worker, and the fix. 3) How would you add `scope`-style borrowing so jobs can use non-`'static` data (what `std::thread::scope` and `rayon::scope` guarantee)? 4) Add a bounded queue and decide what `execute` does when full: block, drop or error (backpressure). 5) What does `JoinHandle::join` return for a panicked thread, and why `AssertUnwindSafe` is a promise, not a fix?"
+related = ["C6", "S7"]
+
+[[hints]]
+kind = "approach"
+text = "One `Mutex<{ jobs: VecDeque<Job>, closed }>` and a `Condvar`. A worker loops: lock, take a job (or wait), unlock, run it. It exits only when `closed` is set **and** the queue is empty, which is what makes shutdown graceful."
+
+[[hints]]
+kind = "rust"
+text = "`type Job = Box<dyn FnOnce() + Send + 'static>`. Run with `catch_unwind(AssertUnwindSafe(job))` outside the lock. `submit` wraps the closure: create `mpsc::channel()`, send `f()` from inside the job, and let the handle `recv()`; a panic drops the sender, so `recv` fails."
+
+[[hints]]
+kind = "edge"
+text = "`shutdown(self)` and `Drop` share one `finish(&mut self)`: set `closed`, `notify_all`, join every `JoinHandle` via `workers.drain(..)` so `Drop` after `shutdown` has nothing left to do."
+
+[solution]
+explanation = "The pool is exactly the blocking queue from C1 with workers on the consumer side. The two decisions that matter are *where the closed flag is tested* (after the queue is empty, so nothing queued is lost) and *what a panic does* (caught per job, counted, the worker lives on). Results travel back over a one-shot channel, so the handle needs no knowledge of the pool, and a worker that dies with the sender simply drops it."
+time = "O(1) per job"
+space = "O(workers + queued jobs)"
