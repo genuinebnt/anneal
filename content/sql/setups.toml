@@ -240,3 +240,24 @@ undo = "SELECT 1;"
 id = "cl-brin"
 sql = "CREATE INDEX cl_brin ON cl_orders USING brin (created_at); ANALYZE cl_orders;"
 undo = "DROP INDEX cl_brin;"
+
+# module 23: row versions. A 500,000-row copy that autovacuum leaves alone, then updated twice without a vacuum.
+[[setup]]
+id = "mv-table"
+sql = "CREATE TABLE mv_t AS SELECT id, customer_id, total_cents FROM orders WHERE id <= 500000; ALTER TABLE mv_t ADD PRIMARY KEY (id); ALTER TABLE mv_t SET (autovacuum_enabled = false); VACUUM ANALYZE mv_t;"
+undo = "DROP TABLE mv_t;"
+
+[[setup]]
+id = "mv-bloat"
+sql = "UPDATE mv_t SET total_cents = total_cents + 1; UPDATE mv_t SET total_cents = total_cents + 1;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "mv-vacuum"
+sql = "VACUUM mv_t;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "mv-vacuum-full"
+sql = "VACUUM FULL mv_t;"
+undo = "SELECT 1;"
