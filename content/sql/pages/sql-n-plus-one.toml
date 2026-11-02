@@ -1,0 +1,168 @@
+title = "The N+1 query problem"
+group = "sql-shapes"
+order = 14
+minutes = 14
+lede = "N+1 is one query to fetch a list and then one more query for each item in it. It is the most common reason a page that was fast in development is slow in production, and it never appears in an EXPLAIN, because every one of the queries is fast. The cost is in the count. This page measures that cost on a local database, shows the two fixes (a single query with an array, and a lateral join for 'the latest per item') and why a window function is the wrong tool for the second."
+say = "N+1 is a round trip per row: each query is cheap and the sum is not, so look at how many statements a request runs, not at the plan of one. Fetch the whole set in one statement with = ANY($1) or a join, and use a LATERAL join with LIMIT for 'the latest few per item'."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "Fetching the orders of 100 customers with 100 queries took **15 ms** on a local database, against **6.4 ms** for one `customer_id = ANY($1)` query; for 500 customers 79 ms against 29 ms. That is with **zero network latency**: every real round trip adds to the loop and to nothing else.",
+  "At 0.5 ms per round trip (a plausible same-region figure, **arithmetic, not measured here**) the 100 queries gain 50 ms and the single query 0.5 ms.",
+  "`= ANY($1)` is one parameter holding an array, so the statement text never changes and the prepared-statement cache (module 41) keeps working; an `IN (…)` list built by string concatenation produces a new statement for every length.",
+  "'The latest order per customer' is a different problem: `ANY` plus `ORDER BY ... LIMIT 1` returns one row for *all* customers. A **LATERAL** subquery with `LIMIT 1` per customer does it with an index in 20 buffer hits; a `row_number()` window function reads every order of every customer first (about 0.4 ms against 0.03 ms for five customers).",
+  "Find N+1 in production with `pg_stat_statements` (module 42): a statement with a huge `calls` and a tiny `mean_exec_time` is the signature.",
+]
+
+[[sections]]
+heading = "What N+1 looks like, and what it costs"
+body = """
+The pattern, in any ORM or any code: one query for the parent rows, then a loop that runs one query per parent.
+
+```rust title=n_plus_one.rs
+// 1 query for the customers, then N queries, one per customer
+let customers: Vec<Customer> = sqlx::query_as("SELECT id, name FROM customers WHERE country = $1")
+    .bind("DE").fetch_all(&pool).await?;
+for c in &customers {
+    let orders: Vec<Order> = sqlx::query_as("SELECT id, total_cents FROM orders WHERE customer_id = $1")
+        .bind(c.id).fetch_all(&pool).await?;   // one round trip each
+    // ...
+}
+```
+
+Each of those queries is a good one: an index lookup of well under a millisecond (module 2). Every `EXPLAIN` shows nothing wrong, and a slow-query log with a 100 ms threshold sees nothing at all. The cost is the *number* of statements, and each statement pays the same fixed costs on top of the lookup: the network round trip, the server parsing or looking up a prepared statement, the planner, a protocol exchange. That fixed cost does not shrink when the lookup is fast.
+
+It is measured here with the example database over a loopback connection, as small as the fixed cost gets (`tools/sqlperf/n_plus_one.py`, median of 7 warm runs; `loop` is one query per customer, `prepared` the same through a prepared statement, `ANY` one query with an array):
+
+| Customers | Orders returned | One query each | Prepared, one each | One `ANY` query |
+|---|---|---|---|---|
+| 20 | 793 | 3.4 ms | 2.7 ms | 1.0 ms |
+| 100 | 4,027 | 15.1 ms | 16.9 ms | 6.4 ms |
+| 500 | 20,025 | 79.4 ms | 77.0 ms | 29.1 ms |
+
+About 0.15 ms per statement even on loopback, and a single statement 2.5 to 3 times faster for the same rows. Preparing the statement did not change the loop (the parse was never the cost). On a real network every one of the N statements waits for an answer before the next can start, so the loop's time is N times the round-trip time plus the server work, and the single query pays the round trip once. At 0.5 ms per round trip the 500-customer loop would gain 250 ms on top (arithmetic, not measured here); a hundred-customer page that took 15 ms on a laptop takes 65 ms or much more from an application server in another zone.
+"""
+
+[[sections]]
+heading = "Fix 1: one query with an array"
+body = """
+Fetch all the children in one statement. In Postgres the natural form is a single array parameter:
+
+```plan id=m14-any setup=orders-customer,no-parallel
+SELECT id, total_cents FROM orders WHERE customer_id = ANY('{1000,1001,1002,1003,1004}');
+```
+
+One statement, one plan, 205 rows. `ANY` with an array of constants becomes an index condition; the planner reads the index for all five values and fetches the table pages once with a bitmap (module 5), so the table pages shared between customers are read once. In the application the array is a single bind parameter:
+
+```rust title=any.rs
+let ids: Vec<i32> = customers.iter().map(|c| c.id).collect();
+let orders: Vec<Order> = sqlx::query_as("SELECT id, customer_id, total_cents FROM orders WHERE customer_id = ANY($1)")
+    .bind(&ids)        // one array parameter, whatever its length
+    .fetch_all(&pool).await?;
+// group by customer_id in memory (a HashMap<i32, Vec<Order>>)
+```
+
+Why not `WHERE customer_id IN (1, 2, 3, ...)` built as a string? It works, and it makes a different statement text for every list length, so the statement cache holds hundreds of near-identical entries, and it is a place to write an injection bug. `= ANY($1)` is one statement for every length. For large lists (thousands) a join to `unnest($1::int[])` or to a temporary table lets the planner choose a hash join; for hundreds, `ANY` is fine.
+
+When the parent rows come from the same database, the better fix is often a **join** that returns parents and children in one statement (module 13): `SELECT c.id, c.name, o.id, o.total_cents FROM customers c JOIN orders o ON o.customer_id = c.id WHERE c.country = $1`. It repeats the parent columns on every child row, which is wasteful for wide parents; `ANY` with a second query is better there.
+"""
+
+[[sections]]
+heading = "Fix 2: the latest few per parent, with LATERAL"
+body = """
+'The latest order of each of these customers' is not the same query. This does not do it:
+
+```plan id=m14-any-limit setup=orders-customer-created,no-parallel
+SELECT id, total_cents FROM orders
+WHERE customer_id = ANY('{1000,1001,1002,1003,1004}') ORDER BY created_at DESC LIMIT 1;
+```
+
+It finds the single newest order *among all five customers*. To get one per customer, run the small query once for each customer **inside the database**, with a `LATERAL` subquery that may refer to the outer row:
+
+```plan id=m14-lateral setup=orders-customer-created,no-parallel
+SELECT o.id, o.total_cents, o.created_at
+FROM unnest('{1000,1001,1002,1003,1004}'::int[]) AS u(id)
+CROSS JOIN LATERAL (
+    SELECT id, total_cents, created_at FROM orders
+    WHERE customer_id = u.id ORDER BY created_at DESC LIMIT 1
+) o;
+```
+
+A **Nested Loop** over the five ids (module 13) with an `Index Scan Backward` on `(customer_id, created_at)` for each, `LIMIT 1` stopping each at its first row: five rows, 20 buffer hits, 0.03 ms. This is the module 3 centrepiece used from a join, and the index it needs is the same: equality on the customer, then the sort column. A `LIMIT 3` gives the latest three per customer with the same plan shape.
+
+The tool most people reach for instead is a window function (module 18): number each customer's orders newest first, keep number 1.
+
+```plan id=m14-window setup=orders-customer-created,no-parallel
+SELECT id, total_cents, created_at FROM (
+    SELECT id, total_cents, created_at,
+           row_number() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS rn
+    FROM orders WHERE customer_id = ANY('{1000,1001,1002,1003,1004}')
+) s WHERE rn = 1;
+```
+
+It is correct and it reads all 205 orders of the five customers, sorts them, numbers them and throws 200 away: about 0.4 ms against 0.03 for the lateral version, and the gap grows with how many orders each customer has, because the lateral plan reads one row per customer however long the history. For all customers (or the top rank of every group over a whole table) the window function is the right tool; for a handful of known parents with an index, use `LATERAL`.
+"""
+
+[[sections]]
+heading = "Finding N+1 in a running system"
+body = """
+Three places it shows, from cheapest to most work:
+
+- **`pg_stat_statements`** (module 42): the same statement text with a huge `calls` and a tiny `mean_exec_time` and a `rows` of about 1 per call. `SELECT query, calls, mean_exec_time, rows / calls AS rows_per_call FROM pg_stat_statements ORDER BY calls DESC LIMIT 20;`
+- **A request-level counter** in the application: log the number of statements per request (sqlx can wrap the pool; tracing spans on queries work too) and alarm when it passes a number such as 50. A test that runs a page and asserts the statement count is the cheapest regression guard.
+- **The ORM's own tooling**: eager-loading options (`include`, `prefetch_related`, `joinedload`) exist to prevent exactly this, and a query log in development shows it at once.
+
+The cases that look innocent: a template that renders `order.customer.name` for 50 orders, a serializer that touches a related field, a GraphQL resolver per field (the standard fix there is a batching loader that collects the ids and runs one `= ANY($1)`).
+"""
+
+[[checks]]
+prompt = "A page takes 15 ms in development and 400 ms in production, with the same data and every query under 1 ms in the slow-query log. What is the first thing you check?"
+answer = "The number of statements the request runs: an N+1 loop. Each query is fast so nothing is logged slowly, but with real network round trips the fixed cost of every statement adds up (hundreds of statements at a millisecond or more each). Check pg_stat_statements for a statement with a very high calls count, or count statements per request in the application."
+
+[[checks]]
+prompt = "Why is WHERE customer_id = ANY($1) better than building IN (1, 2, 3) with string formatting?"
+answer = "ANY($1) is one statement text for every list length, with the array as a single bind parameter, so the prepared-statement cache and the plan cache see one statement and there is no SQL injection surface. IN lists built by formatting produce a different text for each length (and each value if inlined), filling the statement cache with near-duplicates."
+
+[[checks]]
+prompt = "You need the latest order of each of 50 given customers. Why is ANY with ORDER BY created_at DESC LIMIT 1 wrong, and what do you write?"
+answer = "It returns a single order, the newest among all 50 customers, not one per customer. Write a LATERAL subquery with ORDER BY created_at DESC LIMIT 1 that refers to each customer id, cross joined to unnest($1::int[]); with an index on (customer_id, created_at) each customer costs one backward index probe."
+
+[[checks]]
+prompt = "The window-function version (row_number over a partition, keep rn = 1) and the LATERAL version return the same rows for five customers. When would you still choose the window function?"
+answer = "When you want the top rank for every group across a large part of the table, not for a handful of known parents: there is no short list of ids to loop over, so reading and numbering everything once is the efficient plan. For a few known parents and an index on the partition and sort columns, LATERAL reads one row per parent."
+
+[[terms]]
+term = "N+1 queries"
+means = "One query for a list followed by one query per item; cheap statements whose count, not their plan, is the cost."
+section = "What N+1 looks like, and what it costs"
+
+[[terms]]
+term = "Round trip"
+means = "One statement sent to the server and its answer received; each has a fixed cost on top of the work the query does."
+section = "What N+1 looks like, and what it costs"
+
+[[terms]]
+term = "LATERAL"
+means = "A join to a subquery that may refer to columns of the tables before it, so it runs once for each of their rows."
+section = "Fix 2: the latest few per parent, with LATERAL"
+
+[[sources]]
+title = "PostgreSQL: LATERAL subqueries"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-LATERAL"
+
+[[sources]]
+title = "PostgreSQL: row and array comparisons (ANY / SOME)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-comparisons.html#FUNCTIONS-COMPARISONS-ANY-SOME"
+
+[[sources]]
+title = "PostgreSQL: pg_stat_statements"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgstatstatements.html"
+
+[[sources]]
+title = "Use The Index, Luke: fetching top-N rows per group"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/partial-results/top-n-queries"
