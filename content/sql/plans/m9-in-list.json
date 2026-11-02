@@ -1,0 +1,91 @@
+{
+ "id": "m9-in-list",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE customer_id IN (10, 20000, 40000) AND created_at >= '2026-01-01';",
+ "setup": [
+  {
+   "id": "orders-customer-created",
+   "sql": "CREATE INDEX orders_customer_created ON orders (customer_id, created_at);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Bitmap Heap Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 13.77,
+   "Total Cost": 194.63,
+   "Plan Rows": 47,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.03,
+   "Actual Total Time": 0.07,
+   "Actual Rows": 41.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Recheck Cond": "((customer_id = ANY ('{10,20000,40000}'::integer[])) AND (created_at >= '2026-01-01 00:00:00+00'::timestamp with time zone))",
+   "Rows Removed by Index Recheck": 0,
+   "Exact Heap Blocks": 41,
+   "Lossy Heap Blocks": 0,
+   "Shared Hit Blocks": 50,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Index Name": "orders_customer_created",
+     "Startup Cost": 0.0,
+     "Total Cost": 13.76,
+     "Plan Rows": 47,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.02,
+     "Actual Total Time": 0.02,
+     "Actual Rows": 41.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "((customer_id = ANY ('{10,20000,40000}'::integer[])) AND (created_at >= '2026-01-01 00:00:00+00'::timestamp with time zone))",
+     "Index Searches": 3,
+     "Shared Hit Blocks": 9,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.057,
+  "Triggers": [],
+  "Execution Time": 0.083
+ },
+ "text": "Bitmap Heap Scan on orders  (cost=13.77..194.63 rows=47 width=8) (actual time=0.027..0.055 rows=41.00 loops=1)\n  Recheck Cond: ((customer_id = ANY ('{10,20000,40000}'::integer[])) AND (created_at >= '2026-01-01 00:00:00+00'::timestamp with time zone))\n  Heap Blocks: exact=41\n  Buffers: shared hit=50\n  ->  Bitmap Index Scan on orders_customer_created  (cost=0.00..13.76 rows=47 width=0) (actual time=0.018..0.018 rows=41.00 loops=1)\n        Index Cond: ((customer_id = ANY ('{10,20000,40000}'::integer[])) AND (created_at >= '2026-01-01 00:00:00+00'::timestamp with time zone))\n        Index Searches: 3\n        Buffers: shared hit=9\nPlanning Time: 0.046 ms\nExecution Time: 0.064 ms"
+}

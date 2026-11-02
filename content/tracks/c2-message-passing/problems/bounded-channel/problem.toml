@@ -1,0 +1,32 @@
+slug = "bounded-channel"
+title = "A bounded MPMC channel with disconnect"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["channel", "Condvar", "disconnect", "backpressure", "Clone/Drop counting"]
+teaches = [
+  "Disconnect is a count reaching zero: senders gone means recv drains then fails; receivers gone means send fails.",
+  "Waking blocked threads when the *last* handle drops (the part everyone forgets).",
+  "Backpressure: a full bounded channel blocks senders until receivers catch up.",
+]
+follow_up = "1) Add `capacity 0` (a rendezvous channel): who must wait for whom, and what does `try_send` mean there? 2) Add `select` over two receivers (`crossbeam::select!`): why is it hard with a condvar per channel, and what do real implementations register instead (waker lists)? 3) Add `send_timeout` and a `Sender::is_disconnected()`: which is racy by nature and why? 4) Compare backpressure policies: block, drop newest, drop oldest, error. Which does a metrics pipeline want, and which a payment pipeline? 5) How do you shut down a pipeline of three stages connected by these channels without losing items?"
+related = ["C1", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "State under one mutex: the queue, `cap`, and two counts, `senders` and `receivers` (both start at 1). `Clone` increments, `Drop` decrements. `send` fails when `receivers == 0`; `recv` fails when the queue is empty **and** `senders == 0`."
+
+[[hints]]
+kind = "rust"
+text = "Two condvars as in the blocking queue. In `Drop`, when a count reaches zero call `notify_all` on the condvar the *other* side waits on, otherwise blocked threads sleep forever. Check the queue before the sender count in `recv` so queued values are still delivered after disconnect."
+
+[[hints]]
+kind = "edge"
+text = "`send` must re-check `receivers == 0` on every loop iteration: the last receiver can drop while the sender is asleep on `not_full`."
+
+[solution]
+explanation = "This is what `std::sync::mpsc::sync_channel` does, plus multiple consumers. 'Disconnected' is not a message but a count; both `Clone` and `Drop` have to maintain it, and the last drop must wake the other side because nobody else will. Delivering queued values after the senders are gone is the rule that makes `for v in rx` a complete drain."
+time = "O(1) per operation"
+space = "O(capacity)"

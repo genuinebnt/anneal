@@ -33,10 +33,13 @@ main() {
     trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
   fi
 
-  log "pulling images"
-  compose pull --quiet
-  # The API starts the runner image itself; pull it now so the first run after a deploy doesn't wait on it.
-  docker pull --quiet "ghcr.io/genuinebnt/anneal-runner:${tag}" >/dev/null
+  # deploy/deploy-manual.sh builds the images on this box and sets ANNEAL_SKIP_PULL, so there is nothing to pull.
+  if [ -z "${ANNEAL_SKIP_PULL:-}" ]; then
+    log "pulling images"
+    compose pull --quiet
+    # The API starts the runner image itself; pull it now so the first run after a deploy doesn't wait on it.
+    docker pull --quiet "ghcr.io/genuinebnt/anneal-runner:${tag}" >/dev/null
+  fi
 
   # Progress safety: a backup first, then the new version checks the live database (stranded progress, edited
   # migrations) before anything is replaced. If preflight fails, the running version keeps serving.

@@ -1,0 +1,11 @@
+code = "C2"
+name = "Message passing"
+section = "C"
+tier = "core"
+order = 2
+summary = "Thread pools and channels by building them: workers, results, graceful shutdown, bounded queues and disconnection."
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

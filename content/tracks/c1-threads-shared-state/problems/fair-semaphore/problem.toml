@@ -1,0 +1,32 @@
+slug = "fair-semaphore"
+title = "A fair counting semaphore"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["Condvar", "ticket queue", "fairness", "RAII permit", "starvation"]
+teaches = [
+  "A ticket counter (`next_ticket`, `serving`) turns a stampede into a strict FIFO line.",
+  "`notify_all` plus per-waiter predicates when only one specific waiter may proceed.",
+  "RAII permits with a lifetime tied to the semaphore.",
+]
+follow_up = "1) What does Tokio's `Semaphore` do differently (it is async and fair, and why does it store waiters in an intrusive list)? 2) How would you avoid the thundering herd (per-waiter `Condvar` or `thread::park`)? 3) Add `acquire_timeout`: what happens to the ticket of a waiter that gives up, and why must `serving` skip it? 4) Where do you use a semaphore in real systems (connection limits, bounded parallelism, rate limiting)? 5) Why does fairness reduce throughput, and when is that the right trade?"
+related = ["C2", "B5"]
+
+[[hints]]
+kind = "approach"
+text = "State: `available`, `next_ticket`, `serving`. `acquire` takes `ticket = next_ticket++`, then waits until `serving == ticket && available >= n`; when it proceeds it subtracts `n`, bumps `serving` and wakes everyone so the next ticket can re-check."
+
+[[hints]]
+kind = "rust"
+text = "Use `notify_all`: with per-waiter predicates `notify_one` may wake a thread whose ticket is not up, which goes back to sleep while the right thread never wakes. The `Permit` drop adds `n` back under the lock, then notifies."
+
+[[hints]]
+kind = "edge"
+text = "`try_acquire` must check `next_ticket == serving` (nobody queued) as well as `available >= n`, or it overtakes waiters. `waiting() = next_ticket - serving`."
+
+[solution]
+explanation = "Strict FIFO is bought with a ticket counter: only the thread whose ticket equals `serving` may take permits, so a big request cannot be starved by later small ones (the price: a free permit stays idle while the head of the queue still needs more, which is why `std`'s futex-based primitives are not fair). Because each waiter has its own predicate, wake-ups use `notify_all`; the cost is a thundering herd of cheap re-checks. A per-waiter condvar (a queue of `Thread` handles to `unpark`) avoids the herd."
+time = "O(waiters) wake-ups per release"
+space = "O(1) state"
