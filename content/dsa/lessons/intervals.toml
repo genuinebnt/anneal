@@ -13,6 +13,7 @@ groups = ["Merge and combine", "Intersection and subtraction", "Selection by ear
 
 [[technique]]
 id = "Intervals:merge"
+walk = "intervals-merge"
 group = "Merge and combine"
 template_name = "Merge overlapping"
 signals = [
@@ -166,6 +167,7 @@ class MyCalendarThree:
 
 [[technique]]
 id = "Intervals:sweep"
+walk = "intervals-sweep"
 group = "Line sweep"
 signals = [
     "how many ranges overlap at the busiest moment (meeting rooms)",
@@ -256,6 +258,7 @@ examples = ["set-intersection-size-at-least-two", "minimum-number-of-arrows-to-b
 
 [[extra]]
 id = "Intervals:room-heap"
+walk = "intervals-sweep"
 name = "Which room: a heap of free rooms and a heap of busy ones"
 group = "Meeting rooms"
 signals = [

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { IdeaDemo } from "../components/IdeaDemo";
 import { api, type DsaOverview, type DsaProblem, type PatternExtra, type PatternLessons, type PatternListed, type PatternTechnique, type TechniqueLesson } from "../api";
 import { LIST_LABEL, Mark, PRIORITY_LABEL, PyCode } from "../components/dsaBits";
 import { IdeaGlyph } from "../components/IdeaGlyph";
@@ -311,6 +312,8 @@ function Card({ item, open, toggle, today, glyph }: { item: Item; open: boolean;
     return () => window.removeEventListener("scroll", on);
   }, [open]);
   const first = item.lesson?.signals[0];
+  const walk = item.lesson?.walk;
+  const [view, setView] = useState<"code" | "walk">("code");
   return (
     <article className={`lr-card${open ? " open" : ""}`} id={id}>
       <button ref={head} className={`lr-head${glyph ? " thumb" : ""}`} aria-expanded={open} aria-controls={`${id}-body`} onClick={toggle}>
@@ -323,7 +326,16 @@ function Card({ item, open, toggle, today, glyph }: { item: Item; open: boolean;
       </button>
       <div className="lr-body" id={`${id}-body`}>
         <div>
-          {opened && (
+          {opened && walk && (
+            <div className="lr-views" role="tablist" aria-label="View">
+              <button role="tab" aria-selected={view === "code"} onClick={() => setView("code")}>Code and problems</button>
+              <button role="tab" aria-selected={view === "walk"} onClick={() => setView("walk")}>Walk through</button>
+            </div>
+          )}
+          {opened && walk && view === "walk" && (
+            <div className="lr-walk"><IdeaDemo names={[walk]} /></div>
+          )}
+          {opened && !(walk && view === "walk") && (
             <div className="lr-split">
               <div className="lr-left">
                 {item.lists > 0 && <span className="lr-prog">{item.solved} / {item.lists} in the lists<i><b style={{ width: `${(item.solved / item.lists) * 100}%` }} /></i></span>}

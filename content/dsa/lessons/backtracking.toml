@@ -13,6 +13,7 @@ groups = ["Subsets, combinations and permutations", "Constraint satisfaction", "
 
 [[technique]]
 id = "Backtracking:include-exclude"
+walk = "bt-subsets"
 group = "Subsets, combinations and permutations"
 signals = [
     "all subsets, or all selections from a list",
@@ -246,6 +247,7 @@ pitfalls = [
 
 [[technique]]
 id = "Backtracking:n-queens"
+walk = "bt-queens"
 group = "Constraint satisfaction"
 template_name = "Sets"
 signals = [

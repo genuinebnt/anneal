@@ -633,6 +633,8 @@ export interface TechniqueLesson {
   /** The name of the first tab when there are variants. */
   template_name?: string;
   variant?: LessonVariant[];
+  /** An animation of the Idea tab (`IDEA_DEMOS`) that walks this technique step by step. */
+  walk?: string;
 }
 
 /** A lesson for a technique with no must-learn problem in the lists, taught with example problems. */

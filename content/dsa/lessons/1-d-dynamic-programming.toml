@@ -36,6 +36,7 @@ pitfalls = [
 
 [[technique]]
 id = "1-D Dynamic Programming:take-skip"
+walk = "dp-rob"
 group = "Linear and sequence DP"
 signals = [
     "pick items along a line, but you can't pick two neighbours",
@@ -83,6 +84,7 @@ pitfalls = [
 
 [[technique]]
 id = "1-D Dynamic Programming:unbounded"
+walk = "dp-coins"
 group = "Coin change"
 signals = [
     "the same item or coin can be used any number of times",

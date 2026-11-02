@@ -129,3 +129,17 @@ test("every problem has a one-line key insight, shown under the title and on the
     await page.locator(".pp-ins").getByRole("button", { name: "Show" }).click();
     await expect(page.locator(".pp-ins")).toContainText(all.insight);
 });
+
+test("a technique with an animation has a Walk through view that steps through it and comes back to the code", async ({ page }) => {
+    await page.goto("/dsa/patterns/D2#t-opposite");
+    const card = page.locator("#t-opposite");
+    await expect(card).toHaveClass(/open/);
+    await card.getByRole("tab", { name: "Walk through" }).click();
+    await expect(card.locator(".id-lab")).toBeVisible();
+    await expect(card.locator(".id-n")).toContainText("step 1 of");
+    await card.getByRole("button", { name: "Next →" }).click();
+    await expect(card.locator(".id-n")).toContainText("step 2 of");
+    await card.getByRole("tab", { name: "Code and problems" }).click();
+    await expect(card.locator(".lr-left pre").first()).toBeVisible();
+    await expect(card.locator(".id-lab")).toHaveCount(0);
+});

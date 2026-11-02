@@ -13,6 +13,7 @@ groups = ["LCS and edit distance", "Interval DP", "Grid and path DP", "Tree DP",
 
 [[technique]]
 id = "2-D Dynamic Programming:grid-dp"
+walk = "dp2-path"
 group = "Grid and path DP"
 signals = [
     "move through a grid, usually only right and down",
@@ -38,6 +39,7 @@ pitfalls = [
 
 [[technique]]
 id = "2-D Dynamic Programming:two-string"
+walk = "dp2-lcs"
 group = "LCS and edit distance"
 signals = [
     "compare two strings or two arrays position by position",
@@ -208,6 +210,7 @@ examples = ["house-robber-iii", "binary-tree-maximum-path-sum", "diameter-of-bin
 
 [[extra]]
 id = "2-D Dynamic Programming:lcs-family"
+walk = "dp2-lcs"
 name = "LCS and its relatives"
 group = "LCS and edit distance"
 signals = [

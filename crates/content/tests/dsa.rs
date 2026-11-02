@@ -323,3 +323,19 @@ fn the_sites_own_idea_tabs_load_without_issues() {
     assert!(ideas.is_empty(), "{ideas:?}");
     assert!(loaded.catalog.dsa.ideas.contains_key("Sliding Window"));
 }
+
+#[test]
+fn a_walk_through_must_name_an_animation_the_web_app_can_draw() {
+    let dir = root_with(&std::fs::read_to_string(fixture().join("dsa/problems.json")).unwrap());
+    std::fs::create_dir_all(dir.path().join("dsa/lessons")).unwrap();
+    let write = |walk: &str| {
+        std::fs::write(dir.path().join("dsa/lessons/two-pointers.toml"), format!("pattern = \"Two Pointers\"\nintro = \"x\"\n[[technique]]\nid = \"Two Pointers:opposite\"\n{walk}\nsignals = [\"a\"]\ntemplate = \"pass\"\npitfalls = [\"b\"]\n")).unwrap();
+    };
+    write("walk = \"pointers-opposite\"");
+    let loaded = Catalog::load(dir.path()).unwrap();
+    assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+    assert_eq!(loaded.catalog.dsa.lessons["Two Pointers:opposite"].walk.as_deref(), Some("pointers-opposite"));
+    write("walk = \"teleport\"");
+    let found: Vec<String> = Catalog::load(dir.path()).unwrap().issues.into_iter().map(|i| i.message).collect();
+    assert!(found.iter().any(|m| m.contains("isn't an animation the web app can draw")), "{found:?}");
+}
