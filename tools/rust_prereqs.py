@@ -338,10 +338,11 @@ def slug_of(code):
 
 
 def link(code):
-    # only a written track is linked; an unwritten one is plain text so no planned page is reachable
-    if not os.path.isdir(os.path.join(ROOT, "content", "tracks", slug_of(code))):
+    # only a written track is linked (by its real directory); an unwritten one is plain text so no planned page is reachable
+    found = sorted(glob.glob(os.path.join(ROOT, "content", "tracks", code.lower() + "-*")))
+    if not found:
         return f"{code} {BY_CODE[code][0]}"
-    return f"[{code} {BY_CODE[code][0]}](/t/{slug_of(code)})"
+    return f"[{code} {BY_CODE[code][0]}](/t/{os.path.basename(found[0])})"
 
 
 def build_doc():

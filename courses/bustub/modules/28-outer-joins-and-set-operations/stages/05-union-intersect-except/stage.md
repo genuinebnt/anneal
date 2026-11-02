@@ -32,7 +32,7 @@ The key of a row (a string of the values and types, a vector of values with a ha
 
 ## If this is new
 
-- S2 Collections: `HashMap` entry API.
+- [S2 Collections](/t/s2-strings-text): `HashMap` entry API.
 - Y5 Testing & verification: a model written in the style of the specification.
 
 ## Tests
