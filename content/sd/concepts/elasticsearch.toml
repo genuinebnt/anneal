@@ -90,7 +90,7 @@ Changing a mapping for existing data is not possible: you create a new index wit
 [[sections]]
 heading = "Inside a shard: segments, merges and the translog"
 body = """
-Each shard is a Lucene index made of immutable **segments**. A write goes to an in-memory buffer and to the **translog** (fsynced per request by default). A **refresh** (every second by default) turns the buffer into a new segment that search can see; a **flush** commits segments to disk and clears the translog. Because segments are never edited, an update is a delete flag on the old document plus a new document, and a **background merge** combines small segments into bigger ones and finally drops deleted documents: the same idea as an LSM tree.
+Each shard is a Lucene index made of immutable **segments**. A write goes to an in-memory buffer and to the **translog** (fsynced per request by default). A **refresh** (every second by default; a shard with no search for 30 seconds skips background refreshes until the next search arrives) turns the buffer into a new segment that search can see; a **flush** commits segments to disk and clears the translog. Because segments are never edited, an update is a delete flag on the old document plus a new document, and a **background merge** combines small segments into bigger ones and finally drops deleted documents: the same idea as an LSM tree.
 
 Consequences:
 
@@ -106,9 +106,12 @@ body = """
 - **Cluster state**: a master-eligible quorum (three dedicated nodes) manages the cluster's metadata; a split brain is prevented by requiring a majority. Data nodes hold shards; coordinating nodes route queries.
 - **Health**: `green` means all shards are assigned, `yellow` means a replica is missing, `red` means a primary is missing and some data is unavailable.
 - **Hot-warm-cold**: time-series data (logs) goes into a new index per day or size, with **index lifecycle management** moving old indices to cheaper nodes and then deleting them. Dropping a whole index is instant; deleting millions of documents is not.
-- **Capacity**: size by shards of 10 to 50 GB, document count, query load and the heap (the JVM heap should stay at or below about 31 GB so that object pointers stay compressed, the rest of memory is the file system cache that Lucene relies on).
+- **Capacity**: size by shards of 10 to 50 GB, document count, query load and the heap (keep the JVM heap under the threshold for compressed object pointers: Elastic documents 26 GB as safe on most systems and up to about 30 GB on some; the rest of memory is the file system cache that Lucene relies on).
 - **Backups**: snapshots to object storage; rebuild from the source of truth if you can.
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** Checked against the Elasticsearch repository's documentation on GitHub: the one-second refresh and 30-second search-idle rule, translog `request` durability, the 10,000-hit `from + size` cap and the compressed-pointer heap guidance (26 GB safe, up to about 30 GB). Not verified (Elastic's sizing guide could not be reached): shards of 10 to 50 GB and about 20 shards per GB of heap."""
 
 [[sections]]
 heading = "Elasticsearch against the alternatives"
