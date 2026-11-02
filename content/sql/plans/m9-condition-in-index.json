@@ -1,0 +1,68 @@
+{
+ "id": "m9-condition-in-index",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE customer_id = 4242 AND status = 'refunded';",
+ "setup": [
+  {
+   "id": "orders-customer-status",
+   "sql": "CREATE INDEX orders_customer_status ON orders (customer_id, status);"
+  },
+  {
+   "id": "no-bitmap",
+   "sql": "SET enable_bitmapscan = off;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Index Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Scan Direction": "Forward",
+   "Index Name": "orders_customer_status",
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 0.43,
+   "Total Cost": 24.53,
+   "Plan Rows": 5,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.005,
+   "Actual Total Time": 0.005,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Index Cond": "((customer_id = 4242) AND (status = 'refunded'::text))",
+   "Rows Removed by Index Recheck": 0,
+   "Index Searches": 1,
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {
+   "enable_bitmapscan": "off"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.049,
+  "Triggers": [],
+  "Execution Time": 0.012
+ },
+ "text": "Index Scan using orders_customer_status on orders  (cost=0.43..24.53 rows=5 width=8) (actual time=0.005..0.005 rows=1.00 loops=1)\n  Index Cond: ((customer_id = 4242) AND (status = 'refunded'::text))\n  Index Searches: 1\n  Buffers: shared hit=4\nPlanning Time: 0.027 ms\nExecution Time: 0.010 ms"
+}
