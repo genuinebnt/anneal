@@ -1,0 +1,114 @@
+title = "The visibility map: when index-only scans lie"
+group = "sql-covering"
+order = 21
+minutes = 14
+lede = "An index entry says a row exists, not that your transaction can see it. Postgres answers that from the table unless a small bitmap, the visibility map, says every row on that page is visible to everyone. VACUUM sets the bits; any write to the page clears them. This page breaks a covering index on purpose and measures the damage and the repair."
+say = "An Index Only Scan skips the table only for pages the visibility map marks all-visible. On a freshly vacuumed 500,000-row table it read 17 buffers and made 0 heap fetches; after updating 100 rows it made 182 heap fetches (198 buffers); after updating 10% of the rows it made 5,014, one per row (5,026 buffers); after a VACUUM it was back to 0 heap fetches and 19 buffers. Heap Fetches in EXPLAIN is the number to watch, and autovacuum frequency is the lever."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "An index entry holds the key and a pointer to the row, but not the row's **visibility** (which transaction created or deleted it). To answer 'can this transaction see it?' the executor reads the table page, unless the **visibility map** has the page's all-visible bit set. `Heap Fetches` in `EXPLAIN (ANALYZE)` counts the table visits an index-only scan still had to make.",
+  "On a 500,000-row copy that had just been vacuumed, `SELECT sum(total_cents) ... WHERE customer_id BETWEEN 1 AND 500` (5,014 rows) was an `Index Only Scan` with **0 heap fetches** and **17 buffers**.",
+  "After `UPDATE` of **100 rows** (one in 5,000): **182 heap fetches**, 198 buffers. Each updated row clears the bit for its page, and every other row on that page then needs a visit too. After an update of **10% of the rows**: **5,014 heap fetches**, one for every row, 5,026 buffers, the 'index-only' scan reading the table anyway (about 2.2 ms against 0.8 ms here, all cached; the buffer count is what a cold cache turns into disk reads).",
+  "After `VACUUM`: **0 heap fetches**, 19 buffers. VACUUM, and autovacuum, is the only thing that sets the bit. `pg_class.relallvisible` (the planner's count) stayed at 2,703 of 2,752 pages through both updates and only moved at the vacuum (2,973 of 2,973).",
+  "Default autovacuum waits for dead rows to reach 20% of the table (`autovacuum_vacuum_scale_factor = 0.2`) before it vacuums a table; a hot table that is updated more slowly than that can have a poor visibility map for a long time. Per-table settings (`autovacuum_vacuum_scale_factor`, `autovacuum_vacuum_threshold`) set lower for a table that serves index-only queries are the usual fix.",
+]
+
+[[sections]]
+heading = "Why the index cannot answer alone"
+body = """
+Postgres keeps old versions of a row until nobody can need them (MVCC, module 23). Two versions of the same row can both be in the table, and in the index, at the same moment; which one your transaction sees depends on when it started. The index entry cannot say. The table page carries that information in each row's header.
+
+So an index-only scan, for each entry, asks the **visibility map**: a bitmap with two bits per table page, one of which means 'every row on this page is visible to all current and future transactions'. If it is set, the entry is accepted without looking at the table. If not, the scan fetches the page and checks the row. That is a *heap fetch*, and the plan reports how many there were.
+
+The bit is set by `VACUUM`. It is cleared by any `INSERT`, `UPDATE` or `DELETE` that touches the page. A table that is written constantly has many pages without the bit, and an index-only scan over it is an index scan with extra steps.
+"""
+
+[[sections]]
+heading = "Break it, measure it, repair it"
+body = """
+A 500,000-row copy of the orders table, with a covering index on `(customer_id) INCLUDE (total_cents)`, autovacuum turned off for it so the numbers stay put, and a `VACUUM` after loading. The query adds up the totals for customers 1 to 500 (5,014 rows):
+
+```plan id=m21-clean setup=vm-table,no-parallel
+SELECT sum(total_cents) FROM vm_orders WHERE customer_id BETWEEN 1 AND 500;
+```
+
+`Index Only Scan`, `Heap Fetches: 0`, 17 buffers. This is the plan module 20 promised. Now update one row in 5,000 (100 rows) and run it again:
+
+```plan id=m21-few setup=vm-table,vm-update-few,no-parallel
+SELECT sum(total_cents) FROM vm_orders WHERE customer_id BETWEEN 1 AND 500;
+```
+
+182 heap fetches, 198 buffers, from 100 changed rows. More fetches than updated rows, because the unit is a page: an update marks the page not-all-visible, and then every entry that points into it, changed or not, needs the table. And the plan still says `Index Only Scan`. Nothing in the node name changes; only `Heap Fetches` tells you. Now update one row in ten:
+
+```plan id=m21-many setup=vm-table,vm-update-many,no-parallel
+SELECT sum(total_cents) FROM vm_orders WHERE customer_id BETWEEN 1 AND 500;
+```
+
+5,014 heap fetches for 5,014 rows: every entry needed the table, 5,026 buffers, 300 times what the clean scan read. In a cache-warm run like this the time is only 2.2 ms against 0.8 ms; on a table bigger than memory those buffers are random reads. The covering index is still there, and has stopped helping.
+
+The repair is `VACUUM`:
+
+```plan id=m21-vacuumed setup=vm-table,vm-update-many,vm-vacuum,no-parallel
+SELECT sum(total_cents) FROM vm_orders WHERE customer_id BETWEEN 1 AND 500;
+```
+
+`Heap Fetches: 0` and 19 buffers again. The planner's own view of this lags: `pg_class.relallvisible` read 2,703 of 2,752 pages after the first vacuum, stayed at 2,703 through both updates (the update also grew the table to 2,973 pages), and only became 2,973 of 2,973 after the second vacuum. It counts what the last vacuum saw, not what has been written since.
+"""
+
+[[sections]]
+heading = "Keeping the map clean"
+body = """
+Autovacuum does the vacuuming. It decides per table, from the numbers of dead and inserted rows against two thresholds each: by default 50 rows plus 20% of the table for dead rows (`autovacuum_vacuum_threshold`, `autovacuum_vacuum_scale_factor`), and the same shape for inserts (`autovacuum_vacuum_insert_threshold`, `autovacuum_vacuum_insert_scale_factor`, which lets an insert-only table get its visibility map set). Settings in a stock install check each database about every minute (`autovacuum_naptime`).
+
+Twenty percent of a 500-million-row table is 100 million rows. For an index-only workload on a big, hot table that is far too long to leave the bits unset, so:
+
+- Lower the scale factor for that table: `ALTER TABLE orders SET (autovacuum_vacuum_scale_factor = 0.01)`.
+- Watch `Heap Fetches` on the plans that matter, and `last_autovacuum` and `n_dead_tup` in `pg_stat_user_tables`.
+- Remember what keeps vacuum from cleaning: a long-running transaction holds back the oldest-visible horizon, so rows changed after it started cannot be marked all-visible (module 31).
+
+This is also the answer to 'we added a covering index and it did not get faster': check Heap Fetches before blaming the index.
+"""
+
+[[checks]]
+prompt = "A covering index made a report 5 times faster in staging. In production, EXPLAIN (ANALYZE) shows Index Only Scan with Heap Fetches close to the row count. What happened and what do you check?"
+answer = "The visibility map in production does not mark most of the table's pages all-visible, so every entry needs a table visit and the scan reads the table anyway. Staging was freshly loaded and vacuumed. Check last_autovacuum and n_dead_tup, whether autovacuum is keeping up (scale factor for a large table, long transactions holding the horizon), and run VACUUM on the table to confirm the fetches drop."
+
+[[checks]]
+prompt = "You UPDATE 100 rows in a vacuumed 500,000-row table and an index-only query over 5,014 rows goes from 0 to 182 heap fetches. Why more than 100?"
+answer = "The visibility map works per page. An update clears the all-visible bit of every page it touches, and then every index entry pointing into those pages needs a heap fetch, not only the updated rows. Pages with many rows turn a few updates into many fetches."
+
+[[checks]]
+prompt = "Why does the visibility map need to exist, and why can an index entry not carry the visibility information itself?"
+answer = "Row versions are created and removed by every transaction, so visibility changes constantly and differs between transactions. Storing it in each index entry would mean updating every index on every change to a row's transaction state; Postgres keeps it only in the table and uses the small page-level bitmap as a cheap shortcut for pages that are known to be fully visible."
+
+[[terms]]
+term = "Visibility map"
+means = "A per-table bitmap with a bit per page that is set by VACUUM when every row on the page is visible to all transactions, and cleared by writes; index-only scans use it to skip the table."
+section = "Why the index cannot answer alone"
+
+[[terms]]
+term = "Heap fetch"
+means = "A table-page visit made during an index-only scan because the visibility map did not mark the page all-visible; EXPLAIN (ANALYZE) reports the count as Heap Fetches."
+section = "Break it, measure it, repair it"
+
+[[terms]]
+term = "Autovacuum"
+means = "The background process that runs VACUUM and ANALYZE on tables whose dead or inserted row counts pass per-table thresholds."
+section = "Keeping the map clean"
+
+[[sources]]
+title = "PostgreSQL: visibility map"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/storage-vm.html"
+
+[[sources]]
+title = "PostgreSQL: routine vacuuming and the autovacuum daemon"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"
+
+[[sources]]
+title = "PostgreSQL: index-only scans and covering indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"

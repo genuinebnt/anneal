@@ -1,0 +1,98 @@
+{
+ "id": "m21-clean",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT sum(total_cents) FROM vm_orders WHERE customer_id BETWEEN 1 AND 500;",
+ "setup": [
+  {
+   "id": "vm-table",
+   "sql": "CREATE TABLE vm_orders AS SELECT id, customer_id, total_cents FROM orders WHERE id <= 500000; ALTER TABLE vm_orders ADD PRIMARY KEY (id); ALTER TABLE vm_orders SET (autovacuum_enabled = false); CREATE INDEX vm_orders_cover ON vm_orders (customer_id) INCLUDE (total_cents); VACUUM ANALYZE vm_orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 378.64,
+   "Total Cost": 378.65,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.839,
+   "Actual Total Time": 0.84,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 17,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Only Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "vm_orders_cover",
+     "Relation Name": "vm_orders",
+     "Alias": "vm_orders",
+     "Startup Cost": 0.42,
+     "Total Cost": 365.06,
+     "Plan Rows": 5432,
+     "Plan Width": 4,
+     "Actual Startup Time": 0.027,
+     "Actual Total Time": 0.483,
+     "Actual Rows": 5014.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "((customer_id >= 1) AND (customer_id <= 500))",
+     "Rows Removed by Index Recheck": 0,
+     "Heap Fetches": 0,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 17,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.063,
+  "Triggers": [],
+  "Execution Time": 0.853
+ },
+ "text": "Aggregate  (cost=378.64..378.65 rows=1 width=8) (actual time=0.737..0.738 rows=1.00 loops=1)\n  Buffers: shared hit=17\n  ->  Index Only Scan using vm_orders_cover on vm_orders  (cost=0.42..365.06 rows=5432 width=4) (actual time=0.023..0.464 rows=5014.00 loops=1)\n        Index Cond: ((customer_id >= 1) AND (customer_id <= 500))\n        Heap Fetches: 0\n        Index Searches: 1\n        Buffers: shared hit=17\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.072 ms\nExecution Time: 0.752 ms"
+}
