@@ -219,3 +219,24 @@ undo = "SELECT 1;"
 id = "vm-vacuum"
 sql = "VACUUM vm_orders;"
 undo = "SELECT 1;"
+
+# module 22: physical order. A throwaway copy of orders, because CLUSTER rewrites the table under an exclusive lock.
+[[setup]]
+id = "cl-orders"
+sql = "CREATE TABLE cl_orders AS SELECT * FROM orders; ALTER TABLE cl_orders ADD PRIMARY KEY (id); ALTER TABLE cl_orders SET (autovacuum_enabled = false); CREATE INDEX cl_created ON cl_orders (created_at); VACUUM ANALYZE cl_orders;"
+undo = "DROP TABLE cl_orders;"
+
+[[setup]]
+id = "cl-cluster"
+sql = "CLUSTER cl_orders USING cl_created; ANALYZE cl_orders;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "cl-drop-btree"
+sql = "DROP INDEX cl_created;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "cl-brin"
+sql = "CREATE INDEX cl_brin ON cl_orders USING brin (created_at); ANALYZE cl_orders;"
+undo = "DROP INDEX cl_brin;"

@@ -1,0 +1,123 @@
+title = "Physical order: correlation, CLUSTER and BRIN"
+group = "sql-covering"
+order = 22
+minutes = 15
+lede = "A b-tree index is sorted; the table is not. Where the rows that an index returns sit in the table decides how many pages the query reads, and that is a property of the data's physical order, not of the index. This page measures it, reorders a table with CLUSTER, and builds a BRIN index that is 24 kB because it relies on that order."
+say = "A column's correlation (pg_stats, from -1 to 1) says how well its order matches the table's physical order. A created_at range of 1,993 rows read 1,867 buffers because correlation was about 0; after CLUSTER on that index (4.6 s on 2,000,000 rows, exclusive lock) the same query read 25 buffers. CLUSTER is a one-time rewrite: 200,000 random inserts dropped correlation from 1.0 to 0.83. A BRIN index on the clustered column is 24 kB against 43 MB for the b-tree and answered in 128 pages (1.3 ms); on the unclustered column it read all 14,976 pages (about 160 ms)."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Correlation** in `pg_stats` compares a column's sort order with the order of the rows in the table. In the example `orders`, `id` has correlation **1.0** (rows were inserted in id order) and `created_at` **-0.006**: a range of dates is scattered across the whole table.",
+  "Same plan shape, different cost: `id BETWEEN ...` returning 20,000 rows read **208 buffers**; `created_at` in a 14-hour window returning 1,993 rows (a tenth as many) read **1,867**, almost one page per row (`Heap Blocks: exact=1858`).",
+  "`CLUSTER cl_orders USING cl_created` rewrote a copy of the table in index order: **4.6 s** for 2,000,000 rows, an `ACCESS EXCLUSIVE` lock for the duration, correlation **1.0** afterwards. The same query then read **25 buffers** (0.4 ms against 3 ms) with a plain `Index Scan`.",
+  "CLUSTER is **not maintained**. 200,000 rows inserted with random timestamps (10% more rows) took the correlation from 1.0 to **0.83**, and updates move rows too. Re-clustering means another rewrite, so it suits data that is loaded once or rarely changed, or append-mostly data that arrives in key order anyway (logs, events).",
+  "**BRIN** stores one min/max summary per block range instead of one entry per row: **24 kB** against **43 MB** for the b-tree on `created_at`. On the clustered table it found the 2,000 rows by reading **128 pages** (`Heap Blocks: lossy=128`, 1.3 ms). On the unclustered table every range's min/max spans the whole date range, so it matched everything: **14,976 pages**, 1,998,007 rows rechecked and thrown away, about 160 ms, no better than a sequential scan.",
+]
+
+[[sections]]
+heading = "Where the rows are"
+body = """
+Two range queries on the same 2,000,000-row table, with an index on the column each uses. First by `id`, which is the order rows were inserted in:
+
+```plan id=m22-id-range setup=no-parallel
+SELECT sum(total_cents) FROM orders WHERE id BETWEEN 1000000 AND 1019999;
+```
+
+20,000 rows, `Index Scan`, **208 buffers**: the matching rows sit next to each other, about 134 per 8 kB page, so a range of ids touches a few hundred pages. Then 14 hours of `created_at`, which holds 1,993 rows (the index is on `created_at`):
+
+```plan id=m22-created-range setup=orders-created-day,no-parallel
+SELECT sum(total_cents) FROM orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';
+```
+
+A tenth of the rows and **nine times the buffers**: `Heap Blocks: exact=1858` for 1,993 rows. The rows from one afternoon are not stored near each other; the table is in `id` order and the timestamps in this data set were assigned independently of it. The index finds them in 9 pages and the table costs the other 1,858.
+
+That is what **correlation** measures. `ANALYZE` stores it per column in `pg_stats`: 1 when the column's order is the table's order, -1 when reversed, near 0 when unrelated. The planner uses it to price index scans (module 10): with high correlation a range scan is sequential and cheap, with correlation near 0 it prices every row as a separate page. `id` is 1; `created_at` is -0.006; `customer_id` is 0.007. A correlation of about 0 also explains the 10,991 heap blocks in module 20's covering-index example.
+"""
+
+[[sections]]
+heading = "CLUSTER: put the table in index order"
+body = """
+`CLUSTER table USING index` rewrites the table so the rows are physically in that index's order. On a throwaway copy of `orders` with an index on `created_at`, before:
+
+```plan id=m22-before setup=cl-orders,no-parallel
+SELECT sum(total_cents) FROM cl_orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';
+```
+
+(The same 1,858 blocks as above; `cl_orders` is a copy of the table and not a different situation.) Then `CLUSTER cl_orders USING cl_created`, and `ANALYZE`:
+
+```plan id=m22-after setup=cl-orders,cl-cluster,no-parallel
+SELECT sum(total_cents) FROM cl_orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';
+```
+
+`Index Scan`, **25 buffers**, 0.4 ms against about 3 ms. The 1,993 rows now sit in about 15 adjacent pages, and the plan can read the index in order and the table behind it in order. `CLUSTER` took 4.6 s here for 117 MB and left correlation at 1.0.
+
+What it costs and does not do:
+
+- **A rewrite under an `ACCESS EXCLUSIVE` lock.** Nothing can read or write the table while it runs, and it needs room for a second copy. On a production table that is a maintenance window (the `pg_repack` extension does it online).
+- **Not maintained.** Postgres does not keep new rows in cluster order. After 200,000 rows with random timestamps went into the clustered copy (10% more rows), the correlation was 0.83; after enough churn it is back near 0, and you cluster again. (Updates that need a new row version place it elsewhere in the table.)
+- **One order per table.** The table can follow one index's order. Clustering on `created_at` makes `customer_id` queries no better.
+- **Not for the common OLTP case.** Where inserts arrive already in key order (an `id`, a timestamp of insertion, an event log), the table is clustered on that column for free. The case for `CLUSTER` is data that was loaded in a different order from the one it is read in.
+"""
+
+[[sections]]
+heading = "BRIN: an index that relies on the order"
+body = """
+A **block range index** keeps, for each run of pages (128 by default), the minimum and maximum of the column in those pages. A query for a range of values skips every block range whose min/max cannot match. It is tiny because it holds one summary per 128 pages rather than one entry per row, and it only works if the column's values are clustered. On the clustered copy, with the b-tree dropped so the planner has no other choice:
+
+```plan id=m22-brin-clustered setup=cl-orders,cl-cluster,cl-drop-btree,cl-brin,no-parallel
+SELECT sum(total_cents) FROM cl_orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';
+```
+
+The index is **24 kB** (the b-tree on the same column was 43 MB). It said which block ranges might contain the dates: `Heap Blocks: lossy=128` means 128 pages were read and every row in them rechecked (`Rows Removed by Index Recheck: 15129`), to find 1,993 rows. 130 buffers and 1.3 ms: more than the b-tree's 25 buffers, for a thousandth of the space. That is the BRIN trade, and it is why it suits very large, append-only tables (time series, logs) where a 43 MB-per-2-million-rows index is the problem.
+
+The same index on the table as it was, with correlation near 0. The planner is on the fence here (a sequential scan costs about the same as this plan and sometimes wins), so the plan below is taken with sequential scans switched off to show what the BRIN index does:
+
+```plan id=m22-brin-random setup=cl-orders,cl-drop-btree,cl-brin,no-seqscan,no-parallel
+SELECT sum(total_cents) FROM cl_orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';
+```
+
+Every block range's minimum and maximum covers almost the whole date range, so the index can rule out nothing: **14,976 pages** read, 1,998,007 rows rechecked and discarded, about 160 ms. That is a sequential scan of the table with a bitmap in front. BRIN on a column with no correlation is useless; check `pg_stats.correlation` before building one.
+"""
+
+[[checks]]
+prompt = "pg_stats shows correlation 0.01 for created_at, and a one-hour window of orders reads one table page per row through the created_at index. What are your options?"
+answer = "Cover the query so it needs no table pages (module 20), or cluster the table on that index with CLUSTER (an exclusive-lock rewrite, not maintained afterwards), or accept the cost if the window is rare. Insert-ordered tables are usually already clustered on id or insertion time; if reads are by event time and writes arrive in a different order, a periodic CLUSTER or pg_repack can restore it."
+
+[[checks]]
+prompt = "You build a BRIN index on customer_id of a 2-million-row table and it is 24 kB. Will it speed up WHERE customer_id = 4242?"
+answer = "No. BRIN keeps only min and max per block range, and customer_id has correlation near 0, so every range contains values from the whole span and none can be skipped: the scan reads all pages and rechecks every row. BRIN needs a column whose values follow the physical order of the table (a timestamp of insertion, a serial id)."
+
+[[checks]]
+prompt = "What does CLUSTER lock, what does it not do afterwards, and what is the alternative on a live table?"
+answer = "It takes an ACCESS EXCLUSIVE lock on the table while it rewrites it, blocking reads and writes, and needs space for a second copy. It does not keep the order: new and updated rows land wherever there is room, so correlation decays. On a live table, pg_repack (an extension) rewrites it online, or design the load so rows arrive in the read order."
+
+[[terms]]
+term = "Correlation"
+means = "A pg_stats value from -1 to 1 comparing a column's sort order with the physical order of the rows; the planner uses it to price index range scans."
+section = "Where the rows are"
+
+[[terms]]
+term = "CLUSTER"
+means = "A command that rewrites a table in the order of one of its indexes, under an exclusive lock; the order is not maintained afterwards."
+section = "CLUSTER: put the table in index order"
+
+[[terms]]
+term = "BRIN"
+means = "A block range index: a min/max summary per run of table pages, tiny, and useful only when the column's values follow the table's physical order."
+section = "BRIN: an index that relies on the order"
+
+[[sources]]
+title = "PostgreSQL: CLUSTER"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-cluster.html"
+
+[[sources]]
+title = "PostgreSQL: BRIN indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/brin.html"
+
+[[sources]]
+title = "PostgreSQL: pg_stats (correlation)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/view-pg-stats.html"
