@@ -1,0 +1,32 @@
+slug = "typed-arena"
+title = "A typed arena that hands out references through &self"
+mode = "write"
+level = "hard"
+stage = "arena-and-allocator"
+order = 3
+status = "ready"
+tags = ["arena", "unsafe", "lifetimes", "interior mutability", "RefCell", "drop order", "typed-arena"]
+teaches = [
+  "Why `fn alloc(&self, v: T) -> &mut T` is sound only because the storage never moves: the invariant that justifies one `unsafe` block.",
+  "Chunked growth (double each time) as the way to keep addresses stable while amortising allocation: the design of `typed-arena` and `bumpalo`.",
+  "Building cyclic graphs with plain `&'a Node<'a>` references and `Cell`, which an arena makes possible and `Box` cannot.",
+]
+follow_up = "1) Why must `alloc` take `&self`, and what stops you from calling `arena.alloc(...)` while holding the `RefCell` borrow on re-entry (e.g. a `T::clone` that allocates)? 2) Show the use-after-free that a single `Vec<T>` would cause with a test under Miri. 3) `typed-arena` needs a nightly `#[may_dangle]` to allow cycles with `Drop` types: explain dropck. 4) Make a `Bump` that allocates mixed types from one buffer with correct alignment (`Layout::pad_to_align`). 5) Why is `Arena<T>` not `Sync`, and what would a sharded per-thread arena look like?"
+related = ["Y2", "F2", "D6"]
+
+[[hints]]
+kind = "approach"
+text = "`RefCell<Vec<Vec<T>>>`. To allocate: if the last chunk is full (or there is none) push a `Vec::with_capacity(previous * 2)` (4 the first time); then `push` the value into the last chunk and take a raw pointer to it."
+
+[[hints]]
+kind = "rust"
+text = "`let ptr: *mut T = chunk.last_mut().unwrap();` then `unsafe { &mut *ptr }` detaches the reference from the `RefCell` borrow. It is sound because pushing into a chunk with spare capacity never reallocates, and the outer `Vec<Vec<T>>` only moves the chunk headers, not their heap buffers."
+
+[[hints]]
+kind = "edge"
+text = "Do not implement `Drop` yourself: the field's own drop glue drops every value once, which keeps the cyclic-graph test compiling (a `Drop` impl would demand `T` outlive the arena). Compare `len() == capacity()` to decide when a chunk is full, never `len() >= some constant`."
+
+[solution]
+explanation = "`typed-arena` is exactly this (plus `iter_mut` and `alloc_extend`); `bumpalo` generalises it to mixed types by handing out bytes from one bump pointer. Arenas win when many objects share one lifetime: an AST per compilation, a request's scratch data, a graph. Allocation is a pointer bump, deallocation is free, locality is good, and `&'a` references make cyclic structures expressible in safe code."
+time = "O(1) amortised per alloc"
+space = "O(n) plus up to 2x slack in the last chunk"
