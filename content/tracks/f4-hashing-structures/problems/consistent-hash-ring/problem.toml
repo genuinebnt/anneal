@@ -1,0 +1,32 @@
+slug = "consistent-hash-ring"
+title = "A consistent-hash ring with virtual nodes and replicas"
+mode = "write"
+level = "medium"
+stage = "sketches-and-rings"
+order = 3
+status = "ready"
+tags = ["consistent hashing", "BTreeMap range", "virtual nodes", "sharding", "replication", "Dynamo", "load balancing"]
+teaches = [
+  "Why `hash(key) % n` is a disaster for a cache or shard map (adding a node moves almost every key) and how a ring moves only about `1/(n+1)` of them.",
+  "Virtual nodes as the fix for lumpy load: many points per node average out the arc lengths.",
+  "`BTreeMap::range` for 'first point at or after this hash, wrapping around' and the replica walk used by Dynamo, Cassandra and memcached clients.",
+]
+follow_up = "1) Implement jump consistent hash and rendezvous hashing, and compare balance, memory and lookup cost to the ring. 2) Add per-node weights (more or fewer vnodes) and test that load follows the weights. 3) Bounded-load consistent hashing: cap each node at `(1 + eps) * average` and spill to the next node; when does that matter (hot keys)? 4) Use `get_n` for replication in a toy Dynamo: what do sloppy quorums and hinted handoff add? 5) Why do vnode points from different nodes colliding on the same hash matter, and what does your ring do?"
+related = ["F4", "S4", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Keep `points: BTreeMap<u64, String>` (point to node name) and the set of node names. `add_node` inserts `vnodes` points `hash64(\"{name}#{i}\")`. `get` is `points.range(h..).next()`, falling back to the first entry when nothing is at or above `h`."
+
+[[hints]]
+kind = "rust"
+text = "`BTreeMap::range(h..)` then `.chain(range(..h))` walks the circle once, starting just after the key. For replicas collect names while skipping ones you already have, until you have `n` or run out. `retain(|_, node| node != name)` removes a node's points."
+
+[[hints]]
+kind = "edge"
+text = "Reject a second `add_node` of the same name (it would insert nothing new but must not double-count). The empty ring has no owner. With one point per node the arcs are wildly uneven: that is what the virtual nodes are for."
+
+[solution]
+explanation = "Consistent hashing is how Dynamo, Cassandra, Riak, memcached clients (ketama) and many load balancers (Envoy's ring-hash, HAProxy `hash-type consistent`) place keys. Rendezvous (highest-random-weight) hashing and jump hash solve the same problem with different trade-offs: no ring to store, but O(n) per lookup or no arbitrary node removal."
+time = "O(log P) per lookup, O(vnodes log P) per membership change"
+space = "O(nodes * vnodes)"
