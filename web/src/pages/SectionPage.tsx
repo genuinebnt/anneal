@@ -163,7 +163,7 @@ function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean
       <h4>{live?.name ?? row.name}</h4>
       <p dangerouslySetInnerHTML={{ __html: blank ? "" : marked.parseInline(live?.summary || BLURB[row.code] || "", { async: false }) }} />
       <div className="s-meta s-x">
-        <b>{total}</b> problems · {hours(minutesTotal(row))} · easy → hard
+        <b>{total}</b> problems · {hours(minutesTotal(row))} · easy → hard{live && row.state !== "planned" && live.total > 0 ? <> · <b>{Math.round((live.solved / live.total) * 100)}%</b> solved</> : null}
       </div>
       <Segs row={row} />
       <div className="s-foot">
@@ -179,6 +179,45 @@ function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean
     <article className={cls} style={rv.style} aria-disabled="true">
       {body}
     </article>
+  );
+}
+
+/** The recommended order as one rail: a node per track, coloured by where you are, each a link to its page. */
+function Roadmap({ rows }: { rows: Row[] }) {
+  const done = rows.filter((r) => r.state === "done").length;
+  const written = rows.filter((r) => r.state !== "planned").length;
+  const pct = written ? Math.round((done / written) * 100) : 0;
+  return (
+    <section className="s-card s-road s-rv" style={rise(5).style} aria-label="Roadmap">
+      <h5>
+        ROADMAP · RECOMMENDED ORDER
+        <b>{done} of {written} written tracks done · {pct}%</b>
+      </h5>
+      <ol>
+        {rows.map((r) => {
+          const live = r.live;
+          const p = live && live.total ? Math.round((live.solved / live.total) * 100) : 0;
+          const inner = (
+            <>
+              <i className={`s-dot s-d-${r.state}`} style={{ "--p": `${p}%` } as CSSProperties} />
+              <span className="s-rc">{r.code}</span>
+              <small>{r.state === "planned" ? "planned" : `${live?.solved ?? 0}/${live?.total ?? 0}`}</small>
+            </>
+          );
+          return (
+            <li key={r.code} title={`${live?.name ?? r.name}${live && r.state !== "planned" ? ` · ${p}% solved` : " · not written yet"}`}>
+              {live && r.state !== "planned" ? (
+                <Link to="/t/$track" params={{ track: live.slug }}>
+                  {inner}
+                </Link>
+              ) : (
+                <span className="s-nolink">{inner}</span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }
 
@@ -466,6 +505,7 @@ export function SectionPage({ area }: { area: NavArea }) {
     <>
       {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
       {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
+      {!loading && rows.length > 0 && <Roadmap rows={rows} />}
       <div className="s-tools">
         <label className="s-search">
           <span>⌕</span>
