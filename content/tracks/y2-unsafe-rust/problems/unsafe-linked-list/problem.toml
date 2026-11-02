@@ -1,0 +1,32 @@
+slug = "unsafe-linked-list"
+title = "An unsafe doubly linked list"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 3
+status = "ready"
+tags = ["unsafe", "NonNull", "Box::leak / from_raw", "PhantomData", "DoubleEndedIterator", "iterative Drop", "invariants"]
+teaches = [
+  "Owning heap nodes through `NonNull` pointers: `Box::leak` to create, `Box::from_raw` to free exactly once.",
+  "Writing the list's invariants first (ends have no outer link, `n.next.prev == n`, `len` counts nodes) and checking each operation against them.",
+  "Iterators that hand out `&T` / `&mut T` safely: `PhantomData<&'a T>`, a remaining-count so the two ends never cross, disjoint `&mut`.",
+]
+follow_up = "1) Run the tests under Miri; then change `Iter` to keep `&'a Node<T>` instead of `NonNull` and see which aliasing rule `IterMut` would break (Stacked/Tree Borrows). 2) Add a `Cursor`/`CursorMut` with `move_next`, `insert_after`, `remove_current`, and `split_off`: which invariants does `split_off` have to repair? 3) Make an intrusive LRU: a `HashMap<K, NonNull<Node>>` plus this list, with O(1) get-and-promote. 4) Why does `PhantomData<Box<Node<T>>>` matter for the drop checker, and what changes if you leave it out? 5) Should `List<T>` be `Send`/`Sync`? Write the `unsafe impl`s and the argument."
+related = ["Y2", "D5", "S7"]
+
+[[hints]]
+kind = "approach"
+text = "Write the invariants as a comment: both ends `None` together, `head.prev == None`, `tail.next == None`, `n.next.prev == n`, `len` counts nodes. Every method is 'make the new links, then restore the invariants at the ends'. `push_front` on an empty list must set the tail too."
+
+[[hints]]
+kind = "rust"
+text = "Create: `NonNull::from(Box::leak(Box::new(node)))`. Free: `Box::from_raw(ptr.as_ptr())` once, then read its `next`/`prev` fields before the box goes away. Iterators keep `head`, `tail` and a **remaining count**; stop when the count is 0 so `next` and `next_back` never hand out the same node."
+
+[[hints]]
+kind = "edge"
+text = "`Drop` must loop (`while self.pop_front().is_some() {}`): the derived recursive drop of a `Box<Node>` chain overflows the stack at around 100k nodes. In `retain` read `next` before you free the current node."
+
+[solution]
+explanation = "`std::collections::LinkedList` is exactly this (and the 'Learn Rust With Entirely Too Many Linked Lists' book builds the same thing in stages). It exists in `std` mostly as a lesson: for real work a `VecDeque` is faster, and intrusive lists (the node lives inside the object, as in the Linux kernel's `list_head`) are where the technique pays off, for example in an LRU cache with O(1) unlink by handle."
+time = "O(1) per end operation"
+space = "O(n)"
