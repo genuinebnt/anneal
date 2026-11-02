@@ -225,3 +225,5 @@ open, never multiple choice. DSA Learn pages follow DSA_LEARN_PAGE_SPEC.md exact
 | The course itself | `courses/bustub/{modules,concepts,template,reference}` (reference is committed; `anneal course template` regenerates the template) |
 | CLI | `crates/cli/src/{course.rs,ui.rs,update.rs,course_sync.rs,embedded.rs}`; install and update docs in `docs/CLI_INSTALL.md` |
 | App side of CLI updates | `crates/api/src/cli_updates.rs` (public: `/cli/<target>/version`, `/courses-bundle/<id>[/version]`), `/install.sh`, `/downloads/*` |
+
+- 2026-11-02, SQL track: modules 5 to 9 merged; module 10 `sql-statistics` (PR in flight); plan explorer built on a local commit (web/src/pages/sd/SdPlans.tsx, route /sd/plans), to be pushed after this PR; module 11 experiments done, page unwritten.

@@ -1,0 +1,269 @@
+title = "Statistics: what the planner knows"
+group = "sql-plans"
+order = 10
+minutes = 22
+lede = "The planner never looks at your table when it plans a query. It looks at a small summary kept in the catalog: how many rows, how many distinct values, which values are common, how the rest are spread. Every row estimate in a plan, and so every choice between an index and a scan, is arithmetic on that summary. When a plan is wrong, the summary is usually where to look."
+say = "Postgres estimates a condition's row count from a sampled summary (the most common values, a histogram, the number of distinct values), multiplies the estimates of separate conditions as if they were independent, and rounds up to one row; stale or sampled-thin statistics, and columns that depend on each other, are where its estimates go wrong."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "`ANALYZE` samples the table (about 30,000 rows at the default target of 100) and stores per-column facts in `pg_stats`: `null_frac`, `n_distinct`, the most common values with their frequencies, a 100-bucket histogram and the physical `correlation`.",
+  "A common value's estimate is its frequency times the table size: `pending` at 0.0559 × 2,000,000 = **111,733** rows, against 111,232 actual.",
+  "A range is estimated from the histogram (`created_at < '2025-03-01'`: 199,574 against 197,569); a value nobody has is estimated at **1** row, never 0.",
+  "Separate conditions are multiplied as independent: `city = 7 AND country = 7` was estimated at **100** rows and returned **1,000** until `CREATE STATISTICS` taught the planner that country follows from city.",
+  "Autovacuum re-analyzes after about 10% of a table changes; run `ANALYZE` yourself after a bulk load and after creating an expression index.",
+]
+
+[[sections]]
+heading = "What ANALYZE stores"
+body = """
+Two places hold what the planner knows. `pg_class` has the size of each table and index: `reltuples` (rows) and `relpages` (8 KB pages), which for `orders` read 2,000,000 and 14,960. `pg_stats` has a row for each column, built by `ANALYZE` (run by hand, or by autovacuum in the background) from a **random sample** of the table: 300 rows per unit of the statistics target, which is 100 by default, so 30,000 rows however large the table is.
+
+The facts it keeps for each column, measured on the example `orders` table:
+
+| Column | `n_distinct` | `correlation` | What it says |
+|---|---|---|---|
+| `id` | -1 | 1.0 | every value different (negative means a fraction of the row count); stored in table order |
+| `created_at` | -1 | -0.01 | all different; not in table order (the example loads orders in random date order) |
+| `customer_id` | 49,043 | 0.005 | about 49,000 distinct customers (50,000 exist; this is an estimate from the sample) |
+| `status` | 4 | 0.43 | four values |
+
+`n_distinct` is the planner's estimate of how many different values there are; with 30,000 rows sampled out of 2 million it can be a little off, as 49,043 against 50,000 shows. `correlation` is the relation between the order of values and the order of rows in the table, from 1 (the table is sorted by this column) to 0 (no relation): it decides how much an index range scan on the column jumps around the table, which is why a range on a column with correlation near 0 reads about one page per row (module 5).
+
+For columns with repeated values, `ANALYZE` also keeps the **most common values** (MCVs) with their frequencies, and for the rest a **histogram**: bounds that cut the remaining values into 100 buckets of equal count.
+
+```sql title=pg_stats.sql
+SELECT most_common_vals, most_common_freqs FROM pg_stats
+WHERE tablename = 'orders' AND attname = 'status';
+--         most_common_vals         |           most_common_freqs
+-- ---------------------------------+----------------------------------------
+--  {paid,shipped,refunded,pending} | {0.6095,0.22303334,0.1116,0.055866666}
+```
+
+The frequencies are fractions of the sample, so they carry sampling noise. Two successive `ANALYZE` runs on this table stored 0.0535 and then 0.0559 for `pending`, while the true share is 111,232 of 2,000,000, or 0.0556. An estimate wrong by a few percent from the sample is normal and almost never changes a plan.
+"""
+
+[[sections]]
+heading = "Estimating a condition"
+body = """
+Take the plan for the pending orders:
+
+```plan id=m10-mcv setup=no-parallel
+SELECT id FROM orders WHERE status = 'pending';
+```
+
+The estimate, `rows=111733`, is not a guess from the plan but arithmetic: `pending` is in the most-common-values list with frequency 0.055866666, and 0.055866666 × 2,000,000 rows = **111,733**. The actual count is 111,232, within half a percent. For a value in the MCV list the estimate is the frequency times the row count, and that is all.
+
+A **range** is estimated from the histogram. `created_at < '2025-03-01'` falls between bucket bounds; the planner counts the buckets below the value and interpolates inside the one that holds it:
+
+```plan id=m10-histogram setup=no-parallel
+SELECT id FROM orders WHERE created_at < '2025-03-01';
+```
+
+199,574 estimated, 197,569 actual: one percent off, from a 30,000-row sample of 2 million. (With 100 buckets, each holds 1% of the rows, so the interpolation error is limited to the rows of the two buckets at the ends of the range.)
+
+A value that is **not** in the MCV list but is in the column is estimated from what is left over: the share not taken by common values, divided among the remaining distinct values. For `customer_id = 4242` that is roughly 2,000,000 / 49,043 = 41 rows; the example customer has 44.
+
+A value nobody has:
+
+```plan id=m10-unknown setup=no-parallel
+SELECT id FROM orders WHERE status = 'nonexistent';
+```
+
+`rows=1` estimated, 0 actual. Postgres never estimates fewer than one row for a scan, because a plan built on zero rows would be fragile: a single row turns out to exist and the plan, tuned for nothing, collapses. That clamp is harmless here, and a source of surprise when a join of several such conditions multiplies those ones together.
+
+> [!NOTE]
+> Parameters and generic plans (module 11) are the other half of this: with `status = $1` and no value, the planner cannot use the MCV list, so it uses `1 / n_distinct` (here 500,000 rows, a quarter of the table, measured with `EXPLAIN EXECUTE` on a generic plan), the same estimate for every status. That is why a prepared statement can plan worse than the same statement with the literal.
+"""
+
+[[sections]]
+heading = "Columns that depend on each other"
+body = """
+For `WHERE a = 1 AND b = 2` the planner multiplies the two selectivities as if the columns were **independent**: P(a) × P(b). When one column determines the other, that is wrong by a large factor. A `places` table of a million rows holds 1,000 cities, and each city is in exactly one of 10 countries. Looking for one city and its country:
+
+```plan id=m10-independence setup=places,no-parallel
+SELECT id FROM places WHERE city = 7 AND country = 7;
+```
+
+`rows=100` estimated against **1,000** actual, ten times too low: 1/1000 of the table for the city times 1/10 for the country, as if the country told you something extra about a city that already fixes it. Ten times is mild; with several dependent columns, or a join, the error compounds into thousands, and the plan changes (a nested loop where a hash join belonged).
+
+Postgres lets you tell it: **extended statistics**, created for the group of columns.
+
+```sql title=extended.sql
+CREATE STATISTICS places_dep (dependencies) ON city, country FROM places;
+ANALYZE places;
+SELECT dependencies FROM pg_stats_ext WHERE statistics_name = 'places_dep';
+--      dependencies
+-- ----------------------
+--  {"2 => 3": 1.000000}     -- column 2 (city) determines column 3 (country) with degree 1.0
+```
+
+```plan id=m10-dependencies setup=places,places-stats,no-parallel
+SELECT id FROM places WHERE city = 7 AND country = 7;
+```
+
+The estimate is now `rows=994`, against 1,000. The kinds of extended statistics:
+
+| Kind | Fixes |
+|---|---|
+| `dependencies` | one column functionally determines another (city to country, postcode to city) |
+| `ndistinct` | the number of distinct *combinations* in a `GROUP BY a, b` is far lower than the product |
+| `mcv` | specific combinations of values are common or absent (a multi-column most-common-values list) |
+| expressions | statistics on an expression such as `lower(email)` without an index |
+
+Extended statistics are not built automatically, because the planner cannot know which columns you care about. Create one when you find, in a plan, a gap between estimated and actual rows that traces to two or more columns of the same table in one condition or `GROUP BY`. They cost a little more in `ANALYZE` and planning time.
+"""
+
+[[sections]]
+heading = "Keeping statistics fresh and detailed"
+body = """
+Statistics are a snapshot. **Autovacuum** re-runs `ANALYZE` on a table when the rows changed since the last one pass `autovacuum_analyze_threshold` (50) plus `autovacuum_analyze_scale_factor` (0.1) times the table size: for `orders`, about 200,050 changed rows, 10% of the table. That is usually fine and sometimes not:
+
+- After a **bulk load or a large delete**, the statistics describe the old table until autovacuum gets to it. Run `ANALYZE table` yourself in the same script. `pg_stat_user_tables.n_mod_since_analyze` shows how many rows changed since the last run.
+- A new **expression index** has no statistics until the next `ANALYZE` (module 4 measured the planner guessing 250 rows instead of 1 for `lower(email)` until it ran).
+- On a **huge, fast-growing table** 10% is too late. Lower the scale factor for that table: `ALTER TABLE events SET (autovacuum_analyze_scale_factor = 0.01)`.
+
+The other dial is detail. `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS n` (or `default_statistics_target` for all) sets how many MCVs and histogram buckets to keep and, with it, the sample size. On `orders.total_cents`, the histogram had 101 bounds at the default target of 100 and **1,001** at a target of 1000 (measured, and then set back to the default). A bigger target helps a skewed column whose long tail has real structure, and costs a larger sample for each `ANALYZE` and a little more time to plan. It rarely fixes a wrong estimate by itself; changing the target is the right tool when an estimate on a single column is off because the sample is too thin to see it.
+
+> [!WARNING]
+> The cause of a bad estimate matters more than the knob. Stale statistics: `ANALYZE`. A thin sample on one skewed column: raise its target. Dependent columns: `CREATE STATISTICS`. A function or arithmetic on the column hiding it from its statistics (module 7): rewrite the condition. A parameter with no value: module 11.
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+| Engine | Statistics |
+|---|---|
+| MySQL | InnoDB keeps persistent index statistics (sampled pages per index, refreshed by `ANALYZE TABLE` or after enough changes) and, since 8.0, optional **histograms** you create with `ANALYZE TABLE ... UPDATE HISTOGRAM ON column`; histograms are per column. From the manual; not run here |
+| SQLite | `ANALYZE` writes `sqlite_stat1` (rows per index prefix) and, if compiled in, `sqlite_stat4` (samples of values); the planner reads them at connection time. From the manual; not run here |
+| ClickHouse, DuckDB | They keep min and max per block (zone maps) rather than per-column histograms like Postgres's; the details are in their documentation, and were not run here |
+
+Postgres's multi-column statistics are the fix for correlated columns that this page showed; the MySQL and SQLite lines above are from their manuals and were not run here.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Two habits that cost almost nothing. After a bulk load, analyze in the same step, so the first queries are planned on the new data:
+
+```rust title=bulk_load.rs
+async fn load_orders(pool: &sqlx::PgPool, rows: Vec<(i32, String, i32)>) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    // UNNEST turns three arrays into rows in one statement (module 28 compares this with COPY)
+    let (customers, statuses, totals): (Vec<i32>, Vec<String>, Vec<i32>) = rows.into_iter().fold(
+        (vec![], vec![], vec![]),
+        |(mut a, mut b, mut c), (x, y, z)| { a.push(x); b.push(y); c.push(z); (a, b, c) },
+    );
+    sqlx::query("INSERT INTO orders (customer_id, status, total_cents, created_at) SELECT c, s, t, now() FROM UNNEST($1::int[], $2::text[], $3::int[]) AS u(c, s, t)")
+        .bind(customers).bind(statuses).bind(totals)
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    sqlx::query("ANALYZE orders").execute(pool).await?; // outside the transaction: refresh the statistics too
+    Ok(())
+}
+```
+
+And a query that lists the tables whose statistics are stale enough to matter, for a dashboard or a check in CI:
+
+```sql title=stale_stats.sql
+SELECT relname, n_live_tup, n_mod_since_analyze,
+       round(100.0 * n_mod_since_analyze / greatest(n_live_tup, 1), 1) AS pct_changed, last_autoanalyze
+FROM pg_stat_user_tables
+WHERE n_mod_since_analyze > 0.05 * greatest(n_live_tup, 1)
+ORDER BY n_mod_since_analyze DESC;
+```
+"""
+
+[[checks]]
+prompt = "A plan estimates rows=100 for WHERE city = 7 AND country = 7 and gets 1,000. The table has 1,000 cities and 10 countries, and each city is in one country. Reconstruct the 100, and say what you do about it."
+answer = "The planner multiplies the selectivities as independent: 1/1000 for the city times 1/10 for the country is 1/10000 of a million rows, which is 100. But the country is fixed by the city, so the true selectivity is just 1/1000 (1,000 rows). Create extended statistics for the pair, CREATE STATISTICS ... (dependencies) ON city, country, and ANALYZE; the estimate then comes out at 994."
+
+[[checks]]
+prompt = "Postgres estimated 111,733 rows for status = 'pending' and found 111,232. Where did 111,733 come from, and would you try to improve it?"
+answer = "Pending is in the table's most-common-values list with a frequency of 0.055866666 in the sample, and 0.055866666 x 2,000,000 rows = 111,733. The sample is 30,000 rows, so the frequency has sampling noise (the stored value was 0.0535 in an earlier ANALYZE); half a percent of error is irrelevant to any plan choice, so no."
+
+[[checks]]
+prompt = "You bulk load 5 million rows into an empty table and the first reports run a nested loop that takes minutes. What is the likely cause, and the one-line fix in your load script?"
+answer = "The statistics still describe the empty table (autovacuum has not analyzed it yet), so the planner believes the table has almost no rows and chooses plans for tiny inputs, such as a nested loop. Run ANALYZE on the table right after the load, in the same script."
+
+[[checks]]
+prompt = "When is raising the statistics target the right fix, and when is it the wrong one?"
+answer = "It is right when the estimate for a single column is off because the sample is too thin to see its distribution, for example a skewed column whose long tail of values has real structure that 100 histogram buckets and 100 common values do not capture. It is wrong when the cause is somewhere else: stale statistics (ANALYZE), dependent columns (CREATE STATISTICS), a function hiding the column (rewrite the condition), or a parameter with no value (generic plans). A larger target makes every ANALYZE and every plan a little slower."
+
+[[terms]]
+term = "pg_stats"
+means = "The catalog view of per-column statistics built by ANALYZE: null fraction, n_distinct, most common values, histogram, correlation."
+section = "What ANALYZE stores"
+
+[[terms]]
+term = "Most common values (MCV)"
+means = "The list of a column's most frequent values with their frequencies; a value in it is estimated as frequency times row count."
+section = "What ANALYZE stores"
+
+[[terms]]
+term = "Histogram"
+means = "Bounds that split the column's remaining values into buckets of equal row count (100 by default), used to estimate ranges."
+section = "Estimating a condition"
+
+[[terms]]
+term = "Correlation"
+means = "How closely the order of a column's values follows the physical order of rows, from 1 to -1; near 0 means a range scan jumps around the table."
+section = "What ANALYZE stores"
+
+[[terms]]
+term = "Independence assumption"
+means = "The planner multiplies the selectivities of separate conditions as if the columns were unrelated."
+section = "Columns that depend on each other"
+
+[[terms]]
+term = "Extended statistics"
+means = "CREATE STATISTICS: dependencies, distinct counts, most common combinations and expressions for several columns together."
+section = "Columns that depend on each other"
+
+[[sources]]
+title = "PostgreSQL: statistics used by the planner"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/planner-stats.html"
+
+[[sources]]
+title = "PostgreSQL: row estimation examples"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/row-estimation-examples.html"
+note = "the arithmetic behind the estimates on this page"
+
+[[sources]]
+title = "PostgreSQL: the pg_stats view"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/view-pg-stats.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE STATISTICS"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createstatistics.html"
+
+[[sources]]
+title = "PostgreSQL: multivariate statistics examples"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/multivariate-statistics-examples.html"
+
+[[sources]]
+title = "PostgreSQL: the autovacuum daemon (analyze thresholds)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html#AUTOVACUUM"
+
+[[sources]]
+title = "MySQL: optimizer statistics and histograms"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/optimizer-statistics.html"
+
+[[sources]]
+title = "SQLite: the ANALYZE command"
+kind = "docs"
+url = "https://www.sqlite.org/lang_analyze.html"
+
+[[sources]]
+title = "Use The Index, Luke: statistics"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/explain-plan/postgresql/getting-an-execution-plan"
+note = "further reading"
