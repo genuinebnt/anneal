@@ -1,0 +1,312 @@
+title = "Reading EXPLAIN"
+group = "sql-plans"
+order = 8
+minutes = 24
+lede = "A query plan is a tree of small operations, each handing rows to its parent. EXPLAIN prints the planner's guess about that tree; EXPLAIN ANALYZE runs it and prints what happened beside the guess. Reading one is a skill with a short list of rules: which node runs first, what the numbers are per call and in total, where the pages were read, and which gap between guess and reality matters."
+say = "Read a plan from the innermost, most indented node outwards: each node's rows, loops and buffers say what it did, and the gap between its estimated and actual rows is where the planner went wrong; EXPLAIN ANALYZE really runs the statement, so wrap a write in a transaction you roll back."
+related = ["indexes", "postgres"]
+
+summary = [
+  "`EXPLAIN` shows the plan and **estimates** without running the query; `EXPLAIN ANALYZE` **runs it** and adds actual rows, time, loops and, since Postgres 18, buffers by default.",
+  "Read from the **innermost** node out: children produce rows, parents consume them. Costs are in arbitrary units (`seq_page_cost` = 1), not milliseconds.",
+  "`rows` and `time` are **per loop**: a node with `loops=3` and `rows=27.67` produced about 83 rows. Buffers are totals, and include the node's children.",
+  "A row-count estimate that is far from the actual count is the first thing to look for: every later choice in the plan rests on it.",
+  "`ANALYZE` executes `UPDATE`, `DELETE` and `INSERT` for real: use `BEGIN; EXPLAIN (ANALYZE) ...; ROLLBACK;`. Timing every node roughly doubled a 110 ms query here; `TIMING OFF` keeps most of the cost out.",
+]
+
+[[sections]]
+heading = "EXPLAIN without ANALYZE: the planner's guess"
+body = """
+`EXPLAIN` asks the planner for its plan and prints it. Nothing runs. For a lookup in the 50,000-row `customers` table with no useful index:
+
+```sql title=explain.sql
+EXPLAIN SELECT id FROM customers WHERE email LIKE 'user4242%';
+```
+
+```text
+ Seq Scan on customers  (cost=0.00..1140.00 rows=5 width=4)
+   Filter: (email ~~ 'user4242%'::text)
+```
+
+Each node carries four estimates in parentheses. `cost=0.00..1140.00` is the **startup cost** (before the first row can be returned) and the **total cost**; `rows=5` is how many rows the node is expected to return; `width=4` is the average row size in bytes. Cost is measured in abstract units, anchored at *one sequential page read = 1.0*. The numbers behind them are settings you can look at:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `seq_page_cost` | 1.0 | reading one page in order |
+| `random_page_cost` | 4.0 | reading one page out of order |
+| `cpu_tuple_cost` | 0.01 | processing one row |
+| `cpu_index_tuple_cost` | 0.005 | processing one index entry |
+| `cpu_operator_cost` | 0.0025 | evaluating one operator or function |
+
+The 1140 above is exactly arithmetic you can do: the table has 515 pages (515 × 1.0), 50,000 rows to process (50,000 × 0.01 = 500) and the `LIKE` condition to evaluate on each (50,000 × 0.0025 = 125), and 515 + 500 + 125 = **1,140**. That is all a cost is: a weighted sum of pages and rows. It means two things for reading plans:
+
+- Costs compare plans *to each other* for the same query. They are not milliseconds, and a cost of 18,000 here ran in 34 ms.
+- Because `random_page_cost` is four times `seq_page_cost`, the planner assumes random reads are expensive (they are on a spinning disk). On an SSD with a warm cache that is too pessimistic, which is why many production systems lower it to 1.1 or so; Part II returns to this when the planner chooses badly.
+
+> [!NOTE]
+> `rows=5` is a guess from the column's statistics (module 10). The actual count for `'user4242%'` is 11. A guess that is off by a factor of two is normal; a guess that is off by a factor of a thousand is a finding.
+"""
+
+[[sections]]
+heading = "EXPLAIN ANALYZE: guess beside reality"
+body = """
+`EXPLAIN ANALYZE` *executes the statement* and adds what actually happened to every node: `actual time` (milliseconds), `rows` and `loops`. Since Postgres 18 it also prints **buffer** counts without asking for them (before 18 you wrote `EXPLAIN (ANALYZE, BUFFERS)`), and shows row counts with decimals because they are averages per loop. In the course's pages this is the form every plan is captured in.
+
+Here is a query that has most of what a plan can contain, the revenue by country of one week's orders:
+
+```plan id=m8-tree setup=orders-created-day
+SELECT c.country, count(*) AS orders, sum(o.total_cents) AS cents
+FROM orders o JOIN customers c ON c.id = o.customer_id
+WHERE o.created_at >= '2026-03-01' AND o.created_at < '2026-03-08'
+GROUP BY c.country ORDER BY orders DESC;
+```
+
+The plan view above shows the tree. Read it the way Postgres runs it, **from the innermost node outwards**:
+
+:::steps Following the plan from the inside out
+- Bitmap Index Scan | orders_created: 23,481 entries, 67 pages | The index finds the week's matching entries (module 5) and builds a bitmap of table pages. It has no rows to give a parent yet, only the bitmap.
+- Bitmap Heap Scan | orders: 23,481 rows, 11,830 table pages | Visits each page named in the bitmap and returns the matching rows. This is where almost all the pages are: 11,897 of the plan's 12,412 (that count includes the index scan below it).
+- Seq Scan + Hash | customers: 50,000 rows into a hash table | The other side of the join is read completely (515 pages) and put into a hash table keyed by `id`. It runs before the join can emit its first row.
+- Hash Join | 23,481 rows | Streams the orders past the hash table and looks up each one's customer. The join's rows equal the orders' rows: every order has a customer.
+- HashAggregate | 7 groups | Groups the joined rows by country and computes the count and sum. It produced seven rows, one per country.
+- Sort | 7 rows, 25 kB in memory | Orders the seven rows by count. A sort of seven rows costs nothing; the plan's total time is the scan and the join.
+:::
+
+The numbers on each node, and how to read them:
+
+- **`cost=a..b`** are startup and total cost. A node's total includes its children's. A large startup cost (the `Hash` node, the `Sort`) means the node must see all its input before it can return anything, which matters for `LIMIT` queries (module 16).
+- **`rows` estimated vs actual.** The join was estimated at 22,193 rows and produced 23,481, about 6% off: a good plan. Compare them at every node.
+- **`actual time=a..b`** is the time to the first row and to the last, in milliseconds. It includes the children's time, so a node's own time is its total minus its children's. The course's plan view does this subtraction for you and marks the hottest node.
+- **`Buffers`** are the 8 KB pages touched, `shared hit` from Postgres's cache and `read` from the operating system or disk. Like time, they include the children's pages; the plan view again subtracts them.
+- **`Heap Blocks: exact=11830`** is the number of table pages the bitmap scan visited. **`Batches: 1`** on the hash and the aggregate says they fit in `work_mem`; more than one means they spilled to disk.
+"""
+
+[[sections]]
+heading = "Loops: the numbers are per call"
+body = """
+The trap in every beginner's reading of a plan is `loops`. A node under a nested loop is executed once for every outer row, and its `rows` and `actual time` are **averages per execution**, not totals. Three customers and their orders:
+
+```plan id=m8-loops setup=orders-customer
+SELECT c.id, o.id FROM customers c JOIN orders o ON o.customer_id = c.id WHERE c.id <= 3;
+```
+
+The outer node (`customers`, `loops=1`) returned 3 rows. The inner `Bitmap Heap Scan on orders` ran **three times** (`loops=3`), once per customer, and shows `rows=27.67`: an average. Multiply: 27.67 × 3 = 83 rows, which is the join's `rows=83`. The same applies to time (a node with `actual time=0.019..0.036` and `loops=3` spent about 0.1 ms in total), and to the `Index Searches: 3` line, which counts descents of the index (Postgres 18 reports it).
+
+The buffer counts are **not** averaged; they are totals for all loops (92 pages for the three executions). The estimate (`rows=41`) is also per execution, so compare it with the per-loop actual (27.67), not with the total. Planning-time estimates are for one call and runtime numbers are averaged for one call, and the multiplication by `loops` is yours to do.
+
+Two other places the same arithmetic appears: a **parallel** node reports the average over its workers and the leader (a `Parallel Seq Scan` with `rows=1102` and `loops=3` read 3,307 rows), and `Rows Removed by Filter` is per loop too.
+"""
+
+[[sections]]
+heading = "Spilling to disk"
+body = """
+Sorts, hashes and aggregates use memory up to `work_mem` (4 MB by default, per operation, not per query) and spill to temporary files beyond it. The plan says so. Sorting one month of orders by total with `work_mem = '1MB'`:
+
+```plan id=m8-sort-disk setup=orders-created-day,sort-small-mem
+SELECT id, total_cents FROM orders
+WHERE created_at >= '2026-03-01' AND created_at < '2026-04-01' ORDER BY total_cents DESC;
+```
+
+`Sort Method: external merge  Disk: 2256kB` and `temp read=282 written=287` are the spill: Postgres sorted runs of rows in temporary files and merged them. The same query with `work_mem = '64MB'`:
+
+```plan id=m8-sort-memory setup=orders-created-day,sort-big-mem
+SELECT id, total_cents FROM orders
+WHERE created_at >= '2026-03-01' AND created_at < '2026-04-01' ORDER BY total_cents DESC;
+```
+
+`Sort Method: quicksort  Memory: 6299kB`. The disk sort needed only 2.2 MB on disk where the in-memory sort used 6.3 MB, because the on-disk format is more compact. Notice what did **not** change: the two ran in 72 ms and 74 ms. The temporary files here are tiny and sit in the operating system's cache, so "external merge" costs little on this machine. The planner's estimate rises (28,829 against 27,121) because it assumes the disk is slower. On a busy server, a sort that spills many gigabytes is a different matter; the plan's `temp read` and `written` counts are how you notice it, and `log_temp_files` (module 42) is how you notice it in production.
+
+Do not raise `work_mem` globally to fix a spill. It is allocated per sort and hash in each of many sessions; set it for one transaction (`SET LOCAL work_mem = '64MB'`) or one role.
+"""
+
+[[sections]]
+heading = "What ANALYZE does to a statement, and its cost"
+body = """
+**ANALYZE runs the statement.** For a `SELECT` that is harmless. For `UPDATE`, `DELETE` and `INSERT` the rows really change. Wrap the statement in a transaction you roll back, and ask for the WAL (write-ahead log) it produced as well, since writes cost that:
+
+```sql title=explain_write.sql
+BEGIN;
+EXPLAIN (ANALYZE, BUFFERS, WAL) UPDATE wal_demo SET name = name || 'x' WHERE id <= 1000;
+ROLLBACK;
+```
+
+```text
+ Update on wal_demo (actual rows=0.00 loops=1)
+   Buffers: shared hit=3595 dirtied=12 written=13
+   WAL: records=2001 fpi=1 bytes=191449
+   ->  Seq Scan on wal_demo (actual rows=1000.00 loops=1)
+         Filter: (id <= 1000)
+         Rows Removed by Filter: 49000
+         Buffers: shared hit=576
+```
+
+A thousand-row update wrote **2,001 WAL records and 191 KB** (the new row versions and the changes to the table), on a table with no indexes. Every index on the table adds records; module 27 measures that. After the `ROLLBACK`, `SELECT count(*) FROM wal_demo WHERE name LIKE '%x'` returned 0: nothing stayed. Locks, triggers and sequence values still happened for real while it ran, so do not do this on a production table in a busy hour.
+
+**ANALYZE also costs time.** To time each node Postgres reads the clock twice per row per node. Measured on a 2-million-row aggregate on this machine (a sequential scan, all in cache), with parallelism off:
+
+| Run | Time |
+|---|---|
+| the query alone (`\\timing`) | 109 and 118 ms |
+| `EXPLAIN ANALYZE` | 294 ms and 289 ms |
+| `EXPLAIN (ANALYZE, TIMING OFF)` | 144 ms and 128 ms |
+
+So the plan reported **2.5 times** the real runtime: the per-row clock reads were more than half of it. `TIMING OFF` keeps the row counts, loops and buffers (which is what you usually need) and removes most of the distortion; the remaining 20 to 30% comes from counting rows. Treat the times in a plan as a way to compare nodes within it, not as the runtime, and trust the buffers, which are unaffected. Where the hardware is slow at reading the clock (some virtual machines), the distortion is larger; `pg_test_timing` measures it.
+"""
+
+[[sections]]
+heading = "The other options"
+body = """
+`EXPLAIN` takes options in parentheses. The useful ones, all from the Postgres documentation, with the version that added the later ones:
+
+| Option | What it adds |
+|---|---|
+| `ANALYZE` | runs the statement; actual time, rows, loops (and buffers by default from 18) |
+| `BUFFERS` | pages hit, read, dirtied, written, and temporary-file reads and writes |
+| `VERBOSE` | each node's output columns and schema-qualified names (`Output: id, total_cents`) |
+| `SETTINGS` | the non-default planner settings in force (the course's plans use it) |
+| `WAL` | WAL records, full-page images and bytes (with `ANALYZE`) |
+| `TIMING OFF` | skip the per-node clock reads |
+| `SUMMARY` | the planning and execution time lines |
+| `MEMORY` | memory used by the planner (17 and later; `Planning: Memory: used=12kB allocated=16kB`) |
+| `GENERIC_PLAN` | the plan for a statement with `$1` parameters, without values (16 and later) |
+| `FORMAT JSON` | the same plan as JSON, which tools (and this course's plan view) parse |
+
+`GENERIC_PLAN` deserves a note because it answers a question you otherwise cannot ask: what plan will a prepared statement get once it uses a generic plan (module 11)? `EXPLAIN (GENERIC_PLAN) SELECT id FROM orders WHERE customer_id = $1` printed a bitmap scan using `customer_id = $1` as its index condition, with no value given and no execution.
+
+> [!TIP]
+> The habit worth building: **`EXPLAIN (ANALYZE, BUFFERS, SETTINGS)`** for investigation (`BUFFERS` is on with `ANALYZE` in 18 but `SETTINGS` is not, and writing both keeps the command working on older servers), and **`FORMAT JSON`** when a tool will read it, such as the course's plan explorer or a test.
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+| Engine | How to see the plan |
+|---|---|
+| MySQL | `EXPLAIN` prints a table by default; `EXPLAIN FORMAT=TREE` and `EXPLAIN ANALYZE` (8.0.18 and later) print a tree with estimated and actual rows and timings, like Postgres's. From the manual; not run here |
+| SQLite | `EXPLAIN QUERY PLAN` prints only the strategy, no costs or actuals. Measured on 3.53.1, a join and aggregate printed `SCAN o USING COVERING INDEX oc`, `SEARCH c USING INTEGER PRIMARY KEY (rowid=?)`, `USE TEMP B-TREE FOR GROUP BY` and `USE TEMP B-TREE FOR ORDER BY`: four lines for the same shape that Postgres draws as a tree with numbers |
+| ClickHouse, DuckDB | `EXPLAIN` shows the pipeline; DuckDB's `EXPLAIN ANALYZE` and ClickHouse's `EXPLAIN PIPELINE` and query log report rows and time per operator, and the unit of work is a block of rows, not a page (from their documentation; not run here) |
+
+Postgres's `EXPLAIN` is unusually informative, and the plan view in this course reads MySQL and SQLite plans too, with whatever those engines provide.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Two uses of `EXPLAIN` from Rust: a one-off look at what the database does for a query your code sends, and a test that fails if the plan gets worse (module 41 builds that out). With sqlx, ask for JSON and read it as a value:
+
+```rust title=explain_json.rs
+use serde_json::Value;
+
+async fn plan_of(pool: &sqlx::PgPool, sql: &str) -> sqlx::Result<Value> {
+    // EXPLAIN cannot take bind parameters in the explained text, so pass a statement with literals,
+    // or use EXPLAIN (GENERIC_PLAN) with $1 placeholders. Never ANALYZE a statement that writes, outside a rolled-back transaction.
+    let (plan,): (Value,) = sqlx::query_as(&format!("EXPLAIN (FORMAT JSON) {sql}")).fetch_one(pool).await?;
+    Ok(plan)
+}
+
+fn mentions(plan: &Value, node_type: &str) -> bool {
+    // a plan is [{"Plan": {"Node Type": ..., "Plans": [...]}}]
+    fn walk(n: &Value, t: &str) -> bool {
+        n["Node Type"] == t || n["Plans"].as_array().is_some_and(|c| c.iter().any(|x| walk(x, t)))
+    }
+    walk(&plan[0]["Plan"], node_type)
+}
+```
+
+`assert!(!mentions(&plan, "Seq Scan"))` is the beginning of a plan test. In production, you rarely run `EXPLAIN` by hand: the extension `auto_explain` writes the plan of every statement slower than a threshold to the log, with the same `ANALYZE` and `BUFFERS` options (module 42).
+"""
+
+[[checks]]
+prompt = "A plan shows a Bitmap Heap Scan with loops=40, rows=12 and actual time=0.2..0.3 beneath a Nested Loop. About how many rows did it produce, and how much time did it spend?"
+answer = "About 480 rows (12 per loop times 40 loops) and about 12 ms (0.3 ms per loop times 40). rows and actual time are averages per execution of the node, while buffers are totals for all loops. Forgetting to multiply by loops is the most common misreading of a plan."
+
+[[checks]]
+prompt = "EXPLAIN ANALYZE reports 300 ms for a query that takes 110 ms when you run it. Is the plan wrong? What do you trust in it, and what do you change to see less distortion?"
+answer = "The plan is right; the timing is inflated by the clock reads Postgres makes for every row at every node. Trust the row counts, loops and buffers, and compare node times with each other rather than with the real runtime. EXPLAIN (ANALYZE, TIMING OFF) skips the clock reads and kept the overhead to 20 to 30% here; the buffers are unaffected either way."
+
+[[checks]]
+prompt = "You must see the plan of an UPDATE that touches 10 million rows, with real row counts and WAL volume. How, and what happens to the data?"
+answer = "BEGIN; EXPLAIN (ANALYZE, BUFFERS, WAL) UPDATE ...; ROLLBACK;. ANALYZE executes the update (so it takes the row locks, fires triggers and writes the WAL), but the ROLLBACK undoes the changes, which stay invisible and are cleaned up by VACUUM. It is still real work and real locks while it runs, so do it on a copy, or off-peak. Plain EXPLAIN without ANALYZE shows the estimates and touches nothing."
+
+[[checks]]
+prompt = "The cost of a Seq Scan on a 515-page, 50,000-row table with one WHERE operator is 1140. Rebuild the number from the cost settings, and say what you would conclude comparing it with an index plan's cost of 8.4."
+answer = "515 pages x 1.0 (seq_page_cost) + 50,000 rows x 0.01 (cpu_tuple_cost) + 50,000 evaluations x 0.0025 (cpu_operator_cost) = 515 + 500 + 125 = 1,140. An index plan at 8.4 is estimated at about 135 times less work, so the planner prefers it. The costs are in units of a sequential page read, not milliseconds, and only mean something compared with each other for the same query."
+
+[[terms]]
+term = "Plan node"
+means = "One operation in the plan tree (a scan, a join, a sort); it receives rows from its children and gives rows to its parent."
+section = "EXPLAIN ANALYZE: guess beside reality"
+
+[[terms]]
+term = "Cost"
+means = "The planner's estimate of work in units of one sequential page read: startup..total, summed up the tree."
+section = "EXPLAIN without ANALYZE: the planner's guess"
+
+[[terms]]
+term = "Estimated vs actual rows"
+means = "The planner's guess against the real count, per node; a large gap is the first thing to look for."
+section = "EXPLAIN ANALYZE: guess beside reality"
+
+[[terms]]
+term = "Loops"
+means = "How many times a node ran; its rows and times are averages per run, so multiply by loops for totals."
+section = "Loops: the numbers are per call"
+
+[[terms]]
+term = "work_mem"
+means = "The memory a single sort, hash or aggregate may use before spilling to temporary files (4 MB by default)."
+section = "Spilling to disk"
+
+[[terms]]
+term = "TIMING OFF"
+means = "An EXPLAIN option that skips the per-row clock reads, removing most of ANALYZE's overhead."
+section = "What ANALYZE does to a statement, and its cost"
+
+[[sources]]
+title = "PostgreSQL: EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-explain.html"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
+note = "costs, rows, loops, buffers and the worked examples"
+
+[[sources]]
+title = "PostgreSQL: planner cost constants"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-query.html#RUNTIME-CONFIG-QUERY-CONSTANTS"
+
+[[sources]]
+title = "PostgreSQL: pg_test_timing"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgtesttiming.html"
+note = "why EXPLAIN ANALYZE slows a query down"
+
+[[sources]]
+title = "PostgreSQL: auto_explain"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/auto-explain.html"
+
+[[sources]]
+title = "PostgreSQL 18 release notes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/18/release-18.html"
+note = "BUFFERS by default with ANALYZE, index search counts"
+
+[[sources]]
+title = "MySQL: EXPLAIN output and EXPLAIN ANALYZE"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/explain.html"
+
+[[sources]]
+title = "SQLite: EXPLAIN QUERY PLAN"
+kind = "docs"
+url = "https://www.sqlite.org/eqp.html"
+
+[[sources]]
+title = "Use The Index, Luke: execution plans"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/explain-plan/postgresql/operations"
+note = "further reading"
