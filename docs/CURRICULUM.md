@@ -383,6 +383,8 @@ The "design this class" round. Concurrent versions live in C1 and C2.
 | Hard | Build | (★) bounded channel from `Mutex` + `Condvar` · `select`-style receive across channels · backpressure policy: block, drop or error |
 
 ### C3 · Atomics & lock-free: SDE-3 · 14
+
+*Written 2026-11-02 (7 of 14, a deeper set than the anchors below; see PROGRESS): atomic-stats, once-cell, spinlock, mini-arc, spsc-ring, index-stack (ABA), bounded-mpmc. The Treiber stack became the tagged-index stack; the others in the table are still to do.*
 | Band | Stage | Problems |
 |---|---|---|
 | Medium | Understand | atomic counters · W77 Acquire / Release / Relaxed / SeqCst · `compare_exchange` loops · (★) Fix: `Relaxed` flag publishes stale data |

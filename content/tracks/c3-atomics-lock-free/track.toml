@@ -1,0 +1,16 @@
+code = "C3"
+name = "Atomics & lock-free"
+section = "C"
+tier = "sde3"
+order = 3
+summary = "Memory ordering and lock-free structures by building them: counters, a once-cell, a spinlock, queues, a stack and an Arc."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"
