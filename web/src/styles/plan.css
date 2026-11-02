@@ -66,3 +66,21 @@
   .pv-details>div{grid-template-columns:1fr;gap:2px}
   .pv-more{padding-left:calc(12px + var(--d) * 12px)}
 }
+
+.pe-main{display:grid;gap:18px;min-width:0}
+.pe-slot{display:grid;gap:8px;min-width:0}
+.pe-lab{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.pe-in{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:10px;border:1px solid var(--line2);background:var(--inset);color:var(--fg);font:400 12px/1.6 var(--code);resize:vertical;scrollbar-width:none}
+.pe-in::-webkit-scrollbar{display:none}
+.pe-in:focus{outline:2px solid var(--acc);outline-offset:1px}
+.pe-err{margin:0;padding:8px 11px;border-radius:8px;font-size:13px;color:var(--fg);background:var(--bad-bg)}
+.pe-sel{width:100%;box-sizing:border-box;height:32px;padding:0 8px;border-radius:8px;border:1px solid var(--line2);background:var(--inset);color:var(--fg);font:500 12px var(--sans)}
+.pe-list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.pe-list li{display:flex;gap:6px;align-items:center;font:400 11.5px var(--mono);color:var(--mut)}
+.pe-list li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pe-list button{height:24px;padding:0 8px;border-radius:6px;font:600 11px var(--mono);color:var(--fg);background:var(--raise)}
+.pe-cmp{width:100%;border-collapse:collapse;font:500 12.5px var(--mono);font-variant-numeric:tabular-nums}
+.pe-cmp th,.pe-cmp td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line2)}
+.pe-cmp th:first-child{text-align:left;color:var(--dim);font-weight:600}
+.pe-cmp thead th{color:var(--dim);font-size:10.5px;letter-spacing:.08em}
+.pe-cmp .good{color:var(--ok,#3fa66b)}.pe-cmp .bad{color:var(--bad,#d1544a)}
