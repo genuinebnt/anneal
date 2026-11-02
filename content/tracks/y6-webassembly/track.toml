@@ -1,0 +1,16 @@
+code = "Y6"
+name = "WebAssembly from scratch"
+section = "Y"
+tier = "sde3"
+order = 6
+summary = "WebAssembly without an engine: decode the binary format with bounded reads, then run its structured control flow on a stack machine."
+
+[[stages]]
+slug = "read-it"
+name = "Read it"
+band = "medium"
+
+[[stages]]
+slug = "run-it"
+name = "Run it"
+band = "hard"
