@@ -1,0 +1,32 @@
+slug = "block-on"
+title = "block_on: run a future with a hand-made Waker"
+mode = "write"
+level = "medium"
+stage = "wake-and-poll"
+order = 1
+status = "ready"
+tags = ["Future", "Waker", "Context", "Pin", "pin!", "Wake trait", "park/unpark", "lost wakeup"]
+teaches = [
+  "What `async` really is: a `Future` is polled; `Pending` means 'I stored your `Waker` and will call it when progress is possible'.",
+  "Building a `Waker` from an `Arc<impl Wake>`, and the flag-plus-`park` pattern that cannot lose a wake-up that happens between `poll` and `park`.",
+  "Pinning a future on the stack with `std::pin::pin!` so a self-referential state machine never moves.",
+]
+follow_up = "1) Remove the `woken` flag and rely on `park`/`unpark` alone: what breaks, and why is the flag still needed for spurious wake-ups? 2) Make a version that takes a deadline (`block_on_timeout`) with `park_timeout`. 3) Why must a pending future store the *latest* waker on every poll (see the oneshot problem)? 4) Replace `pin!` with `Box::pin`: what is the cost, and when is it required? 5) How does `Waker`'s `RawWaker` vtable work, and what is `Wake` saving you from writing by hand (read `std::task::Wake` and `RawWakerVTable`)?"
+related = ["C4", "C3", "C1"]
+
+[[hints]]
+kind = "approach"
+text = "A `Waker` is a handle that says 'poll this task again'. Here the task is the thread blocked in `block_on`, so `wake` = set a flag and `unpark` that thread. The loop is: poll; if `Ready`, return; else wait until the flag is set, clear it, repeat."
+
+[[hints]]
+kind = "rust"
+text = "Implement `std::task::Wake` for a struct holding `Thread` (from `thread::current()`) and an `AtomicBool`, wrap it in an `Arc`, and turn it into a `Waker` with `Waker::from(arc)`. `Context::from_waker(&waker)` is what `poll` takes. `pin!(fut)` gives a `Pin<&mut F>`; call `.as_mut().poll(&mut cx)` each time."
+
+[[hints]]
+kind = "edge"
+text = "Use the flag, not `park` alone: `park` may return without anyone waking you (spurious), and a wake may land between your `poll` and your `park`. `swap(false)` consumes the wake exactly once, and `unpark` before `park` leaves a token so the next `park` returns at once."
+
+[solution]
+explanation = "This is the core of `futures::executor::block_on` and of `pollster`: about 30 lines. Everything bigger (tokio, async-std, smol) is this loop plus a scheduler, an I/O reactor and a timer wheel. Knowing that `await` is only 'poll, and if pending, return to whoever polled me' removes most of the mystery from async Rust, including why a future that never stores its waker hangs forever."
+time = "O(polls)"
+space = "O(1) extra"
