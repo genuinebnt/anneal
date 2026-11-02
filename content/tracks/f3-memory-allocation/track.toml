@@ -1,0 +1,16 @@
+code = "F3"
+name = "Memory & allocation"
+section = "F"
+tier = "sde3"
+order = 3
+summary = "Where memory comes from and how to hand it out: interning, generational slabs, a typed arena and a buddy allocator."
+
+[[stages]]
+slug = "arenas-and-pools"
+name = "Arenas and pools"
+band = "medium"
+
+[[stages]]
+slug = "arena-and-allocator"
+name = "Build an allocator"
+band = "hard"

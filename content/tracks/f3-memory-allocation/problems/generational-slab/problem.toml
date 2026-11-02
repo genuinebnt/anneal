@@ -1,0 +1,32 @@
+slug = "generational-slab"
+title = "A slab with generational keys"
+mode = "write"
+level = "medium"
+stage = "arenas-and-pools"
+order = 2
+status = "ready"
+tags = ["slab", "generational index", "free list", "ABA", "mem::replace", "let-else"]
+teaches = [
+  "Replacing pointers with `(index, generation)` keys: no lifetimes, no `Rc`, and a stale key is detected instead of aliasing a new value.",
+  "A free list threaded through the empty slots themselves (an enum where `Empty` carries the next free index), so reuse costs no extra memory.",
+  "The same ABA problem as lock-free stacks, solved the same way: a version counter next to the slot.",
+]
+follow_up = "1) What happens when a generation overflows `u32`? Make it `NonZeroU32`, retire the slot after the last generation, and discuss why wrapping is a security bug. 2) Make `iter` faster after heavy removal (a bitmap of live slots, using the F5 bitset). 3) Add `Index<Key>` and `retain`. 4) Compare with `Vec<Option<T>>` plus a free `Vec<usize>`: what do you give up (the free list inside the slots) and gain? 5) Where does tokio use a slab for I/O registrations, and why does it add a generation tag to the token?"
+related = ["F2", "D6", "C3"]
+
+[[hints]]
+kind = "approach"
+text = "Each entry is `{ gen: u32, slot: Full(T) | Empty { next_free: Option<u32> } }`. `free_head` is the most recently freed index. Insert pops the head (or pushes a new entry); remove replaces the slot with `Empty` pointing at the old head, bumps `gen`, and becomes the new head."
+
+[[hints]]
+kind = "rust"
+text = "`std::mem::replace(&mut e.slot, Slot::Empty { .. })` takes the value out of a slot you only have `&mut` to. A key is valid iff the entry exists, is `Full`, and `entry.gen == key.gen`; a `match` with a guard says that in one arm."
+
+[[hints]]
+kind = "edge"
+text = "Bump the generation when you free (not when you reuse) so even a key to the freed-but-not-yet-reused slot is already dead. Check the generation in `remove` too, or a stale remove deletes the new occupant."
+
+[solution]
+explanation = "This is the core of `slotmap`, `generational-arena`, tokio's `slab` plus tags, and every ECS entity id (`bevy`'s `Entity` is index plus generation). It replaces raw references in graphs and game worlds: you get O(1) access, cache-friendly storage and memory safety without lifetimes. The generation is the ABA fix from lock-free stacks, applied to ids."
+time = "O(1) per operation"
+space = "O(slots)"
