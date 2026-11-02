@@ -88,3 +88,7 @@ a.rt-row:hover{border-color:var(--line);background:var(--raise)}
 .rt-fails dt{font:500 11px var(--mono);color:var(--dim)}
 .rt-fails dd{margin:0;overflow-wrap:anywhere}
 .rt-fails pre{margin:6px 0 0;white-space:pre-wrap;font:500 11.5px var(--mono);color:var(--bad)}
+/* /rust wears the DSA page's goal cards and track rings; the goals sit tight under the next-up card */
+.s-root.s-rust .d-goals{padding-top:0;margin-bottom:18px}
+.s-root .s-th .s-tring{margin-left:auto;width:40px;height:40px}
+.s-root .s-th .s-tring b{font-size:10.5px}

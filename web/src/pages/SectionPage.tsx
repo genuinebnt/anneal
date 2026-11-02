@@ -183,6 +183,85 @@ function Topics({ code }: { code: string }) {
   );
 }
 
+/** The percent solved as a ring, the same one the DSA pattern cards wear. */
+function Ring({ live, done }: { live: TrackSummary; done: boolean }) {
+  const pct = Math.round((live.solved / live.total) * 100);
+  return (
+    <span className="pt-ring s-tring" role="img" aria-label={`${live.solved} of ${live.total} solved`} style={{ "--p": pct, "--cs": done ? "var(--grn)" : "var(--s-ac)", "--c-track": "var(--line2)", "--c-bg": "var(--panel)" } as CSSProperties}>
+      <b>{done ? "✓" : `${pct}%`}</b>
+    </span>
+  );
+}
+
+/** Three goal cards, the DSA page's: how many problems of the core tracks, the SDE-3 tracks and all of them are solved. Each one picks its filter. */
+function Goals({ rows, filter, setFilter }: { rows: Row[]; filter: string; setFilter: (f: string) => void }) {
+  const defs: [string, string, string, (r: Row) => boolean][] = [
+    ["core", "GOAL · CORE TRACKS", "var(--acc)", (r) => r.tier === "core"],
+    ["sde3", "SDE-3 TRACKS", "var(--vio)", (r) => r.tier === "sde3"],
+    ["all", "ALL RUST", "var(--grn)", () => true],
+  ];
+  return (
+    <section className="d-goals s-rv" style={rise(5).style} aria-label="Goals">
+      {defs.map(([k, label, color, test]) => {
+        const rs = rows.filter((r) => r.live && r.live.ready > 0 && test(r));
+        const done = rs.reduce((n, r) => n + r.live!.solved, 0);
+        const total = rs.reduce((n, r) => n + r.live!.ready, 0);
+        const finished = rs.filter((r) => r.state === "done").length;
+        return (
+          <button key={k} className={`d-goal${filter === k ? " on" : ""}`} style={{ "--gc": color } as CSSProperties} aria-pressed={filter === k} onClick={() => setFilter(filter === k && k !== "all" ? "all" : k)}>
+            <span>{label}</span>
+            <b>
+              {done}
+              <small>/ {total}</small>
+            </b>
+            <div className="bar">
+              <i style={{ width: `${total ? (done / total) * 100 : 0}%`, background: color }} />
+            </div>
+            <em>
+              <b>{finished}</b> of {rs.length} tracks done
+            </em>
+          </button>
+        );
+      })}
+    </section>
+  );
+}
+
+/** Today as three steps, the DSA page's: the re-solves due, the next problem, and done. The first one not finished is marked. */
+function Today({ due, next, doneToday }: { due: number; next?: NextUp | null; doneToday: number }) {
+  const solved = doneToday > 0;
+  const dueDone = due === 0;
+  type Step = { key: string; label: string; detail: string; state: "done" | "now" | "wait"; to?: { to: "/progress"; hash: string } | { to: "/p/$id"; params: { id: string } } };
+  const steps: Step[] = [
+    { key: "rev", label: "Re-solves", detail: dueDone ? "none due" : `${due} due`, state: dueDone ? "done" : "now", to: dueDone ? undefined : { to: "/progress", hash: "reviews" } },
+    {
+      key: "new",
+      label: "New problem",
+      detail: solved ? `${doneToday} solved today` : next ? next.title : "nothing left",
+      state: solved ? "done" : dueDone ? "now" : "wait",
+      to: next && !solved ? { to: "/p/$id", params: { id: next.problem_id } } : undefined,
+    },
+    { key: "end", label: "Done for today", detail: dueDone && solved ? "all done" : "not yet", state: dueDone && solved ? "done" : "wait" },
+  ];
+  return (
+    <nav className="d-today s-rv" aria-label="Today">
+      {steps.map((s, i) => {
+        const body = (
+          <>
+            <i className={`d-ts ${s.state}`} aria-hidden="true">{s.state === "done" ? "\u2713" : i + 1}</i>
+            <span><b>{s.label}</b><small>{s.detail}</small></span>
+          </>
+        );
+        return s.to ? (
+          <Link key={s.key} className={`d-step ${s.state}`} {...(s.to as { to: "/progress" })}>{body}</Link>
+        ) : (
+          <div key={s.key} className={`d-step ${s.state}`}>{body}</div>
+        );
+      })}
+    </nav>
+  );
+}
+
 function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean; blank: boolean }) {
   const live = row.live;
   const total = live?.total ?? row.planned;
@@ -196,6 +275,7 @@ function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean
           TRACK / {TIER_LABEL[row.tier]} · {row.code}
         </span>
         <Tag row={row} />
+        {live && row.state !== "planned" && live.total > 0 ? <Ring live={live} done={row.state === "done"} /> : null}
       </div>
       <h4>{live?.name ?? row.name}</h4>
       <p dangerouslySetInnerHTML={{ __html: blank ? "" : marked.parseInline(live?.summary || BLURB[row.code] || "", { async: false }) }} />
@@ -522,6 +602,9 @@ export function SectionPage({ area }: { area: NavArea }) {
   const active = (filter !== "all" ? 1 : 0) + (sec !== "all" ? 1 : 0);
   const leftPanel = (
     <>
+      <Panel title="Today">
+        <Today due={due.length} next={activity.data?.next} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
+      </Panel>
       <Panel title="Status" aside={active > 0 ? <button className="d-clearall" onClick={clear}>clear {active}</button> : undefined}>
         <div className="d-rail-in">
           <div className="rbox">
@@ -554,6 +637,7 @@ export function SectionPage({ area }: { area: NavArea }) {
     <>
       {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
       {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
+      {!loading && rows.length > 0 && <Goals rows={rows} filter={filter} setFilter={setFilter} />}
       {!loading && rows.length > 0 && <Roadmap rows={rows} sections={sections} />}
       <div className="s-tools">
         <label className="s-search">

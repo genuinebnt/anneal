@@ -248,3 +248,5 @@ open, never multiple choice. DSA Learn pages follow DSA_LEARN_PAGE_SPEC.md exact
 | App side of CLI updates | `crates/api/src/cli_updates.rs` (public: `/cli/<target>/version`, `/courses-bundle/<id>[/version]`), `/install.sh`, `/downloads/*` |
 
 - 2026-11-02, SQL track: modules 5 to 9 merged; module 10 `sql-statistics` (PR in flight); plan explorer built on a local commit (web/src/pages/sd/SdPlans.tsx, route /sd/plans), to be pushed after this PR; module 11 experiments done, page unwritten.
+
+- Rust page (/rust): now wears the DSA page's goal cards (core, SDE-3, all), the Today steps in the left panel and a progress ring on each track card; all reuse the DSA classes (`d-goals`, `d-today`, `pt-ring`).
