@@ -1,0 +1,32 @@
+slug = "tcp-reassembler"
+title = "Reassemble a TCP byte stream from out-of-order segments"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["TCP", "sequence numbers", "wraparound", "BTreeMap", "reassembly", "flow-control window", "CS144"]
+teaches = [
+  "Why a transport protocol needs sequence numbers: segments are reordered, duplicated and overlap, and the receiver must still emit each byte once, in order.",
+  "Unwrapping a 32-bit wrapping counter into a 64-bit stream offset relative to a checkpoint (the trick used for TCP seq numbers and QUIC packet numbers).",
+  "A receive window as a memory bound: bytes beyond it are dropped, so a malicious sender cannot make you buffer without limit.",
+]
+follow_up = "1) Merge adjacent chunks in `pending` so the map stays small under heavy reordering, and measure the effect. 2) Add `ack()` returning the 32-bit cumulative acknowledgment number (`isn + next`) and a `window_size()` for the sender: what does a zero window do to the sender? 3) Replace first-wins with last-wins and show an inconsistent-retransmit attack on an intrusion detector that picks the other policy. 4) Add selective acknowledgment blocks (SACK) from `pending`. 5) How do QUIC's per-stream offsets (62-bit, no wraparound) simplify this compared with TCP's 32-bit sequence space?"
+related = ["B5", "C2", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Keep `next` (the stream offset of the first undelivered byte) and a `BTreeMap<offset, Vec<u8>>` of disjoint out-of-order chunks. On each segment: unwrap `seq` to an offset, clip to `[next, next + window)`, insert only the parts no stored chunk already covers, then pop chunks while the first one starts exactly at `next`."
+
+[[hints]]
+kind = "rust"
+text = "Unwrap: `diff = seq.wrapping_sub(isn) as u64`; the answer is the value `base + diff` (with `base` = `next` rounded down to a multiple of 2^32), moved by ±2^32 if that lands more than 2^31 from `next`. `BTreeMap::range(..end)` walks chunks that start before the new one ends; `first_entry()` / `remove()` pops the front."
+
+[[hints]]
+kind = "edge"
+text = "Compute the clipped range in 64-bit offsets before slicing `data` (a segment can start before `next`). Only accept a FIN whose end offset is inside the window. `is_finished` must compare `next` with the FIN offset: a FIN that arrives first (out of order) says nothing until the gap fills."
+
+[solution]
+explanation = "This is the CS144 'TCP receiver' lab and the core of any transport: TCP, QUIC streams (offset-based `CRYPTO`/`STREAM` frames) and SCTP all reassemble this way, and the first-writer-wins overlap policy is why different OSes' stacks can be fingerprinted and why IDS evasions through overlapping segments exist. The window is the receiver's memory bound and the basis of flow control."
+time = "O(log n) per segment"
+space = "O(window)"

@@ -1,0 +1,32 @@
+slug = "length-prefixed-codec"
+title = "A length-prefixed frame codec that survives partial reads"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["framing", "TCP is a stream", "partial reads", "u32 big-endian", "DoS limits", "Decoder", "tokio_util codec"]
+teaches = [
+  "TCP delivers a byte stream, not messages: a `read` can return half a frame or three frames, so framing is your job.",
+  "The decoder contract: `Ok(None)` means 'need more bytes' and must consume nothing; a frame is consumed exactly once.",
+  "Validate the announced length before buffering the payload, or one 4-byte header makes the server allocate 4 GB.",
+]
+follow_up = "1) Replace `drain(..n)` with a read cursor and compact lazily: what is the cost model? 2) Add a `u16` or varint length option (reuse the F5 varint). 3) Make the decoder generic over `Read` and write a blocking `read_frame(&mut impl Read)` using `read_exact`; why is `read_exact` wrong for a nonblocking socket? 4) What should the server do after `TooLarge`: why close the connection rather than skip the bytes? 5) Add a checksum (CRC32) trailer and decide what a corrupt frame does to the stream."
+related = ["S9", "F7", "F5"]
+
+[[hints]]
+kind = "approach"
+text = "Keep a `Vec<u8>` of everything received but not yet consumed. `next_frame`: need 4 bytes for the header, else `Ok(None)`; read the length; reject it if above the limit; need `4 + len` bytes in total, else `Ok(None)`; copy the payload out and remove the whole frame from the front."
+
+[[hints]]
+kind = "rust"
+text = "`u32::from_be_bytes(buf[..4].try_into().unwrap())` reads the header; `u32::to_be_bytes` writes it. `Vec::drain(..n)` removes the consumed prefix (a `BytesMut`/`VecDeque` would avoid the memmove: a follow-up)."
+
+[[hints]]
+kind = "edge"
+text = "Check the limit right after the header is readable, **before** waiting for the payload: otherwise a peer that sends `FF FF FF FF` makes you wait for (and buffer) gigabytes. Return `Ok(None)` without touching the buffer when more bytes are needed."
+
+[solution]
+explanation = "`tokio_util::codec::LengthDelimitedCodec` is this plus configurable field width, endianness and offset; Kafka, Postgres (`[tag][len]`), Redis RESP3 bulk strings and gRPC (`[flag][len]`) all frame this way. The two bugs people ship are treating one `read` as one message, and trusting the length field: both are CVE classes."
+time = "O(frame) per frame"
+space = "O(max_frame)"
