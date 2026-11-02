@@ -1,0 +1,32 @@
+slug = "string-interner"
+title = "A string interner returning Symbol(u32)"
+mode = "write"
+level = "medium"
+stage = "arenas-and-pools"
+order = 1
+status = "ready"
+tags = ["interning", "Symbol(u32)", "Rc<str>", "HashMap", "borrow", "compilers"]
+teaches = [
+  "Why compilers intern identifiers: equality becomes an integer compare, a `Symbol` is `Copy`, and each name is stored once.",
+  "Looking up a `HashMap<Rc<str>, _>` with a `&str` (the `Borrow<str>` impl) so a hit allocates nothing.",
+  "A dense id doubles as an index into a `Vec`: the pattern behind rustc's `Symbol`, `IndexVec`, and every string table.",
+]
+follow_up = "1) Make `resolve` return `&'static str` by leaking an arena: when is that acceptable (a compiler run) and when not (a server)? 2) Replace `Rc<str>` with one big `String` plus `(start, len)` spans and show it stores each string once in a single allocation. 3) Make it thread safe with a sharded `RwLock` map: where does contention appear? 4) Why does `Symbol(u32)` plus `Option` still fit in 8 bytes, and how would `NonZeroU32` make `Option<Symbol>` 4 bytes? 5) How do `lasso`'s `RodeoReader`/`Rodeo` split read-mostly and build phases?"
+related = ["F2", "F4", "D6"]
+
+[[hints]]
+kind = "approach"
+text = "Two structures: a `Vec` of strings indexed by the symbol, and a map from string to symbol. A symbol is just the length of the `Vec` at the moment the string was first seen."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap<Rc<str>, Symbol>` lets `map.get(s)` take a plain `&str`, because `Rc<str>: Borrow<str>`. Keep one `Rc<str>` in the `Vec` and a clone of it in the map so the text exists once."
+
+[[hints]]
+kind = "edge"
+text = "Check the map before allocating anything: the common call is a hit. Build the `Rc<str>` only on a miss."
+
+[solution]
+explanation = "An interner trades one hash lookup at creation for O(1) integer equality and tiny, `Copy` identifiers afterwards. rustc's `Symbol` is exactly this (plus a global table); `string-cache`, `lasso` and `ustr` are the crates. The cost to know: interned text lives as long as the interner, so it suits identifiers, not unbounded user input."
+time = "O(len) per intern"
+space = "O(total distinct bytes)"

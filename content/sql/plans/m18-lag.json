@@ -1,0 +1,161 @@
+{
+ "id": "m18-lag",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, customer_id, created_at,\n       created_at - lag(created_at) OVER (PARTITION BY customer_id ORDER BY created_at) AS gap\nFROM orders WHERE customer_id <= 200;",
+ "setup": [
+  {
+   "id": "orders-customer-created",
+   "sql": "CREATE INDEX orders_customer_created ON orders (customer_id, created_at);"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "WindowAgg",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 14276.54,
+   "Total Cost": 14472.49,
+   "Plan Rows": 8709,
+   "Plan Width": 36,
+   "Actual Startup Time": 9.72,
+   "Actual Total Time": 12.664,
+   "Actual Rows": 7919.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Window": "w1 AS (PARTITION BY customer_id ORDER BY created_at)",
+   "Storage": "Memory",
+   "Maximum Storage": 17,
+   "Shared Hit Blocks": 6166,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Sort",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 14276.54,
+     "Total Cost": 14298.31,
+     "Plan Rows": 8709,
+     "Plan Width": 20,
+     "Actual Startup Time": 9.711,
+     "Actual Total Time": 10.069,
+     "Actual Rows": 7919.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Sort Key": [
+      "customer_id",
+      "created_at"
+     ],
+     "Sort Method": "quicksort",
+     "Sort Space Used": 502,
+     "Sort Space Type": "Memory",
+     "Shared Hit Blocks": 6166,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Heap Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Relation Name": "orders",
+       "Alias": "orders",
+       "Startup Cost": 203.92,
+       "Total Cost": 13706.61,
+       "Plan Rows": 8709,
+       "Plan Width": 20,
+       "Actual Startup Time": 1.654,
+       "Actual Total Time": 7.277,
+       "Actual Rows": 7919.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Recheck Cond": "(customer_id <= 200)",
+       "Rows Removed by Index Recheck": 0,
+       "Exact Heap Blocks": 6133,
+       "Lossy Heap Blocks": 0,
+       "Shared Hit Blocks": 6166,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0,
+       "Plans": [
+        {
+         "Node Type": "Bitmap Index Scan",
+         "Parent Relationship": "Outer",
+         "Parallel Aware": false,
+         "Async Capable": false,
+         "Index Name": "orders_customer_created",
+         "Startup Cost": 0.0,
+         "Total Cost": 201.75,
+         "Plan Rows": 8709,
+         "Plan Width": 0,
+         "Actual Startup Time": 0.866,
+         "Actual Total Time": 0.867,
+         "Actual Rows": 7919.0,
+         "Actual Loops": 1,
+         "Disabled": false,
+         "Index Cond": "(customer_id <= 200)",
+         "Index Searches": 1,
+         "Shared Hit Blocks": 33,
+         "Shared Read Blocks": 0,
+         "Shared Dirtied Blocks": 0,
+         "Shared Written Blocks": 0,
+         "Local Hit Blocks": 0,
+         "Local Read Blocks": 0,
+         "Local Dirtied Blocks": 0,
+         "Local Written Blocks": 0,
+         "Temp Read Blocks": 0,
+         "Temp Written Blocks": 0
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.121,
+  "Triggers": [],
+  "Execution Time": 13.044
+ },
+ "text": "WindowAgg  (cost=14276.54..14472.49 rows=8709 width=36) (actual time=8.785..11.787 rows=7919.00 loops=1)\n  Window: w1 AS (PARTITION BY customer_id ORDER BY created_at)\n  Storage: Memory  Maximum Storage: 17kB\n  Buffers: shared hit=6166\n  ->  Sort  (cost=14276.54..14298.31 rows=8709 width=20) (actual time=8.776..9.164 rows=7919.00 loops=1)\n        Sort Key: customer_id, created_at\n        Sort Method: quicksort  Memory: 502kB\n        Buffers: shared hit=6166\n        ->  Bitmap Heap Scan on orders  (cost=203.92..13706.61 rows=8709 width=20) (actual time=1.470..6.481 rows=7919.00 loops=1)\n              Recheck Cond: (customer_id <= 200)\n              Heap Blocks: exact=6133\n              Buffers: shared hit=6166\n              ->  Bitmap Index Scan on orders_customer_created  (cost=0.00..201.75 rows=8709 width=0) (actual time=0.735..0.735 rows=7919.00 loops=1)\n                    Index Cond: (customer_id <= 200)\n                    Index Searches: 1\n                    Buffers: shared hit=33\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.103 ms\nExecution Time: 12.166 ms"
+}

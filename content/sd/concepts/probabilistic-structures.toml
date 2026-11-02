@@ -207,7 +207,10 @@ A single estimate can be off by two standard errors; that is the deal.
 **Merging** is where HyperLogLog earns its place in designs. Two sketches of 600,000 visitors each, overlapping by 200,000, estimated 598,622 and 598,298 (adding them says 1.2 million). Merged register by register they estimated **1,001,227** for the true union of 1,000,000, and the merged registers were *identical* to a sketch fed both streams. So unique visitors per page per day can be stored once and rolled up into any week, month, or set of pages without the raw ids. The intersection is not supported directly; estimating it as \(|A| + |B| - |A \cup B|\) has an error relative to the union, which is useless when the overlap is small.
 
 In Redis: `PFADD visits:2026-11-01 user42`, `PFCOUNT visits:2026-11-01`, `PFMERGE visits:week visits:2026-10-26 …`. Small counters use a compact sparse encoding and grow to the full 12 KB only as they fill. Google's **HyperLogLog++** (Heule et al., 2013) is the variant most systems use: a 64-bit hash, an empirical bias correction for small and medium counts, and a sparse representation.
-'''
+
+
+> [!NOTE]
+> **How these were checked.** Redis's `hyperloglog.c` (GitHub) uses 14 index bits, so 16,384 registers of 6 bits each, which is the 12 KB (12,288 bytes) dense size; it also has a sparse encoding for small counters. The 0.81% standard error is the HyperLogLog formula 1.04/√m for m = 16,384.'''
 
 [[sections]]
 heading = "Count-min sketch: how often?"

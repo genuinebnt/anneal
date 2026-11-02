@@ -1,0 +1,136 @@
+{
+ "id": "m19-rollup",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT status, date_trunc('year', created_at) AS yr, count(*)\nFROM orders GROUP BY ROLLUP (status, date_trunc('year', created_at));",
+ "setup": [
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Sorted",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 317637.69,
+   "Total Cost": 362637.75,
+   "Plan Rows": 2000005,
+   "Plan Width": 22,
+   "Actual Startup Time": 1247.986,
+   "Actual Total Time": 1467.443,
+   "Actual Rows": 13.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Grouping Sets": [
+    {
+     "Group Keys": [
+      [
+       "status",
+       "(date_trunc('year'::text, created_at))"
+      ],
+      [
+       "status"
+      ],
+      []
+     ]
+    }
+   ],
+   "Shared Hit Blocks": 14960,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 13167,
+   "Temp Written Blocks": 13195,
+   "Plans": [
+    {
+     "Node Type": "Sort",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 317637.69,
+     "Total Cost": 322637.69,
+     "Plan Rows": 2000000,
+     "Plan Width": 14,
+     "Actual Startup Time": 1086.129,
+     "Actual Total Time": 1282.906,
+     "Actual Rows": 2000000.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Sort Key": [
+      "status",
+      "(date_trunc('year'::text, created_at))"
+     ],
+     "Sort Method": "external merge",
+     "Sort Space Used": 52704,
+     "Sort Space Type": "Disk",
+     "Shared Hit Blocks": 14960,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 13167,
+     "Temp Written Blocks": 13195,
+     "Plans": [
+      {
+       "Node Type": "Seq Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Relation Name": "orders",
+       "Alias": "orders",
+       "Startup Cost": 0.0,
+       "Total Cost": 39960.0,
+       "Plan Rows": 2000000,
+       "Plan Width": 14,
+       "Actual Startup Time": 0.014,
+       "Actual Total Time": 390.919,
+       "Actual Rows": 2000000.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Shared Hit Blocks": 14960,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.08,
+  "Triggers": [],
+  "Execution Time": 1472.67
+ },
+ "text": "GroupAggregate  (cost=317637.69..362637.75 rows=2000005 width=22) (actual time=1342.977..1574.755 rows=13.00 loops=1)\n  Group Key: status, (date_trunc('year'::text, created_at))\n  Group Key: status\n  Group Key: ()\n  Buffers: shared hit=14960, temp read=13167 written=13195\n  ->  Sort  (cost=317637.69..322637.69 rows=2000000 width=14) (actual time=1183.520..1385.785 rows=2000000.00 loops=1)\n        Sort Key: status, (date_trunc('year'::text, created_at))\n        Sort Method: external merge  Disk: 52704kB\n        Buffers: shared hit=14960, temp read=13167 written=13195\n        ->  Seq Scan on orders  (cost=0.00..39960.00 rows=2000000 width=14) (actual time=0.064..423.800 rows=2000000.00 loops=1)\n              Buffers: shared hit=14960\nPlanning Time: 0.083 ms\nExecution Time: 1579.700 ms"
+}

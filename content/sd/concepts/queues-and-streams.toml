@@ -162,7 +162,10 @@ idempotent: charges per order {1: 1, 2: 1, 3: 1, 4: 1, 6: 1}, dead-lettered [5],
 The naive handler charged order 4 twice; the idempotent one remembered it had already handled message 4 and only acknowledged it. Order 5 was received at t = 0, 30 and 60 and dead-lettered at t = 90 instead of blocking the queue forever.
 
 In a real system the "already handled" record must be **durable and written atomically with the effect**: an `inbox` table with the message id as primary key, inserted in the same database transaction as the change; or an idempotency key passed to the payment provider, which then returns the first result for a repeated key. A set in memory, as in the simulation, is lost with the worker.
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** The SQS API model in the botocore repository on GitHub confirms the 30-second default visibility timeout (0 seconds to 12 hours), 4-day default retention (1 minute to 14 days), long polling up to 20 seconds, a 1 MiB maximum message and a default `maxReceiveCount` of 10 (the 3 in the example is a choice, not the default). RabbitMQ's source on GitHub confirms the 30-minute `consumer_timeout` and the default delivery limit of 20 for quorum queues."""
 
 [[sections]]
 heading = "A stream"

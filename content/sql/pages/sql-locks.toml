@@ -1,0 +1,147 @@
+title = "Row locks, job queues and deadlocks"
+group = "sql-writes"
+order = 30
+minutes = 13
+lede = "Readers never wait for writers in Postgres, but two writers to the same row do. This page measures what that waiting costs in a job queue, shows the one clause (SKIP LOCKED) that turns the queue from serial to parallel, makes a deadlock on purpose and times how long Postgres takes to notice, and shows the advisory lock for the cases where the thing to lock is not a row."
+say = "Four workers claiming jobs with FOR UPDATE took 2,432 ms for 400 jobs at 5 ms of work each, the same as one worker (2,530 ms), because each waits for the row the others hold; with FOR UPDATE SKIP LOCKED four workers took 663 ms and eight took 340, each job claimed exactly once. Two sessions updating rows 1 and 2 in opposite order deadlocked: one was aborted with DeadlockDetected after 1,303 ms (the 1 s deadlock_timeout plus the 0.3 s the test slept), and with both in the same order neither failed. NOWAIT and lock_timeout fail fast instead of waiting."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The rule:** an `UPDATE`, `DELETE` or `SELECT ... FOR UPDATE` takes a lock on each row it touches and holds it until the transaction ends. A plain `SELECT` takes no row lock and never waits for one (MVCC, module 23); a second writer to the same row waits for the first to commit or roll back.",
+  "**The job queue:** table `jq` of 400 jobs, workers that claim one job, hold the transaction for 5 ms (simulated work) and commit. With `... WHERE id = (SELECT id FROM jq WHERE state = 'new' ORDER BY id LIMIT 1 FOR UPDATE)`: 1 worker **2,530 ms**, 4 workers **2,432 ms**, no speed-up, because all four wait for the same first row. With `FOR UPDATE SKIP LOCKED`: 1 worker **2,576 ms**, 4 workers **663 ms**, 8 workers **340 ms**, and every job claimed exactly once (400 claimed, 400 distinct, 400 done).",
+  "**Why it works:** `SKIP LOCKED` leaves rows that another transaction has locked out of the result, so each worker takes the next free row instead of queueing behind the first. It gives an inconsistent view of the table on purpose, which is right for 'give me any available job' and wrong for anything that must see every row.",
+  "**The deadlock:** session A updates row 1 then row 2, session B updates row 2 then row 1. Each ends up waiting for the lock the other holds. After `deadlock_timeout` (1 s by default) Postgres checks, picks a victim and aborts it with `DeadlockDetected`: in the test one session failed after **1,303 ms** (the other finished at the same time once the victim's locks were released). Both updating in the **same order** (1 then 2): no deadlock, 303 and 604 ms (the second simply waited).",
+  "**Failing fast:** `SELECT ... FOR UPDATE NOWAIT` raised `LockNotAvailable` at once on a locked row; `SET lock_timeout = '200ms'` made a blocked `UPDATE` give up after **201 ms**. Without either, a writer waits as long as the holder does (module 31: when that is hours).",
+  "**Advisory locks:** `pg_try_advisory_lock(42)` returned true in the first session and false in a second until the first called `pg_advisory_unlock(42)`. For work with no row to lock (one cron job at a time, one importer per customer). The `_xact_` variants release at the end of the transaction, which is what you want unless you have a reason not to.",
+]
+
+[[sections]]
+heading = "Who waits for whom"
+body = """
+Writers lock the rows they change. Readers do not lock anything, because a reader sees a snapshot of row versions (module 23). So:
+
+| Session 1 holds | Session 2 does | Result |
+|---|---|---|
+| `UPDATE` of row 1, not committed | `SELECT` of row 1 | returns the old version, no wait |
+| same | `UPDATE` or `DELETE` of row 1 | waits for session 1 to commit or roll back |
+| same | `UPDATE` of row 2 | independent, no wait |
+| same | `SELECT ... FOR UPDATE` of row 1 | waits |
+| same | `SELECT ... FOR UPDATE NOWAIT` | `LockNotAvailable` immediately |
+
+The wait lasts exactly as long as session 1's transaction, whatever it does next, which is why transactions that write should be short (module 31). `pg_blocking_pids(pid)` and the `pg_locks` view show who is waiting on whom; `pg_stat_activity.wait_event_type = 'Lock'` marks the waiting sessions.
+
+Two more row-level modes exist, `FOR SHARE` and `FOR KEY SHARE` (taken on the referenced row by a foreign key insert), which are weaker than `FOR UPDATE` and do not conflict with each other; the manual's table lists which modes conflict.
+"""
+
+[[sections]]
+heading = "A queue in a table"
+body = """
+The textbook job queue is a table with a state column and a claim statement. Throwaway table `jq`, 400 rows in state `new`; each worker runs one transaction per job: claim, sleep 5 ms in place of the work, commit.
+
+```sql
+UPDATE jq SET state = 'done', worker = $1
+WHERE id = (
+    SELECT id FROM jq
+    WHERE state = 'new'
+    ORDER BY id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id;
+```
+
+| Locking clause | Workers | Time for 400 jobs |
+|---|---|---|
+| `FOR UPDATE` | 1 | 2,530 ms |
+| `FOR UPDATE` | 4 | 2,432 ms |
+| `FOR UPDATE SKIP LOCKED` | 1 | 2,576 ms |
+| `FOR UPDATE SKIP LOCKED` | 4 | 663 ms |
+| `FOR UPDATE SKIP LOCKED` | 8 | 340 ms |
+
+Without `SKIP LOCKED`, the four workers all pick the same lowest `new` row, three wait for the one that got it, and when it commits they re-check the row (read committed re-evaluates the condition on the updated row), find it done and try the next. The workload is serialised and four workers are no faster than one, apart from how the jobs happened to be shared out (71, 78, 144 and 107 each). With `SKIP LOCKED` they are split evenly (100 each of 400 for four workers, about 50 each for eight) and the time falls with the worker count. The number of claims is exact: 400 claimed, 400 distinct, none twice.
+
+Things to add for a real queue: an index on the claim condition (the test uses a partial index on `id WHERE state = 'new'` so the `LIMIT 1` is a short index scan), a visibility timeout or `locked_at` column to recover jobs whose worker died (its transaction rolled back, so the row is `new` again, which handles a crash but not a stuck worker that never finishes), and a plan for the dead rows: a table with a high turnover of updates needs aggressive autovacuum (module 24) or partitioning, or its claim scan slows as dead entries pile up.
+"""
+
+[[sections]]
+heading = "Deadlocks"
+body = """
+A deadlock is a cycle of waits. Table `dl` with rows 1 and 2; two sessions each update both rows, with a 0.3 s pause between the two updates so that they interleave:
+
+| Session A | Session B |
+|---|---|
+| `UPDATE ... WHERE id = 1` | `UPDATE ... WHERE id = 2` |
+| `UPDATE ... WHERE id = 2` (waits for B) | `UPDATE ... WHERE id = 1` (waits for A) |
+
+Neither can proceed. Postgres does not notice at once: it waits `deadlock_timeout` (1 s) and then looks for a cycle; it found one and cancelled one session with `DeadlockDetected` ("deadlock detected"), after **1,303 ms** in the test. The other session then finished. When both sessions update row 1 first, then row 2, there is no cycle: A finished in 303 ms and B, which had to wait for A's lock on row 1, in 604 ms.
+
+The cure is **a consistent lock order**: always touch rows (and tables) in the same order, for instance sorting the ids a batch will update before updating them (`ORDER BY id` inside the `SELECT ... FOR UPDATE` that locks them first). Deadlocks cannot be configured away; an application that writes concurrently should expect `DeadlockDetected` (SQLSTATE 40P01) and retry the whole transaction.
+
+To stop waiting rather than risk waiting: `NOWAIT` on the locking `SELECT` (error at once if any row is locked) and `lock_timeout` for statements. A blocked `UPDATE` with `lock_timeout = '200ms'` failed after 201 ms. Timeouts limit the damage of a stuck holder (next module) but the work must still be retried.
+"""
+
+[[sections]]
+heading = "Advisory locks"
+body = """
+When the thing that must not run twice is not a row, an advisory lock is a lock on a number you choose that the database enforces but does not interpret:
+
+```sql
+SELECT pg_try_advisory_lock(42);        -- true: you hold it
+-- in a second session:
+SELECT pg_try_advisory_lock(42);        -- false: not available
+SELECT pg_advisory_unlock(42);          -- release (session level)
+SELECT pg_advisory_xact_lock(7);        -- held until the transaction ends
+```
+
+In the test the first session got `true`, the second `false`, and after the unlock the second got `true`; a transaction-level lock on 7 made the other session's attempt `false` until the first transaction committed. Typical uses: only one instance of a scheduled job runs (the others get `false` and exit), one migration or import at a time per customer (lock on the customer id), or serialising a read-modify-write across rows that do not exist yet.
+
+Session-level locks outlive transactions and belong to the connection, so with a connection pool in transaction mode they leak or are released from a different connection than took them; prefer the `_xact_` variants. They are held in shared memory, so lock one number per job, not one per row of a million.
+"""
+
+[[checks]]
+prompt = "You run eight workers on a table-based queue with SELECT ... FOR UPDATE LIMIT 1 and the total throughput is the same as with one worker. Why, and what is the one-clause change?"
+answer = "Every worker selects the same lowest row, so seven wait for the row lock held by the first; the queue is serialised on one row at a time. Add SKIP LOCKED: locked rows are skipped, each worker takes the next free row, and throughput scales with the number of workers (400 jobs in 663 ms with four workers against 2,432 ms)."
+
+[[checks]]
+prompt = "A transaction updates the rows of an order and its lines in whatever order the application loops, and under load you see 'deadlock detected' errors. What is the structural fix, and what must the application still do?"
+answer = "Take the locks in a consistent order, for example sort the ids and update (or SELECT ... FOR UPDATE ORDER BY id) in that order, so that no cycle of waits can form. The application must still handle SQLSTATE 40P01 by retrying the whole transaction, because deadlocks cannot be ruled out in every code path."
+
+[[checks]]
+prompt = "Why do you take pg_advisory_xact_lock rather than pg_advisory_lock when your application uses a connection pool in transaction pooling mode?"
+answer = "A session-level advisory lock belongs to the backend connection, but in transaction pooling the next transaction may run on another connection, so the lock is either held by a connection you no longer use (leaking, blocking others) or not held where you think. The transaction-level lock is released automatically when the transaction ends, on the same connection that took it."
+
+[[terms]]
+term = "SKIP LOCKED"
+means = "A locking-clause option that omits rows already locked by other transactions instead of waiting for them, used so parallel workers each take a different row from a queue."
+section = "A queue in a table"
+
+[[terms]]
+term = "Deadlock"
+means = "A cycle of transactions each waiting for a lock another holds. Postgres detects it after deadlock_timeout and aborts one of them with SQLSTATE 40P01."
+section = "Deadlocks"
+
+[[terms]]
+term = "Advisory lock"
+means = "A lock on an application-chosen number that Postgres enforces but does not attach to any table or row."
+section = "Advisory locks"
+
+[[terms]]
+term = "lock_timeout"
+means = "A setting that makes a statement give up with an error after waiting that long for a lock, instead of waiting indefinitely."
+section = "Deadlocks"
+
+[[sources]]
+title = "PostgreSQL: explicit locking (row-level locks, deadlocks, advisory locks)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"
+
+[[sources]]
+title = "PostgreSQL: SELECT (the locking clause: FOR UPDATE, NOWAIT, SKIP LOCKED)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-select.html"
+
+[[sources]]
+title = "PostgreSQL: advisory lock functions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-admin.html"

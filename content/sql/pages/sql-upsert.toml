@@ -1,0 +1,140 @@
+title = "Upserts: ON CONFLICT and MERGE"
+group = "sql-writes"
+order = 29
+minutes = 12
+lede = "'Insert it if it is new, update it if it exists' is two statements and a race when written as check-then-write, and one atomic statement when written as an upsert. This page runs both under four concurrent sessions, then measures what an upsert costs when most rows already exist: the dead versions a no-op DO UPDATE leaves, the identity values a conflict burns, and where MERGE fits."
+say = "Four sessions each 'incrementing' the same 2,000 counters with select, then update or insert lost 39 increments to unique-violation errors (sum 7,961 instead of 8,000); with INSERT ... ON CONFLICT DO UPDATE the same load gave 0 errors and the exact 8,000. On a 100,000-row table, an upsert of 100,000 keys (half existing) wrote 9.8 MB of WAL for DO NOTHING, 27.7 MB for DO UPDATE and grew the heap from 7.6 to 10.2 MB even when every update wrote the same value; adding WHERE ... IS DISTINCT FROM brought it back to 15.2 MB and 7.6 MB. A conflicting INSERT still consumes an identity value: 1,000 conflicts left a gap of 1,000."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The race:** the application checks `SELECT ... WHERE k = $1`, then does `UPDATE` if the row exists or `INSERT` if not. Two sessions can both see 'not there' and both insert. Four sessions, 2,000 keys each, every session adding 1 to each key: **39 unique-violation errors** and a total of **7,961** instead of 8,000 (one run; the number varies, the failure does not). Each error is a lost increment or a failed request.",
+  "**The fix:** `INSERT INTO t (k, n) VALUES ($1, 1) ON CONFLICT (k) DO UPDATE SET n = t.n + 1`. The same load: **0 errors, total 8,000**. It is atomic: if a concurrent transaction inserts the key first, the statement waits for it and takes the update path. It needs a unique index or constraint on the conflict columns.",
+  "**Cost on 100,000 existing rows, upserting 100,000 keys (half of them existing, in one statement from `unnest`)**, median of 3: `DO NOTHING` **587 ms, 9.8 MB WAL, heap 7,648 kB**; `DO UPDATE` **745 to 780 ms, 27.7 MB, heap 10,192 kB**. The update path writes a new row version for each of the 50,000 existing rows, **even when `SET val = excluded.val` writes the identical value**.",
+  "**Skip the no-op:** `ON CONFLICT (id) DO UPDATE SET val = excluded.val WHERE up_t.val IS DISTINCT FROM excluded.val` skips rows that would not change: **598 ms, 15.2 MB, heap 7,648 kB** (no new versions at all, so nothing for VACUUM, module 24, to clean up). Use it when the input mostly repeats what is stored, as a sync from another system does.",
+  "**Identity gaps:** the 'new row' is built, and its identity value taken, before the conflict is found. 1,000 plain inserts, then an upsert of 2,000 keys with 1,000 conflicts: the largest id was **3,000** and the next value 3,001, so ids 1,001 to 2,000 were consumed by rows that were never stored. Sequences are not gap-free anyway (rollbacks also burn values), but a high-rate upsert on a `serial` or identity column can use up an `int` key faster than the row count suggests; use `bigint`.",
+  "**MERGE (Postgres 15 and later):** `MERGE INTO t USING (...) s ON t.id = s.id WHEN MATCHED THEN UPDATE ... WHEN NOT MATCHED THEN INSERT ...` took **465 ms and 22.5 MB** for the same 100,000 keys (the matched branch also rewrites unchanged rows). It is more general (conditions per branch, `DELETE`, several `WHEN` clauses, and since 17 `RETURNING` and `WHEN NOT MATCHED BY SOURCE`) but the manual says it can still fail with a unique violation when a concurrent session inserts the same key, which `ON CONFLICT` retries instead. I did not run that race for MERGE.",
+]
+
+[[sections]]
+heading = "Check-then-write is a race"
+body = """
+The common first version:
+
+```sql
+SELECT 1 FROM counters WHERE k = $1;   -- application sees no row
+INSERT INTO counters (k, n) VALUES ($1, 1);
+-- or, if the SELECT found one:
+UPDATE counters SET n = n + 1 WHERE k = $1;
+```
+
+Between the `SELECT` and the `INSERT` another session can insert the same key. At the default isolation level (read committed) nothing stops it; the primary key does, by raising an error in the loser. The test: four connections, each walking keys 0 to 1,999 and adding 1 to each, 8,000 increments in all.
+
+| Method | Unique violations | Sum of the counters |
+|---|---|---|
+| select, then update or insert | 39 | 7,961 (expected 8,000) |
+| `INSERT ... ON CONFLICT (k) DO UPDATE SET n = counters.n + 1` | 0 | 8,000 |
+
+The 39 errors are a count from one run on this machine; it will differ every time, and the more concurrent the writers the more of them. The table is `up_r`, created and dropped by the demo. Wrapping the check and write in a transaction does not close the gap at read committed; locking the row first (`SELECT ... FOR UPDATE`) cannot lock a row that does not exist yet.
+
+`INSERT ... ON CONFLICT` closes it inside the server. It tries the insert; if the unique index reports a conflict with a committed or in-flight row it takes the other branch, waiting for the other transaction if it must. The conflict target (`ON CONFLICT (k)`) must match a unique index or constraint.
+"""
+
+[[sections]]
+heading = "DO NOTHING, DO UPDATE and the rows that did not change"
+body = """
+A table `up_t` of 100,000 rows (`id bigint primary key`, `hits int`, `val text`) and an upsert of 100,000 keys, ids 50,001 to 150,000, so half exist and half are new, sent as one statement through `unnest` (module 28). Each run starts from a fresh copy with autovacuum off; median of 3.
+
+| Statement | Time | WAL | Heap afterwards |
+|---|---|---|---|
+| `ON CONFLICT DO NOTHING` | 587 ms | 9.8 MB | 7,648 kB |
+| `DO UPDATE SET hits = up_t.hits + 1` | 772 ms | 27.7 MB | 10,192 kB |
+| `DO UPDATE SET val = excluded.val` (new values) | 745 ms | 27.7 MB | 10,192 kB |
+| same, but the values are unchanged | 780 ms | 27.7 MB | 10,192 kB |
+| same, with `WHERE up_t.val IS DISTINCT FROM excluded.val` | 598 ms | 15.2 MB | 7,648 kB |
+
+Postgres does not compare the old and new values: `DO UPDATE` writes a new row version for every conflicting row, so the third and fourth rows cost the same, 18 MB of WAL more than `DO NOTHING` and 2.5 MB of heap that VACUUM will have to collect. The extra `WHERE` clause evaluates before the update is written and removes the dead versions entirely. `IS DISTINCT FROM` rather than `<>` so that a `NULL` on either side counts as a difference. For many columns, compare the row: `WHERE (up_t.*) IS DISTINCT FROM (excluded.*)`.
+
+The first row is the choice when you only need the key to exist ('create if absent'): it never touches existing rows. `RETURNING` on an upsert returns only the rows that were inserted or updated, not the skipped ones, so detecting 'was it new' needs `RETURNING (xmax = 0) AS inserted` or a second statement.
+"""
+
+[[sections]]
+heading = "What a conflict still consumes"
+body = """
+An `INSERT` builds the row, including defaults such as an identity value, before the unique index says it conflicts. The identity value is not given back:
+
+```sql
+CREATE TABLE up_s (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, k int UNIQUE);
+INSERT INTO up_s (k) SELECT g FROM generate_series(1, 1000) g;
+INSERT INTO up_s (k) SELECT g FROM generate_series(1, 2000) g
+  ON CONFLICT (k) DO NOTHING;
+-- max(id) = 3000, not 2000: the 1,000 conflicts used 1,000 values
+```
+
+Nothing is wrong, since identity values only promise to be unique and increasing, but a job that upserts the same 10 million keys every night burns 10 million values a night on an identity column, and an `int` runs out at 2.1 billion. Use `bigint`, or make the natural key the primary key and drop the surrogate.
+"""
+
+[[sections]]
+heading = "MERGE"
+body = """
+`MERGE` (Postgres 15) takes a source of rows and a join condition, and runs a different action for matched and unmatched rows:
+
+```sql
+MERGE INTO up_t t
+USING (SELECT id, val FROM unnest($1::bigint[], $2::text[]) AS s(id, val)) s
+   ON t.id = s.id
+WHEN MATCHED AND t.val IS DISTINCT FROM s.val THEN UPDATE SET val = s.val
+WHEN NOT MATCHED THEN INSERT (id, val) VALUES (s.id, s.val);
+```
+
+It is the right statement for several cases `ON CONFLICT` cannot express: a different action depending on a condition, a `DELETE` branch, a conflict on something that is not a unique index. The same 100,000 keys (matched branch rewriting every row, no `AND` condition) took 465 ms and wrote 22.5 MB, faster than `DO UPDATE` here and in the same range of WAL; with the `AND` condition it also skips unchanged rows.
+
+The difference that matters in production is concurrency: `MERGE` does not retry. If another session inserts a matching key between the `MERGE` taking its snapshot and its `INSERT`, the manual says the statement can fail with a unique violation, where `ON CONFLICT` waits for the other transaction and takes the update path. For a single-key increment under concurrent writers use `ON CONFLICT`; for a batch synchronisation run by one job, `MERGE` is clearer and as fast. I only measured the single-session cost above, not that race for `MERGE`.
+"""
+
+[[checks]]
+prompt = "A nightly job upserts 5 million rows with ON CONFLICT DO UPDATE SET every column, and 98% of the rows are unchanged. The table grows and VACUUM is busy. Why, and what is the change?"
+answer = "DO UPDATE writes a new row version for every conflicting row even when no value changed, so 4.9 million dead versions and their WAL are produced each night. Add WHERE (t.*) IS DISTINCT FROM (excluded.*) so unchanged rows are skipped; only the 2% that differ are rewritten."
+
+[[checks]]
+prompt = "Why is 'SELECT then INSERT or UPDATE' wrong under concurrency even inside a transaction, and what does ON CONFLICT do differently?"
+answer = "At read committed, two sessions can both read 'no row' and both try to insert; the unique index makes one fail, and a transaction does not lock a row that does not exist yet. ON CONFLICT performs the insert and the conflict check against the unique index atomically, waits for a concurrent inserter if needed, and takes the update path, so there is no window."
+
+[[checks]]
+prompt = "After a year of nightly ON CONFLICT DO NOTHING loads into a table with an identity primary key, the max id is far larger than the row count. Is anything broken?"
+answer = "No. A conflicting insert still takes the next identity value before the conflict is detected, and the value is never reused, so every skipped row leaves a gap. It is harmless except that it uses up the key range faster (an int overflows at 2.1 billion); use bigint, or key the table on the natural unique column."
+
+[[terms]]
+term = "ON CONFLICT"
+means = "An INSERT clause naming a unique index or constraint and an action, DO NOTHING or DO UPDATE, to take atomically when the insert would violate it."
+section = "DO NOTHING, DO UPDATE and the rows that did not change"
+
+[[terms]]
+term = "excluded"
+means = "The pseudo-table inside ON CONFLICT DO UPDATE that holds the row that was proposed for insertion, so the update can use the new values."
+section = "DO NOTHING, DO UPDATE and the rows that did not change"
+
+[[terms]]
+term = "MERGE"
+means = "A statement (Postgres 15 and later) that joins a source to a target and runs UPDATE, DELETE or INSERT per matched or unmatched row, with conditions."
+section = "MERGE"
+
+[[terms]]
+term = "IS DISTINCT FROM"
+means = "A comparison that treats NULL as an ordinary value, so NULL IS DISTINCT FROM 1 is true and NULL IS DISTINCT FROM NULL is false; the safe way to test for a change."
+section = "DO NOTHING, DO UPDATE and the rows that did not change"
+
+[[sources]]
+title = "PostgreSQL: INSERT (the ON CONFLICT clause)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-insert.html"
+
+[[sources]]
+title = "PostgreSQL: MERGE"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-merge.html"
+
+[[sources]]
+title = "PostgreSQL: concurrency and MERGE"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/mvcc-caveats.html"

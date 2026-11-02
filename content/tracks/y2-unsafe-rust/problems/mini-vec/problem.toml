@@ -1,0 +1,32 @@
+slug = "mini-vec"
+title = "MiniVec: a Vec from raw allocation"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["unsafe", "alloc", "Layout", "NonNull", "ptr::read/write/copy", "Drop", "ZST", "Deref to slice"]
+teaches = [
+  "The three-field layout of `Vec`, and the invariant (slots below `len` are live, above are garbage) every `unsafe` block depends on.",
+  "`alloc`/`realloc`/`dealloc` with a matching `Layout`, `handle_alloc_error`, and why a zero-sized type needs special handling.",
+  "Moving values in and out of raw memory with `ptr::write`, `ptr::read` and `ptr::copy`, and dropping each element exactly once.",
+]
+follow_up = "1) Run it under Miri (`cargo +nightly miri test`) and then plant a bug (read `ptr.add(len)` in `pop`) to see the error. 2) Add `IntoIter` (it must own the buffer and drop the unconsumed tail) and `drain`; why is leaking a `Drain` (the Leakpocalypse) the reason `Drain` sets `len = 0` first? 3) Split out a `RawVec<T>` that owns only the allocation, so `Drop` for the buffer and for the elements are separate. 4) Add `with_capacity` and `reserve`, with `Layout::array` overflow checks: what attack does the overflow check stop? 5) What changes for `T` with alignment above 16, or for `Vec<T, A>` with a custom allocator?"
+related = ["F3", "C3", "D5"]
+
+[[hints]]
+kind = "approach"
+text = "Three fields: `ptr: NonNull<T>`, `cap`, `len`. `push` grows when `len == cap`, writes with `ptr::write(ptr.add(len), v)` and bumps `len`. `pop` decrements `len` first, then `ptr::read`s that slot. `insert`/`remove` use `ptr::copy` (memmove: overlapping is allowed) to shift the tail."
+
+[[hints]]
+kind = "rust"
+text = "Grow: `Layout::array::<T>(new_cap)`; first time `alloc::alloc(layout)`, later `alloc::realloc(ptr as *mut u8, old_layout, new_layout.size())`; null means `handle_alloc_error(layout)`. `NonNull::dangling()` is the pointer for an empty or zero-sized vec. `Drop`: `truncate(0)` then `dealloc` with the layout for `cap`, only if `cap != 0` and `T` is not zero-sized."
+
+[[hints]]
+kind = "edge"
+text = "Update `len` before running anything that could panic (a `Drop` impl): `truncate` decrements `len` first, then `drop_in_place`s. `remove` shifts `len - index - 1` elements *after* decrementing `len`, which is `len - index` afterwards. Never allocate with a zero-size layout: that is undefined behaviour."
+
+[solution]
+explanation = "This is `RawVec` plus `Vec` from the standard library in about 100 lines, the same shape as the Rustonomicon's 'Implementing Vec' chapter. The skill it builds is stating an invariant (live prefix, dead suffix, allocation layout) and checking each `unsafe` block against it: that habit is what makes unsafe code in a database buffer pool or a lock-free queue reviewable."
+time = "O(1) amortised push, O(n) insert/remove"
+space = "O(capacity)"

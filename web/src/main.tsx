@@ -38,6 +38,7 @@ import { CompanyPage } from "./pages/CompanyPage";
 import { SdHome } from "./pages/sd/SdHome";
 import { ReadPage } from "./pages/ReadPage";
 import { SdConceptPage, SdLearn } from "./pages/sd/SdLearn";
+import { SdPlans } from "./pages/sd/SdPlans";
 import { SdProblems } from "./pages/sd/SdProblems";
 import { SdPractice } from "./pages/sd/SdPractice";
 import { SdReview } from "./pages/sd/SdReview";
@@ -208,6 +209,7 @@ const routes = [
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/sd/review", component: SdReview }),
   createRoute({ getParentRoute: () => rootRoute, path: "/dsa/read", component: ReadPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/sd/plans", component: SdPlans }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

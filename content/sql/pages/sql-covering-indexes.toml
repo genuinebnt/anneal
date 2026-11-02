@@ -1,0 +1,134 @@
+title = "Covering indexes and index-only scans"
+group = "sql-covering"
+order = 20
+minutes = 14
+lede = "An index-only scan answers a query from the index and never visits the table. It is the largest single saving an index can give once the lookup itself is fast, and it is all or nothing: one column missing from the index and the table comes back. This page measures both sides, what INCLUDE is for, and what the extra width costs."
+say = "A query that needs only columns held in the index can run as an Index Only Scan: for 19,834 rows, 3 ms and 123 buffers against 14 ms and 11,069 buffers through the table. Add one column the index lacks and the plan goes back to the heap (15 ms) even though the covering index exists. INCLUDE puts payload columns in the leaf entries without making them part of the sort order; they can be filtered inside the index but not searched. The price is index size (60 MB became 95 MB here) and, in later modules, write cost and the visibility map."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "Sum of `total_cents` for customers 1 to 500 (19,834 orders) through `(customer_id, created_at)`: `Bitmap Heap Scan`, 10,991 heap blocks, 11,069 buffers, **about 14 ms**. The index finds the rows in 2 ms; the other 12 ms is reading the table.",
+  "With `(customer_id, created_at) INCLUDE (id, total_cents)` the same query is an `Index Only Scan` with `Heap Fetches: 0`: **123 buffers, about 3 ms**. The table is never read.",
+  "It is all or nothing. Adding `max(status)` to the select list (a column the index does not hold) sends the plan back to a `Bitmap Heap Scan` at **about 16 ms**, with the covering index still present. `SELECT *` almost never qualifies.",
+  "`INCLUDE` columns are stored in the index entries but are not part of the key: they cannot be searched or sorted on. They can still be tested without a heap visit: `AND total_cents > 17982` became a `Filter` inside the `Index Only Scan` (**1.7 ms**, 17,852 entries removed, `Heap Fetches: 0`).",
+  "The price is size: `(customer_id, created_at)` is **60 MB**; with `id` and `total_cents` it is **95 MB** (the table is 117 MB), and every INSERT and UPDATE that touches those columns pays for the bigger entries. Putting them in the key instead of `INCLUDE` gave the same 95 MB here; INCLUDE's advantages are semantic, below.",
+  "Index-only scans need `Heap Fetches: 0` to be fast: rows on pages not marked all-visible still need a table visit. That is the visibility map, the next module.",
+]
+
+[[sections]]
+heading = "The table visit is the cost"
+body = """
+Total spend for the first 500 customers. The index on `(customer_id, created_at)` finds their orders, but `total_cents` is not in it:
+
+```plan id=m20-heap setup=orders-customer-created,no-parallel
+SELECT customer_id, sum(total_cents) FROM orders WHERE customer_id BETWEEN 1 AND 500 GROUP BY customer_id;
+```
+
+The `Bitmap Index Scan` found 19,834 entries in about 2 ms. Then the `Bitmap Heap Scan` read **10,991 table blocks**, because those orders are scattered across the table, and the plan cost 11,069 buffers and about 14 ms. The index did its job; the heap fetches are the bill. Now include the columns the query reads:
+
+```plan id=m20-cover setup=orders-customer-created-cover,no-parallel
+SELECT customer_id, sum(total_cents) FROM orders WHERE customer_id BETWEEN 1 AND 500 GROUP BY customer_id;
+```
+
+`Index Only Scan`, `Heap Fetches: 0`, 123 buffers, about 3 ms. 90 times fewer buffers and about 4.5 times faster, from the same predicate on the same rows. The plan also changed shape: the index returns the rows already ordered by `customer_id`, so a `GroupAggregate` replaces the `HashAggregate`.
+
+The setup was `CREATE INDEX ... ON orders (customer_id, created_at) INCLUDE (id, total_cents)`. A covering index is not a type of index; it is any index that holds every column the query touches (in the select list, `WHERE`, `ORDER BY` and `GROUP BY`).
+"""
+
+[[sections]]
+heading = "One missing column breaks it"
+body = """
+The same query with one more output column, the order status:
+
+```plan id=m20-missing setup=orders-customer-created-cover,no-parallel
+SELECT customer_id, sum(total_cents), max(status) FROM orders WHERE customer_id BETWEEN 1 AND 500 GROUP BY customer_id;
+```
+
+The covering index exists, and the planner does not use it: `status` is not in it, so every row needs its table page, and a `Bitmap Heap Scan` is the cheapest way to get them (about 16 ms, back where it started). Two consequences for how you work with this:
+
+- Cover **queries**, not tables. Look at the select list and the filter of the one query that matters, and include exactly those columns. An index that almost covers ten queries covers none of them.
+- `SELECT *` is the enemy. A query written as `SELECT * FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20` has to visit the table for the columns the index does not hold, even with a wide index on top:
+
+```plan id=m20-star setup=orders-customer-created-cover,no-parallel
+SELECT * FROM orders WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20;
+```
+
+For 20 rows that is still 0.02 ms and nobody notices. The `Index Scan Backward` is fine; the point is that `SELECT *` would never become an index-only scan, and over 20,000 rows it would be the 14 ms plan above. Name the columns.
+"""
+
+[[sections]]
+heading = "INCLUDE against key columns"
+body = """
+The columns after `INCLUDE` are payload: stored in the leaf entries, not compared when the b-tree is searched, and not part of the sort order. What that buys over putting them in the key:
+
+- **Uniqueness stays on the key.** `CREATE UNIQUE INDEX ON orders (customer_id, created_at) INCLUDE (total_cents)` enforces uniqueness of `(customer_id, created_at)` only; adding `total_cents` as a key column would change what the constraint means.
+- **No operator class needed.** A column with no b-tree ordering (a `point`, say) can be included in an index even though it cannot be a key.
+- **Intent is visible.** A reader sees which columns are for searching and which are for answering.
+
+What it does not buy, at least in this measurement, is a smaller index: with `id` and `total_cents` as key columns instead of `INCLUDE` the index was also 95 MB, because the leaf entries are the same size and only the few internal pages differ. And an included column cannot be searched. It can only be tested after the entry is found, as a `Filter` inside the scan:
+
+```plan id=m20-filter setup=orders-customer-created-cover,no-parallel
+SELECT customer_id, sum(total_cents) FROM orders WHERE customer_id BETWEEN 1 AND 500 AND total_cents > 17982 GROUP BY customer_id;
+```
+
+`Filter: (total_cents > 17982)` with `Rows Removed by Filter: 17852`: the scan read all 19,834 entries of customers 1 to 500 and discarded 90% of them, without touching the table (`Heap Fetches: 0`, 123 buffers, 1.7 ms). Compare module 9: this is a filter condition, not an access condition, but because it costs no heap visit it is cheap.
+"""
+
+[[sections]]
+heading = "What the width costs"
+body = """
+The index with the two payload columns is 95 MB; the one without is 60 MB; the table is 117 MB. A covering index can approach the size of the table it covers, and that has three prices:
+
+- **Memory.** An index that does not fit in `shared_buffers` and the OS cache turns the 123-buffer plan into 123 disk reads. The saving relies on the index being cheaper to keep warm than the table, which holds only while it is narrower.
+- **Writes.** Every `INSERT` adds an entry to every index, and an `UPDATE` of any indexed or included column writes new entries (and prevents HOT updates for indexed columns). Module 27 measures this per index.
+- **Index-only scans need a clean visibility map.** An index entry does not say whether the row is visible to your transaction; the table does. Postgres skips the table only for pages the visibility map says are all-visible, which `VACUUM` maintains. The `Heap Fetches: 0` in these plans is only true because the table was just vacuumed; on a table with a steady write load it is not. Module 21 breaks this on purpose and measures it.
+
+A good covering index is for one hot, read-heavy query, narrow enough to stay small, on a table that is vacuumed often.
+"""
+
+[[checks]]
+prompt = "You added an index on (customer_id, created_at) INCLUDE (id, total_cents) for a report, and EXPLAIN still shows a Bitmap Heap Scan. What do you check first?"
+answer = "Whether the query reads a column the index does not hold: another output column, an expression in the select list, a column in ORDER BY or WHERE that is not in the index, or SELECT *. A single missing column rules out an index-only scan. Add the column to INCLUDE, or drop it from the query."
+
+[[checks]]
+prompt = "What is the difference between putting total_cents in the key and in INCLUDE?"
+answer = "A key column is part of the b-tree's sort order and can be searched and used for ordering (and for uniqueness); an INCLUDE column is stored in the leaf entries but not compared in the tree, so it can only be tested as a Filter after the entry is found, and it does not change what a UNIQUE index enforces. INCLUDE also allows types with no b-tree ordering. In the measured example the size was the same."
+
+[[checks]]
+prompt = "An Index Only Scan shows Heap Fetches: 40,000 on a table that gets constant updates. What does that mean and what do you do?"
+answer = "The visibility map does not mark many pages all-visible, so the scan has to visit the table to check row visibility for those entries, which gives back much of the saving. VACUUM sets the map bits: vacuum more often (autovacuum settings for that table) so pages become all-visible again. Module 21 covers this."
+
+[[checks]]
+prompt = "A covering index took a query from 14 ms to 3 ms, but the table is write-heavy. What do you weigh before keeping it?"
+answer = "The extra index size (here 60 MB to 95 MB), the write cost on every insert and on updates of the indexed or included columns, whether VACUUM keeps the visibility map current enough for Heap Fetches to stay near zero, and how often the query runs. A rarely-run report may not repay it."
+
+[[terms]]
+term = "Index-only scan"
+means = "A scan that answers the query from the index entries alone, without visiting the table, when every needed column is in the index and the pages are all-visible."
+section = "The table visit is the cost"
+
+[[terms]]
+term = "Covering index"
+means = "Any index holding every column one particular query touches, so that query can run as an index-only scan."
+section = "The table visit is the cost"
+
+[[terms]]
+term = "INCLUDE"
+means = "Index clause for payload columns stored in the leaf entries but not in the key: not searchable or sorted, not part of uniqueness."
+section = "INCLUDE against key columns"
+
+[[sources]]
+title = "PostgreSQL: index-only scans and covering indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX (INCLUDE)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createindex.html"
+
+[[sources]]
+title = "Use The Index, Luke: index-only scan"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/clustering/index-only-scan-covering-index"

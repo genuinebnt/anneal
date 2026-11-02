@@ -1,0 +1,32 @@
+slug = "array-vec"
+title = "ArrayVec: a const-generic vector on the stack"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["MaybeUninit", "const generics", "unsafe", "drop_in_place", "mem::forget", "no heap", "smallvec"]
+teaches = [
+  "`MaybeUninit<T>`: storage that is not yet a `T`, and the invariant 'a prefix is initialised' that replaces the compiler's guarantee.",
+  "A const generic `N` as a type-level capacity, so `ArrayVec<u8, 16>` is a plain 16-byte-plus-length value with no allocation.",
+  "Taking values out of a type that implements `Drop`: `mem::forget` after reading them out, or you drop them twice.",
+]
+follow_up = "1) Add `IntoIterator` that owns the elements (it must drop the unconsumed ones and track a start index). 2) Make `new` a `const fn` (what does `MaybeUninit::uninit_array` or an inline const give you?). 3) Add `extend_from_slice` for `T: Copy` using one `copy_nonoverlapping`, and `drain(range)` and explain why a leaked `Drain` must not leave `len` pointing at moved-out slots. 4) Implement a `SmallVec<T, N>` enum of inline-or-`Vec`, and decide when to spill. 5) Which of `Send`/`Sync`/`Clone`/`Debug` are derived for free, and why is `Clone` not (a panic mid-clone must drop what was cloned so far)?"
+related = ["F2", "F3", "D13"]
+
+[[hints]]
+kind = "approach"
+text = "`buf: [MaybeUninit<T>; N]` and `len`; the invariant is 'exactly `buf[..len]` is initialised'. `try_push` writes into `buf[len]` with `MaybeUninit::write`; `pop` decrements `len` then `assume_init_read`s that slot; `insert`/`remove` shift the tail with `ptr::copy`."
+
+[[hints]]
+kind = "rust"
+text = "Create the array with `unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() }` (sound because the inner type needs no init). View the prefix as `&[T]` with `slice::from_raw_parts(self.buf.as_ptr() as *const T, self.len)`. `Drop`: `ptr::drop_in_place(self.as_mut_slice())`."
+
+[[hints]]
+kind = "edge"
+text = "`into_array`: after `ptr::read`ing all `N` slots as a `[T; N]` you must `mem::forget(self)`, or `Drop` drops the same elements again. `try_push` on a full vector must give the value back, not drop it. `N = 0` has to work."
+
+[solution]
+explanation = "This is the core of the `arrayvec` and `heapless` crates, and `smallvec` adds a spill-to-heap case. Const generics move the capacity into the type, so there is no allocation, no pointer chase and the size is known at compile time: the right shape for per-packet scratch lists, embedded firmware, or the small-neighbours case of a graph node."
+time = "O(1) push/pop, O(n) insert/remove"
+space = "inline: N * size_of::<T>() + 8"

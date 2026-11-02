@@ -1,0 +1,32 @@
+slug = "buddy-allocator"
+title = "A buddy allocator with coalescing"
+mode = "write"
+level = "hard"
+stage = "arena-and-allocator"
+order = 4
+status = "ready"
+tags = ["buddy allocator", "power of two", "XOR buddy", "free lists", "BTreeSet", "fragmentation", "kernel"]
+teaches = [
+  "Power-of-two blocks aligned to their size: the buddy of the block at `off` of order `k` is at `off ^ (1 << k)`, one XOR.",
+  "Split on allocation, merge on free: how the Linux page allocator keeps large blocks available without scanning memory.",
+  "External fragmentation made visible: `free_units` can be large while `largest_free` is small.",
+]
+follow_up = "1) Compute the worst-case internal fragmentation of this allocator and how a slab (the first problem in this track) layers on top to fix it for small objects. 2) Replace each `BTreeSet` with an intrusive free list stored inside the free blocks, plus a bitmap per order for the buddy test. 3) Add `realloc(offset, old, new)` that grows in place when the buddy chain allows it. 4) Detect double free and a size that does not match the allocation: what extra metadata do you need? 5) Read `/proc/buddyinfo` on a Linux box and explain what a lot of free order-0 blocks and no order-10 blocks means for huge pages."
+related = ["F2", "F5", "Y2"]
+
+[[hints]]
+kind = "approach"
+text = "`free[k]` is a `BTreeSet` of offsets of free blocks of `2^k` units; start with `free[max_order] = {0}`. Alloc: find the smallest `k >= want` with a free block, `pop_first`, then while `k > want` drop one order and push the upper half `off + (1 << k)` onto `free[k]`."
+
+[[hints]]
+kind = "rust"
+text = "`size.max(1).next_power_of_two().trailing_zeros()` is the order. Free: loop `buddy = off ^ (1 << k)`; if `free[k].remove(&buddy)` succeeded the pair merges (`off = off.min(buddy)`, `k += 1`); otherwise insert `off` at order `k` and stop."
+
+[[hints]]
+kind = "edge"
+text = "Stop merging at `max_order` (the whole region has no buddy). `alloc(size)` with `size > 2^max_order` must be `None` before `next_power_of_two` can overflow."
+
+[solution]
+explanation = "Linux's page allocator is a buddy system per zone and order (`/proc/buddyinfo` prints the free-list lengths); `jemalloc`/`tcmalloc` use size classes instead because buddy rounding wastes up to half of each block (internal fragmentation) and large frees need the buddy to be free to merge. Kernel code likes it because splitting and merging are a handful of bit operations with no searching."
+time = "O(max_order * log n) per operation"
+space = "O(number of free blocks)"

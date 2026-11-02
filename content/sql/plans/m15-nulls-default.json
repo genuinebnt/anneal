@@ -1,0 +1,97 @@
+{
+ "id": "m15-nulls-default",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM tickets ORDER BY assignee_id LIMIT 10;",
+ "setup": [
+  {
+   "id": "tickets",
+   "sql": "CREATE TABLE tickets AS SELECT i AS id, CASE WHEN i % 50 = 0 THEN NULL ELSE (1 + (i::bigint * 7919) % 200)::int END AS assignee_id, timestamptz '2026-01-01' + (i % 100000) * interval '5 minutes' AS created_at FROM generate_series(1, 500000) AS i; ALTER TABLE tickets ADD PRIMARY KEY (id); VACUUM ANALYZE tickets;"
+  },
+  {
+   "id": "tickets-assignee",
+   "sql": "CREATE INDEX tickets_assignee ON tickets (assignee_id);"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.42,
+   "Total Cost": 0.83,
+   "Plan Rows": 10,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.016,
+   "Actual Total Time": 0.023,
+   "Actual Rows": 10.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 13,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "tickets_assignee",
+     "Relation Name": "tickets",
+     "Alias": "tickets",
+     "Startup Cost": 0.42,
+     "Total Cost": 20220.34,
+     "Plan Rows": 500000,
+     "Plan Width": 8,
+     "Actual Startup Time": 0.016,
+     "Actual Total Time": 0.021,
+     "Actual Rows": 10.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 13,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.035,
+  "Triggers": [],
+  "Execution Time": 0.034
+ },
+ "text": "Limit  (cost=0.42..0.83 rows=10 width=8) (actual time=0.010..0.019 rows=10.00 loops=1)\n  Buffers: shared hit=13\n  ->  Index Scan using tickets_assignee on tickets  (cost=0.42..20220.34 rows=500000 width=8) (actual time=0.010..0.017 rows=10.00 loops=1)\n        Index Searches: 1\n        Buffers: shared hit=13\nPlanning Time: 0.035 ms\nExecution Time: 0.028 ms"
+}

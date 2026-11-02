@@ -1,0 +1,150 @@
+title = "Aggregates: count, DISTINCT, FILTER, ROLLUP"
+group = "sql-shapes"
+order = 19
+minutes = 15
+lede = "count(*) on a big table is slow in Postgres and no index makes it fast: the rows have to be visited, because each transaction may see a different number. This page measures what an exact count costs, what DISTINCT adds, how FILTER turns three scans into one, and what ROLLUP does to the sort."
+say = "An exact count(*) of 2,000,000 rows reads every row: about 235 ms serially, 75 ms with 3 workers, and an index-only scan over the primary key (fewer pages, 5,468 against 14,960 buffers) was not faster (about 285 ms). count(DISTINCT x) sorts all the values (800 ms, 23 MB spilled); SELECT count(*) FROM (SELECT DISTINCT x ...) hashes instead (450 ms). Several conditional counts belong in one scan with FILTER (290 ms) instead of three subqueries (550 ms). ROLLUP is one sort and one pass (1.5 s here, 52 MB on disk) but the sort dominates."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "`SELECT count(*) FROM orders` (2,000,000 rows) is a `Seq Scan` + `Aggregate`: 14,960 buffers, **about 235 ms** (median of 5). Postgres cannot answer from a stored row count, because with MVCC each transaction may see a different set of rows.",
+  "More workers help linearly-ish: `Parallel Seq Scan` with 3 workers **75 ms**. An `Index Only Scan` on the primary key reads far fewer buffers (**5,468** against 14,960) and was **not faster**, about 285 ms (forced with `enable_seqscan = off`): counting an index is not free either.",
+  "`count(*) WHERE status = 'refunded'` (222,462 rows) with an index on `status` is an `Index Only Scan` and took **25 ms** (`Heap Fetches: 0`): a count over a *selective* condition can be cheap, a count over most of the table cannot.",
+  "`count(DISTINCT customer_id)` sorts all 2,000,000 values (`Sort Method: external merge Disk: 23528kB`), **about 800 ms**. The same answer written as `SELECT count(*) FROM (SELECT DISTINCT customer_id ...)` uses a `HashAggregate` over 50,000 groups, **about 450 ms**. In this version the aggregate form of DISTINCT sorts; the subquery form can hash.",
+  "Three conditional counts as three subqueries scan the table three times (**about 550 ms**); one query with `count(*) FILTER (WHERE ...)` scans once (**about 290 ms**).",
+  "`GROUP BY ROLLUP (status, year)` computes the groups and both subtotals plus the grand total in one pass over one sort: 13 rows out, but the sort of 2,000,000 rows spilled 52 MB to disk and took **about 1.5 s**.",
+  "When an estimate is enough, `reltuples` in `pg_class` returns the row count the planner already has in under a millisecond (module 10): updated by `VACUUM` and `ANALYZE`, so it can be stale.",
+]
+
+[[sections]]
+heading = "Why count(*) is slow"
+body = """
+In a heap with MVCC (module 23) every row version has to be checked for visibility to *your* transaction, so there is no single counter to read. Postgres counts by visiting rows:
+
+```plan id=m19-count-all setup=no-parallel
+SELECT count(*) FROM orders;
+```
+
+2,000,000 rows, 14,960 buffers, about 235 ms. The only direct levers are doing it in parallel and reading fewer pages. Parallel first (`max_parallel_workers_per_gather = 4`, module 12):
+
+```plan id=m19-count-parallel setup=parallel-4
+SELECT count(*) FROM orders;
+```
+
+Three workers plus the leader: 75 ms, a `Gather` over four `Partial Aggregate`s. The second lever is the idea from module 3: count from an index, which is smaller than the table. The primary key is 43 MB against 117 MB for the table, and the planner will not choose it, so force it to see:
+
+```plan id=m19-count-index setup=no-seqscan,no-parallel
+SELECT count(*) FROM orders;
+```
+
+5,468 buffers instead of 14,960, `Heap Fetches: 0`, and about 285 ms: a bit **slower** than the sequential scan here. An index-only scan walks the b-tree page by page with a visibility check per entry, and with everything in cache the saved I/O is not what costs. On a cold cache, or with a much wider table, the narrower index wins; measure on yours. (This is also why the planner did not pick it.)
+
+A count over a *selective* condition is a different story. With an index on `status`:
+
+```plan id=m19-count-filter setup=orders-status,no-parallel
+SELECT count(*) FROM orders WHERE status = 'refunded';
+```
+
+222,462 refunded orders counted from the index alone, `Heap Fetches: 0`, 25 ms. That is the kind of count an index makes cheap: the answer is a small fraction of the table.
+
+When the exact number does not matter, `SELECT reltuples::bigint FROM pg_class WHERE relname = 'orders'` returned 2,000,000 in under a millisecond: it is the planner's own estimate (module 10), refreshed by `VACUUM` and `ANALYZE`. Good for 'about 2 million results', wrong for anything that must be exact or that depends on a filter.
+"""
+
+[[sections]]
+heading = "count(DISTINCT) and its two shapes"
+body = """
+How many different customers have ordered:
+
+```plan id=m19-distinct setup=no-parallel
+SELECT count(DISTINCT customer_id) FROM orders;
+```
+
+`count(DISTINCT customer_id)` sorts all 2,000,000 values, and the sort does not fit in memory (`external merge Disk: 23528kB`): about 800 ms. Written as a subquery:
+
+```plan id=m19-distinct-group setup=no-parallel
+SELECT count(*) FROM (SELECT DISTINCT customer_id FROM orders) s;
+```
+
+`HashAggregate` with 50,000 groups and `Memory Usage: 2329kB`, then count the groups: about 450 ms. The two queries are equal in result, but they are not equal to the planner: the aggregate form of `DISTINCT` is implemented by sorting inside the `Aggregate`, and the `SELECT DISTINCT` form is free to hash. If you need the distinct count of many rows, test both. An index on `customer_id` would let the distinct run as an index scan in order (module 15), which is another option; it is not free either when most of the table is read.
+
+For counts over very large sets where a few percent error is fine (unique visitors, for instance), approximate sketches (HyperLogLog, in the `postgresql-hll` extension) trade accuracy for a fixed memory cost. That is outside this course's measurements; I did not measure it.
+"""
+
+[[sections]]
+heading = "FILTER: one scan for many counts"
+body = """
+A dashboard row that needs paid, refunded and total counts. The straightforward version is three subqueries:
+
+```plan id=m19-separate setup=no-parallel
+SELECT (SELECT count(*) FROM orders WHERE status = 'paid') AS paid,
+       (SELECT count(*) FROM orders WHERE status = 'refunded') AS refunded,
+       (SELECT count(*) FROM orders) AS total;
+```
+
+Three `InitPlan`s, three scans of 2,000,000 rows (the first two with `Rows Removed by Filter`), about 550 ms in total. One scan with `FILTER`:
+
+```plan id=m19-filter-agg setup=no-parallel
+SELECT count(*) FILTER (WHERE status = 'paid') AS paid,
+       count(*) FILTER (WHERE status = 'refunded') AS refunded,
+       count(*) AS total
+FROM orders;
+```
+
+One `Seq Scan`, one `Aggregate` computing three counters as it goes, about 290 ms. `count(*) FILTER (WHERE cond)` (also available on `sum`, `avg` and the others) is the clean form of the older `sum(CASE WHEN cond THEN 1 END)`. The saving is in scans, not in arithmetic: put every aggregate over the same table in one query. The three subqueries could each have used an index (the `refunded` one did in the previous section); the single scan is the better trade only when the counts together touch most of the table.
+"""
+
+[[sections]]
+heading = "ROLLUP: subtotals in one sort"
+body = """
+Counts by status and year with a subtotal per status and a grand total:
+
+```plan id=m19-rollup setup=no-parallel
+SELECT status, date_trunc('year', created_at) AS yr, count(*)
+FROM orders GROUP BY ROLLUP (status, date_trunc('year', created_at));
+```
+
+The three `Group Key` lines are the three grouping levels (status and year, status, nothing), all computed by one `GroupAggregate` over one sorted stream: 13 rows out. Without `ROLLUP` you would run three queries and scan three times. But the cost is in the `Sort` of 2,000,000 rows (`external merge Disk: 52704kB`, about 1.5 s): the sort key is an expression (`date_trunc('year', created_at)`) so no ordinary index can supply it, and the grouping is on only 13 combinations, which a hash aggregate would handle in memory. `GROUPING SETS` and `CUBE` behave the same way; for a report that runs often, a summary table kept up to date (the write-cost modules in part VI weigh that) is the real answer.
+"""
+
+[[checks]]
+prompt = "A dashboard runs SELECT count(*) FROM events for a total and the table has 200 million rows. It takes 20 seconds. You add an index on every column. Does it help, and what are your options?"
+answer = "No: an exact count must visit every visible row, and an index only gives a smaller structure to walk (an index-only scan over it read fewer buffers but was not faster in the measured example). Options: parallel query to spread the scan, an approximate count from pg_class.reltuples if exactness is not required, or a maintained counter or summary table if it is."
+
+[[checks]]
+prompt = "count(DISTINCT customer_id) over 2 million rows takes 800 ms with a sort spilling to disk. What equivalent form can be faster, and why?"
+answer = "SELECT count(*) FROM (SELECT DISTINCT customer_id FROM orders) s. The aggregate form sorts all the input values; the subquery form can use a HashAggregate over the 50,000 distinct values in memory (450 ms in the example). Measure both on your data."
+
+[[checks]]
+prompt = "A page computes paid, refunded and total counts with three scalar subqueries. How would you rewrite it, and when would you keep the subqueries?"
+answer = "One query with count(*) FILTER (WHERE status = 'paid'), count(*) FILTER (WHERE status = 'refunded') and count(*): one scan instead of three. Keep separate subqueries when each condition is selective and has its own index, so each is a cheap index-only count (25 ms in the example) and the single scan would read the whole table."
+
+[[terms]]
+term = "FILTER clause"
+means = "A condition attached to an aggregate, such as count(*) FILTER (WHERE status = 'paid'), that restricts which rows that one aggregate sees."
+section = "FILTER: one scan for many counts"
+
+[[terms]]
+term = "ROLLUP"
+means = "A GROUP BY extension that also produces the subtotals for each prefix of the grouping columns and a grand total, in one pass."
+section = "ROLLUP: subtotals in one sort"
+
+[[terms]]
+term = "reltuples"
+means = "The planner's stored estimate of a table's row count in pg_class, refreshed by VACUUM and ANALYZE."
+section = "Why count(*) is slow"
+
+[[sources]]
+title = "PostgreSQL wiki: slow counting"
+kind = "guide"
+url = "https://wiki.postgresql.org/wiki/Slow_Counting"
+
+[[sources]]
+title = "PostgreSQL: aggregate expressions (FILTER)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-AGGREGATES"
+
+[[sources]]
+title = "PostgreSQL: GROUPING SETS, CUBE and ROLLUP"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS"

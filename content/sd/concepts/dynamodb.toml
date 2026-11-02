@@ -85,7 +85,10 @@ Numbers an interviewer may probe, and that change what you can design:
 | point-in-time recovery | any second in the last 35 days |
 
 Partitions **split on size and on traffic**: a table starts with few partitions and DynamoDB adds them as data grows or traffic is sustained. **Adaptive capacity** lets a hot partition borrow unused capacity from the table and splits a hot item collection when it can, but a single key still cannot exceed the 1,000 write units a second one partition serves. A new table in on-demand mode can absorb up to roughly double its previous peak immediately; a sudden jump far beyond that can still be throttled for a few minutes.
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** Checked against the DynamoDB API model in the botocore repository on GitHub: 400 KB items, 1 MB per `Query` or `Scan` page, `BatchGetItem` 100 items or 16 MB, `BatchWriteItem` 25 operations or 16 MB, `TransactWriteItems` and `TransactGetItems` 100 items, point-in-time recovery for 35 days, and 10 GB per local-index item collection. Not verified (the developer guide's repository is empty and the site could not be opened): about 3,000 read and 1,000 write units a second per partition, the 40,000 default table quota, 24-hour stream retention, and the capacity-unit sizes (4 KB read, 1 KB write)."""
 
 [[sections]]
 heading = "Reads: consistency, cost and caching"

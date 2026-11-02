@@ -122,7 +122,10 @@ body = """
 **Membership changes.** Switching straight from an old set of servers to a new one could, during the switch, let one majority of the old set and a different majority of the new set each elect a leader. The paper's **joint consensus** passes through a configuration that needs majorities of both; the thesis's simpler alternative changes **one server at a time**, where any old and new majorities always overlap. etcd adds new members as non-voting **learners** that catch up on the log before they count towards the quorum, so a slow new member cannot stall commits.
 
 **Snapshots.** The log cannot grow forever: each server periodically writes its state machine to a snapshot and discards the log before it. A follower too far behind receives the snapshot (InstallSnapshot) instead of the missing entries.
-"""
+
+
+> [!NOTE]
+> **How these were checked.** The etcd-io/raft library's README and source (GitHub) confirm that it implements `ReadIndex` reads through the leader, pre-vote, and membership changes one node at a time, applied when the entry is applied rather than when it is appended. Joint consensus is the paper's general method; the library supports it as well."""
 
 [[sections]]
 heading = "Paxos and the family"

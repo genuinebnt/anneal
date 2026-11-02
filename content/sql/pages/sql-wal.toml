@@ -1,0 +1,131 @@
+title = "The write-ahead log, commits and checkpoints"
+group = "sql-internals"
+order = 26
+minutes = 15
+lede = "Every change Postgres makes is first written to a sequential log, the WAL, and a commit returns when that log reaches disk, not when the table pages do. That one design decides what a write costs: how many bytes every index adds, why the first change after a checkpoint is more expensive, and why one transaction per row is slow. This page measures each of them on this machine."
+say = "Changes go to the WAL first; COMMIT waits for the log flush (fsync) and the data pages are written later by checkpoints. Inserting 100,000 rows wrote 8.0 MB of WAL with no index, 14.7 MB with one and 30.1 MB with three. The first update of 100,000 rows after a checkpoint wrote 21.3 MB against 16.4 MB for the second, because each page's first change after a checkpoint is logged as a full 8 kB image. 2,000 one-row transactions took about 0.3 ms per commit with synchronous_commit=on, 0.08 with off, and 0.07 per insert in one transaction; the absolute numbers depend on the disk, the ratio is the lesson."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The rule:** a change is written to the WAL (an append-only log) before the data page it touches; a transaction commits when its commit record is flushed to disk. The table and index pages are written to disk later, in the background and at checkpoints. After a crash Postgres replays the log from the last checkpoint.",
+  "**Bytes per write.** `INSERT` of 100,000 rows (`id`, `customer_id`, `status`, `total_cents`): **8.0 MB** of WAL with no index, **14.7 MB** with one index, **30.1 MB** with three indexes; 72, 191 and 476 ms. Each index is a full set of extra log records and extra work, roughly doubling then tripling the cost of the table alone.",
+  "**Full-page images.** Right after a `CHECKPOINT`, updating all 100,000 rows wrote **21.3 MB**; updating them again (same pages, already logged since the checkpoint) wrote **16.4 MB**. The 4.9 MB difference is about 600 pages of 8 kB: the first change to a page after a checkpoint logs the whole page, to protect against a torn write (`full_page_writes = on`).",
+  "**Commits.** 2,000 single-row transactions with `synchronous_commit = on` took **0.26 to 0.34 ms each**, with `off` **0.07 to 0.09 ms**, and 2,000 inserts in one transaction **0.073 ms per insert**. The cost of a commit is the flush; one flush per transaction means batching rows amortises it. This VM's disk flushes fast; on a network disk the commit figure is far larger, which I did not measure.",
+  "`synchronous_commit = off` returns before the flush, so a crash can lose the last few hundred milliseconds of committed transactions (up to about three times `wal_writer_delay`, 200 ms by default) but cannot corrupt the database. It is a per-session or per-transaction setting.",
+  "**Checkpoints** write all dirty pages and mark a point from which replay need not start earlier: every `checkpoint_timeout` (5 min here) or when the WAL reaches `max_wal_size` (1 GB). After updating 500,000 rows (94 MB of WAL), a `CHECKPOINT` took **113 ms** against **3 ms** when idle: the time is the dirty pages that have to be written.",
+]
+
+[[sections]]
+heading = "Write the log first"
+body = """
+A page in the shared buffers is changed in memory and marked dirty. If every commit waited for the table and every index page to be written to random places on disk, commits would be slow. Instead, each change appends a small record to the **write-ahead log** (a sequential file, in 16 MB segments), and `COMMIT` waits only for those records, ending with the commit record, to be flushed with `fsync`. Sequential appends are the fast thing disks do.
+
+The dirty data pages are written later: by the background writer, and in bulk by **checkpoints**. If the server crashes in between, startup reads the WAL from the last checkpoint forward and re-applies every change to the pages, so committed work is not lost and half-done work is not visible (MVCC, module 23: its row versions were never marked committed).
+
+The same log is what replication ships to a standby and what point-in-time recovery replays; the `wal_level` here is `replica`. A `logical` level, needed by logical replication and change-data-capture, writes more.
+
+So the cost of a write is the volume of WAL it generates and the number of flushes it forces. Both are measurable.
+"""
+
+[[sections]]
+heading = "What a write costs in log bytes"
+body = """
+The change in the log is per heap row and per index entry. A table of four columns, 100,000 inserted rows, measured as the difference in `pg_current_wal_lsn()` before and after (autovacuum off on the table):
+
+| Indexes on the table | WAL written | Time |
+|---|---|---|
+| none | 8.0 MB | 72 ms |
+| 1 (`id`) | 14.7 MB | 191 ms |
+| 3 (`id`, `customer_id`, `(status, total_cents)`) | 30.1 MB | 476 ms |
+
+The table itself is about 80 bytes of log per row; each index adds about 65 more (a b-tree insert is logged, and sometimes a page split, which logs far more). Three indexes cost about four times what the bare table does. Module 27 takes this to updates and deletes and counts the work per index.
+
+Updates add the **full-page image** effect. The first time a page is modified after a checkpoint, the log carries a copy of the whole 8 kB page, because a crash during a page write could otherwise leave a half-written page that replay cannot repair:
+
+| Update of all 100,000 rows | WAL |
+|---|---|
+| right after a `CHECKPOINT` | 21.3 MB |
+| again, same pages, before the next checkpoint | 16.4 MB |
+
+The difference, 4.9 MB, is the table's roughly 600 pages in full. Two consequences: WAL volume rises after each checkpoint and tapers off as pages are logged, so more frequent checkpoints mean more WAL; and `wal_compression` (off here) compresses those images at some CPU cost.
+"""
+
+[[sections]]
+heading = "The price of a commit"
+body = """
+`COMMIT` waits until its WAL is flushed to stable storage. That wait is the same whether the transaction wrote one row or ten thousand, so a transaction per row pays it per row. On this machine, 2,000 single-row inserts in autocommit mode:
+
+| Setting | Time per row |
+|---|---|
+| `synchronous_commit = on` (default), one transaction per row | 0.26 to 0.34 ms |
+| `synchronous_commit = off`, one transaction per row | 0.07 to 0.09 ms |
+| `on`, all 2,000 rows in one transaction | 0.073 ms |
+
+(Two runs each; the first of each pair includes the cost of growing the table's file.) The flush on this VM is fast, a fraction of a millisecond; on a cloud network volume it can be several milliseconds, and the 'one transaction per row' line then dominates everything else. I did not measure that, only this machine, but the proportions are the point.
+
+The two ways to pay less:
+
+- **Fewer, larger transactions.** Insert in batches, with multi-row `INSERT` or `COPY` (module 28). The single transaction above did the same work as the 2,000 as if each commit were free. Concurrent commits also share a flush (group commit), which is why many connections doing small writes scale better than one doing them in a loop.
+- **`synchronous_commit = off`** for data you can afford to lose a moment of (counters, logs, sessions), per transaction with `SET LOCAL synchronous_commit = off`. The commit returns before the flush; a crash can lose the last transactions, up to about three times `wal_writer_delay` (200 ms by default), but cannot corrupt the database. Never for money.
+"""
+
+[[sections]]
+heading = "Checkpoints"
+body = """
+A **checkpoint** writes every dirty page in the shared buffers to its place on disk and records that the log before this point is no longer needed for crash recovery. It runs every `checkpoint_timeout` (5 minutes here) or sooner when the WAL since the last one reaches `max_wal_size` (1 GB here), and Postgres spreads its writes over `checkpoint_completion_target` of the interval so they do not arrive as a single burst.
+
+After updating 500,000 rows (94 MB of WAL), a manual `CHECKPOINT` took 113 ms; run again immediately, with nothing dirty, 3 ms. So the cost of a checkpoint is the dirty data, and the pressure on it comes from write volume. Two settings follow from the numbers above:
+
+- A `max_wal_size` that is too small makes checkpoints frequent and **requested** rather than **timed** (the two counters in `pg_stat_checkpointer`), each one repeats the full-page images, and write-heavy workloads suffer for it. Raising it trades more WAL on disk and a longer crash recovery for fewer, cheaper checkpoints.
+- Crash recovery time is the WAL since the last checkpoint, replayed: a longer `checkpoint_timeout` means more to replay after a crash.
+
+What the application can do is the same in every case: write fewer bytes (fewer indexes, narrower rows), commit less often per row, and let the database batch the flushes.
+"""
+
+[[checks]]
+prompt = "A service inserts one row per request, each in its own transaction, and the database CPU is idle but throughput stops at a few thousand rows per second. What is the limit, and what are the fixes?"
+answer = "The commit flush: each transaction waits for its WAL to reach disk, so a single connection is limited by the fsync latency, not by CPU. Batch rows into larger transactions (multi-row INSERT or COPY), use more concurrent connections so commits share a flush (group commit), or for data that can tolerate a moment of loss use synchronous_commit = off for those transactions."
+
+[[checks]]
+prompt = "You add two indexes to a table and bulk insert time goes from 72 ms to 476 ms per 100,000 rows. Where did the time go?"
+answer = "Into maintaining the indexes: each index entry is inserted into its b-tree (with page splits) and each insert is also written to the WAL, so the log volume went from 8 MB to 30 MB. Drop the indexes before a bulk load and rebuild afterwards, or keep only the indexes the queries need."
+
+[[checks]]
+prompt = "After every checkpoint your WAL volume spikes, then falls. Why, and what might you tune?"
+answer = "The first change to each page after a checkpoint writes a full 8 kB page image (full_page_writes) to protect against torn writes, so WAL volume peaks right after a checkpoint and declines as pages are already logged. More frequent checkpoints mean more spikes. Raise max_wal_size or checkpoint_timeout so checkpoints are timed and less frequent, or enable wal_compression to shrink the images at some CPU cost."
+
+[[terms]]
+term = "WAL"
+means = "The write-ahead log: an append-only record of every change, flushed at commit before the data pages are written, and replayed after a crash."
+section = "Write the log first"
+
+[[terms]]
+term = "Checkpoint"
+means = "The operation that writes all dirty pages to disk and sets the point from which crash recovery has to replay the WAL."
+section = "Checkpoints"
+
+[[terms]]
+term = "Full-page image"
+means = "A whole 8 kB page copied into the WAL the first time it is changed after a checkpoint, to guard against torn page writes."
+section = "What a write costs in log bytes"
+
+[[terms]]
+term = "synchronous_commit"
+means = "The setting that decides whether COMMIT waits for its WAL to be flushed to disk; off trades the last few hundred milliseconds of commits for speed, without risking corruption."
+section = "The price of a commit"
+
+[[sources]]
+title = "PostgreSQL: write-ahead logging"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-intro.html"
+
+[[sources]]
+title = "PostgreSQL: WAL configuration (checkpoints, full page writes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-configuration.html"
+
+[[sources]]
+title = "PostgreSQL: asynchronous commit"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-async-commit.html"

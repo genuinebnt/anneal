@@ -18,6 +18,10 @@ export const SD_GROUPS: { id: string; name: string; blurb: string; color: string
     // the SQL performance course (docs/SQL_COURSE.md); its other parts are added here as they are written
     { id: "sql-indexes", name: "SQL performance: indexes", blurb: "how an index is laid out, and what makes a query fast", color: "var(--fn)" },
     { id: "sql-plans", name: "SQL performance: reading plans", blurb: "EXPLAIN, access and filter conditions, statistics, the planner's mistakes", color: "var(--fn)" },
+    { id: "sql-shapes", name: "SQL performance: query shapes", blurb: "joins, sorting, pagination, subqueries and aggregates", color: "var(--fn)" },
+    { id: "sql-covering", name: "SQL performance: covering and clustering", blurb: "index-only scans, the visibility map, physical order", color: "var(--fn)" },
+    { id: "sql-internals", name: "SQL performance: Postgres internals", blurb: "row versions, vacuum, TOAST and the write-ahead log", color: "var(--fn)" },
+    { id: "sql-writes", name: "SQL performance: writes and concurrency", blurb: "what indexes cost writes, batching, upserts, locks and long transactions", color: "var(--fn)" },
 ];
 
 export const groupOf = (id: string) => SD_GROUPS.find((g) => g.id === id) ?? SD_GROUPS[0]!;

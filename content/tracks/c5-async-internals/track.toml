@@ -1,0 +1,16 @@
+code = "C5"
+name = "Async internals"
+section = "C"
+tier = "sde3"
+order = 5
+summary = "How async Rust works underneath: a hand-made block_on and waker, a oneshot channel as a future, and a task executor."
+
+[[stages]]
+slug = "wake-and-poll"
+name = "Wake and poll"
+band = "medium"
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

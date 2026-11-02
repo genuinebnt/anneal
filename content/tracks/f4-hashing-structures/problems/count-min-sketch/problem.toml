@@ -1,0 +1,32 @@
+slug = "count-min-sketch"
+title = "A count-min sketch for heavy hitters"
+mode = "write"
+level = "medium"
+stage = "sketches-and-rings"
+order = 2
+status = "ready"
+tags = ["count-min sketch", "streaming", "heavy hitters", "seeded hashing", "mergeable", "approximate counting"]
+teaches = [
+  "Counting millions of distinct keys in a few KB: each key owns one counter per row, and the minimum over rows is the least-collided estimate.",
+  "The guarantee in one line: never an undercount, and an overcount of at most `eps * total` with probability `1 - delta`; width `e / eps`, depth `ln(1 / delta)`.",
+  "Why rows must hash independently (different seeds), and why the sketch is mergeable (sum the tables): the basis of distributed telemetry.",
+]
+follow_up = "1) Add conservative update (only raise the cells that equal the current minimum) and measure the error reduction. 2) Pair the sketch with a small heap to maintain the approximate top-K as the stream goes by. 3) Why can a count-min sketch not support deletions with the minimum rule, and what is the count-mean-min variant for? 4) Derive the width from Markov's inequality: where does `e / eps` come from? 5) Implement HyperLogLog next (distinct counting) and compare what each sketch can answer."
+related = ["F4", "F5", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "A flat `Vec<u64>` of `depth * width` counters. For row `r`, the column is `hash(r, item) % width`. `add` bumps one cell per row; `estimate` takes the minimum over the item's cells."
+
+[[hints]]
+kind = "rust"
+text = "Seed each row by hashing the row number into the `DefaultHasher` first, then the item. Use `saturating_add` so a huge count cannot wrap. `with_error`: `(E / eps).ceil()` and `(1.0 / delta).ln().ceil()`."
+
+[[hints]]
+kind = "edge"
+text = "The minimum is right because every counter only ever over-counts (collisions add, nothing subtracts). If all rows used the same column function, the min would equal a single row and the `1 - delta` guarantee would be gone."
+
+[solution]
+explanation = "Count-min sketches power top-K and heavy-hitter detection in network monitoring, ad systems and databases (Redis's `CMS.*` commands, Apache DataSketches, Twitter's Algebird). Because merge is element-wise addition, each node keeps a local sketch and a coordinator sums them: the same shape as a CRDT counter. They are the right tool when exact counting needs memory proportional to the number of distinct keys."
+time = "O(depth) per operation"
+space = "O(width * depth)"
