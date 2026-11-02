@@ -1,0 +1,32 @@
+slug = "wasm-stack-interpreter"
+title = "A WebAssembly stack machine with structured control flow"
+mode = "write"
+level = "hard"
+stage = "run-it"
+order = 2
+status = "ready"
+tags = ["WebAssembly", "interpreter", "stack machine", "structured control flow", "labels", "traps", "fuel", "i32 semantics"]
+teaches = [
+  "WebAssembly has no goto: `block`, `loop` and `if` are labels, and `br n` means 'leave (or, for a loop, restart) the n-th enclosing block'. A `br` also has to cut the operand stack back to the block's entry height.",
+  "i32 arithmetic is two's complement everywhere and the spec is exact about the corners: wrapping add/mul, shifts that take the count mod 32, `MIN / -1` as a trap but `MIN % -1` as 0.",
+  "A sandbox is the combination of traps (an error, never a crash), a call-depth cap and a fuel counter, all enforced by the interpreter itself.",
+]
+follow_up = "1) Precompute the jump table into the instruction stream (a decoded `Vec<Op>` with resolved targets) and measure the speedup over re-reading bytes. 2) Add a type-checking validator pass (the abstract stack of types from the spec appendix) so ill-typed code is rejected before running; then delete the runtime underflow checks. 3) Add linear memory with `i32.load`/`i32.store` and bounds checks that trap: what is the cost of the check, and how do real engines avoid it (guard pages)? 4) Add `i64` and a value enum, or `br_table`. 5) Connect it to the decoder: run an exported function of a module decoded by the previous problem."
+related = ["Y6", "C5", "Y2"]
+
+[[hints]]
+kind = "approach"
+text = "Scan each function once to find, for every `block`/`loop`/`if`, where its `end` (and `else`) is: keep a stack of open blocks. Then run with an operand stack, locals, and a **label stack**. A label records where `br` goes (after the `end` for a block, back to the loop body for a loop), the stack height at entry and how many values it yields."
+
+[[hints]]
+kind = "rust"
+text = "`branch(depth)`: pick `labels[len - 1 - depth]`, `split_off` its arity values from the stack, `truncate` to its height, push them back, then `labels.truncate(...)` (keep the label for a loop, drop it for a block) and set the pc. The function itself is label 0 with target `code.len()`, so `return` is `br` to the outermost label. Skip over immediates with the provided LEB readers when scanning, or you will misread a `0x0B` inside a constant as an `end`."
+
+[[hints]]
+kind = "edge"
+text = "Decrement fuel *before* executing each instruction, and test for zero first. `if` with a false condition: jump to just after the `else` if there is one, else to the `end`; when a then-branch reaches `else`, jump to the matching `end`. `wrapping_shl`/`wrapping_shr` already take the count mod 32; `i32::MIN / -1` must be checked before dividing, because Rust panics on it."
+
+[solution]
+explanation = "This is `wasm3`/`wasmi`-style interpretation: the structured control flow (no arbitrary jumps) is exactly what makes WebAssembly fast to validate and compile, and why a side table of block ends lets even a naive interpreter run it. Real engines also validate types up front, so the `Malformed` cases here become load-time errors and the hot loop never checks the stack. Fuel and depth limits are how a host sandbox bounds untrusted code (Wasmtime exposes both)."
+time = "O(instructions executed) after an O(code) scan"
+space = "O(stack + locals + labels), call depth capped at 100"

@@ -1,0 +1,32 @@
+slug = "wasm-binary-decoder"
+title = "Decode a WebAssembly binary module"
+mode = "write"
+level = "medium"
+stage = "read-it"
+order = 1
+status = "ready"
+tags = ["WebAssembly", "binary format", "LEB128", "sections", "validation", "bounded reads", "wasmparser"]
+teaches = [
+  "A `.wasm` file is a header plus a list of `[id][size][payload]` sections: the size lets a reader skip what it does not understand.",
+  "LEB128: seven payload bits per byte, high bit means 'more'. The spec bounds a `u32` to five bytes and zeroes the unused bits, so a hostile file cannot make you loop or overflow.",
+  "Read each section through a reader limited to its own payload: that one decision turns 'ran past the end' and 'left bytes over' into clean errors.",
+]
+follow_up = "1) Decode the import section and the memory section (limits) instead of skipping them, and add the data section so you can read a module's initial memory. 2) Add the `name` custom section parser (function names by index) and print a call-graph-free disassembly of `add`. 3) Add the section-12 `datacount` rule (it sits between the element and code sections in the order). 4) Fuzz: generate random byte strings and mutations of valid modules; the decoder must never panic or allocate more than the input size times a small constant. 5) Write the encoder (`Module -> Vec<u8>`, signed and unsigned LEB128) and check `decode(encode(m)) == m` as a property."
+related = ["B4", "F5", "Y2"]
+
+[[hints]]
+kind = "approach"
+text = "Write a small `Reader` over a slice with `byte`, `u32` (LEB), `take(n)`, `name`. For the file, one reader; for each section, `take(size)` and make a **second** reader over just that payload. Then 'did it end early' and 'is anything left' are both a comparison with the payload's length."
+
+[[hints]]
+kind = "rust"
+text = "In the LEB loop, shift by `7 * i` in a `u32`; on `i == 4` reject `b & 0xF0 != 0` (that covers the continuation bit and the bits above bit 31). `(0..n).map(|_| r.valtype()).collect::<Result<Vec<_>, _>>()` collects a counted vector and stops at the first error. Compare the header with `bytes[4..8] != [1, 0, 0, 0]`."
+
+[[hints]]
+kind = "edge"
+text = "Check `count <= bytes_left` before looping: a hostile file can claim four billion elements in a two-byte section, and you should fail without allocating for them. Sum the locals in a `u64`, then compare with 50 000, so two enormous runs cannot wrap a `u32` back under the limit."
+
+[solution]
+explanation = "This is the front door of every WebAssembly tool: `wasmparser` is the same loop with more sections. The size-prefixed section is the format's extension mechanism (engines skip custom sections such as `name` and debug info), and bounded LEB128 plus count-before-allocate is the difference between a decoder and an attack surface: the real-world CVEs here are all 'a length or count was trusted'."
+time = "O(n) in the module size"
+space = "O(n) for the decoded module"
