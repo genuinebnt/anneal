@@ -65,3 +65,11 @@ On a phone the picture and the side structure stack (`.id-body` wraps below 700 
 
 Pitfalls met on the way: `tsconfig.json` needs `allowImportingTsExtensions` (the Node test runner needs the `.ts` in imports); `IdeaGlyph.tsx` `SPEC` keys must be unique (TypeScript says so at build, but `env.sh rebuild` hides build errors, so run `pnpm build` yourself);
 a reading that changes between text and a number used to show NaN (fixed in `Num`).
+
+## Walk through on a technique card (2026-11-02)
+
+A technique (or extra) in `content/dsa/lessons/<pattern>.toml` may carry `walk = "<demo>"`, a name from `IDEA_DEMOS`. Its card on the Learn page then
+gets a "Walk through" tab beside "Code and problems" that shows the same `IdeaDemo` lab as the Idea tab. `load_lessons` rejects an unknown name
+(`a_walk_through_must_name_an_animation_the_web_app_can_draw`); e2e: `pattern-lessons.spec.ts`. 46 techniques are mapped to an existing animation.
+**Still to do:** a purpose-written animation for the other ~550 techniques (add the simulator, its name in `IDEA_DEMOS`, then `walk = ...`), one pattern per commit.
+Per-problem animations were dropped by the owner: animations stay at pattern and technique level.

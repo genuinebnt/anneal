@@ -1,10 +1,18 @@
 title = "Object storage (S3)"
 group = "technology"
 order = 7
-minutes = 10
+minutes = 20
 lede = "A flat store of immutable blobs addressed by key, priced per gigabyte and per request, built for eleven nines of durability. Every design with files, images, video, backups or a data lake puts the bytes here and only the metadata in a database."
 say = "Clients upload straight to S3 with a presigned multipart upload; the API only issues the URL and records metadata when S3's event says the object is complete, and a CDN serves reads."
-related = ["large-blobs", "replication", "caching"]
+related = ["large-blobs", "replication", "caching", "scaling-reads", "storage-engines"]
+
+summary = [
+  "Object storage keeps **immutable blobs by key** in a flat namespace at huge scale and very high durability (eleven nines), for far less than block or database storage.",
+  "Never route big files through your API: use **presigned URLs** for direct upload and download, **multipart upload** for large files, and a **CDN** in front for reads.",
+  "Keep **metadata in a database** and bytes in the bucket; the object key is the link between them.",
+  "Strong read-after-write consistency is now standard on S3, but **there are no in-place edits, no renames, and listing is by prefix**.",
+  "Cost is three meters: storage per GB by class, requests, and **data transfer out**. Lifecycle rules move cold data down the classes.",
+]
 
 [[sections]]
 heading = "The model"
@@ -47,6 +55,60 @@ An object store is two systems: a **metadata service** (key → where the pieces
 > Never send large files through the API servers or store them in the database; say presigned URLs, multipart, a CDN for reads, and metadata in the database.
 """
 
+[[sections]]
+heading = "Design details that matter"
+body = """
+- **Key design.** Throughput is per prefix, so a flat key space with a single hot prefix (`2026-11-02/...` for every upload of the day) can be limited; spread writes with a hash prefix when you push thousands of requests a second. Put the user or tenant id early if you list per user. Keys are immutable names: never encode data that changes (a title, an owner) in the key.
+- **Listing is expensive and slow.** `ListObjectsV2` returns up to 1,000 keys per call, sorted by key; "count the objects" or "find objects modified yesterday" at scale needs an **inventory** report or your own index in a database, not repeated listing.
+- **Rename is copy plus delete.** There is no atomic rename of a "folder": renaming a prefix of a million objects is a million copies. Keep stable keys and change the metadata instead.
+- **Overwrites and races.** Two writers of the same key: the last one wins. Conditional writes (`If-None-Match: *`, `If-Match` on an ETag) let a writer say "create only if absent" or "replace only if unchanged", which is enough for a simple lock or a safe commit of a manifest file; this is how table formats (Iceberg, Delta) commit to a bucket.
+- **Integrity.** Send a checksum (`Content-MD5` or the newer `x-amz-checksum-*` headers) so the store rejects corrupted uploads, and verify after download for important data.
+- **Encryption and access.** Encrypt at rest by default (SSE-S3 or a KMS key) and keep buckets private; give clients access with short-lived presigned URLs or signed cookies, and restrict a CDN to read via an origin access identity.
+"""
+
+[[sections]]
+heading = "Storage classes and the cost model"
+body = """
+| Class (S3 names) | For | Trade-off |
+|---|---|---|
+| Standard | hot data, read often | highest price per GB, no retrieval fee |
+| Standard-IA / One Zone-IA | read about monthly | cheaper per GB, a retrieval fee and a 30-day minimum |
+| Intelligent-Tiering | unknown or changing access | per-object monitoring fee, moves objects automatically |
+| Glacier Instant / Flexible / Deep Archive | archives, compliance | much cheaper per GB; minutes to hours (or 12 hours) to retrieve, minimum storage duration |
+
+Three bills matter in an estimate: **storage** (GB-months), **requests** (priced per 1,000 or per 10,000; many tiny objects make requests dominate), and **egress** (data sent out to the internet, often the biggest line for a media site, which is why a CDN with cheaper transfer sits in front). Small objects also carry per-object overhead and minimum billable sizes in the infrequent-access classes; batch many small items into larger files (a log shipper writing 100 MB files rather than one object per event).
+
+Estimate example: 5 million uploads a day of 3 MB is 15 TB a day, about 450 TB a month; at roughly 23 dollars per TB-month for Standard that is about 10,000 dollars of new storage cost each month before lifecycle, so lifecycle rules and thumbnails matter. Treat prices as an order of magnitude and look up the current price list.
+"""
+
+[[sections]]
+heading = "Patterns"
+body = """
+- **Upload service.** Client asks the API for a presigned multipart upload; uploads parts directly; the API receives an S3 event (or the client's `complete` call), records the object in the database as `pending`, and a worker validates, scans and generates thumbnails before marking it `ready`. Unfinished uploads are cleaned by a lifecycle abort rule.
+- **Deduplication.** Name objects by content hash (`sha256`), so identical files are stored once and an upload of an existing hash is skipped (Dropbox-style chunking, content-defined chunks, is on the large blobs page).
+- **Data lake.** Parquet files partitioned by date in a bucket, queried by Athena, Spark or DuckDB, with a table format for atomic commits.
+- **Backup and archive.** Versioning plus object lock (write once, read many) protects against deletion and ransomware.
+- **Static hosting and CDN origin.** Immutable, content-hashed names with long cache lifetimes; a new version means a new key.
+- **Cross-region replication** copies objects to another region asynchronously for disaster recovery or locality; it is not instant.
+
+> [!WARNING]
+> Event notifications are at least once and can arrive out of order. Make the handler idempotent and compare versions.
+"""
+
+[[sections]]
+heading = "Object storage against the alternatives"
+body = """
+| | Object | Block (EBS) | File (EFS, NFS) |
+|---|---|---|---|
+| access | HTTP by key | attached disk, byte-addressed | POSIX paths |
+| edit in place | no | yes | yes |
+| scale | practically unlimited | one volume, TBs | large but bounded |
+| latency | tens of ms | sub-ms to ms | ms |
+| use | media, backups, lakes, static assets | databases, boot disks | shared home directories |
+
+A database that needs random in-place updates does not run on object storage directly; engines built for it (LSM trees, Parquet tables, Neon, Snowflake) use immutable files in a bucket and rewrite them in bulk.
+"""
+
 [[checks]]
 prompt = "Why use presigned URLs for uploads instead of posting the file to your API?"
 answer = "The bytes go straight from the client to object storage, so API servers do not spend bandwidth, memory and connection time proxying gigabytes; the API only authorises the upload (signs a short-lived URL for one key) and records metadata, so it scales independently of file sizes."
@@ -54,3 +116,88 @@ answer = "The bytes go straight from the client to object storage, so API server
 [[checks]]
 prompt = "A 4 GB upload over a phone connection fails at 90%. How does multipart upload help?"
 answer = "The file is sent as independent parts (say 16 MB each), uploaded in parallel and retried individually; a failure only resends the failed part, and the upload resumes with the parts already stored. The object appears only when the upload is completed."
+
+[[checks]]
+prompt = "A photo service stores 1 billion objects and the team wants to find all photos uploaded yesterday by listing the bucket. Why is that a bad plan, and what do you do?"
+answer = "Listing returns 1,000 keys per call in key order, so scanning a billion objects takes millions of calls and cannot filter by date. Record each upload in a database with its timestamp and key, and query that; for audits use an inventory report. The bucket is for bytes, the database for metadata and queries."
+
+[[checks]]
+prompt = "Two clients upload a manifest file to the same key at the same moment, and one overwrite is lost. How can object storage help you prevent that?"
+answer = "Use conditional writes: create with If-None-Match: * so only the first succeeds, or replace with If-Match on the ETag you read so the write fails if someone changed it meanwhile, then retry from the new version. This gives compare-and-set on a single object without a lock service."
+
+[[checks]]
+prompt = "Your CDN bill and S3 bill are both high for a site serving large images. Which settings or designs reduce cost?"
+answer = "Cache with long lifetimes and content-hashed keys so the CDN serves most reads and the origin sees few requests; resize images to the sizes needed and use modern formats; compress; use lifecycle rules to tier old originals; avoid millions of tiny objects whose requests cost more than storage; check that data does not cross regions needlessly."
+
+[[terms]]
+term = "Object"
+means = "Bytes plus metadata addressed by key in a bucket; immutable once written."
+section = "The model"
+
+[[terms]]
+term = "Presigned URL"
+means = "A URL, signed by the API, that allows one operation on one key for a short time."
+section = "Uploads and downloads that skip your servers"
+
+[[terms]]
+term = "Multipart upload"
+means = "Uploading a large object as parts in parallel and then completing it."
+section = "Uploads and downloads that skip your servers"
+
+[[terms]]
+term = "Erasure coding"
+means = "Storing data as k data chunks and m parity chunks so any k of the k+m rebuild it."
+section = "Inside, roughly"
+
+[[terms]]
+term = "Lifecycle rule"
+means = "A policy that moves objects to cheaper classes or deletes them by age."
+section = "Durability, cost and speed"
+
+[[terms]]
+term = "Egress"
+means = "Data transferred out of the provider to the internet or another region; billed per GB."
+section = "Storage classes and the cost model"
+
+[[terms]]
+term = "Object lock"
+means = "Write once, read many: an object cannot be deleted or overwritten for a retention period."
+section = "Patterns"
+
+[[sources]]
+title = "Amazon S3 User Guide: consistency model"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel"
+
+[[sources]]
+title = "Amazon S3 User Guide: multipart upload overview and limits"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html"
+
+[[sources]]
+title = "Amazon S3 User Guide: best practices design patterns for performance"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html"
+note = "3,500 writes and 5,500 reads per second per prefix"
+
+[[sources]]
+title = "Amazon S3 User Guide: sharing objects with presigned URLs"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html"
+
+[[sources]]
+title = "Amazon S3 User Guide: storage classes"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+
+[[sources]]
+title = "Amazon S3 User Guide: conditional requests and writes"
+kind = "docs"
+url = "https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html"
+
+[[sources]]
+title = "Ghemawat, Gobioff and Leung: The Google File System (SOSP 2003)"
+kind = "paper"
+url = "https://research.google/pubs/the-google-file-system/"
+note = "chunked, replicated blob storage"
+

@@ -13,6 +13,7 @@ groups = ["Reversal", "Fast and slow pointers", "Merging and sorting", "Partitio
 
 [[technique]]
 id = "Linked List:reverse"
+walk = "list-reverse"
 group = "Reversal"
 signals = [
     "reverse a list, or a part of it",
@@ -75,6 +76,7 @@ pitfalls = [
 
 [[technique]]
 id = "Linked List:fast-slow"
+walk = "list-cycle"
 group = "Cycles in functional graphs"
 signals = [
     "does the list have a cycle, and where does it start?",

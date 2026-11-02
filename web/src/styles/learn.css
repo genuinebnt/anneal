@@ -183,3 +183,9 @@ html[data-motion="reduce"] :is(.lr-ul,.lr-stack i,.lr-filt u,.lr-gb u,.lr-tl u){
 .lr-about-t{margin:0;font-size:15px;line-height:1.3}
 .lr-tags{display:flex;flex-wrap:wrap;gap:5px}
 .lr-tags span{font:500 11px var(--mono);color:var(--dim);padding:1px 7px;border-radius:6px;background:color-mix(in oklab,var(--dim) 12%,transparent)}
+
+.lr-views{display:flex;gap:6px;padding:12px 22px 0;border-top:1px solid var(--line2)}
+.lr-views button{height:30px;padding:0 13px;border-radius:999px;border:0;background:transparent;color:var(--dim);font:600 12px var(--sans,inherit);cursor:pointer}
+.lr-views button[aria-selected="true"]{background:var(--acc-bg);color:var(--acc)}
+.lr-views button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.lr-walk{padding:16px 22px 22px}

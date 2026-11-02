@@ -1,19 +1,34 @@
 title = "Kafka"
 group = "technology"
 order = 1
-minutes = 12
+minutes = 24
 lede = "A distributed, replicated log. Producers append records to the end of a partition; consumers read forward from an offset they keep, so many readers can replay the same history at their own pace."
 say = "I'd put the events on Kafka, partitioned by order id so each order's events stay in order, and let each downstream service read them as its own consumer group."
-related = ["queues-and-streams", "replication", "scaling-writes", "stream-processing", "multi-step-processes"]
+related = ["queues-and-streams", "replication", "scaling-writes", "stream-processing", "multi-step-processes", "storage-engines", "quorums"]
+
+summary = [
+  "Kafka is a **replicated, partitioned, append-only log**. Producers append; consumers pull from an offset they track, so any number of groups can read, and re-read, the same history.",
+  "**Order exists only inside a partition.** The record key picks the partition, so key by whatever must stay in order (order id, account id).",
+  "**Partitions cap parallelism**: a group has at most one active consumer per partition, and the count is hard to reduce later, so size it for the peak.",
+  "Durability is a **setting**, not a given: replication factor 3, `acks=all` and `min.insync.replicas=2` survive one broker loss without losing an acknowledged record.",
+  "Delivery is **at least once** by default. Make consumers idempotent; Kafka transactions give exactly-once only for read-process-write inside Kafka.",
+]
+
 
 [[sections]]
 heading = "The model"
 body = """
 A **topic** is a named stream, split into **partitions**. Each partition is an append-only log on disk: records get increasing **offsets** (0, 1, 2…) and are never changed in place.
 
-- Producers choose the partition, usually by hashing a **key** (all records with key `order-42` land in one partition, so they stay in order).
+- Producers choose the partition, usually by hashing a **key** (all records with key `order-42` land in one partition, so they stay in order). A record with no key is spread across partitions.
 - Order is guaranteed **within a partition only**. Across partitions there is no global order.
 - Records are kept for a **retention** time or size (say 7 days), whether or not anyone read them. Reading does not delete.
+
+A record is a key, a value (bytes: Avro, Protobuf or JSON), headers and a timestamp. The default maximum record size is about 1 MB (`message.max.bytes`); put big payloads in object storage and send a pointer.
+
+**Storage.** A partition is a directory of **segment** files (a new one every 1 GiB or 7 days by default). Each segment has the log file, a sparse offset index and a time index. Retention deletes whole old segments, which is cheap. **Log compaction** is the other policy: keep only the latest record per key, so a topic becomes a changelog of current state (a table), with a record whose value is null (a tombstone) deleting the key.
+
+**Offsets belong to consumers.** The broker does not track who read what; each group stores its position in an internal topic, `__consumer_offsets`. That is why adding a reader costs the broker almost nothing, and why a new group can start from the earliest offset and replay history.
 """
 
 [[sections]]
@@ -24,6 +39,12 @@ A consumer reads a partition from an offset and **commits** how far it got. A **
 - More consumers than partitions: the extra ones sit idle. **Partitions cap parallelism**, so choose the count for the peak you expect (it is hard to lower later).
 - A new group starts from the beginning or the end; two groups read the same data independently (search indexing and billing can both consume `orders`).
 - When a member joins or dies, the group **rebalances** and partitions move. Work in flight can be read twice.
+
+**Rebalances and liveness.** A member proves it is alive with heartbeats (`session.timeout.ms`, 45 s in current versions) and by calling `poll()` often enough (`max.poll.interval.ms`, 5 minutes). If processing a batch takes longer than the poll interval, the broker assumes the consumer is stuck, takes its partitions away and another member reprocesses the batch. Keep batches small enough to finish in time, or hand work to a pool and keep polling. The **cooperative** rebalance protocol moves only the partitions that must move, instead of stopping the whole group.
+
+**Lag** is the distance between the end of a partition and the group's committed offset. It is the number to alert on: steady lag means the consumers are slower than the producers, and growing lag means you will fall off the end of retention and lose data you never read.
+
+**Choosing the partition count.** Take the target throughput (say 200 MB/s), divide by what one partition and one consumer can do (often tens of MB/s, measure your own), and round up with room for growth. Many more partitions cost: more open files, longer leader elections and recovery, more memory in producers' batching. Thousands per broker is a lot; tens of thousands per cluster is routine for large clusters. Increasing the count later **changes which partition a key maps to**, which breaks per-key ordering for existing keys during the change.
 """
 
 [[sections]]
@@ -34,6 +55,29 @@ Each partition has a **leader** on one broker and **followers** on others that c
 - `acks=all`: the leader answers the producer only after every in-sync replica has the record. Lose a broker, lose nothing.
 - `acks=1`: faster, but a leader that dies before followers copied the record loses it.
 - If the leader dies, a follower from the ISR takes over. A controller (KRaft, formerly ZooKeeper) decides who leads.
+
+The three settings that decide whether an acknowledged record survives:
+
+| Setting | Typical value | Meaning |
+|---|---|---|
+| `replication.factor` | 3 | copies of each partition, on different brokers (and racks or zones) |
+| `acks` | `all` | the leader waits for every in-sync replica |
+| `min.insync.replicas` | 2 | with `acks=all`, a write is refused if fewer than 2 replicas are in sync |
+
+With 3, `all` and 2, one broker can fail and writes continue with no loss. Two failures make the partition **reject writes** rather than accept ones it could lose: Kafka picks consistency over availability here. `unclean.leader.election.enable=true` would let an out-of-date replica lead to restore availability, at the price of losing acknowledged records; it is off by default. Kafka does not fsync every write: it relies on replication across machines for durability and on the OS to flush the page cache, so losing all in-sync replicas at once can still lose data.
+
+The ISR is not a majority quorum like Raft's. Kafka's controller runs on **KRaft**, a Raft-based quorum for metadata that replaced ZooKeeper (removed in Kafka 4.0), while the data partitions use the leader and ISR protocol. The quorums page compares the two.
+"""
+
+[[sections]]
+heading = "Producing"
+body = """
+Producers batch records per partition and send a batch at a time: `linger.ms` (how long to wait for more records) and `batch.size` (bytes per partition batch) trade a little latency for far more throughput, and `compression.type` (lz4, zstd, snappy, gzip) shrinks the batches on the wire and on disk.
+
+- **Idempotent producer** (`enable.idempotence=true`, the default in current clients): each producer has an id and numbers its records per partition, so a retry after a timeout does not add a duplicate or reorder records. Turn it on for any producer that retries.
+- **Retries and order**: with several requests in flight and no idempotence, a retried batch can land after a later one. Idempotence keeps order with up to 5 in flight.
+- **Backpressure**: if the broker is slow the producer's buffer (`buffer.memory`) fills and `send` blocks or fails after `max.block.ms`. Decide whether the caller should wait, drop or spill.
+- **The dual-write trap**: updating a database and then publishing to Kafka are two writes that can disagree. Write the event to an **outbox** table in the same transaction and let a relay (or change data capture) publish it. The multi-step processes page shows it.
 """
 
 [[sections]]
@@ -42,12 +86,18 @@ body = """
 - **At most once**: commit the offset before processing. A crash loses the record.
 - **At least once** (the usual): process, then commit. A crash means the record is processed again, so **make consumers idempotent** (dedupe on an event id, or upsert).
 - **Exactly once** inside Kafka: idempotent producers plus transactions that write output and commit offsets together. It does not cover side effects outside Kafka (an email sent twice is still sent twice).
+
+How the transactional version works: a producer with a `transactional.id` writes to several partitions and sends the consumed offsets as part of one transaction, then commits; a consumer with `isolation.level=read_committed` sees records only from committed transactions. A read-process-write job (consume `orders`, write `invoices`) can therefore crash and restart without duplicates in `invoices`. The guarantee stops at Kafka's edge: a call to a payment API or a database write in the middle is outside the transaction, so keep those idempotent too.
+
+When one record cannot be processed (a malformed payload), do not let it block the partition forever: retry a few times, then publish it to a **dead letter topic** with the error, and move on. Ordered processing and skipping a bad record are in tension; decide which wins.
 """
 
 [[sections]]
 heading = "Why it is fast"
 body = """
 Sequential disk writes, batching, compression, and the OS page cache: a partition is mostly appended to and read from the tail, so reads come from memory. Consumers pull in batches. A single broker handles hundreds of MB/s.
+
+Two details to be able to explain: Kafka writes to the **page cache** and lets the OS flush it, so a write costs a memory copy, not a disk wait, and a consumer reading the tail reads from the same cache; and on Linux a broker can send log bytes to a socket with `sendfile` (**zero copy**) without passing them through user space, when TLS is not in the way. Throughput scales by adding partitions and brokers; per-partition throughput is limited by one leader and one consumer.
 """
 
 [[sections]]
@@ -60,6 +110,18 @@ body = """
 | High write throughput, ordered per key | Per-message priorities, delays or routing rules |
 
 A **hot key** sends everything to one partition; spread it (key plus a bucket) if order across that key does not matter.
+
+Other things Kafka is used for, in one line each: **change data capture** (Debezium turns a database's log into a topic); **stream processing** (Kafka Streams and Flink read topics, keep state and write topics); **a buffer** that absorbs a spike so a slower database can catch up; **an audit log** you can replay. It is not a database to query by arbitrary field, and not a task queue with per-message acknowledgement and delay.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+- Say the key and the partition count with a reason: "key by order id for per-order ordering; 24 partitions so a group can reach 24-way parallelism at peak".
+- State the durability settings, not just "Kafka is durable": replication factor 3, `acks=all`, `min.insync.replicas=2`.
+- Say **at least once plus idempotent consumers**, and what makes each consumer idempotent.
+- Mention lag as the health signal, and what happens when a consumer falls behind retention.
+- Know when to say no: a work queue with retries, delays and priorities is not Kafka's strength; a small system may need only a database table or SQS.
 """
 
 [[checks]]
@@ -73,6 +135,123 @@ answer = "The record is delivered again after the rebalance (at least once). Mak
 [[checks]]
 prompt = "Why does Kafka only promise order within a partition, and how do you keep all events of one order in sequence?"
 answer = "Partitions are independent logs on different brokers, read in parallel, so there is no shared sequence. Key the records by order id so every event of an order goes to the same partition."
+
+[[checks]]
+prompt = "A topic has replication factor 3, acks=all and min.insync.replicas=2. Two of the three brokers holding a partition go down. What do producers see, and why is that the right behaviour?"
+answer = "Writes to that partition are rejected (NotEnoughReplicas), because only one replica is in sync and the minimum is two. Accepting them would risk losing acknowledged records if the last broker failed too, so Kafka chooses consistency over availability; reads of existing data can continue. Enabling unclean leader election would restore availability at the cost of possible loss."
+
+[[checks]]
+prompt = "A consumer takes 8 minutes to process each batch and the group keeps rebalancing, with the same records processed repeatedly. Why, and what do you change?"
+answer = "The consumer exceeds max.poll.interval.ms (5 minutes by default) between polls, so the group coordinator considers it dead, removes it and gives its partitions to another member, which reprocesses the batch. Make batches smaller (max.poll.records), speed up processing, or process in worker threads while the polling thread keeps calling poll; raising the interval only hides slow processing."
+
+[[checks]]
+prompt = "You add partitions to a topic from 12 to 24 while producers key records by user id. What breaks?"
+answer = "The partition is chosen by hash(key) mod partition count, so after the change existing keys map to different partitions. Records of one user now spread over two partitions over time, and per-key ordering is lost for the transition; a consumer's per-key state may sit on the wrong instance. Create a new topic with the right count and migrate, or accept the break once at a quiet time."
+
+[[checks]]
+prompt = "How do you publish an event to Kafka and update a database row so that neither is ever done without the other?"
+answer = "You cannot make two systems commit together, so write the event to an outbox table in the same database transaction as the row change. A relay process (or change data capture reading the database log) publishes outbox rows to Kafka and marks them sent. Delivery is at least once, so consumers deduplicate on the event id."
+
+[[checks]]
+prompt = "What is the difference between a retention-based topic and a log-compacted topic, and when do you use each?"
+answer = "Retention keeps every record for a time or size and then deletes old segments: use it for event streams to be consumed and replayed within a window. Compaction keeps at least the latest record for each key and drops older ones, with a null value as a delete: use it for state, like the current profile of each user, where a new consumer must rebuild the latest value of every key."
+
+[[terms]]
+term = "Offset"
+means = "A position number of a record in a partition."
+section = "The model"
+
+[[terms]]
+term = "Segment"
+means = "One file of a partition log; retention deletes whole segments."
+section = "The model"
+
+[[terms]]
+term = "Log compaction"
+means = "Keeping only the latest record per key instead of deleting by age."
+section = "The model"
+
+[[terms]]
+term = "Consumer lag"
+means = "How far a committed offset of a group is behind the end of the partition."
+section = "Consumers and groups"
+
+[[terms]]
+term = "ISR"
+means = "In-sync replicas: the followers that are caught up with the leader."
+section = "Durability and replication"
+
+[[terms]]
+term = "min.insync.replicas"
+means = "The least number of in-sync replicas needed to accept a write sent with acks=all."
+section = "Durability and replication"
+
+[[terms]]
+term = "Idempotent producer"
+means = "A producer whose retries cannot create duplicates or reorder records within a partition."
+section = "Producing"
+
+[[terms]]
+term = "Outbox"
+means = "A table written in the same transaction as the data, relayed to Kafka afterwards."
+section = "Producing"
+
+[[terms]]
+term = "Dead letter topic"
+means = "A topic that receives records that could not be processed."
+section = "Delivery guarantees"
+
+[[terms]]
+term = "Zero copy"
+means = "Sending file bytes to a socket inside the kernel, without copying through the application."
+section = "Why it is fast"
+
+[[sources]]
+title = "Apache Kafka documentation: design"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#design"
+note = "persistence, efficiency, the producer and consumer, message delivery semantics, replication"
+
+[[sources]]
+title = "Apache Kafka documentation: producer configs"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#producerconfigs"
+note = "acks, linger.ms, batch.size, enable.idempotence"
+
+[[sources]]
+title = "Apache Kafka documentation: consumer configs"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#consumerconfigs"
+note = "session.timeout.ms, max.poll.interval.ms, isolation.level"
+
+[[sources]]
+title = "Apache Kafka documentation: topic configs"
+kind = "docs"
+url = "https://kafka.apache.org/documentation/#topicconfigs"
+note = "min.insync.replicas, retention, segment, cleanup.policy"
+
+[[sources]]
+title = "KIP-98: Exactly once delivery and transactional messaging"
+kind = "paper"
+url = "https://cwiki.apache.org/confluence/display/KAFKA/KIP-98+-+Exactly+Once+Delivery+and+Transactional+Messaging"
+note = "the design of idempotence and transactions"
+
+[[sources]]
+title = "KIP-500: Replace ZooKeeper with a self-managed metadata quorum"
+kind = "paper"
+url = "https://cwiki.apache.org/confluence/display/KAFKA/KIP-500%3A+Replace+ZooKeeper+with+a+Self-Managed+Metadata+Quorum"
+note = "KRaft"
+
+[[sources]]
+title = "Kreps, Narkhede and Rao: Kafka, a distributed messaging system for log processing (2011)"
+kind = "paper"
+url = "https://notes.stephenholiday.com/Kafka.pdf"
+note = "the original paper"
+
+[[sources]]
+title = "Kreps: The Log, what every software engineer should know (2013)"
+kind = "article"
+url = "https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying"
 
 [[figures]]
 name = "kafka-log"

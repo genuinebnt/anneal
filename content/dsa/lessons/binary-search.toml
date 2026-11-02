@@ -13,6 +13,7 @@ groups = ["Classic boundaries", "Rotated arrays", "Peaks and turning points", "2
 
 [[technique]]
 id = "Binary Search:classic"
+walk = "search-find"
 group = "Real numbers"
 signals = [
     "find a value in a sorted array",
@@ -104,6 +105,7 @@ pitfalls = [
 
 [[technique]]
 id = "Binary Search:on-answer"
+walk = "search-first-true"
 group = "Search on the answer (minimise the max / maximise the min)"
 signals = [
     "the smallest value that makes something possible (a speed, a capacity, a time)",
@@ -859,6 +861,7 @@ def max_profit_assignment(difficulty, profit, worker):
 
 [[extra]]
 id = "Binary Search:first-true"
+walk = "search-first-true"
 name = "First true in a monotone yes/no"
 group = "Classic boundaries"
 signals = [

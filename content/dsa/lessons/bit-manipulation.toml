@@ -13,6 +13,7 @@ groups = ["Single-number tricks", "XOR tricks", "Masks, shifts and fields", "Bit
 
 [[technique]]
 id = "Bit Manipulation:xor"
+walk = "bits-xor"
 group = "XOR tricks"
 signals = [
     "every value appears twice except one (or one is missing)",
@@ -42,6 +43,7 @@ pitfalls = [
 
 [[technique]]
 id = "Bit Manipulation:bit-count"
+walk = "bits-count"
 group = "Single-number tricks"
 signals = [
     "count the 1 bits in a number, or in every number up to n",

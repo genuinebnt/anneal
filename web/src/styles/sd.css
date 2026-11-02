@@ -47,6 +47,7 @@
 .sd-md strong{color:var(--fg)}
 .sd-md ul,.sd-md ol{margin:0 0 10px;padding-left:20px}.sd-md li{margin:3px 0}
 .sd-md code{font:500 12.5px var(--mono);padding:1px 5px;border-radius:5px;background:var(--inset);color:var(--fg)}
+.sd-md :not(pre)>code{overflow-wrap:anywhere}
 .sd-md pre{margin:10px 0;padding:12px 14px;border-radius:12px;background:var(--inset);overflow-x:auto;scrollbar-width:none}
 .sd-md pre::-webkit-scrollbar{display:none}
 .sd-md pre code{padding:0;background:none;font-size:12.5px;line-height:1.6}
@@ -202,7 +203,7 @@
 .rd-art .sd-lede{font-size:calc(var(--rd-fs) + 2.5px);line-height:1.6;max-width:62ch}
 .rd-art .sd-md{font-size:var(--rd-fs);line-height:var(--rd-lh);max-width:var(--rd-col);color:var(--mut)}
 .rd-art .sd-md p{margin:0 0 .85em;font-size:inherit;line-height:inherit;color:inherit}.rd-art .sd-md li{margin:.3em 0}
-.rd-art .sd-md code{font:500 .86em var(--code);padding:2px 6px;background:var(--raise)}
+.rd-art .sd-md code{font:500 .86em var(--code);padding:2px 6px;background:var(--raise);overflow-wrap:anywhere}
 .rd-art .sd-call{font-size:calc(var(--rd-fs) - 1.5px);max-width:var(--rd-col)}
 .rd-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
 .rd-meta span{font:500 12px var(--mono);color:var(--mut);background:var(--inset);padding:6px 11px;border-radius:8px}

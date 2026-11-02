@@ -13,6 +13,7 @@ groups = ["Top-k selection", "Two heaps and the median", "K-way merge", "Schedul
 
 [[technique]]
 id = "Heap / Priority Queue:size-k"
+walk = "heap-topk"
 group = "Heapify and heap sort"
 signals = [
     "the k-th largest (or smallest) value in a stream",
@@ -364,6 +365,7 @@ def nth_super_ugly_number(n, primes):
 
 [[extra]]
 id = "Heap / Priority Queue:own-heap"
+walk = "heap-sift"
 name = "Write the heap yourself"
 group = "Heapify and heap sort"
 signals = [

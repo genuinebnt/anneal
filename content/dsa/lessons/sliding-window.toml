@@ -34,6 +34,7 @@ pitfalls = [
 
 [[technique]]
 id = "Sliding Window:fixed-sum"
+walk = "window-fixed"
 group = "Fixed-size window"
 signals = [
     "every window of exactly k items",
@@ -83,6 +84,7 @@ pitfalls = [
 
 [[technique]]
 id = "Sliding Window:fixed-window"
+walk = "window-fixed"
 group = "Fixed-size window"
 signals = [
     "find a window of a fixed length that has the same letters as a pattern",
@@ -116,6 +118,7 @@ pitfalls = [
 
 [[technique]]
 id = "Sliding Window:at-most-k"
+walk = "window-variable"
 group = "Fixed-size window"
 signals = [
     "the longest window with at most k distinct values (or kinds)",
