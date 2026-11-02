@@ -1,0 +1,232 @@
+title = "When the planner is wrong"
+group = "sql-plans"
+order = 11
+minutes = 20
+lede = "The planner picks the cheapest plan by its own arithmetic, and the arithmetic has two inputs it can get wrong: how many rows it expects (module 10) and what a page or a row costs. This page is about telling those apart, using the planner's own switches as experiments rather than as fixes, and about the places where a plan is wrong by construction: prepared statements and common table expressions."
+say = "A bad plan is a bad estimate or a bad cost; find which by comparing estimated and actual rows, then force the alternative plan once to see whether it really is faster. The planner is usually right, a forced plan is a measurement and never a fix, and what survives into code is better statistics, a rewritten query or one setting for one transaction."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "Start with **estimated against actual rows** on the node where they first differ by 10 times or more. If they agree and the query is still slow, the plan was the right one for the data and the problem is the work, not the planner.",
+  "`enable_seqscan = off` and friends do not forbid a plan, they mark it *disabled*, so it loses to any plan without a disabled node. Use them in a session to **see the plan you wanted and what it costs**, never in production code.",
+  "Measured here: for `status = 'paid'` (61% of the table) the planner chose a Seq Scan costed at 39,960 (about 300 ms); forcing the index gave a plan costed at **75,701** that ran in about 265 ms with everything in cache, and in 1,094 ms on a first, colder run. A tie in memory and a loss on a cold cache: **not worth steering**.",
+  "Lowering `random_page_cost` to 1.1, the usual advice for SSDs, flipped a range query from a Bitmap Heap Scan (about 160 ms) to a plain Index Scan (about 380 ms) on a table in cache: the cost model has to match the storage *and* the data order.",
+  "A bind parameter with no value is estimated from `1 / n_distinct` (500,000 rows for any status) instead of from the common-value list, and a CTE marked `MATERIALIZED` is an optimisation fence: a one-row lookup became a 2,000,000-row scan, about 420 ms against 0.03 ms.",
+]
+
+[[sections]]
+heading = "Find the node where the estimate breaks"
+body = """
+Read the plan for the first node where `rows=` (the estimate) and the `actual ... rows=` differ by a factor of ten or more, working from the leaves up, because an error at a leaf is multiplied by everything above it. Module 8 showed how to read the tree and module 10 showed where estimates come from. Three outcomes are possible:
+
+| Estimate against actual | Meaning | Where to look |
+|---|---|---|
+| close | the planner knew the data; it chose from the right numbers | the plan is probably right; the query does a lot of work (modules 3 to 7) |
+| far, on one table's scan | statistics are stale, thin, or the condition hides the column | `ANALYZE`, statistics target, module 7 |
+| far, after a join or several conditions | independence or a join the planner cannot see through | `CREATE STATISTICS`, a rewrite |
+
+If the estimates are close and the plan still looks wrong to you, the cost constants are the next suspect. The honest first step is to ask the planner for the plan you expected and compare, which is what the next section does.
+"""
+
+[[sections]]
+heading = "Ask for the plan you expected"
+body = """
+The `enable_*` settings (`enable_seqscan`, `enable_bitmapscan`, `enable_nestloop`, `enable_hashjoin` and so on) do not remove a plan type. In Postgres 18 a node of a disabled type is flagged (`Disabled: true` in `EXPLAIN`) and a plan with fewer disabled nodes always beats one with more, whatever the cost; before 18 the same effect came from adding a cost of 10 billion. Either way the planner uses a disabled type only when nothing else exists. That makes them an experiment: turn one off *in your session*, read the other plan, and compare its cost and its actual time with the one the planner chose.
+
+`status = 'paid'` matches 61% of the example `orders` table, and an index on `status` exists. The planner:
+
+```plan id=m11-seq-wins setup=orders-status,no-parallel
+SELECT id FROM orders WHERE status = 'paid';
+```
+
+A Seq Scan, with a cost of 39,960. You expected the index. Ask for it:
+
+```plan id=m11-forced-index setup=orders-status,no-parallel,no-index-scans
+SELECT id FROM orders WHERE status = 'paid';
+```
+
+The index plan is costed at 75,701, almost twice as high. Run with the table in memory it took 265 ms against 304 for the Seq Scan, so the two are a tie, and on a first run, right after the index was built and before its pages were cached, the index plan took 1,094 ms (measured once): reading 1.2 million rows through an index means 1.2 million trips from index to table, and without the cache each can be a disk read. A plan that is no faster when everything is cached and much slower when it is not is not one to force. **The planner was right to prefer the scan**; this is the usual outcome, and it is why the experiment comes before any change. When a forced plan is clearly *faster* than the chosen one, in the conditions you really run in, you have a real finding, and the question becomes why the costs were wrong: the estimated rows (module 10) or the constants below.
+
+> [!WARNING]
+> Never leave `enable_seqscan = off` (or any `enable_*`) in application code or in `postgresql.conf`. It makes every query in the session pay for one query's problem, and it hides the bad estimate that will break the next one. If you must steer one statement, scope it: `SET LOCAL enable_nestloop = off` inside a transaction lasts until the transaction ends.
+"""
+
+[[sections]]
+heading = "The cost constants"
+body = """
+The planner prices a plan in abstract units: a sequential page read costs `seq_page_cost` (1.0), a page read in random order costs `random_page_cost` (4.0), a row costs `cpu_tuple_cost` (0.01), and so on. The default 4.0 was chosen for spinning disks, where random reads were slow, and a common recommendation is to lower it to 1.1 for SSDs. It is a reasonable idea and it is worth measuring on your queries rather than copying, because what it changes is the price of the index paths:
+
+```plan id=m11-bitmap-wins setup=orders-customer,no-parallel
+SELECT id FROM orders WHERE customer_id BETWEEN 1 AND 15000;
+```
+
+With the default constants this range of 600,000 rows uses a **bitmap** scan: it reads the index, sorts the page numbers, then visits each table page once, in order. Now the same query with `random_page_cost = 1.1`:
+
+```plan id=m11-ssd-cost setup=orders-customer,no-parallel,ssd-cost
+SELECT id FROM orders WHERE customer_id BETWEEN 1 AND 15000;
+```
+
+A plain **Index Scan**, which follows the index order and fetches each row's page as it goes. Because `customer_id` has no relation to the physical order of the table (module 10's correlation near 0), nearly every row means a different page, and the same pages are read again and again. On this table, in cache, it took about 380 ms against 160 for the bitmap. The lower constant made the planner believe random access was nearly free, and the cache hid nothing: the repeated page visits are CPU and buffer-lookup work, not disk.
+
+So the constants are not a speed knob. They are a model of your storage, and the right value is the one that makes the planner's choices match the plans you measure to be fastest. Two honest procedures: leave `random_page_cost` alone unless you have a pair of plans, as above, where the chosen one is slower than the alternative; and when you do change it, change it for the one role or database that needs it (`ALTER ROLE reports SET random_page_cost = 1.1`) and re-measure the queries that matter, not one.
+
+| Setting | Default | What it prices | Reasons to change it |
+|---|---|---|---|
+| `random_page_cost` | 4.0 | a page read in random order | storage that is truly fast at random reads and a working set larger than memory |
+| `effective_cache_size` | 4 GB | how much of the data the OS and Postgres can keep in memory (no allocation, only a hint) | set to about half to three quarters of the machine's memory; it makes index scans look cheaper when the data is cached |
+| `cpu_tuple_cost`, `cpu_index_tuple_cost` | 0.01, 0.005 | work per row | almost never |
+| `work_mem` | 4 MB | memory per sort or hash (module 8) | sorts and hashes that spill |
+"""
+
+[[sections]]
+heading = "Prepared statements: a parameter has no value"
+body = """
+A driver such as sqlx prepares a statement and sends the parameters separately (module 4). For the first five executions Postgres makes a **custom plan** for each value, which sees the value and so uses the common-value list. After that it may switch to a **generic plan**, built once with no value and reused, if that plan's estimated cost is no worse than the average custom plan. `plan_cache_mode` controls it: `auto` (the default), `force_custom_plan` and `force_generic_plan`.
+
+With the literal in the SQL, or a custom plan:
+
+```plan id=m11-custom setup=orders-status,no-parallel
+SELECT id FROM orders WHERE status = 'pending';
+```
+
+The estimate is `rows=` about 115,000 against 111,232 actual, from the common-value list. With `status = $1` and a generic plan, the planner has no value and must use what is true of any value, one divided by the number of distinct values:
+
+```plan id=m11-generic setup=orders-status,no-parallel,generic-status
+EXECUTE by_status('pending');
+```
+
+`rows=500000`, a quarter of the table, for *every* status, against 111,232 actual. Here both plans are bitmap scans, so nothing changed but the estimate. The estimate is what feeds the nodes above: a join, a sort, a decision to spill. A condition on a rare value and one on a common value are indistinguishable to a generic plan, and the optional-filter query of module 7 and the partial index of module 6 are the two cases measured earlier where that moved the plan itself.
+
+What to do, in order of preference: keep the value that matters in the SQL text when it is a fixed business constant; use `SET LOCAL plan_cache_mode = force_custom_plan` for one transaction that serves a very skewed column; watch for a statement that was fast for the first five calls and slow after (that is the switch to the generic plan, and `EXPLAIN (GENERIC_PLAN)` shows what it chose without running it).
+"""
+
+[[sections]]
+heading = "Common table expressions: a fence you may not want"
+body = """
+Since Postgres 12 a `WITH` query that is referenced once, has no side effects and is not recursive is **inlined** into the outer query, so the planner can push the outer conditions into it. Writing `MATERIALIZED` (or using a CTE that is referenced twice, or one with a data-modifying statement) makes it an *optimisation fence*: it is run in full, its result is held, and the outer query then filters what is left.
+
+```plan id=m11-cte-fence setup=no-parallel
+WITH c AS MATERIALIZED (SELECT * FROM orders)
+SELECT id FROM c WHERE id = 12345;
+```
+
+The inner query reads all 2,000,000 rows into the CTE, and the filter then discards 1,999,999 of them: about 420 ms, and the CTE's 83 MB did not fit in `work_mem`, so it was written to disk. The same query without `MATERIALIZED` is inlined:
+
+```plan id=m11-cte-inline setup=no-parallel
+WITH c AS (SELECT * FROM orders)
+SELECT id FROM c WHERE id = 12345;
+```
+
+A primary-key lookup, 0.03 ms. Before Postgres 12 every CTE was a fence, so older advice to "use CTEs to structure your query" or "to stop the planner doing something" survives in code and in blog posts. `MATERIALIZED` is still the right tool in two cases: the CTE is expensive and used several times, and you *want* it computed once; or you must stop the planner from pushing a condition into it (rare). Default to the inlined form, and read the plan for a `CTE Scan` where you did not expect one.
+
+> [!NOTE]
+> MySQL 8 merges simple CTEs and derived tables into the outer query by default and materialises others (the optimizer switch `derived_merge`); SQLite 3.35 added `MATERIALIZED` and `NOT MATERIALIZED` with the same meaning. From their documentation; not run here.
+"""
+
+[[sections]]
+heading = "Hints, and what to do instead"
+body = """
+Postgres has no hints in the language, deliberately: the project's position is that a query that needs a hint reveals a statistics or cost problem that should be fixed where it is, and a hint left in the SQL goes stale when the data changes. (The `pg_hint_plan` extension adds them for those who need them; it is not part of core and was not run here.) MySQL and Oracle do have them (`USE INDEX`, `FORCE INDEX`, optimizer hints in comments). In Postgres the tools are, in the order to try them:
+
+1. **Fix the estimate**: `ANALYZE`, a higher target on one column, `CREATE STATISTICS` (module 10).
+2. **Rewrite the query** so the planner can use what it has: remove the function on the column, split an `OR` into a `UNION ALL`, inline the CTE (modules 7 and this one).
+3. **Change the index** so the right plan is also the cheapest (modules 3, 5, 6): a covering index, a partial index, the right column order.
+4. **Scope a setting** to one transaction or role (`SET LOCAL`), with a comment saying which plan it protects and a test that checks the plan still uses it.
+5. Only then consider an extension.
+
+A plan that is wrong *sometimes* is the hardest. Record the plans that matter (the `auto_explain` extension, or a saved `EXPLAIN` in the repository, as this course's plan files are) so you can diff them when a query slows down after a deploy, a migration or a bulk load.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+A check you can run in a test or a CI job: that the query you rely on still uses its index, with the plan as JSON and no application logic. It inspects the plan, it does not time anything, so it is stable.
+
+```rust title=plan_check.rs
+use sqlx::PgPool;
+
+/// True when the plan for `sql` (with no parameters) contains a node of `node_type` on `relation`.
+async fn plan_uses(pool: &PgPool, sql: &str, node_type: &str, relation: &str) -> sqlx::Result<bool> {
+    let row: (serde_json::Value,) = sqlx::query_as(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+        .fetch_one(pool)
+        .await?;
+    fn walk(node: &serde_json::Value, node_type: &str, relation: &str) -> bool {
+        let here = node["Node Type"] == node_type && node["Relation Name"] == relation;
+        here || node["Plans"]
+            .as_array()
+            .map_or(false, |kids| kids.iter().any(|k| walk(k, node_type, relation)))
+    }
+    Ok(walk(&row.0[0]["Plan"], node_type, relation))
+}
+```
+
+Run it against a database with production-like statistics (a copy, or a table filled by the test), never against an empty one, where the planner rightly prefers a Seq Scan.
+"""
+
+[[checks]]
+prompt = "The planner chose a Seq Scan for status = 'paid' with an index on status. With enable_seqscan off the index plan costs 75,701 against 39,960, takes 265 ms against 304 warm, and 1,094 ms on a cold first run. Do you steer the planner?"
+answer = "No. 61% of the table matches, so the index means 1.2 million trips from index to table. In memory the two tie, and on a first uncached run the index plan was several times slower (one measurement), so the scan is the safer choice; a plan that wins only when everything is cached should not be forced. The cost estimates being far apart while the warm times are close is itself information: the cost model assumes some of those trips are disk reads."
+
+[[checks]]
+prompt = "After you lower random_page_cost to 1.1 for the whole database, a report that used a Bitmap Heap Scan now runs a plain Index Scan and is 2.6 times slower. Why did the planner change its mind, and why was it wrong?"
+answer = "A lower random page cost makes visiting table pages in index order look cheap, so the plain Index Scan became cheaper than the bitmap. But the column has no relation to the physical order of the table (correlation near 0), so almost every row is on a different page and pages are visited again and again; the bitmap visits each page once in order. The constant described the storage but not the data order. Restore the default, or apply the lower value only to the role or queries where you measured it to help."
+
+[[checks]]
+prompt = "A query is fast for its first five calls and slow from the sixth, with the same parameter. What is the likely cause and how do you confirm it?"
+answer = "A prepared statement switched from custom plans to a generic plan after five executions; the generic plan has no value, so it uses 1 / n_distinct for equality and may choose another plan. Confirm with EXPLAIN (GENERIC_PLAN) on the statement or by setting plan_cache_mode = force_custom_plan for the session and checking that the slow call becomes fast."
+
+[[checks]]
+prompt = "A WITH query that selected one order by id takes about 420 ms. The same SELECT written without the WITH takes well under a millisecond. What do you look for in the plan, and what removes it?"
+answer = "A CTE Scan over a Seq Scan of the whole table, with Rows Removed by Filter close to the table size: the CTE is materialised and filtered afterwards. It happens when the CTE is marked MATERIALIZED, is referenced more than once, or contains a data-modifying statement. Remove MATERIALIZED (or write NOT MATERIALIZED) and the planner inlines it."
+
+[[terms]]
+term = "Cost constants"
+means = "The numbers the planner uses to price a plan: seq_page_cost, random_page_cost, cpu_tuple_cost and others; a model of the hardware, not a speed setting."
+section = "The cost constants"
+
+[[terms]]
+term = "enable_* settings"
+means = "Switches that mark a plan type (a seq scan, a nested loop) as disabled so the planner avoids it unless nothing else exists; for experiments in a session, never for production code."
+section = "Ask for the plan you expected"
+
+[[terms]]
+term = "Generic plan"
+means = "A prepared statement's plan built once without knowing the parameter values and reused; custom plans are built per execution with the values."
+section = "Prepared statements: a parameter has no value"
+
+[[terms]]
+term = "Optimisation fence"
+means = "A boundary the planner will not push conditions across; a MATERIALIZED CTE is one."
+section = "Common table expressions: a fence you may not want"
+
+[[sources]]
+title = "PostgreSQL: planner cost constants"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-query.html"
+
+[[sources]]
+title = "PostgreSQL: PREPARE (custom and generic plans)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"
+
+[[sources]]
+title = "PostgreSQL: WITH queries (CTE materialization)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/queries-with.html"
+
+[[sources]]
+title = "PostgreSQL: how the planner uses statistics"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/planner-stats-details.html"
+
+[[sources]]
+title = "PostgreSQL wiki: OptimizerHintsDiscussion"
+kind = "guide"
+url = "https://wiki.postgresql.org/wiki/OptimizerHintsDiscussion"
+note = "why core Postgres has no hints"
+
+[[sources]]
+title = "MySQL: optimizer hints"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/optimizer-hints.html"

@@ -1,0 +1,74 @@
+{
+ "id": "m11-forced-index",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE status = 'paid';",
+ "setup": [
+  {
+   "id": "orders-status",
+   "sql": "CREATE INDEX orders_status ON orders (status);"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  },
+  {
+   "id": "no-index-scans",
+   "sql": "SET enable_seqscan = off; SET enable_bitmapscan = off;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Index Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Scan Direction": "Forward",
+   "Index Name": "orders_status",
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 0.43,
+   "Total Cost": 75701.04,
+   "Plan Rows": 1220533,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.016,
+   "Actual Total Time": 229.041,
+   "Actual Rows": 1221501.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Index Cond": "(status = 'paid'::text)",
+   "Rows Removed by Index Recheck": 0,
+   "Index Searches": 1,
+   "Shared Hit Blocks": 15991,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0",
+   "enable_seqscan": "off",
+   "enable_bitmapscan": "off"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.074,
+  "Triggers": [],
+  "Execution Time": 298.064
+ },
+ "text": "Index Scan using orders_status on orders  (cost=0.43..75701.04 rows=1220533 width=8) (actual time=0.024..201.318 rows=1221501.00 loops=1)\n  Index Cond: (status = 'paid'::text)\n  Index Searches: 1\n  Buffers: shared hit=15991\nPlanning Time: 0.093 ms\nExecution Time: 265.332 ms"
+}
