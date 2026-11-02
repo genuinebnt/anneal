@@ -9,9 +9,9 @@ test.describe("/rust", () => {
 
     test("the numbers count up to the real ones", async ({ page }) => {
         const cards = await page.locator(".s-trk").count();
-        await expect(page.locator(".s-stats b").first()).toHaveText(String(cards), { timeout: 5000 });
-        await expect(page.locator(".s-stats b").nth(1)).not.toHaveText("0");
-        await expect(page.locator(".s-stats b").nth(2)).toHaveText(/^~\d/);
+        await expect(page.locator(".ly-tl strong").first()).toHaveText(String(cards), { timeout: 5000 });
+        await expect(page.locator(".ly-tl strong").nth(1)).not.toHaveText("0");
+        await expect(page.locator(".ly-tl strong").nth(2)).toHaveText(/^~\d/);
     });
 
     test("the cards and the page rise in and end fully visible", async ({ page }) => {
@@ -60,7 +60,7 @@ test.describe("/rust", () => {
 
     test("a filter chip shows only its tracks and the all chip restores them", async ({ page }) => {
         const all = await page.locator(".s-trk:not(.s-gone)").count();
-        const chips = page.locator(".s-chip");
+        const chips = page.locator(".ly-lp .d-opt");
         expect(await chips.count()).toBeGreaterThan(2);
         await chips.nth(1).click();
         await expect(chips.nth(1)).toHaveAttribute("aria-pressed", "true");
@@ -78,6 +78,6 @@ test.describe("reduced motion", () => {
         await expect(card).toBeVisible();
         expect(await card.evaluate((e) => getComputedStyle(e).animationName)).toBe("none");
         const cards = await page.locator(".s-trk").count();
-        await expect(page.locator(".s-stats b").first()).toHaveText(String(cards), { timeout: 1000 });
+        await expect(page.locator(".ly-tl strong").first()).toHaveText(String(cards), { timeout: 1000 });
     });
 });

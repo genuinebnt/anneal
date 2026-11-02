@@ -1,3 +1,4 @@
+import { FollowUps } from "../components/trackBits";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -499,14 +500,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                         ))}
                       </div>
                     )}
-                    {p.follow_up && (
-                      <div className="dash">
-                        <div className="lab" style={{ color: "var(--acc)", marginBottom: 4 }}>
-                          {p.mode === "fix" ? "ASKED AS" : "INTERVIEW FOLLOW-UP"}
-                        </div>
-                        {p.follow_up}
-                      </div>
-                    )}
+                    {p.follow_up && <FollowUps text={p.follow_up} label={p.mode === "fix" ? "ASKED AS" : "INTERVIEW FOLLOW-UP"} />}
                   </div>
                 )}
 

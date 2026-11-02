@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-const rows = ".tbl-co > .tr:not(.th):not(.tr-empty)";
+const rows = ".rt-list > .tr:not(.tr-empty)";
 
 test.beforeEach(async ({ page }) => {
-    await page.goto("/t/l1-ownership-moves");
+    await page.goto("/t/l1-ownership-moves?tab=problems");
     await expect(page.locator(rows).first()).toBeVisible();
 });
 
@@ -34,19 +34,18 @@ test("/ focuses the filter box and Escape leaves it", async ({ page }) => {
     await expect(page.getByLabel("Filter problems")).not.toBeFocused();
 });
 
-test("clicking a header sorts, again reverses, a third time restores the recommended order", async ({ page }) => {
+test("the sort menu sorts, reverses, and reset restores the recommended order", async ({ page }) => {
     const titles = async () => (await page.locator(`${rows} .pt`).allInnerTexts()).map((t) => t.trim());
     const original = await titles();
-    const header = page.locator(".th .sorth", { hasText: "Problem" });
-    await header.click();
+    const sort = page.getByLabel("Sort problems");
+    await sort.selectOption("t1");
     const asc = await titles();
     expect(asc).toEqual([...original].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).map((t) => t));
-    await expect(header).toHaveAttribute("aria-sort", "ascending");
-    await header.click();
+    await sort.selectOption("t-1");
     expect(await titles()).toEqual([...asc].reverse());
-    await header.click();
+    await page.getByRole("button", { name: "RESET ORDER" }).click();
     expect(await titles()).toEqual(original);
-    await expect(header).toHaveAttribute("aria-sort", "none");
+    await expect(sort).toHaveValue("");
 });
 
 test("j and k move a row highlight and Enter opens a ready problem", async ({ page }) => {
