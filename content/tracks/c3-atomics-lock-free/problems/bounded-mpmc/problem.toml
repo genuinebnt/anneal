@@ -1,0 +1,32 @@
+slug = "bounded-mpmc"
+title = "A bounded MPMC queue with sequence numbers"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 7
+status = "ready"
+tags = ["MPMC", "Vyukov queue", "sequence numbers", "false sharing", "cache padding"]
+teaches = [
+  "Per-slot sequence numbers turn 'claim a position' and 'publish the value' into two separate, safe steps.",
+  "CAS on the position claims a slot; the slot's own Release store hands it to the other side.",
+  "`#[repr(align(64))]` padding so head and tail do not share a cache line.",
+]
+follow_up = "1) Why is this not strictly lock-free (a thread preempted between its CAS and its `seq` store)? What does that do to the consumer at that position? 2) Add `push_blocking` and `pop_blocking` with a parking strategy: spin, yield, then park. What is the lost-wakeup race? 3) Compare with `crossbeam::queue::ArrayQueue` and `std::sync::mpsc::sync_channel`. 4) Why do `head` and `tail` need separate cache lines, and how would you measure it (perf c2c)? 5) Make it unbounded (a linked list of blocks, like crossbeam's `SegQueue`): what is the reclamation story? 6) How would you add a `len()` that is right under concurrency, and why is it only ever an estimate?"
+related = ["C2", "F6", "S5"]
+
+[[hints]]
+kind = "approach"
+text = "Slot `i` starts with `seq = i`. A push at position `pos` may use slot `pos & mask` when its `seq == pos`; after writing, store `seq = pos + 1`. A pop at `pos` needs `seq == pos + 1`; after reading, store `seq = pos + cap` so the slot is ready for the next lap's push."
+
+[[hints]]
+kind = "rust"
+text = "Loop: load the slot's `seq` (Acquire), compute `diff = seq as isize - expected as isize`. `diff == 0`: try to CAS the position (`compare_exchange_weak`, Relaxed is enough: the slot's `seq` carries the ordering); success means the slot is yours. `diff < 0`: full (push) or empty (pop). `diff > 0`: another thread moved on, reload the position."
+
+[[hints]]
+kind = "edge"
+text = "Use wrapping arithmetic on positions. Put `head` and `tail` in `#[repr(align(64))]` wrappers. `Drop` can simply pop until empty."
+
+[solution]
+explanation = "The position CAS decides *who* owns a slot; the slot's sequence number (written with Release, read with Acquire) decides *when* the other side may touch it, which closes the claimed-but-not-written window that a naive head/tail design has. A full queue is detected without reading the other index: the slot still carries last lap's sequence, so `seq < pos`. The structure is lock-free (a stalled thread between claim and publish blocks only that slot's consumer, not the whole queue, but strict lock-freedom is debatable there) and is the basis of crossbeam's `ArrayQueue`."
+time = "O(1) per operation"
+space = "O(capacity)"

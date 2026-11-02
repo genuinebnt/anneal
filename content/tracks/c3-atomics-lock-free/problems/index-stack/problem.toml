@@ -1,0 +1,32 @@
+slug = "index-stack"
+title = "An ABA-safe lock-free stack"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 6
+status = "ready"
+tags = ["Treiber stack", "ABA", "bit packing", "compare_exchange", "free list"]
+teaches = [
+  "A Treiber stack: push and pop are a CAS loop on the head.",
+  "The ABA problem: the head looks unchanged but the list under it is not. A version tag packed next to the index fixes it.",
+  "Bit packing two 32-bit fields into one `AtomicU64`, and a slot pool instead of per-node `Box`es (no reclamation problem).",
+]
+follow_up = "1) Is this stack wait-free? Why can a thread starve? 2) Replace the pool with `Box`ed nodes: what must you do about freeing a popped node while another thread may still read its `next`? Compare hazard pointers, epoch-based reclamation (crossbeam-epoch) and the tag-on-pointer approach. 3) Why does the tag live in the same word as the index, and what would a double-width CAS (`cmpxchg16b`) allow? 4) Could `pop` use `Relaxed` for the `next` load and why do we still need `Acquire` on the CAS? 5) Why LIFO stacks make poor work queues, and what do you use instead?"
+related = ["C3", "F6", "D14"]
+
+[[hints]]
+kind = "approach"
+text = "Slot `i` is a node: `values[i]` and `next[i]`. A list head is one `AtomicU64` = `(tag << 32) | index`, with index `NIL` for empty. `push` = take a slot off the free list, store the value, push the slot on `top`; `pop` is the reverse."
+
+[[hints]]
+kind = "rust"
+text = "pop loop: `load` head, split it, read `next[index]`, `compare_exchange_weak(cur, pack(tag + 1, next), Acquire, Acquire)`; on `Err(seen)` retry with `seen`. push loop: write `next[index] = head_index` first, then CAS to `pack(tag + 1, index)` with `Release`."
+
+[[hints]]
+kind = "edge"
+text = "Use `wrapping_add` on the tag. A reader can see a stale `next[index]`; that is harmless exactly because a stale read can only pair with a CAS that will then fail on the tag."
+
+[solution]
+explanation = "Without the tag, pop reads `A.next = B`, is preempted, others pop A, pop B, push A: the head is `A` again, so the CAS succeeds and installs `B`, which is no longer on the list. The tag makes the head word different every time even if the index repeats (it can only repeat after 2^32 operations in between, which is the accepted residual risk of tagged pointers). Using a fixed pool of slots instead of heap nodes avoids the other half of lock-free stacks, memory reclamation: a slot is never freed, only recycled, so a stale reader never touches freed memory. Values are `AtomicU64`s so a racing stale read is defined behaviour."
+time = "O(1) amortised, lock-free"
+space = "O(capacity)"
