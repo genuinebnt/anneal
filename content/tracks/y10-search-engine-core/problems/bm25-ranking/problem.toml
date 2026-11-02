@@ -1,0 +1,32 @@
+slug = "bm25-ranking"
+title = "Rank search results with BM25"
+mode = "write"
+level = "hard"
+stage = "search"
+order = 2
+status = "ready"
+tags = ["BM25", "ranking", "tf-idf", "inverted index", "relevance", "top-k", "Lucene", "tokenization"]
+teaches = [
+  "Ranking is arithmetic on three counts: how often a term is in this document (tf), how rare it is across all documents (idf), and how long this document is compared to the average (length normalisation).",
+  "BM25 saturates term frequency (the 10th occurrence adds much less than the 2nd) and discounts long documents: the two fixes that made it beat plain tf-idf, and the default in Lucene, Elasticsearch and tantivy.",
+  "An index that keeps per-term posting lists and per-document lengths can score a query by touching only the documents that contain a query term.",
+]
+follow_up = "1) Replace the full sort with a bounded min-heap of size `k` and compare for large corpora. 2) Add field boosts (title counts double) by indexing fields separately and summing weighted scores (BM25F). 3) Add phrase search using positional postings. 4) Implement block-max WAND: store the maximum possible contribution per block and skip documents that cannot beat the current k-th best. 5) Evaluate: build a few queries with known relevant documents and compute precision@k and MRR for BM25 vs raw tf-idf vs your `idf`-less variant."
+related = ["Y10", "F7", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Keep, per term, a map from document to term frequency (the posting list), and per document its length; also the total length so `avglen` is cheap. To search: for each distinct query term, compute `idf` once and add its contribution to every document in its posting list; then sort the accumulated scores and truncate."
+
+[[hints]]
+kind = "rust"
+text = "`HashMap<String, BTreeMap<u32, u32>>` for postings and `BTreeMap<u32, Vec<String>>` for the documents' terms (needed to remove a replaced document). Accumulate scores in a `HashMap<u32, f64>`; sort with `b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0))`. `ln` is `f64::ln`; `(1.0 + x).ln()` is what makes `idf` positive even for a term in every document."
+
+[[hints]]
+kind = "edge"
+text = "`avglen` changes whenever any document is added or replaced: compute it at query time from `total_len / N`, and keep `total_len` exact when replacing. A term repeated in the query counts once. Documents with no query term never appear: scores are only created from posting lists."
+
+[solution]
+explanation = "BM25 (Robertson and Walker, 1994, from the Okapi system) is Lucene's default similarity since 6.0, so it is what Elasticsearch, OpenSearch, Solr and tantivy rank with. Real engines avoid scoring every posting with block-max indexes (WAND / BlockMax-WAND skip documents that cannot reach the current top-k) and precompute each document's length-normalisation factor into a one-byte 'norm'."
+time = "O(sum of the query terms' posting lengths + matches log matches)"
+space = "O(total terms)"

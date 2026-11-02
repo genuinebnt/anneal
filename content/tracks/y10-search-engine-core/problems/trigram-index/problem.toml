@@ -1,0 +1,32 @@
+slug = "trigram-index"
+title = "Code search with a trigram index"
+mode = "write"
+level = "medium"
+stage = "search"
+order = 1
+status = "ready"
+tags = ["code search", "trigram index", "inverted index", "posting lists", "intersection", "candidate verification", "regex search"]
+teaches = [
+  "To find a substring in a million files without reading them, index every 3-character window: a query's trigrams must **all** appear in a document that contains it, so intersecting their posting lists leaves a few candidates.",
+  "The index only *rules documents out*: 'has all the trigrams' is necessary, not sufficient (`abc xbcd` has `abc` and `bcd` but not `abcd`), so every candidate is verified against the text.",
+  "Intersect starting from the **rarest** trigram: the smallest list bounds the work, and one trigram that nobody has settles the query at once.",
+]
+follow_up = "1) Make the posting lists sorted `Vec<u32>`s and intersect by merging (and by galloping when one is much shorter); measure it. 2) Support case-insensitive search by indexing lowercased trigrams and verifying on the original text. 3) Extend to simple regexes: for `foo.*bar` index `foo` and `bar`, for `a|b` take a union; write `candidates_for_regex` using the Y8 regex engine to verify. 4) Store postings with the F7 codec and decode lazily. 5) Handle updates cheaply: keep a small mutable index in memory plus immutable segments, and search both."
+related = ["F7", "Y8", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Index time: for each document, add its id to the set of every distinct trigram. Query time: take the query's distinct trigrams, fetch their id sets, intersect them (smallest first), then check each surviving document with `text.contains(query)`. Replacing a document means first removing the old text's trigrams."
+
+[[hints]]
+kind = "rust"
+text = "`let chars: Vec<char> = text.chars().collect(); chars.windows(3)` gives the trigram windows; collect them into a `BTreeSet<[char; 3]>` to deduplicate. Keep `BTreeSet<u32>` posting sets so results come out sorted. `Vec::retain` with `other.contains(id)` is a simple intersection; on sorted vectors you would merge instead."
+
+[[hints]]
+kind = "edge"
+text = "A query shorter than three chars has no trigrams: scan. A query with one trigram missing from the whole index has no matches: return at once. When `remove`-ing, drop trigram entries whose set becomes empty, or the map grows forever. Windows are over `char`s: a byte-based window would split multibyte characters."
+
+[solution]
+explanation = "This is Russ Cox's 'Regular Expression Matching with a Trigram Index' (the design of Google Code Search, and of Zoekt and GitHub's code search): real systems extend it to regular expressions by extracting a boolean combination of trigrams from the regex, and store the posting lists compressed (see the F7 posting-list codec) and memory-mapped. The recall/precision split is the whole idea: the index guarantees *no false negatives*, the verification removes the false positives."
+time = "O(trigrams x rarest list) per query plus verification"
+space = "O(total text) for the index"
