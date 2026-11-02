@@ -1,0 +1,32 @@
+slug = "bitset-iter"
+title = "A bitset with trailing_zeros iteration"
+mode = "write"
+level = "easy"
+stage = "first-bits"
+order = 1
+status = "ready"
+tags = ["bitset", "u64 words", "trailing_zeros", "count_ones", "PartialEq", "set algebra"]
+teaches = [
+  "Index `i` lives in word `i / 64`, bit `i % 64`: the arithmetic behind `Vec<bool>` replacements, bloom filters and hashbrown's control bytes.",
+  "Iterate members with `trailing_zeros` and `x & (x - 1)` (clear the lowest set bit): work proportional to the members, not the range.",
+  "Set algebra on words, and the trap in `intersect_with` when the two sets have different word counts.",
+]
+follow_up = "1) When does a bitset beat a `HashSet<usize>` or `Vec<bool>`, and when does it lose (sparse sets with huge indices)? 2) Add `iter().rev()` with `DoubleEndedIterator` using `leading_zeros`. 3) How does `count_ones` compile on x86 with and without `-C target-cpu=native` (`popcnt`), and what does the fallback cost? 4) Make `intersect_with` shrink the vector: why might you not (reallocation, hysteresis)? 5) Where does Roaring bitmap improve on this (hybrid containers; the capstone of this track)?"
+related = ["D13", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "Member `i` is bit `i % 64` of `words[i / 64]`. Growing means `resize(w + 1, 0)`; reading a missing word is `get(w)` with 0 as the default."
+
+[[hints]]
+kind = "rust"
+text = "Iteration state is one word's remaining bits: `bit = cur.trailing_zeros()`, yield `word * 64 + bit`, then `cur &= cur - 1`. When `cur == 0`, move to the next word. `from % 64` masks `!0u64 << (from % 64)` keep the bits at or above `from`."
+
+[[hints]]
+kind = "edge"
+text = "`intersect_with`: self's words past the end of `other` must become 0, so iterate over self's words and default the missing ones to 0. `PartialEq`: compare word by word with missing words as 0."
+
+[solution]
+explanation = "One bit per member makes membership O(1), `len` a sum of `count_ones` (one instruction per word on modern CPUs) and set algebra one AND/OR/ANDN per 64 elements. The `x & (x - 1)` idiom clears the lowest set bit, so iteration visits only members. It is the loop inside hashbrown's group matching, Roaring bitmaps, bloom filters and graph visited-sets."
+time = "O(1) insert/contains, O(words) algebra, O(words + members) iterate"
+space = "n/8 bytes"
