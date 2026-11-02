@@ -1,0 +1,32 @@
+slug = "itoa-stack-buffer"
+title = "Format integers into a stack buffer, no allocation"
+mode = "write"
+level = "easy"
+stage = "output"
+order = 1
+status = "ready"
+tags = ["itoa", "integer formatting", "no allocation", "fixed buffer", "i64::MIN", "unsigned_abs", "digit grouping"]
+teaches = [
+  "Digits come out least-significant first, so fill the buffer from the **right** and return the slice that starts where you stopped: no reversing, no `String`.",
+  "`0` has one digit, so the loop must be a do-while: `while n > 0` prints nothing for zero.",
+  "`-i64::MIN` overflows, but `i64::MIN.unsigned_abs()` is exactly `2^63` as a `u64`: convert to unsigned first and the corner case disappears.",
+]
+follow_up = "1) Process two digits per iteration with a lookup table and compare the speed with a benchmark. 2) Write `fmt_u128` (39 digits) and decide how big the buffer must be. 3) Add `fmt_hex(n, buf)` and `fmt_binary(n, buf)` and notice what gets simpler (shifts instead of division). 4) Write a `fmt_fixed(n_milli: i64, buf)` that prints `-12.034` from thousandths without floats. 5) Implement `std::fmt::Display` for a wrapper type using your function and check with `write!` into a `String` that it matches `to_string()`."
+related = ["S2", "F5", "F7"]
+
+[[hints]]
+kind = "approach"
+text = "Divide by ten repeatedly: `n % 10` is the next digit from the right, `n / 10` removes it. Write each digit at `buf[i]` after decrementing `i` from the end, and return `&buf[i..]`. A `loop` that breaks after the division when `n == 0` handles zero without a special case."
+
+[[hints]]
+kind = "rust"
+text = "`std::str::from_utf8(&buf[i..]).unwrap()` is cheap (ASCII) and keeps the function entirely safe; `unsafe { from_utf8_unchecked }` is what `itoa` does after proving the bytes are ASCII. For signed values convert with `n.unsigned_abs()` and add the `-` last (to the left of the most significant digit)."
+
+[[hints]]
+kind = "edge"
+text = "`i64::MIN` is why you never write `-n` on an `i64`. For grouping, count digits as you emit them from the right and insert a comma *before* the next digit whenever the count is a positive multiple of three: no comma at the front."
+
+[solution]
+explanation = "`itoa` also processes two digits per step with a 200-byte lookup table of `\"00\"`..`\"99\"` and divides by 100 instead of 10, roughly doubling the speed, and `ryu` does the same job for floats. This is the first thing to do when profiling shows `format!` in a hot logging or serialisation path."
+time = "O(digits)"
+space = "O(1): the caller's buffer"
