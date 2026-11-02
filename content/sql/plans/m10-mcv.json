@@ -1,0 +1,61 @@
+{
+ "id": "m10-mcv",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE status = 'pending';",
+ "setup": [
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Seq Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 0.0,
+   "Total Cost": 39960.0,
+   "Plan Rows": 111733,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.206,
+   "Actual Total Time": 145.03,
+   "Actual Rows": 111232.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Filter": "(status = 'pending'::text)",
+   "Rows Removed by Filter": 1888768,
+   "Shared Hit Blocks": 1264,
+   "Shared Read Blocks": 13696,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.068,
+  "Triggers": [],
+  "Execution Time": 151.264
+ },
+ "text": "Seq Scan on orders  (cost=0.00..39960.00 rows=111733 width=8) (actual time=0.133..120.066 rows=111232.00 loops=1)\n  Filter: (status = 'pending'::text)\n  Rows Removed by Filter: 1888768\n  Buffers: shared hit=1452 read=13508\nPlanning Time: 0.076 ms\nExecution Time: 125.064 ms"
+}
