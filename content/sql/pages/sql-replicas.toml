@@ -1,0 +1,95 @@
+title = "Read replicas: lag, stale reads and query conflicts"
+group = "sql-scale"
+order = 40
+minutes = 12
+lede = "A read replica takes read traffic off the primary, at a price that every design has to state: it is behind. This page builds a real streaming replica of the test database on the same machine and measures how far behind it is when idle and under a heavy write load, what happens to a read that immediately follows a write, and the two ways a long query on a replica can go wrong: being killed by the primary's cleanup, or holding the primary's cleanup back. The numbers come from loopback on one machine, so network lag is not in them."
+say = "A streaming replica (pg_basebackup, then a second server on another port) showed a committed row after a median of 0.46 ms (p99 1.35 ms, maximum 3.40 ms, 300 inserts), yet a read on the replica sent right after each commit missed the row 300 times out of 300. A bulk load writing 815 MB of WAL in 25 s left the replica at most 72.6 MB (834 ms by replay_lag) behind and caught up 0.3 s after the writer finished. A repeatable-read query on the replica was terminated 2.2 s after the primary vacuumed away rows it could still see (with max_standby_streaming_delay lowered to 2 s; the default is 30 s). With hot_standby_feedback on it ran to completion, and the primary's table stayed at 14.2 MB after the same delete and VACUUM instead of shrinking to 8 kB."
+
+related = ["replication", "scaling-reads", "caching", "postgres"]
+
+summary = [
+  "**The setup:** the primary on port 5418 (Postgres 18.6, `wal_level = replica`, the default), a standby made with `pg_basebackup -R -X stream` on port 5419, same machine, loopback, asynchronous replication (`sync_state = async`). Reads on the standby run in hot standby mode (read-only). Tables are throwaway ones (`rep_t`, `rep_big`, `rep_c`).",
+  "**Idle lag:** after each of 300 single-row inserts committed on the primary, a loop on the replica polled until the row appeared: median **0.46 ms**, p90 0.65, p99 **1.35**, maximum **3.40 ms**. Over a network this adds the round trip, and a loaded standby adds more.",
+  "**Read-your-writes breaks:** in a second run of 300 inserts, the application read the row from the replica immediately after the primary acknowledged the commit; the row was **not there 300 times out of 300**. Replication is asynchronous: the commit is acknowledged when it is durable on the primary, not when the replica has replayed it. Anything that writes and then reads the result back (a redirect after a form post) must read from the primary, or wait for the replica to reach the commit's LSN.",
+  "**Lag under a write load:** ten inserts of 300,000 rows into a table with an index (3,000,000 rows, **815 MB of WAL in 25.1 s**, about 32 MB/s). Sampled every 0.2 s: the replica's replay was at most **72.6 MB behind** (`pg_current_wal_lsn() - replay_lsn`), the largest `replay_lag` **834 ms**, and it had caught up **0.3 s** after the writer finished. On this machine replay kept up; with a slower disk or network on the replica, or a single-threaded replay of a write-heavy primary, the backlog would grow instead.",
+  "**A long query on the replica is cancelled:** a connection on the standby ran a `REPEATABLE READ` query over `rep_c` (200,000 rows) and stayed open. On the primary: `DELETE` of all but 100 rows, then `VACUUM`. Vacuum removes row versions the replica's snapshot still needs, and the replica cannot apply that change until the query is out of the way. With `max_standby_streaming_delay` set to 2 s the next query on the replica failed after **2.2 s**: `terminating connection due to conflict with recovery`. The default is **30 s**, so the same thing happens after half a minute.",
+  "**Or it holds up the primary:** the same sequence with `hot_standby_feedback = on` (the replica tells the primary which rows it still needs). The replica's query was **still running after 12 s**, count unchanged; but the primary's VACUUM could not remove the rows, and the table stayed **14,155,776 bytes** against **8,192** in the first case. A forgotten long query on a replica with feedback on bloats the primary exactly as module 31's idle transaction did.",
+  "**Not measured here:** replication over a real network, synchronous replication (`synchronous_commit = remote_apply` makes the read-your-writes problem go away at a latency cost; not run), logical replication, failover, and caches. For caches (Redis or similar in front of the database) the same questions arise, how stale and who invalidates, and the System design page on caching covers the patterns; none were measured here.",
+]
+
+[[sections]]
+heading = "How far behind is a replica"
+body = """
+A standby receives the primary's write-ahead log and replays it. Replication is asynchronous by default: the primary reports a commit as done once its own WAL is flushed, without waiting for any standby. So at every moment the replica is some distance behind, and the question is how much.
+
+Idle, the test replica showed a row after a median of 0.46 ms (p99 1.35 ms, maximum 3.40 ms over 300 inserts). That is small, but it is not zero, and a read that follows a write by less than that gets the old answer. In a second run the application read from the replica immediately after the primary's `INSERT` returned, 300 times: the row was missing all 300 times. Nothing is wrong with the replica; it is the definition of asynchronous. The ways to live with it:
+
+- Read your own writes from the primary (for a short time after a user writes, or for the pages that depend on it).
+- Wait on the replica until it has replayed past the LSN of your commit (`pg_current_wal_lsn()` after the write, `pg_last_wal_replay_lsn()` on the replica).
+- Use synchronous replication with `remote_apply`, which waits for the replica at every commit. The manual describes this; it was not measured here.
+
+Under load the lag becomes a size, not just a delay. A bulk insert wrote 815 MB of WAL in 25.1 s. Sampling every 0.2 s, the replica was never more than 72.6 MB behind (largest `replay_lag` 834 ms) and was fully caught up 0.3 s after the load ended. This was a local, idle second server; a replica on a slow network or one also serving heavy reads could fall further behind, and `pg_stat_replication` on the primary is where to watch it.
+"""
+
+[[sections]]
+heading = "The long query on a replica"
+body = """
+A replica is read-only, but the primary's cleanup still reaches it. When the primary vacuums away a dead row version, that is a change in the WAL, and the replica must apply it. If a query on the replica is still reading that row, there is a conflict, and Postgres has two ways to settle it.
+
+By default it lets the replica's query run for up to `max_standby_streaming_delay` (30 s by default) and then cancels the query. The test lowered this to 2 s to keep the run short: a `REPEATABLE READ` query was open on the replica, the primary deleted all but 100 of 200,000 rows and vacuumed, and the next query on the replica's connection failed 2.2 s later with `terminating connection due to conflict with recovery`. So an analytics query that runs for minutes on a busy replica can be killed through no fault of its own.
+
+The other option is `hot_standby_feedback = on`, which makes the replica report to the primary the oldest snapshot it needs, so the primary does not vacuum rows away that a replica query can still see. The same sequence then let the replica's query run to the end (still going at 12 s), and shifted the cost to the primary: after the same `DELETE` and `VACUUM` its table was 14,155,776 bytes instead of 8,192, because the dead rows were not removable. Module 31 showed the same effect from an idle transaction on the primary; a long query on a replica with feedback on does it from the other machine.
+
+The usual arrangement is a dedicated replica for long reports with a long delay setting, and a short one with feedback off for the application's reads.
+"""
+
+[[sections]]
+heading = "Caches in front of the database"
+body = """
+A cache (the System design page on caching covers the patterns) answers the same kind of question as a replica: how stale may a read be, and what makes it fresh again. A replica's staleness is a few milliseconds and bounded by the replay; a cache's is whatever the expiry or the invalidation logic allows. Both take reads off the primary, and neither is measured on this page: the caching tests would need a cache server, which was not installed here. Before adding either, check that the read cannot be made cheaper with an index or a materialized view (modules 1 to 38), because those lower the cost for every reader instead of adding a copy to look after.
+"""
+
+[[checks]]
+prompt = "After a user saves their profile, the app redirects to the profile page, which reads from a replica, and sometimes shows the old data. Why, and what are two fixes?"
+answer = "Replication is asynchronous: the commit is acknowledged before the replica replays it. In the test the first read on the replica right after the commit missed the row 300 times out of 300, though the replica caught up in about half a millisecond. Fixes: read from the primary for a short time after a write (or for that page), or wait on the replica until its replay LSN passes the commit's LSN; synchronous replication with remote_apply also works at a latency cost."
+[[checks]]
+prompt = "A nightly report that runs for 10 minutes on a replica fails with 'conflict with recovery'. You turn hot_standby_feedback on and it succeeds, but a week later the primary's tables are bloated. What happened?"
+answer = "With feedback on, the primary does not vacuum away rows the replica's queries can still see, so a long query holds back cleanup on the primary for its whole run (the test table stayed 14,155,776 bytes instead of 8,192 bytes). Run the report on a dedicated replica with a long max_standby_streaming_delay instead, or keep feedback off for it and accept cancellations, and watch long-running queries on replicas as you do transactions on the primary."
+[[checks]]
+prompt = "The replica is a few milliseconds behind when idle. Does that mean it is safe to send all reads to it?"
+answer = "No: reads that must reflect a just-committed write do not see it (300 of 300 missed in the test), and lag grows under write load (up to 72.6 MB and 834 ms behind while the primary wrote 32 MB/s on this machine, with no network in the path). Decide per query how stale it may be, and send only those that can tolerate it."
+
+[[terms]]
+term = "Streaming replication"
+means = "A standby server receives the primary's write-ahead log as it is written and replays it, staying a copy a short distance behind."
+section = "How far behind is a replica"
+
+[[terms]]
+term = "Replication lag"
+means = "How far a replica's replayed position is behind the primary's, measured in bytes of WAL or in time (pg_stat_replication.replay_lag)."
+section = "How far behind is a replica"
+
+[[terms]]
+term = "Conflict with recovery"
+means = "A query on a standby that needs rows the primary has vacuumed away; the standby waits up to max_standby_streaming_delay and then cancels the query."
+section = "The long query on a replica"
+
+[[terms]]
+term = "hot_standby_feedback"
+means = "A standby setting that tells the primary the oldest row version the standby's queries need, so the primary does not remove it; it prevents cancellations and can bloat the primary."
+section = "The long query on a replica"
+
+[[sources]]
+title = "PostgreSQL: high availability, load balancing and replication"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/high-availability.html"
+
+[[sources]]
+title = "PostgreSQL: hot standby (handling query conflicts)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/hot-standby.html"
+
+[[sources]]
+title = "PostgreSQL: monitoring replication (pg_stat_replication)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW"
