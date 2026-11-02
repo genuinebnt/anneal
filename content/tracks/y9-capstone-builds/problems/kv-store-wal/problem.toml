@@ -1,0 +1,32 @@
+slug = "kv-store-wal"
+title = "A key-value store with a write-ahead log that survives torn writes"
+mode = "write"
+level = "hard"
+stage = "build"
+order = 3
+status = "ready"
+tags = ["write-ahead log", "durability", "crash recovery", "checksums", "tombstones", "compaction", "torn writes", "storage engines"]
+teaches = [
+  "Write-ahead logging: record the change in an append-only log *before* applying it, and the log alone is enough to rebuild the state after a crash.",
+  "A crash can leave a **torn** last record (half written). Recovery must accept exactly the complete, checksum-valid prefix and stop at the first bad record, never apply garbage and never panic on a lying length field.",
+  "Deletes are records too (tombstones), distinct from an empty value; compaction rewrites the log with only the live data.",
+]
+follow_up = "1) Add an `fsync` model: a `File` trait with `append` and `sync`, a fake that loses unsynced bytes on a simulated crash, and a test that finds a bug when you forget to sync before acknowledging. 2) Add a sequence number to each record and use it to detect a log with a hole in the middle. 3) Add a snapshot + log scheme: `compact` writes a snapshot and truncates the log, recovery loads the snapshot then the log; what must happen atomically? 4) Make records batchable (one checksum for a group of puts that must apply together or not at all). 5) Build the next layer: an in-memory memtable flushed to sorted immutable files (an SSTable) and a merge read path."
+related = ["F4", "B3", "Y7"]
+
+[[hints]]
+kind = "approach"
+text = "One `record(key, Option<value>)` function builds the bytes for both puts and deletes and is the only place the format is written; `put`/`delete` append it, then update the map. `recover` is a loop over offsets: read the 12-byte header, work out the record's end, **check it fits**, check the checksum, apply it, move on; the first failure ends the loop."
+
+[[hints]]
+kind = "rust"
+text = "Use `u32::from_le_bytes(log[a..b].try_into().unwrap())` for the header fields. Do the end-of-record arithmetic in `usize` (no overflow on 64-bit even for 4 GB lengths) and compare with `log.len()` before slicing. The checksum covers `log[at + 4..end]`. After the loop, the recovered log is `log[..at].to_vec()`."
+
+[[hints]]
+kind = "edge"
+text = "Test the length before trusting any field: a record whose `klen` is 4 GB must be 'torn', not a panic or a giant allocation. Tombstones have *no* value bytes, so their body length uses 0, not `u32::MAX`. Stop at the first bad record: records after a corrupt one may be valid by themselves, but you can no longer know where they start."
+
+[solution]
+explanation = "This is the recovery path of Bitcask, LevelDB/RocksDB's WAL, Redis AOF and SQLite's journal in miniature. Real systems add an fsync policy (the log is only durable once it is synced; that is the throughput/safety trade-off), record batching, a sequence number to detect a log that was truncated in the middle rather than at the end, and compaction that runs in the background into a new file followed by an atomic rename."
+time = "put/delete O(key+value); recover O(log); compact O(live data)"
+space = "O(live data + log)"

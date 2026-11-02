@@ -1,0 +1,32 @@
+slug = "ot-collaborative-text"
+title = "Operational transformation: two people edit the same text"
+mode = "write"
+level = "hard"
+stage = "build"
+order = 2
+status = "ready"
+tags = ["operational transformation", "collaborative editing", "convergence", "concurrency", "Google Docs", "tie-breaking", "distributed systems"]
+teaches = [
+  "Two users edit the same text at once; each applies their own edit immediately and sends it over. To converge, each side must **transform** the other's edit against what it already did, so the same final text appears everywhere.",
+  "The convergence condition: `apply(apply(s, a), b') == apply(apply(s, b), a')`. Every case of the transform function (insert/insert, insert/delete, delete/delete) is checked against it.",
+  "Ties need a deterministic rule that both sides compute identically (lower site id first); otherwise two inserts at the same index land in opposite orders on the two machines.",
+]
+follow_up = "1) Generalise to ranged operations (`Insert { pos, text }`, `Delete { pos, len }`) and handle a delete range that an insert lands inside (the delete splits in two). 2) Write a tiny central server: it keeps a history of applied ops with a version number; a client sends `(base_version, op)` and the server transforms against everything since. Test with random interleavings of three clients. 3) Implement undo as a transformed inverse of an earlier op. 4) Implement an RGA (replicated growable array) CRDT with per-character ids and show it needs no transform function. 5) Find a three-way scenario where naive pairwise transformation diverges and explain why the server's total order fixes it."
+related = ["Y7", "C2", "S2"]
+
+[[hints]]
+kind = "approach"
+text = "Handle the cases one pair at a time and test each against the convergence equation by hand on a short string. Inserts shift the indexes of everything at or after them; deletes shift the indexes of everything after them. The only subtle case is two inserts at the same index, where a deterministic tie-break (the lower `site`) makes both machines choose the same order."
+
+[[hints]]
+kind = "rust"
+text = "`match (a, b)` with a case per pair; for `(Delete, Insert)` call `transform(b, a)` and swap the results rather than writing the mirror image twice. For lists: for each op of `a`, transform it against every (already updated) op of `b` in turn, replacing both: `a` is carried along, each `b` op is updated in place, and the finished `a` op is pushed to the output."
+
+[[hints]]
+kind = "edge"
+text = "`pa <= pb` for insert-vs-delete: an insert at index 3 and a delete of the character currently at index 3 means the new character goes *before* it, so the delete must move to index 4. Deleting the same character on both sides must become `Nop` on both, or one side removes a second, innocent character."
+
+[solution]
+explanation = "This is Ellis and Gibbs' 1989 OT as used in Google Wave/Docs and Etherpad. The control algorithm here (transform a list against a list, one op at a time) is the 'grid' every OT server runs per client; production systems add range deletes, undo, and a central server to totally order operations because the transformation functions for more than two concurrent users are notoriously hard to get right (the TP2 problem). CRDTs (RGA, Yjs, Automerge) avoid transformation entirely by giving each character a unique id."
+time = "O(len(a) x len(b)) transformations"
+space = "O(len(a) + len(b))"
