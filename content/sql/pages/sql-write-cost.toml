@@ -1,0 +1,133 @@
+title = "What an index costs every write"
+group = "sql-writes"
+order = 27
+minutes = 14
+lede = "Every index is a second copy of some columns that has to be kept in step with the table. A SELECT only ever gains from it, but each INSERT, each UPDATE that creates a new row version, and every delete pays. This page measures what that costs in log bytes, time and disk on a 200,000-row table, with the primary key alone, with one more index and with three more, and shows what HOT updates and VACUUM change."
+say = "Inserting 100,000 rows into a table with only its primary key wrote 15.5 MB of WAL; with one more index 26.6 MB; with three more 41.5 MB (159, 399 and 580 ms). Updating a column no index uses still wrote 32.7 MB with the primary key only and 43.7 MB with one more index, because every new row version needs an entry in every index unless the update is HOT (heap-only): with fillfactor 70, 43,173 of the 100,000 updates were HOT and the WAL fell to 25.6 and 33.5 MB. A delete wrote 11.7 MB whatever the indexes, because the index entries are removed later by VACUUM."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a throwaway table `wc_t` of 200,000 rows (`id bigint primary key`, `customer_id`, `status`, `total_cents`, `created_at`), autovacuum off, `CHECKPOINT` before each run, WAL measured as the `pg_current_wal_lsn()` difference. 'Extra indexes' are `(customer_id)`, `(status, total_cents)` and `(created_at)`. Postgres 18.6, one run for insert and delete times, the median of three for updates and vacuum.",
+  "**Insert 100,000 rows:** 15.5 MB of WAL and 159 ms with only the primary key, **26.6 MB / 399 ms** with one more index, **41.5 MB / 580 ms** with three more. The first extra index adds 11 MB of log for 100,000 rows and the next three about 5 MB each; the time goes up 2.5 and 3.6 times.",
+  "**Disk:** the 200,000-row heap is 11.5 MB; the indexes total **4.3 MB** (primary key only), **8.9 MB** (one more) and **19.9 MB** (three more), which is nearly twice the table.",
+  "**Update of an unindexed column** (`total_cents`, 100,000 of the 200,000 rows): **32.7 MB / 348 ms** with the primary key only, **43.7 MB / 621 ms** with `(customer_id)` also present. The new row version needs an entry in every index, even those on columns that did not change, unless the update is HOT.",
+  "**HOT updates:** at fillfactor 70, **43,173 of 100,000** updates were HOT (the new version fit in the same page and no index was touched) and the WAL fell to **25.6 MB / 264 ms** and **33.5 MB / 397 ms**. HOT is impossible when an updated column is in any index: updating `status` with `(status, total_cents)` indexed gave 0 HOT updates and **60.1 MB / 1,107 ms**.",
+  "**Delete 100,000 rows:** **11.7 MB** of WAL and 56 to 69 ms whatever the number of indexes: the delete only marks the heap rows. The index entries stay until VACUUM removes them, which took (median of three) **9, 29 and 40 ms** for the primary key alone, one more index and three more. The cost moves to vacuum, and the files do not shrink: the indexes were still 4.3, 8.9 and 19.9 MB after it.",
+  "**What to do with it:** an index must earn its keep with reads. Find those that are never used (`pg_stat_user_indexes.idx_scan = 0` over a representative period), drop them, avoid indexing frequently updated columns, and for update-heavy tables leave free space with `fillfactor` so updates can be HOT.",
+]
+
+[[sections]]
+heading = "One entry per index, per row version"
+body = """
+An index entry points to a heap row version (module 23). An `INSERT` adds one version and so one entry in every index on the table, the primary key included, each into its place in a sorted b-tree, which can mean a page split. All of it is written to the WAL (module 26).
+
+The measurement: a table of 200,000 rows exists, and 100,000 more are inserted in one statement. The table is `wc_t`, created and dropped by the demo (the example `orders` table is never altered), with the extra indexes added as listed in the summary.
+
+| Indexes | WAL | Time (one run) | Index size at 200,000 rows | at 300,000 rows |
+|---|---|---|---|---|
+| primary key only | 15.5 MB | 159 ms | 4.3 MB | 6.4 MB |
+| plus `(customer_id)` | 26.6 MB | 399 ms | 8.9 MB | 11.1 MB |
+| plus three | 41.5 MB | 580 ms | 19.9 MB | 24.8 MB |
+
+(The heap is 11.5 MB at 200,000 rows and 17.2 MB at 300,000.) This table is not the one in module 26 (it has a primary key and a fifth column), so the figures are not comparable with that page; read the proportions. The first extra index adds about 11 MB of log to the 15.5 and three together add 26; with three extra indexes the indexes are bigger than the table.
+
+If you load a large table once, the usual fix is to create the indexes after the load: one sorted build is cheaper than a hundred thousand individual inserts, which the batching module measures.
+"""
+
+[[sections]]
+heading = "Updates: new version, new entries, unless HOT"
+body = """
+An `UPDATE` writes a **new row version**. The old index entries point to the old version, so unless something prevents it, every index needs a new entry for the new one, even indexes whose columns did not change. This is why updating a column nobody indexes still costs more as indexes are added:
+
+| 100,000 updates of `total_cents` | WAL | Time (median of 3) |
+|---|---|---|
+| primary key only | 32.7 MB | 348 ms |
+| plus `(customer_id)` | 43.7 MB | 621 ms |
+
+(The table has no free space, so no update can be HOT; this is a worst case, the same as a table at the default `fillfactor` 100 whose pages are full after a bulk load.)
+
+The way out is the **HOT update** (heap-only tuple, module 24): when no indexed column changes and the new version fits in the same page, Postgres adds it there and leaves the indexes alone. The page needs free room, which `fillfactor` reserves. With `fillfactor = 70` the same 100,000 updates (half of the rows) gave:
+
+| 100,000 updates, `fillfactor 70` | HOT updates | WAL | Time (median of 3) |
+|---|---|---|---|
+| primary key only | 43,173 | 25.6 MB | 264 ms |
+| plus `(customer_id)` | 43,173 | 33.5 MB | 397 ms |
+
+Only 43% were HOT because updating half the rows of a page needs more room than 30% free leaves; where the update touches few rows per page, nearly all are. What decides HOT is whether an **indexed column** changed. Updating `status` on the table where `(status, total_cents)` is indexed gave **0 HOT updates, 60.1 MB of WAL and 1,107 ms** (three extra indexes, all entries rewritten). So there are two rules for update-heavy tables: keep frequently changing columns out of indexes, and leave free space.
+"""
+
+[[sections]]
+heading = "Deletes: cheap now, paid at vacuum"
+body = """
+A `DELETE` does not remove anything: it stamps the row version's `xmax` (module 23). The indexes are not touched at all, which is why the WAL for deleting 100,000 rows was the same **11.7 MB** with the primary key alone, with one more and with three more indexes, and took 56 to 69 ms in each.
+
+The dead index entries stay until `VACUUM` removes them. Running it afterwards took (median of three) 9 ms with the primary key only, 29 ms with one more index and 40 ms with three more, so the work is proportional to the number of indexes, but done later, in the background, and in bulk. Those are small because the example table is small: the same proportions apply on a large table, with time in seconds.
+
+Two consequences. Deleting a large part of a table makes the *delete* look free and the next *vacuum* expensive; and the files do not shrink either: after the vacuum the heap and the indexes were exactly the size they had before the delete (11.5 MB; 4.3, 8.9 and 19.9 MB), with the freed space inside them for reuse. Only `VACUUM FULL` or a rebuild returns it, and dropping an old partition instead of deleting from a big table avoids the problem (the scale part of this course).
+"""
+
+[[sections]]
+heading = "Deciding what to keep"
+body = """
+All of the above is the price of reads that are faster. The question for each index is whether the queries that use it justify what every write pays. Postgres counts the scans of each index since the statistics were last reset:
+
+```sql
+SELECT relname AS table, indexrelname AS index, idx_scan,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+ORDER BY pg_relation_size(indexrelid) DESC;
+```
+
+An index with `idx_scan = 0` over a period that includes the month-end report and the rare admin query is a candidate to drop. Check `pg_stat_database.stats_reset` first: a fresh count says nothing, and an index backing a unique or primary key constraint does a job even if no query scans it. Duplicates (the same columns in the same order twice) and indexes that are a left prefix of another (`(customer_id)` next to `(customer_id, created_at)`) serve the same queries and can usually go.
+
+Dropping an index is not reversible without a rebuild, so keep its `CREATE INDEX` statement, and on a table that matters try the drop on a copy first.
+"""
+
+[[checks]]
+prompt = "A table has eight indexes and takes 5,000 updates a second, none of them changing an indexed column. The pages are full. Why are the updates still slow, and what are the two fixes?"
+answer = "A new row version needs a new entry in every index unless the update is HOT, and a HOT update needs room in the same page. With full pages every update writes eight index entries and their WAL even though no indexed column changed. Fix 1: reserve free space with a lower fillfactor so updates can be HOT (and let vacuum prune the old versions). Fix 2: drop indexes that are not earning their cost."
+
+[[checks]]
+prompt = "You delete 100,000 rows from a table with five indexes. The DELETE returns in 60 ms but the database is busy for a long time afterwards. Why?"
+answer = "A delete only marks the heap rows; the index entries remain until VACUUM (autovacuum) removes them, which does the per-index work in bulk afterwards. The cost is proportional to the number of indexes and arrives later, as vacuum I/O and WAL. The index files also keep their size."
+
+[[checks]]
+prompt = "pg_stat_user_indexes shows idx_scan = 0 for an index. What do you check before dropping it?"
+answer = "That the statistics were not reset recently (pg_stat_database.stats_reset) and cover a period with all the workload (month-end jobs, rare reports); that the index does not enforce a unique or primary key constraint; and keep the CREATE INDEX statement so it can be rebuilt."
+
+[[terms]]
+term = "HOT update"
+means = "A heap-only tuple update: the new row version goes in the same page as the old one and no index gets a new entry. It needs free space in the page and no change to an indexed column."
+section = "Updates: new version, new entries, unless HOT"
+
+[[terms]]
+term = "Write amplification"
+means = "The extra bytes of log and disk work a write causes beyond the row itself, here from one entry in every index for each new row version."
+section = "One entry per index, per row version"
+
+[[terms]]
+term = "fillfactor"
+means = "The percentage of each table page that inserts may fill, leaving the rest free so updates can stay in the page (HOT)."
+section = "Updates: new version, new entries, unless HOT"
+
+[[terms]]
+term = "idx_scan"
+means = "The number of times an index was scanned since statistics were last reset, from pg_stat_user_indexes; zero over a long, representative period marks an unused index."
+section = "Deciding what to keep"
+
+[[sources]]
+title = "PostgreSQL: heap-only tuples (HOT)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/storage-hot.html"
+
+[[sources]]
+title = "PostgreSQL: the cumulative statistics views (pg_stat_user_indexes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/monitoring-stats.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE TABLE storage parameters (fillfactor)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-createtable.html"
