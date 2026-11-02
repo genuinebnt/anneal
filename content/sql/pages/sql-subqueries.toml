@@ -1,0 +1,165 @@
+title = "Subqueries: IN, EXISTS and NOT IN"
+group = "sql-shapes"
+order = 17
+minutes = 15
+lede = "Subqueries have a folklore: EXISTS is faster than IN, joins are faster than subqueries, NOT IN is slow. On Postgres most of that is out of date, because the planner rewrites a subquery in a WHERE clause into a join before it chooses a plan. This page measures the cases: IN and EXISTS produce the identical plan, NOT IN has a correctness trap that matters more than its speed, and a correlated subquery in the select list is a nested loop that is fast or slow for the same reasons any nested loop is."
+say = "Postgres turns IN and EXISTS subqueries into semi-joins and NOT EXISTS into an anti-join, so they usually plan the same; NOT IN does not (it is a hashed subplan, and a single NULL in the subquery makes it return no rows at all), so write NOT EXISTS. A correlated subquery in the select list runs once per outer row: fine with an index and a small outer side, and not worse than the equivalent join as a rule."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "`id IN (SELECT ...)` and `EXISTS (SELECT 1 ... WHERE ...)` gave the **same plan**: a `Nested Loop Semi Join` that stops each probe at the first matching order, 88 ms against 80 ms (medians of 7 runs; a difference of noise).",
+  "`NOT IN` is not `NOT EXISTS`. With one NULL in the subquery, `g NOT IN (SELECT assignee_id ...)` returned **0 rows** where `NOT EXISTS` returned 104. The planner cannot turn `NOT IN` into an anti-join because of that NULL rule, and plans it as a `hashed SubPlan` that works only while the subquery fits in `work_mem`.",
+  "A correlated subquery in the select list is a `SubPlan` run once per outer row: 1,999 customers with their order counts took **13 ms** (1,999 index-only lookups). The equivalent `LEFT JOIN ... GROUP BY` was planned as a hash join over all 2,000,000 orders and took **176 ms**. Neither form is 'the fast one'; read the plan.",
+  "Rewriting a subquery as a join is only a speed-up when the plan changes. Where a join would change the number of rows (a customer with many orders appears many times), `EXISTS` is the correct form, not a stylistic choice.",
+]
+
+[[sections]]
+heading = "IN and EXISTS: the same semi-join"
+body = """
+'Customers who have at least one refunded order', written two ways. With `IN`:
+
+```plan id=m17-in setup=orders-customer-status,no-parallel
+SELECT id FROM customers
+WHERE id IN (SELECT customer_id FROM orders WHERE status = 'refunded');
+```
+
+And with `EXISTS`:
+
+```plan id=m17-exists setup=orders-customer-status,no-parallel
+SELECT c.id FROM customers c
+WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'refunded');
+```
+
+The plans are the same: a **Nested Loop Semi Join**. The outer side is the 50,000 customers, the inner side is one probe into the `(customer_id, status)` index per customer (`loops=50000`), and a *semi* join means 'stop at the first match': the inner node returns 0.99 rows per loop on average (one order is enough, the rest of the customer's refunds are never read). 49,413 customers qualify. This is why the old advice to prefer `EXISTS` for speed does not hold on Postgres: the planner converts both into a semi-join and picks the method from the statistics, so the two forms differ in how you read them, not in how they run.
+
+The third way, a join, is a different query unless you remove the duplicates:
+
+```plan id=m17-join-distinct setup=orders-customer-status,no-parallel
+SELECT DISTINCT c.id FROM customers c JOIN orders o ON o.customer_id = c.id
+WHERE o.status = 'refunded';
+```
+
+A customer with 5 refunds appears 5 times in the join (222,462 rows from the hash join here, for 49,413 customers), so a `DISTINCT` (the `HashAggregate` at the top) is needed to get the same answer, and the plan produces every joined row before it throws the extras away. 79 ms: no slower here, because the hash join is fast, but the semi-join stops at the first match and never builds those 222,462 rows. Use `IN` or `EXISTS` when you mean 'has at least one'; use a join when you need columns of the matching rows.
+
+> [!TIP]
+> The semi-join rewrite applies to a subquery in `WHERE` with `IN`, `= ANY` or `EXISTS`. It does not apply in the select list, inside an `OR` with other conditions that cannot be pulled apart, or when the subquery calls a volatile function; there the planner keeps a `SubPlan` (below).
+"""
+
+[[sections]]
+heading = "NOT IN: a trap with a plan to match"
+body = """
+The opposite question, 'customers with no refunded order', is where the forms differ in result, not only in plan. With `NOT EXISTS`:
+
+```plan id=m17-not-exists setup=orders-customer-status,no-parallel
+SELECT c.id FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'refunded');
+```
+
+A **Nested Loop Anti Join**: for each customer, probe the index and keep the customer only if the probe finds nothing; 587 customers, 80 ms. With `NOT IN`:
+
+```plan id=m17-not-in setup=orders-customer-status,no-parallel
+SELECT id FROM customers
+WHERE id NOT IN (SELECT customer_id FROM orders WHERE status = 'refunded');
+```
+
+The same 587 rows, a different plan: the `Filter: (NOT (ANY (id = (hashed SubPlan 1).col1)))` line says the subquery was run once, its 222,462 values were hashed in memory, and each customer is checked against the hash. 48 ms here, and it is quick as long as the hash fits in `work_mem`. When it does not, Postgres falls back to a plain `SubPlan` that rescans the subquery result for every outer row, which is quadratic and the reason `NOT IN` has a reputation for being slow.
+
+The speed is the lesser problem. The **NULL rule**: `x NOT IN (a, b, NULL)` is never true, because `x <> NULL` is unknown, not true. If the subquery returns even one NULL, `NOT IN` returns no rows. Measured on a column that has NULLs (every 50th ticket has no assignee), counting the numbers 1 to 300 that are not an assignee:
+
+| Form | Rows returned |
+|---|---|
+| `g NOT IN (SELECT assignee_id FROM tickets)` | **0** |
+| `NOT EXISTS (SELECT 1 FROM tickets t WHERE t.assignee_id = g)` | **104** |
+| `g NOT IN (SELECT assignee_id FROM tickets WHERE assignee_id IS NOT NULL)` | 104 |
+
+The first one is a silent wrong answer, and it appears the day someone adds a NULL to a column that never had one. The fix is `NOT EXISTS`, which handles NULLs the way people expect and lets the planner use an anti-join. Use `NOT IN` only against a column that is declared `NOT NULL`, and even then prefer `NOT EXISTS`.
+"""
+
+[[sections]]
+heading = "A correlated subquery in the select list"
+body = """
+A subquery that refers to the outer row and sits in the select list runs once per outer row, which is what a `SubPlan` node means:
+
+```plan id=m17-scalar setup=orders-customer-status,no-parallel
+SELECT c.id, (SELECT count(*) FROM orders o WHERE o.customer_id = c.id)
+FROM customers c WHERE c.id < 2000;
+```
+
+`loops=1999` on the `Aggregate`: for each of the 1,999 customers, an index-only scan of that customer's orders (about 40 index entries), one count each. 13 ms. This is the same cost shape as a nested loop (module 13): cheap per outer row, so the total is the outer rows times a small number, and it needs the index on `orders(customer_id, ...)` to be small.
+
+The advice 'replace it with a join and a GROUP BY' does not always help:
+
+```plan id=m17-join-group setup=orders-customer-status,no-parallel
+SELECT c.id, count(o.id) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id
+WHERE c.id < 2000 GROUP BY c.id;
+```
+
+The planner built a hash of the 1,999 customers and **read all 2,000,000 orders** to probe it: 176 ms, about fourteen times slower. (`count(o.id)` needs the order `id`, which this index does not hold, so the join cannot be answered from the index alone.) With a different index or `count(*)` the join might win; the point is that a subquery and a join are two descriptions of the same answer, the planner picks a plan for each from the statistics, and it can get either one wrong. If the subquery form is right for a handful of outer rows, keep it; if you need aggregates for most of a large table, the join with a `GROUP BY` is the plan that reads each table once.
+
+Where the subquery needs the *latest few* rows rather than a count, use a `LATERAL` join with `LIMIT` (module 14), and for a result you want to name and reuse, a CTE (module 11: inlined unless you say `MATERIALIZED`).
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Two habits that prevent the worst cases. Write exclusion as `NOT EXISTS` always, and add a test with a NULL in the data so a `NOT IN` can never pass review by accident:
+
+```sql title=customers_without_refunds.sql
+-- customers who have no refunded order; NULL-safe and an anti-join
+SELECT c.id
+FROM customers c
+WHERE NOT EXISTS (
+    SELECT 1 FROM orders o
+    WHERE o.customer_id = c.id AND o.status = 'refunded'
+);
+```
+
+And list the `NOT IN (SELECT` patterns in a codebase before they bite: `grep -rn "NOT IN (SELECT"` is a start; in an ORM, look for `exclude(...)` or `not_in` over a subquery of a nullable column.
+"""
+
+[[checks]]
+prompt = "A colleague rewrote WHERE EXISTS (SELECT 1 ...) as WHERE id IN (SELECT ...) 'for speed' and the plan is identical. Why?"
+answer = "Postgres turns both into a semi-join before planning, so they produce the same Nested Loop Semi Join (or Hash Semi Join, depending on the statistics) that stops at the first match. The EXISTS-is-faster advice dates from engines that ran the subquery per row."
+
+[[checks]]
+prompt = "WHERE x NOT IN (SELECT col FROM t) returns no rows at all, though many x have no match. What is the likely cause and the fix?"
+answer = "col contains a NULL: x <> NULL is unknown, so NOT IN is never true when the subquery returns a NULL. Rewrite as WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.col = x), which ignores the NULL and becomes an anti-join; or filter the subquery with col IS NOT NULL."
+
+[[checks]]
+prompt = "Why would a join with a DISTINCT be a worse way to ask which customers have a refunded order than EXISTS?"
+answer = "The join produces a row for every matching order (222,462 here), and DISTINCT then discards the extras, while EXISTS becomes a semi-join that stops at the first match for each customer and never builds the duplicates. Use a join when you need columns from the matching rows."
+
+[[checks]]
+prompt = "A select-list subquery counting orders per customer ran in 13 ms for 1,999 customers, and the equivalent LEFT JOIN with GROUP BY took 176 ms. Does that make the join the wrong form?"
+answer = "No, it shows the planner chose a plan that read all 2,000,000 orders for the join, while the subquery was 1,999 index lookups. For a few outer rows with a good index, the correlated subquery is fine; for aggregates over most of a large table the join with GROUP BY reads each table once. Compare the plans for your sizes."
+
+[[terms]]
+term = "Semi-join"
+means = "A join that keeps an outer row if at least one inner row matches, stopping at the first; what IN and EXISTS become."
+section = "IN and EXISTS: the same semi-join"
+
+[[terms]]
+term = "Anti-join"
+means = "A join that keeps an outer row only if no inner row matches; what NOT EXISTS becomes."
+section = "NOT IN: a trap with a plan to match"
+
+[[terms]]
+term = "SubPlan"
+means = "A subquery the planner could not turn into a join, run once per outer row (or hashed once, for NOT IN and ANY)."
+section = "A correlated subquery in the select list"
+
+[[sources]]
+title = "PostgreSQL: subquery expressions (IN, EXISTS, NOT IN)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-subquery.html"
+
+[[sources]]
+title = "PostgreSQL wiki: don't do this (NOT IN)"
+kind = "guide"
+url = "https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_use_NOT_IN"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN (semi and anti joins, SubPlan)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
