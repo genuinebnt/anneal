@@ -37,12 +37,12 @@ What the table holds (whole right tuples, or row positions), whether you build i
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): `HashMap`, `entry`, `or_default`.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `let else` for early continues.
-- [S8 The core traits](/t/s8-core-traits): why the key's `Eq` and `Hash` matter here.
+- L7 Enums & pattern matching: `let else` for early continues.
+- S8 The core traits: why the key's `Eq` and `Hash` matter here.
 - The optional *join algorithms* concept.
-- [S5 Queues & heaps](/t/s5-queues-heaps): Understand: `VecDeque` as a buffer of pending output.
+- S5 Queues & heaps: Understand: `VecDeque` as a buffer of pending output.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Right structure for the job: hash tables for grouping and joining; when a scan or an index is better.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: differential tests: three algorithms against each other and a naive one.
+- Y5 Testing & verification: Build it: differential tests: three algorithms against each other and a naive one.
 
 ## Tests
 

@@ -34,10 +34,10 @@ What the iterator holds (a rid and a stop rid, or the page id and a slot, or a c
 
 ## If this is new
 
-- [S6 Iterators](/t/s6-iterators): implementing the trait, `for` desugaring.
+- S6 Iterators: implementing the trait, `for` desugaring.
 - [L3 Lifetimes](/t/l3-lifetimes): a struct that holds a reference.
 - The optional *halloween problem* concept explains the bug with an example.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
+- Y5 Testing & verification: Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
 
 ## Tests
 

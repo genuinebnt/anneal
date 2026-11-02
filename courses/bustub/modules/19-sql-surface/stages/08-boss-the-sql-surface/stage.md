@@ -20,7 +20,7 @@ Everything. A failure here is a bug in one of the six stages before: use the shr
 
 ## If this is new
 
-- [Y5 Testing & verification](/t/y5-testing-verification): generating inputs from a grammar, shrinking, comparing with a model.
+- Y5 Testing & verification: generating inputs from a grammar, shrinking, comparing with a model.
 
 ## Tests
 

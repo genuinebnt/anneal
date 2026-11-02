@@ -46,7 +46,7 @@ How the ghost lists and their limits are stored. The target `p` is internal; its
 - [L1 Ownership & moves](/t/l1-ownership-moves): why the ghost record is *removed* from its map and then used.
 - Concept *adaptive replacement cache* (optional) has a diagram of the four lists and the target.
 - [L2 Borrowing](/t/l2-borrowing): Split borrows; Borrow-checker limits: copy out what you need before calling `&mut self` methods.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: an exact model of a published algorithm.
+- Y5 Testing & verification: Understand it: an exact model of a published algorithm.
 
 ## Tests
 

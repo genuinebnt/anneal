@@ -57,9 +57,9 @@ Do these on the Rust tracks first if the toolbox above reads like a foreign lang
 - [L1 Ownership & moves](/t/l1-ownership-moves) and [L2 Borrowing](/t/l2-borrowing), the first three problems of each: what a move is, why `&` and `&mut` cannot coexist (the `HashMap` trap is this rule).
 - [S4 Maps & sets](/t/s4-maps-sets), the first three: `get`, `insert`, `entry`.
 - [S3 Vec & slices](/t/s3-vec-slices): slicing a buffer (`&buf[a..b]`) and `copy_from_slice`.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Use; Understand (I/O errors): open and create files, positional reads and writes, `io::Result`, `sync_all`.
-- [L8 Error design](/t/l8-error-design): Custom errors: turn an `io::Error` into your own error; `?` through two layers.
-- [F1 Measure & read the machine](/t/f1-measure-machine): Measure: `Instant`, `black_box`: how to time what the Performance sections ask for.
+- S9 I/O & filesystem: Use; Understand (I/O errors): open and create files, positional reads and writes, `io::Result`, `sync_all`.
+- L8 Error design: Custom errors: turn an `io::Error` into your own error; `?` through two layers.
+- F1 Measure & read the machine: Measure: `Instant`, `black_box`: how to time what the Performance sections ask for.
 
 ## Tests
 

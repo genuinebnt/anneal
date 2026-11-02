@@ -34,7 +34,7 @@ How the chain is walked (an iterator you write, `successors`, a loop), how the l
 ## If this is new
 
 - [S3 Vec & slices](/t/s3-vec-slices): joining pieces into a report string.
-- [S6 Trait objects](/t/s6-trait-objects): walking a chain of `&dyn Error`.
+- S6 Trait objects: walking a chain of `&dyn Error`.
 
 ## Tests
 

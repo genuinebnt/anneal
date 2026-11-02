@@ -48,11 +48,11 @@ table.size -= 1;
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): deletion in open addressing.
-- [S6 Iterators](/t/s6-iterators): `filter_map`, `max`.
-- [Y5 Testing & verification](/t/y5-testing-verification): a hash set as the oracle for a long random history.
+- S6 Iterators: `filter_map`, `max`.
+- Y5 Testing & verification: a hash set as the oracle for a long random history.
 - The optional *Robin Hood hashing and open addressing* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Hashing; Right structure for the job: open addressing, probe distance, tombstones.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Enums & exhaustiveness: `Slot<K>`: empty, removed or live.
+- L7 Enums & pattern matching: Enums & exhaustiveness: `Slot<K>`: empty, removed or live.
 
 ## Tests
 

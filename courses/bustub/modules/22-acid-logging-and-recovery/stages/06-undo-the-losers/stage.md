@@ -35,12 +35,12 @@ How you iterate (`records.iter().rev()` once for all losers is the intended desi
 
 ## If this is new
 
-- [S6 Iterators](/t/s6-iterators): `rev()`, `iter()` over slices.
+- S6 Iterators: `rev()`, `iter()` over slices.
 - [S1 Option & Result](/t/s1-option-result): `map_err` and `?` across error types.
-- [Y5 Testing & verification](/t/y5-testing-verification): a model of the committed state, crash at every moment.
+- Y5 Testing & verification: a model of the committed state, crash at every moment.
 - The optional *rolling back with undo logs* concept.
-- [L8 Error design](/t/l8-error-design): Errors at scale: a recovery that never panics on a damaged log; `io::Result` and `?`.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Enums as design: a log record as an enum, matched in analysis, redo and undo.
+- L8 Error design: Errors at scale: a recovery that never panics on a damaged log; `io::Result` and `?`.
+- L7 Enums & pattern matching: Enums as design: a log record as an enum, matched in analysis, redo and undo.
 
 ## Tests
 

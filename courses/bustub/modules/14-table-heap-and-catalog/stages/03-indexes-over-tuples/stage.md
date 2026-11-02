@@ -36,8 +36,8 @@ How the comparator reads the keys (decoding through values, or comparing bytes o
 
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `dyn Trait`, `Send + Sync` bounds.
 - [L5 Generics & associated types](/t/l5-generics): const generics.
-- [S8 The core traits](/t/s8-core-traits): `Ord` and comparators.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
+- S8 The core traits: `Ord` and comparators.
+- Y5 Testing & verification: Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
 
 ## Tests
 

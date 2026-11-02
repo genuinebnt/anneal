@@ -67,9 +67,9 @@ counted.truncate(k as usize);
 ## If this is new
 
 - [C3 Atomics & lock-free](/t/c3-atomics-lock-free): `fetch_add`, `load`, `Ordering::Relaxed`.
-- [S8 The core traits](/t/s8-core-traits): `Hash`, `Hasher`.
+- S8 The core traits: `Hash`, `Hasher`.
 - [L5 Generics & associated types](/t/l5-generics): `PhantomData`, bounds on an `impl`.
-- [Y5 Testing & verification](/t/y5-testing-verification): 'never below the truth' as a property.
+- Y5 Testing & verification: 'never below the truth' as a property.
 - The optional *count-min sketch and frequency estimation* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Hashing: independent hash functions per row: a seeded hasher.
 

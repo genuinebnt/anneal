@@ -65,8 +65,8 @@ let value = estimate(registers.iter().map(|r| *r as u32), registers.len());
 
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): shifts, `leading_zeros`, the top bits of a hash.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): a `Mutex` around read-modify-write.
-- [S8 The core traits](/t/s8-core-traits): `Hash` and a final mixing step.
-- [Y5 Testing & verification](/t/y5-testing-verification): estimator accuracy as a statistical test with a wide band.
+- S8 The core traits: `Hash` and a final mixing step.
+- Y5 Testing & verification: estimator accuracy as a statistical test with a wide band.
 - The optional *HyperLogLog and distinct counting* concept.
 
 ## Tests

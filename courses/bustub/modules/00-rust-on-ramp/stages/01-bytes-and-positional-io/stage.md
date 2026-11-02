@@ -32,7 +32,7 @@ let n = file.read_at(&mut page[done..], offset + done as u64)?;   // n may be le
 
 ## If this is new
 
-- [S9 I/O & filesystem](/t/s9-io-filesystem): `File`, `OpenOptions`, `read_at`.
+- S9 I/O & filesystem: `File`, `OpenOptions`, `read_at`.
 - [S3 Vec & slices](/t/s3-vec-slices): ranges, `copy_from_slice`, `chunks_exact`.
 
 ## Tests

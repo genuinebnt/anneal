@@ -29,7 +29,7 @@ Where the level name is turned into `IsolationLevel` (the parser could do it; th
 
 ## If this is new
 
-- [L7 Enums and patterns](/t/l7-enums-patterns): guards and or-patterns.
+- L7 Enums and patterns: guards and or-patterns.
 - [S2 Strings and text](/t/s2-strings-text): case-insensitive comparison without allocation surprises.
 
 ## Tests

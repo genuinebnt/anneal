@@ -23,7 +23,7 @@ How the table is written: a `match`, a lookup table, bit sets per mode. The enum
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): matching on a pair.
+- L7 Enums & pattern matching: matching on a pair.
 
 ## Tests
 

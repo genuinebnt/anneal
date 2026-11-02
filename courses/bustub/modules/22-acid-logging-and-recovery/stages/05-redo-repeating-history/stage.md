@@ -38,11 +38,11 @@ How you collect the transactions (a `Vec` for order and a `HashSet` for membersh
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): or-patterns, `..` in struct patterns.
+- L7 Enums & pattern matching: or-patterns, `..` in struct patterns.
 - [S4 Maps & sets](/t/s4-maps-sets): `HashSet`, keeping first-seen order with a `Vec`.
-- [Y5 Testing & verification](/t/y5-testing-verification): an independent model of what redo must produce.
+- Y5 Testing & verification: an independent model of what redo must produce.
 - The optional *ARIES recovery* concept.
-- [L8 Error design](/t/l8-error-design): Errors at scale: a recovery that never panics on a damaged log; `io::Result` and `?`.
+- L8 Error design: Errors at scale: a recovery that never panics on a damaged log; `io::Result` and `?`.
 
 ## Tests
 

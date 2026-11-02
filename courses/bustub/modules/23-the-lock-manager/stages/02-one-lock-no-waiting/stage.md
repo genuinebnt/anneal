@@ -23,7 +23,7 @@ How holders are stored (a `Vec`, a map), and whether you store anything beyond h
 
 - [S3 Vec & slices](/t/s3-vec-slices): `iter().any`, `retain`, `find`.
 - [S1 Option & Result](/t/s1-option-result): a result with three outcomes.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: check a concurrent system by the history it leaves.
+- Y5 Testing & verification: Build it: check a concurrent system by the history it leaves.
 
 ## Tests
 

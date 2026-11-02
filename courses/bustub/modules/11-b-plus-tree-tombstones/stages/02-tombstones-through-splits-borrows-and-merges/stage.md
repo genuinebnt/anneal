@@ -40,7 +40,7 @@ How you carry tombstones across the operations (rebuild the buffers from keys, o
 - [L5 Generics & associated types](/t/l5-generics): const generic functions.
 - [S3 Vec & slices](/t/s3-vec-slices): `drain`, `partition`, `extend`.
 - Module 2c-04's rebalancing is what you extend.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: an equivalence property over every buffer size.
+- Y5 Testing & verification: Understand it: an equivalence property over every buffer size.
 
 ## Tests
 

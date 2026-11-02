@@ -36,11 +36,11 @@ Where you hold the current left row, whether you queue output in a buffer (`pend
 ## If this is new
 
 - [S1 Option & Result](/t/s1-option-result): `take`, `as_ref`, `?` in nested loops.
-- [S5 Queues & heaps](/t/s5-queues-heaps): `VecDeque` as a buffer.
+- S5 Queues & heaps: `VecDeque` as a buffer.
 - [L3 Lifetimes](/t/l3-lifetimes): executors that own their children.
 - The optional *join algorithms* concept.
-- [S6 Iterators](/t/s6-iterators): Understand: pulling from iterators by hand; a cursor over a `Vec`.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: differential tests: three algorithms against each other and a naive one.
+- S6 Iterators: Understand: pulling from iterators by hand; a cursor over a `Vec`.
+- Y5 Testing & verification: Build it: differential tests: three algorithms against each other and a naive one.
 
 ## Tests
 

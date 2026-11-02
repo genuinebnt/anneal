@@ -36,7 +36,7 @@ The whole format: field order, widths, byte order, which checksum (a sum, FNV, C
 
 - [S3 Vec & slices](/t/s3-vec-slices): `get(range)`, `extend_from_slice`, `to_le_bytes`.
 - [F7 I/O & serialization](/t/f7-io-serialization): length-prefixed, checksummed records.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): one `match` over every kind in both directions.
+- L7 Enums & pattern matching: one `match` over every kind in both directions.
 - The optional *write-ahead logging* and *serialization of values* concepts.
 
 ## Tests

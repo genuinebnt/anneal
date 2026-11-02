@@ -33,7 +33,7 @@ How you structure the port (a loop over blocks, an iterator over `chunks_exact(1
 ## If this is new
 
 - [S3 Vec & slices](/t/s3-vec-slices): `chunks_exact`, `try_into` to an array.
-- [S8 The core traits](/t/s8-core-traits): wrapping arithmetic and bit operations; the optional *integers and casts* concept covers `wrapping_*` and `as`.
+- S8 The core traits: wrapping arithmetic and bit operations; the optional *integers and casts* concept covers `wrapping_*` and `as`.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Hashing: SipHash vs Fx vs identity hashers, `BuildHasher`, why low bits matter.
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): Matrix, bits & math: `wrapping_*`, rotations, masks.
 

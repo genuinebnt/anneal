@@ -35,7 +35,7 @@ The same as before. A fix here may be small (hold a lock across both steps inste
 
 - [L2 Borrowing](/t/l2-borrowing) and [L1 Ownership & moves](/t/l1-ownership-moves) again: every race the compiler could catch it already did, which leaves the logical ones.
 - Everything else is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it; Build it: a test double that fails on purpose, timeouts so a hang is a failure, loom.
+- Y5 Testing & verification: Understand it; Build it: a test double that fails on purpose, timeouts so a hang is a failure, loom.
 
 ## Tests
 

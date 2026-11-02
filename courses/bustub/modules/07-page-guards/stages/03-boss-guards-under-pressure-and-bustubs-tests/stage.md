@@ -31,7 +31,7 @@ The same as before.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: loom or a watchdog timeout for a lock bug.
+- Y5 Testing & verification: Build it: loom or a watchdog timeout for a lock bug.
 
 ## Tests
 

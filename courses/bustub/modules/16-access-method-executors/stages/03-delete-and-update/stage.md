@@ -44,9 +44,9 @@ Whether delete and update share code, whether the update computes all new tuples
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): calling `Expression::evaluate` through `Arc<dyn Expression>`.
 - [S3 Vec & slices](/t/s3-vec-slices): `iter().map(..).collect()`.
 - The optional *Halloween problem* and *maintaining indexes on writes* concepts.
-- [L6 Closures & functional Rust](/t/l6-closures): Fn / FnMut / FnOnce: predicates and target expressions as callable trees.
-- [L8 Error design](/t/l8-error-design): Custom errors: execution errors.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of SQL in plain vectors; random sessions of statements.
+- L6 Closures & functional Rust: Fn / FnMut / FnOnce: predicates and target expressions as callable trees.
+- L8 Error design: Custom errors: execution errors.
+- Y5 Testing & verification: Build it: a model of SQL in plain vectors; random sessions of statements.
 
 ## Tests
 

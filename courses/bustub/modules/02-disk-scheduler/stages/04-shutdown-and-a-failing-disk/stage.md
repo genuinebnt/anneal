@@ -39,8 +39,8 @@ The stop signal (the `None` of `Channel<Option<_>>`, a flag, closing a channel),
 - [L2 Borrowing](/t/l2-borrowing): why `drop(&mut self)` cannot call a method that wants `self`.
 - The optional concepts *clean shutdown* and *panics and unwinding* are the two things to read if the words are new.
 - [C2 Message passing](/t/c2-message-passing): Use it; Understand it: a worker loop that stops when told, graceful shutdown with no lost jobs, a bounded channel from `Mutex` + `Condvar`.
-- [L8 Error design](/t/l8-error-design): Errors at scale: unwind boundaries, `catch_unwind`, a panic is not an error.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it; Build it: a test double that fails on purpose, timeouts so a hang is a failure, loom.
+- L8 Error design: Errors at scale: unwind boundaries, `catch_unwind`, a panic is not an error.
+- Y5 Testing & verification: Understand it; Build it: a test double that fails on purpose, timeouts so a hang is a failure, loom.
 
 ## Tests
 

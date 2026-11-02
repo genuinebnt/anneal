@@ -50,10 +50,10 @@ Recursive descent with one method per level (what the given statement parser doe
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): an AST as enums, `let else`, patterns with guards.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Box<Expr>` for a recursive type.
-- [L8 Error design](/t/l8-error-design): errors with positions and messages.
-- [Y5 Testing & verification](/t/y5-testing-verification): print-then-parse round trips; a generator of random trees.
+- L7 Enums & pattern matching: an AST as enums, `let else`, patterns with guards.
+- S7 Smart pointers & interior mutability: `Box<Expr>` for a recursive type.
+- L8 Error design: errors with positions and messages.
+- Y5 Testing & verification: print-then-parse round trips; a generator of random trees.
 - The optional *lexers and precedence climbing* concept has a complete calculator parser to read first.
 - [F3 Memory & allocation](/t/f3-memory-allocation): Arenas and pools: an arena AST, a string interner (optional).
 

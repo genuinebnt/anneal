@@ -48,10 +48,10 @@ The layout of all three pages: field order, offsets, sizes, byte order, whether 
 - [L5 Generics & associated types](/t/l5-generics): bounds on an `impl` block.
 - [S3 Vec & slices](/t/s3-vec-slices): byte ranges and sub-slices.
 - Module 1g's page guards, and module 2a's `FixedSize` and `PageArray`, are what you build on. The optional *extendible hashing* concept explains the structure; *latching a hash table* the order of guards.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `Eq` + `Hash` consistency.
+- S8 The core traits: Implement by hand: `Eq` + `Hash` consistency.
 - [F2 Data layout](/t/f2-data-layout): Size it: `repr(C)` pages and `offset_of!`.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it: latch crabbing: take the child, then let go of the parent; lock ordering.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: an invariant checker run after every operation; scoped threads for a stress test.
+- Y5 Testing & verification: Understand it: an invariant checker run after every operation; scoped threads for a stress test.
 
 ## Tests
 

@@ -59,9 +59,9 @@ self.txn_map.write().unwrap().retain(|id, t| matches!(t.state(), Running | Taint
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): `HashSet`, `retain`.
-- [S6 Iterators](/t/s6-iterators): an iterator you advance by hand.
+- S6 Iterators: an iterator you advance by hand.
 - The optional *watermarks and garbage collection* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
+- Y5 Testing & verification: Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
 
 ## Tests
 

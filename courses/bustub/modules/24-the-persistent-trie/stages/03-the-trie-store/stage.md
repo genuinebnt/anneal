@@ -40,8 +40,8 @@ let _writer = self.write_lock.lock().unwrap();        // released at the end of 
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `Mutex`, lock scope, a clone under a short lock.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc` as a snapshot.
-- [Y5 Testing & verification](/t/y5-testing-verification): guards that must keep their values after later writes.
+- S7 Smart pointers & interior mutability: `Arc` as a snapshot.
+- Y5 Testing & verification: guards that must keep their values after later writes.
 - The optional *persistent data structures and path copying* concept.
 
 ## Tests

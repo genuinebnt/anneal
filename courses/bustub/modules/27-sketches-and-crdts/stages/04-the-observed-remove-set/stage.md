@@ -65,8 +65,8 @@ out.dedup();     // the pairs are ordered by element, so equal elements are adja
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): `BTreeSet`, union with `extend`.
-- [S8 The core traits](/t/s8-core-traits): why `Ord + Clone` bounds, `Clone` for snapshots.
-- [Y5 Testing & verification](/t/y5-testing-verification): properties for algebraic laws (commutative, associative, idempotent).
+- S8 The core traits: why `Ord + Clone` bounds, `Clone` for snapshots.
+- Y5 Testing & verification: properties for algebraic laws (commutative, associative, idempotent).
 - The optional *CRDTs and observed-remove sets* concept.
 
 ## Tests

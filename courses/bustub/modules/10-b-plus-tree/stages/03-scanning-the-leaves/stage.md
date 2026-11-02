@@ -37,7 +37,7 @@ What an iterator holds (the pool, a leaf id, a slot, a copy of the current leaf'
 ## If this is new
 
 - [L3 Lifetimes](/t/l3-lifetimes): a struct that holds a reference.
-- [S6 Iterators](/t/s6-iterators): implementing the trait, what `for` desugars to.
+- S6 Iterators: implementing the trait, what `for` desugars to.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `PartialEq` by hand.
 - The optional *range scans and the leaf chain* concept explains the walk.
 

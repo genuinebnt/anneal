@@ -38,10 +38,10 @@ How the builder buffers (a `Vec<u8>` and a count, or writing into a pinned page 
 ## If this is new
 
 - [S3 Vec & slices](/t/s3-vec-slices): `copy_from_slice`, `resize`, `to_le_bytes`.
-- [S6 Iterators](/t/s6-iterators): implementing `Iterator` for a struct with a buffer.
+- S6 Iterators: implementing `Iterator` for a struct with a buffer.
 - [L3 Lifetimes](/t/l3-lifetimes): a struct that borrows a pool.
 - [F7 I/O & serialization](/t/f7-io-serialization): length-prefixed records.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Understand: spilling to disk: bounded-memory reading and writing.
+- S9 I/O & filesystem: Understand: spilling to disk: bounded-memory reading and writing.
 
 ## Tests
 

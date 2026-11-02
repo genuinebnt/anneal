@@ -36,10 +36,10 @@ How you group rows (a `HashMap` of indexes or sorting), how you fold peers, and 
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): grouping with a `HashMap`.
-- [S6 Iterators](/t/s6-iterators): slices of indexes, `while` loops with two cursors.
+- S6 Iterators: slices of indexes, `while` loops with two cursors.
 - [S3 Vec & slices](/t/s3-vec-slices): indexing `out[i]`.
 - The optional *window functions* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
+- Y5 Testing & verification: Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
 
 ## Tests
 

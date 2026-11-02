@@ -27,7 +27,7 @@ None new: a failure belongs to one of your stages.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
+- Y5 Testing & verification: Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
 
 ## Tests
 

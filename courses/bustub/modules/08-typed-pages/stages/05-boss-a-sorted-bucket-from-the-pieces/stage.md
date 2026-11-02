@@ -25,7 +25,7 @@ None new: the test is written with your pieces.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: round-trip properties and a `Vec` model.
+- Y5 Testing & verification: Understand it: round-trip properties and a `Vec` model.
 
 ## Tests
 

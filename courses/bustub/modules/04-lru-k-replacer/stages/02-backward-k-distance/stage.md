@@ -39,9 +39,9 @@ What you keep per frame, how you compare, whether you scan or keep a sorted stru
 - [S3 Vec & slices](/t/s3-vec-slices) and [S1 Option & Result](/t/s1-option-result): sorting by key, `min_by_key`, `Option` ordering.
 - The *iterators and closures* concept (optional) shows the adapter chains used here.
 - The *LRU-K and scan resistance* concept (optional) has the algorithm with a worked example.
-- [S6 Iterators](/t/s6-iterators): Use; Understand: `filter().min_by_key().map()` chains.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `Ord` on tuples, deriving the order you need.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a brute-force model; properties that follow from a rule (k = 1 is LRU).
+- S6 Iterators: Use; Understand: `filter().min_by_key().map()` chains.
+- S8 The core traits: Implement by hand: `Ord` on tuples, deriving the order you need.
+- Y5 Testing & verification: Understand it: a brute-force model; properties that follow from a rule (k = 1 is LRU).
 
 ## Tests
 

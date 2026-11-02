@@ -34,7 +34,7 @@ Ok(parse_records(&bytes)?)             // FormatError -> LoadError::Format
 
 ## If this is new
 
-- [L8 Error design](/t/l8-error-design): enums as errors, `Display`, `source`.
+- L8 Error design: enums as errors, `Display`, `source`.
 - [S1 Option & Result](/t/s1-option-result): `?`, `map_err`.
 - [S2 Strings & text](/t/s2-strings-text): `std::str::from_utf8`.
 

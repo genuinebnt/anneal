@@ -36,8 +36,8 @@ Which ordered structure you use (`BTreeSet`, `BTreeMap`, a binary heap with lazy
 - [S4 Maps & sets](/t/s4-maps-sets): ordered versus hashed collections.
 - [S3 Vec & slices](/t/s3-vec-slices) for tuples and sorting by key.
 - The *ordered sets as priority queues* concept (optional) walks through this exact design and the lazy-deletion alternative.
-- [S5 Queues & heaps](/t/s5-queues-heaps): Understand: a priority queue you can delete from; lazy deletion.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `Ord` on tuples, deriving the order you need.
+- S5 Queues & heaps: Understand: a priority queue you can delete from; lazy deletion.
+- S8 The core traits: Implement by hand: `Ord` on tuples, deriving the order you need.
 
 ## Tests
 

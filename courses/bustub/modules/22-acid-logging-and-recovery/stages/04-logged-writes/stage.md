@@ -42,10 +42,10 @@ How you keep the bookkeeping (one `Mutex` around a struct is the intended design
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `Mutex` around bookkeeping; why the check and the change are one critical section.
 - [S4 Maps & sets](/t/s4-maps-sets): `HashMap`, `retain` to release holds.
-- [L8 Error design](/t/l8-error-design): `StoreResult` with a message.
+- L8 Error design: `StoreResult` with a message.
 - The optional *write-ahead logging* and *rolling back with undo logs* concepts.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Understand: append-only files, `fsync`, what is durable when a call returns.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: crash a disk at a random point, then recover; a model of the committed state.
+- S9 I/O & filesystem: Understand: append-only files, `fsync`, what is durable when a call returns.
+- Y5 Testing & verification: Build it: crash a disk at a random point, then recover; a model of the committed state.
 
 ## Tests
 

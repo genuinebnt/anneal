@@ -32,7 +32,7 @@ How you split and rebuild conjunctions (a left-deep chain of `AND`, a list), how
 ## If this is new
 
 - [S1 Option and Result](/t/s1-option-result): plans are rebuilt as new values, not edited in place.
-- [S6 Trait objects](/t/s6-trait-objects): expressions are trait objects; the given `columns_read` walks them.
+- S6 Trait objects: expressions are trait objects; the given `columns_read` walks them.
 
 ## Tests
 

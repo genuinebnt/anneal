@@ -34,7 +34,7 @@ How you write and read the bytes. The **format is fixed** (BusTub's): later modu
 ## If this is new
 
 - [S3 Vec & slices](/t/s3-vec-slices): slicing with ranges, `copy_from_slice`, `try_into` to an array.
-- [S8 The core traits](/t/s8-core-traits): byte order, encodings.
+- S8 The core traits: byte order, encodings.
 - The optional concepts *serialization of values* and *bytes, endianness and views*.
 - [F7 I/O & serialization](/t/f7-io-serialization): Encodings: a value as bytes.
 

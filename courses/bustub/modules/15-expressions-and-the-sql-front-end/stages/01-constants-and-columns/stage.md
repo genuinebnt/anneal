@@ -42,7 +42,7 @@ Almost none here: these are the two simplest nodes. The design question is the s
 ## If this is new
 
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `dyn Trait`, `Arc<dyn Trait>`, why a trait needs `Send + Sync` to be shared across threads.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc`, `Box`.
+- S7 Smart pointers & interior mutability: `Arc`, `Box`.
 - The optional *expression trees* and *the SQL pipeline* concepts.
 
 ## Tests

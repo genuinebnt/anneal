@@ -32,7 +32,7 @@ The same as before.
 
 - Everything is in the earlier stages of this module.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it: `Mutex<Inner>` plus a latch per frame; never wait for a latch while holding the lock; lock ordering.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a spy test double; threads sharing a pool; running a test many times.
+- Y5 Testing & verification: Build it: a spy test double; threads sharing a pool; running a test many times.
 
 ## Tests
 

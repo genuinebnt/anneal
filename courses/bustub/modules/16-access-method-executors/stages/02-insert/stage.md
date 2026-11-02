@@ -41,8 +41,8 @@ How you iterate the child's batches, whether you insert row by row or collect fi
 - [S1 Option & Result](/t/s1-option-result): `?` through a loop, building a single-row answer.
 - [S3 Vec & slices](/t/s3-vec-slices): `clear`, `push`, `extend`.
 - The optional *maintaining indexes on writes* concept.
-- [L8 Error design](/t/l8-error-design): Custom errors: execution errors.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of SQL in plain vectors; random sessions of statements.
+- L8 Error design: Custom errors: execution errors.
+- Y5 Testing & verification: Build it: a model of SQL in plain vectors; random sessions of statements.
 
 ## Tests
 

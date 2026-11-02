@@ -51,9 +51,9 @@ txn.modify_undo_log(idx, widened);
 
 - [S1 Option & Result](/t/s1-option-result): collecting `Result`s, early returns in a loop.
 - [S3 Vec & slices](/t/s3-vec-slices): building a vector of changes first.
-- [Y5 Testing & verification](/t/y5-testing-verification): a session of interleaved transactions against a model.
+- Y5 Testing & verification: a session of interleaved transactions against a model.
 - The optional *version chains and undo logs* concept.
-- [L8 Error design](/t/l8-error-design): Custom errors: a conflict as an error that also taints the transaction.
+- L8 Error design: Custom errors: a conflict as an error that also taints the transaction.
 
 ## Tests
 

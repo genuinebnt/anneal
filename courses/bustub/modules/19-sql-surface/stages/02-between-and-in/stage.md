@@ -32,7 +32,7 @@ Where the operand's tokens are split (you parse the left operand once, and the r
 ## If this is new
 
 - [S1 Option and Result](/t/s1-option-result): `reduce` and `?` on parse results.
-- [Y5 Testing & verification](/t/y5-testing-verification): a property test against a three-valued model.
+- Y5 Testing & verification: a property test against a three-valued model.
 
 ## Tests
 

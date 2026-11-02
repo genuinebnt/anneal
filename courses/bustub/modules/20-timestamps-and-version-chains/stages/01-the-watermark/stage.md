@@ -34,10 +34,10 @@ The container (`BTreeMap<Timestamp, usize>` is the intended one; a heap with laz
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): `BTreeMap`, `entry`, ordered iteration.
-- [L8 Error design](/t/l8-error-design): returning `Err` with a message.
+- L8 Error design: returning `Err` with a message.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): why a `Mutex` guards the watermark (the next stage uses it).
 - The optional *watermarks and garbage collection* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 

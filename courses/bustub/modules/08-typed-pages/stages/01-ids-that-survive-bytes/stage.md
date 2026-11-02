@@ -40,10 +40,10 @@ Byte order, how you convert, whether a `Rid` encodes itself through `get()` or a
 - [L5 Generics & associated types](/t/l5-generics): the first problems, for `T::SIZE`.
 - [F2 Data layout](/t/f2-data-layout): bytes, sizes and alignment.
 - [S3 Vec & slices](/t/s3-vec-slices): slicing and copying.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `TryFrom` (slice to array), `Ord` for a comparator.
-- [S11 mem, ptr & alloc](/t/s11-mem-ptr-alloc): Understand: `size_of`, `align_of`.
+- S8 The core traits: Implement by hand: `TryFrom` (slice to array), `Ord` for a comparator.
+- S11 mem, ptr & alloc: Understand: `size_of`, `align_of`.
 - [F7 I/O & serialization](/t/f7-io-serialization): Encodings: byte order, fixed-width encodings, `bytemuck` as the safe cast.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: round-trip properties and a `Vec` model.
+- Y5 Testing & verification: Understand it: round-trip properties and a `Vec` model.
 
 ## Tests
 

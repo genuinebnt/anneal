@@ -37,10 +37,10 @@ How you compare (`same_value` per column) and how you build the partial tuple (c
 
 - [S1 Option & Result](/t/s1-option-result): `let else`, `Option<&T>` arguments.
 - [S3 Vec & slices](/t/s3-vec-slices): building vectors by `filter`/`map`/`collect`.
-- [S8 The core traits](/t/s8-core-traits): why `same_value` is not `==`.
+- S8 The core traits: why `same_value` is not `==`.
 - The optional *rolling back with undo logs* concept (an abort uses these logs).
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Patterns in depth: undo log entries; `Option<Vec<_>>` as a three-way answer.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- L7 Enums & pattern matching: Patterns in depth: undo log entries; `Option<Vec<_>>` as a three-way answer.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 

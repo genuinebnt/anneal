@@ -38,11 +38,11 @@ Whether the heap is `BinaryHeap` with the given `Ord` or a sorted `Vec`, and how
 
 ## If this is new
 
-- [S5 Queues & heaps](/t/s5-queues-heaps): `BinaryHeap`, `peek`, `pop`, `into_sorted_vec`.
-- [S8 The core traits](/t/s8-core-traits): implementing `Ord` for a wrapper type.
+- S5 Queues & heaps: `BinaryHeap`, `peek`, `pop`, `into_sorted_vec`.
+- S8 The core traits: implementing `Ord` for a wrapper type.
 - [S3 Vec & slices](/t/s3-vec-slices): `truncate`.
 - The optional *top-N with a bounded heap* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
+- Y5 Testing & verification: Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
 
 ## Tests
 

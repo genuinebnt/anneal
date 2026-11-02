@@ -62,7 +62,7 @@ inner.nodes[prev].set_next(level, Some(id));
 - [F3 Memory & allocation](/t/f3-memory-allocation): why an index is a better pointer.
 - The optional *skip lists* and *arenas* concepts.
 - [D5 Linked lists](/t/d5-linked-lists): Linked lists, the Rust way: index-linked nodes in a `Vec`.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a `BTreeSet` as the oracle; a structural check after every step.
+- Y5 Testing & verification: Build it: a `BTreeSet` as the oracle; a structural check after every step.
 
 ## Tests
 

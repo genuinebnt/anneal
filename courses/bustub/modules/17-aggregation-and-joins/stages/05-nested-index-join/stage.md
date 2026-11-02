@@ -39,7 +39,7 @@ Whether you probe row by row or batch the probes, and how you handle the heap fe
 - [S1 Option & Result](/t/s1-option-result): `?` through a loop, early `continue`.
 - The optional *access paths* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Right structure for the job: hash tables for grouping and joining; when a scan or an index is better.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: differential tests: three algorithms against each other and a naive one.
+- Y5 Testing & verification: Build it: differential tests: three algorithms against each other and a naive one.
 
 ## Tests
 

@@ -36,9 +36,9 @@ How you record what you hold (a `Vec` of guards, an enum of "context"), how you 
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state), and [L1 Ownership & moves](/t/l1-ownership-moves): guards are values you move and drop.
-- [L6 Closures & functional Rust](/t/l6-closures): `impl Fn` parameters.
+- L6 Closures & functional Rust: `impl Fn` parameters.
 - The optional *latch crabbing and safe nodes* and *optimistic latching* concepts draw the protocol.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
+- Y5 Testing & verification: Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
 
 ## Tests
 

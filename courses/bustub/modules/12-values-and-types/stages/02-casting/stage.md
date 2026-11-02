@@ -42,8 +42,8 @@ How you organise the conversions (one function per source type, one per target),
 - [S2 Strings & text](/t/s2-strings-text): `trim_start`, byte vs char indexing, `parse`.
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): overflow, `checked_*`, why `as` is lossy.
 - The optional concepts *integers and casts* and *parsing numbers from text* have the rules and the traps.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `PartialOrd`/`Ord` with `total_cmp`, `From`/`TryFrom`.
-- [L8 Error design](/t/l8-error-design): Custom errors: overflow and cast errors as values.
+- S8 The core traits: Implement by hand: `PartialOrd`/`Ord` with `total_cmp`, `From`/`TryFrom`.
+- L8 Error design: Custom errors: overflow and cast errors as values.
 
 ## Tests
 

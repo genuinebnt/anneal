@@ -34,7 +34,7 @@ Everything about the type: a struct with a message and a boxed cause, an enum wi
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): why an error that crosses a thread must be `Send`.
-- [S6 Trait objects](/t/s6-trait-objects): `dyn Error`, and asking a trait object what it is.
+- S6 Trait objects: `dyn Error`, and asking a trait object what it is.
 
 ## Tests
 

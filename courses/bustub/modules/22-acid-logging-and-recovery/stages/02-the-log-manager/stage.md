@@ -39,10 +39,10 @@ How you hold the state (one `Mutex` around a struct, two atomics and a lock), ho
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): a `Mutex` around a struct, the lock as the critical section.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `Arc<dyn LogIo>`.
-- [L8 Error design](/t/l8-error-design): `io::Result` and `?`.
+- L8 Error design: `io::Result` and `?`.
 - The optional *write-ahead logging* and *durability* concepts.
 - [F7 I/O & serialization](/t/f7-io-serialization): Storage formats: write-ahead-log records: a length, a checksum, a body; a torn tail is the end of the log.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Understand: append-only files, `fsync`, what is durable when a call returns.
+- S9 I/O & filesystem: Understand: append-only files, `fsync`, what is durable when a call returns.
 
 ## Tests
 

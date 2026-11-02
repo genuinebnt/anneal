@@ -42,7 +42,7 @@ The data structure behind each list (any structure with O(1) removal from the mi
 - [S3 Vec & slices](/t/s3-vec-slices) and [S4 Maps & sets](/t/s4-maps-sets).
 - [L2 Borrowing](/t/l2-borrowing): two borrows of one struct: fields versus methods.
 - The *arenas and generational handles* concept (optional) if your 1c-01 list is the base.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Understand it: handles instead of references between list nodes.
+- S7 Smart pointers & interior mutability: Understand it: handles instead of references between list nodes.
 
 ## Tests
 

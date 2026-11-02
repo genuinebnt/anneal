@@ -30,8 +30,8 @@ Whether the executor streams or buffers (the later operators need to buffer, so 
 
 ## If this is new
 
-- [S5 Enums and pattern matching](/t/s5-enums-pattern-matching): an operator and a flag as one `match` on a tuple.
-- [S4 Smart pointers](/t/s4-smart-pointers): `Box` for a recursive type.
+- S5 Enums and pattern matching: an operator and a flag as one `match` on a tuple.
+- S4 Smart pointers: `Box` for a recursive type.
 
 ## Tests
 

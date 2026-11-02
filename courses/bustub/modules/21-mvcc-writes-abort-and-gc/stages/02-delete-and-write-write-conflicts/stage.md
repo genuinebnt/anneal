@@ -61,7 +61,7 @@ update_tuple_and_undo_link(txn_mgr, table, rid, new_link, &new_meta, new_tuple,
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): why a check must be repeated under the lock that makes it true.
-- [L8 Error design](/t/l8-error-design): errors that also change state (taint).
+- L8 Error design: errors that also change state (taint).
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): closures passed as `&dyn Fn`.
 - The optional *snapshot isolation* concept.
 

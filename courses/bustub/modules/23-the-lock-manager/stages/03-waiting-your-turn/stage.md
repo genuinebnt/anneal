@@ -25,7 +25,7 @@ The structure behind the manager: one lock and one condition variable for everyt
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `Mutex` and `Condvar`.
-- [S5 Queues & heaps](/t/s5-queues-heaps): a queue of waiters in arrival order.
+- S5 Queues & heaps: a queue of waiters in arrival order.
 
 ## Tests
 

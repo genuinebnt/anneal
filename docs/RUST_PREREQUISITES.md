@@ -26,15 +26,15 @@ The owner has limited Rust knowledge, and the course gives creative freedom, so 
 | S8 The core traits | `s8-core-traits` | planned | core | 1d, 1e, 1g, 2a, 2b, 2d, 3a, 3d, 3f, 3g, 0c, 0d |
 | S9 I/O & filesystem | `s9-io-filesystem` | planned | core | r, 1a, 3g, 4c |
 | S11 mem, ptr & alloc | `s11-mem-ptr-alloc` | planned | sde3 | 2a |
-| C1 Threads & shared state | `c1-threads-shared-state` | planned | core | r, 1a, 1b, 1f, 1g, 2b, 2c, 3c, 4a, 4b, 4c, 4d, 0a, 0b |
-| C2 Message passing | `c2-message-passing` | planned | core | 1b |
-| C3 Atomics & lock-free | `c3-atomics-lock-free` | planned | sde3 | r, 4a, 0d |
+| C1 Threads & shared state | `c1-threads-shared-state` | written | core | r, 1a, 1b, 1f, 1g, 2b, 2c, 3c, 4a, 4b, 4c, 4d, 0a, 0b |
+| C2 Message passing | `c2-message-passing` | written | core | 1b |
+| C3 Atomics & lock-free | `c3-atomics-lock-free` | written | sde3 | r, 4a, 0d |
 | Y5 Testing & verification | `y5-testing-verification` | planned | sde3 | r, 1a, 1b, 1c, 1d, 1e, 1f, 1g, 2a, 2b, 2c, 2d, 3c, 3d, 3e, 3f, 3g, 3h, 4a, 4b, 4c, 4d, 0a, 0b, 0c, 0d |
 | F1 Measure & read the machine | `f1-measure-machine` | planned | sde3 | 1a |
 | F2 Data layout | `f2-data-layout` | written | sde3 | 2a, 2b, 2c, 3b |
-| F3 Memory & allocation | `f3-memory-allocation` | planned | sde3 | 1c, 1f, 3d, 0b |
-| F4 Hashing & purpose-built structures | `f4-hashing-structures` | planned | sde3 | 2b, 3f, 0c, 0d |
-| F7 I/O & serialization | `f7-io-serialization` | planned | sde3 | 2a, 3a, 3b, 3g, 4c |
+| F3 Memory & allocation | `f3-memory-allocation` | written | sde3 | 1c, 1f, 3d, 0b |
+| F4 Hashing & purpose-built structures | `f4-hashing-structures` | written | sde3 | 2b, 3f, 0c, 0d |
+| F7 I/O & serialization | `f7-io-serialization` | written | sde3 | 2a, 3a, 3b, 3g, 4c |
 | D4 Binary search | `d4-binary-search` | planned | core | 2a |
 | D5 Linked lists | `d5-linked-lists` | planned | core | 1c, 0b |
 | D6 Trees & BSTs | `d6-trees-bsts` | planned | core | 2c |
@@ -51,96 +51,96 @@ Do the rows top to bottom; a module's first rows are the ones its first stages n
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S9 I/O & filesystem](/t/s9-io-filesystem) *(planned)* | Understand it | positional file I/O, `read_at` and short reads | r-01 |
+| S9 I/O & filesystem *(planned)* | Understand it | positional file I/O, `read_at` and short reads | r-01 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Vec & slices | slices, ranges, `copy_from_slice`, `chunks_exact` | r-01 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Error design | an error enum, `Display`, `source`, `From` and `?` | r-02 |
+| L8 Error design *(planned)* | Error design | an error enum, `Display`, `source`, `From` and `?` | r-02 |
 | [S1 Option & Result](/t/s1-option-result) | Option & Result | `?` and `map_err` | r-02 |
 | [S2 Strings & text](/t/s2-strings-text) | Strings & text | `from_utf8` on bytes that may be wrong | r-02 |
 | [L1 Ownership & moves](/t/l1-ownership-moves) | Ownership & moves | moving out of a place: `take`, `replace` | r-03 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | `Box`, `Drop`, and `Arc` for sharing | r-03, r-04 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | `Mutex` and `Condvar`, scoped threads | r-04 |
-| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) *(planned)* | Atomics | `fetch_add` for a shared counter | r-04 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Queues & heaps | `VecDeque` as the model of a queue | r-05 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums & pattern matching | an operation as an enum | r-05 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a random sequence of operations against a model | r-05 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | `Box`, `Drop`, and `Arc` for sharing | r-03, r-04 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | `Mutex` and `Condvar`, scoped threads | r-04 |
+| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) | Atomics | `fetch_add` for a shared counter | r-04 |
+| S5 Queues & heaps *(planned)* | Queues & heaps | `VecDeque` as the model of a queue | r-05 |
+| L7 Enums & pattern matching *(planned)* | Enums & pattern matching | an operation as an enum | r-05 |
+| Y5 Testing & verification *(planned)* | Build it | a random sequence of operations against a model | r-05 |
 
 ### 1A · Disk manager
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S9 I/O & filesystem](/t/s9-io-filesystem) *(planned)* | Use; Understand (I/O errors) | open and create files, positional reads and writes, `io::Result`, `sync_all` | 1a-01, 1a-03, 1a-05 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Custom errors | turn an `io::Error` into your own error; `?` through two layers | 1a-01 |
+| S9 I/O & filesystem *(planned)* | Use; Understand (I/O errors) | open and create files, positional reads and writes, `io::Result`, `sync_all` | 1a-01, 1a-03, 1a-05 |
+| L8 Error design *(planned)* | Custom errors | turn an `io::Error` into your own error; `?` through two layers | 1a-01 |
 | [S1 Option & Result](/t/s1-option-result) | Use it | `Option` for "no such page", `?`, `ok_or` | 1a-01, 1a-02 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Use it; Understand it | slices as views, `copy_from_slice`, `fill`, array vs `Vec` | 1a-01, 1a-03 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | `HashMap` and its entry API (your test model uses it) | 1a-02 |
 | [L1 Ownership & moves](/t/l1-ownership-moves) | Clones & drops | `Drop` and RAII: a file closes when its owner goes away | 1a-05 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Define & implement; Static vs dynamic | a trait, `impl Trait for Type`, `Box<dyn Trait>` | 1a-04 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | a fake behind an injected trait; a model test with proptest | 1a-04, 1a-05 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Use it; Understand it | `thread::spawn`, `move`, `Arc<Mutex<T>>`, `join`, Send/Sync in plain words | 1a-05 |
-| [F1 Measure & read the machine](/t/f1-measure-machine) *(planned)* | Measure | `Instant`, `black_box`: how to time what the Performance sections ask for | 1a-01 |
+| Y5 Testing & verification *(planned)* | Understand it | a fake behind an injected trait; a model test with proptest | 1a-04, 1a-05 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Use it; Understand it | `thread::spawn`, `move`, `Arc<Mutex<T>>`, `join`, Send/Sync in plain words | 1a-05 |
+| F1 Measure & read the machine *(planned)* | Measure | `Instant`, `black_box`: how to time what the Performance sections ask for | 1a-01 |
 
 ### 1B · Disk scheduler
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it; Build it | poisoning, `RwLock`, deadlock and lock order, a bounded blocking queue with `Condvar` (`while`, never `if`) | 1b-01, 1b-05 |
-| [C2 Message passing](/t/c2-message-passing) *(planned)* | Use it; Understand it | a worker loop that stops when told, graceful shutdown with no lost jobs, a bounded channel from `Mutex` + `Condvar` | 1b-01, 1b-04, 1b-06 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Use | `VecDeque` as a queue | 1b-01 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Use it; Understand it | `Arc`, why `Rc` cannot cross threads, shared state with two owners | 1b-02, 1b-03 |
-| [L6 Closures & functional Rust](/t/l6-closures) *(planned)* | Closure basics; Fn / FnMut / FnOnce | `move` closures, a callback that mutates state | 1b-01, 1b-03 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it; Build it | poisoning, `RwLock`, deadlock and lock order, a bounded blocking queue with `Condvar` (`while`, never `if`) | 1b-01, 1b-05 |
+| [C2 Message passing](/t/c2-message-passing) | Use it; Understand it | a worker loop that stops when told, graceful shutdown with no lost jobs, a bounded channel from `Mutex` + `Condvar` | 1b-01, 1b-04, 1b-06 |
+| S5 Queues & heaps *(planned)* | Use | `VecDeque` as a queue | 1b-01 |
+| S7 Smart pointers & interior mutability *(planned)* | Use it; Understand it | `Arc`, why `Rc` cannot cross threads, shared state with two owners | 1b-02, 1b-03 |
+| L6 Closures & functional Rust *(planned)* | Closure basics; Fn / FnMut / FnOnce | `move` closures, a callback that mutates state | 1b-01, 1b-03 |
 | [L1 Ownership & moves](/t/l1-ownership-moves) | Closures take ownership; Partial moves & mem | `Option::take`, `mem::replace`, moving out of `&mut self` | 1b-04 |
 | [S1 Option & Result](/t/s1-option-result) | Use it | `Option` as a stop signal, `while let` | 1b-01 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Arc<dyn Trait>` shared with a thread | 1b-03 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Errors at scale | unwind boundaries, `catch_unwind`, a panic is not an error | 1b-04 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it; Build it | a test double that fails on purpose, timeouts so a hang is a failure, loom | 1b-04, 1b-07 |
+| L8 Error design *(planned)* | Errors at scale | unwind boundaries, `catch_unwind`, a panic is not an error | 1b-04 |
+| Y5 Testing & verification *(planned)* | Understand it; Build it | a test double that fails on purpose, timeouts so a hang is a failure, loom | 1b-04, 1b-07 |
 
 ### 1C · Simple replacers: LRU and CLOCK
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Use it; Understand it | `Box`, `Rc`, choosing the cheapest correct pointer; why linked structures fight the borrow checker | 1c-01 |
-| [D5 Linked lists](/t/d5-linked-lists) *(planned)* | Linked lists, the Rust way | index arenas, cursors, `take()` | 1c-01 |
-| [F3 Memory & allocation](/t/f3-memory-allocation) *(planned)* | Arenas and pools | a typed-index arena with generations (stale handles) | 1c-01 |
+| S7 Smart pointers & interior mutability *(planned)* | Use it; Understand it | `Box`, `Rc`, choosing the cheapest correct pointer; why linked structures fight the borrow checker | 1c-01 |
+| D5 Linked lists *(planned)* | Linked lists, the Rust way | index arenas, cursors, `take()` | 1c-01 |
+| [F3 Memory & allocation](/t/f3-memory-allocation) | Arenas and pools | a typed-index arena with generations (stale handles) | 1c-01 |
 | [L5 Generics & associated types](/t/l5-generics) | Generic code | `IndexList<T>`: a generic container | 1c-01 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Use; Understand | returning `impl Iterator`, `iter::from_fn` | 1c-01 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Use; Understand | `VecDeque` rotation, lazy deletion | 1c-02, 1c-03 |
+| S6 Iterators *(planned)* | Use; Understand | returning `impl Iterator`, `iter::from_fn` | 1c-01 |
+| S5 Queues & heaps *(planned)* | Use; Understand | `VecDeque` rotation, lazy deletion | 1c-02, 1c-03 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | a map from frame to handle; the entry API | 1c-02 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Use it; Understand it | `Vec::insert`/`remove`, indices that must survive removals | 1c-03 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Define & implement | one trait, two policies | 1c-02 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | model-based tests: a four-line model of the policy | 1c-02, 1c-03 |
+| Y5 Testing & verification *(planned)* | Understand it | model-based tests: a four-line model of the policy | 1c-02, 1c-03 |
 
 ### 1D · LRU-K replacer
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [S4 Maps & sets](/t/s4-maps-sets) | Understand it | `BTreeMap`/`BTreeSet`: ordered, with `first()` | 1d-03 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Understand | a priority queue you can delete from; lazy deletion | 1d-03 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Use; Understand | `filter().min_by_key().map()` chains | 1d-02 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Ord` on tuples, deriving the order you need | 1d-02, 1d-03 |
+| S5 Queues & heaps *(planned)* | Understand | a priority queue you can delete from; lazy deletion | 1d-03 |
+| S6 Iterators *(planned)* | Use; Understand | `filter().min_by_key().map()` chains | 1d-02 |
+| S8 The core traits *(planned)* | Implement by hand | `Ord` on tuples, deriving the order you need | 1d-02, 1d-03 |
 | [S1 Option & Result](/t/s1-option-result) | Use it | `let else`, `?` on `Option`, ignoring the unknown frame | 1d-01 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | a brute-force model; properties that follow from a rule (k = 1 is LRU) | 1d-02 |
+| Y5 Testing & verification *(planned)* | Understand it | a brute-force model; properties that follow from a rule (k = 1 is LRU) | 1d-02 |
 
 ### 1E · ARC replacer
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | handles instead of references between list nodes | 1e-01, 1e-02 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | handles instead of references between list nodes | 1e-01, 1e-02 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | two maps with two key types (frames and pages) | 1e-01 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Derive | `Hash`, `Eq`, `Copy` on id newtypes | 1e-01 |
+| S8 The core traits *(planned)* | Derive | `Hash`, `Eq`, `Copy` on id newtypes | 1e-01 |
 | [L2 Borrowing](/t/l2-borrowing) | Split borrows; Borrow-checker limits | copy out what you need before calling `&mut self` methods | 1e-02, 1e-03 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | an exact model of a published algorithm | 1e-03 |
+| Y5 Testing & verification *(planned)* | Understand it | an exact model of a published algorithm | 1e-03 |
 
 ### 1F · Buffer pool manager
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | `Mutex<Inner>` plus a latch per frame; never wait for a latch while holding the lock; lock ordering | 1f-01, 1f-02, 1f-04 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | `Box<dyn Trait>` in a field, `Arc` | 1f-01 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | `Mutex<Inner>` plus a latch per frame; never wait for a latch while holding the lock; lock ordering | 1f-01, 1f-02, 1f-04 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | `Box<dyn Trait>` in a field, `Arc` | 1f-01 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | injecting a trait object | 1f-01 |
 | [L2 Borrowing](/t/l2-borrowing) | Reborrows; Split borrows | a borrow of one field while using another | 1f-01, 1f-02 |
-| [F3 Memory & allocation](/t/f3-memory-allocation) *(planned)* | Allocate less | reusing buffers, copying a page into a `Box` for a request | 1f-02, 1f-03 |
+| [F3 Memory & allocation](/t/f3-memory-allocation) | Allocate less | reusing buffers, copying a page into a `Box` for a request | 1f-02, 1f-03 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `Option::take`, `?` on `Option` in a function that returns `Option` | 1f-02 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a spy test double; threads sharing a pool; running a test many times | 1f-01, 1f-04 |
+| Y5 Testing & verification *(planned)* | Build it | a spy test double; threads sharing a pool; running a test many times | 1f-01, 1f-04 |
 
 ### 1G · Page guards
 
@@ -148,96 +148,96 @@ Do the rows top to bottom; a module's first rows are the ones its first stages n
 |---|---|---|---|
 | [L1 Ownership & moves](/t/l1-ownership-moves) | Clones & drops | RAII guards: `Drop`, drop order, `Option::take` for an idempotent release | 1g-01 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs; Two lifetimes | a guard that borrows the pool; `'a` on a struct | 1g-01 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Deref`/`DerefMut`, `Drop` order | 1g-01 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | `Deref` coercions, `RwLockReadGuard` | 1g-01 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | deadlock and lock ordering; a flush that cannot deadlock | 1g-02 |
+| S8 The core traits *(planned)* | Implement by hand | `Deref`/`DerefMut`, `Drop` order | 1g-01 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | `Deref` coercions, `RwLockReadGuard` | 1g-01 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | deadlock and lock ordering; a flush that cannot deadlock | 1g-02 |
 | [L2 Borrowing](/t/l2-borrowing) | Reborrows | scoped blocks that end a borrow early | 1g-02 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | loom or a watchdog timeout for a lock bug | 1g-02, 1g-03 |
+| Y5 Testing & verification *(planned)* | Build it | loom or a watchdog timeout for a lock bug | 1g-02, 1g-03 |
 
 ### 2A · Typed pages
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `copy_within`, `split_at_mut`, ranges of bytes | 2a-02, 2a-03 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `TryFrom` (slice to array), `Ord` for a comparator | 2a-01, 2a-02 |
+| S8 The core traits *(planned)* | Implement by hand | `TryFrom` (slice to array), `Ord` for a comparator | 2a-01, 2a-02 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Define & implement | a trait with an associated const (`FixedSize::SIZE`) | 2a-01 |
 | [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust | const generics, `const fn` | 2a-02 |
 | [F2 Data layout](/t/f2-data-layout) | Size it | padding, `repr(C)`, why layouts are stated and checked | 2a-01 |
-| [S11 mem, ptr & alloc](/t/s11-mem-ptr-alloc) *(planned)* | Understand | `size_of`, `align_of` | 2a-01 |
-| [F7 I/O & serialization](/t/f7-io-serialization) *(planned)* | Encodings | byte order, fixed-width encodings, `bytemuck` as the safe cast | 2a-01, 2a-02 |
+| S11 mem, ptr & alloc *(planned)* | Understand | `size_of`, `align_of` | 2a-01 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | byte order, fixed-width encodings, `bytemuck` as the safe cast | 2a-01, 2a-02 |
 | [P3 Binary search practice](/t/p3-binary-search-practice) | Binary search practice | `partition_point`, lower bound and upper bound | 2a-04 |
-| [D4 Binary search](/t/d4-binary-search) *(planned)* | Binary search | the lower-bound loop and its invariant | 2a-04 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | round-trip properties and a `Vec` model | 2a-01, 2a-03, 2a-05 |
+| D4 Binary search *(planned)* | Binary search | the lower-bound loop and its invariant | 2a-04 |
+| Y5 Testing & verification *(planned)* | Understand it | round-trip properties and a `Vec` model | 2a-01, 2a-03, 2a-05 |
 
 ### 2B · Extendible hash table
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Eq` + `Hash` consistency | 2b-02 |
-| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) *(planned)* | Hashing | SipHash vs Fx vs identity hashers, `BuildHasher`, why low bits matter | 2b-01 |
-| [D13 Matrix, bits & math](/t/d13-matrix-bits-math) *(planned)* | Matrix, bits & math | `wrapping_*`, rotations, masks | 2b-01 |
+| S8 The core traits *(planned)* | Implement by hand | `Eq` + `Hash` consistency | 2b-02 |
+| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) | Hashing | SipHash vs Fx vs identity hashers, `BuildHasher`, why low bits matter | 2b-01 |
+| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | `wrapping_*`, rotations, masks | 2b-01 |
 | [F2 Data layout](/t/f2-data-layout) | Size it | `repr(C)` pages and `offset_of!` | 2b-02 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | latch crabbing: take the child, then let go of the parent; lock ordering | 2b-02, 2b-04, 2b-05 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | latch crabbing: take the child, then let go of the parent; lock ordering | 2b-02, 2b-04, 2b-05 |
 | [L5 Generics & associated types](/t/l5-generics) | Bounds & associated types | `K: FixedSize + Clone`, a generic table over key and value | 2b-02 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | an invariant checker run after every operation; scoped threads for a stress test | 2b-02, 2b-04, 2b-05 |
+| Y5 Testing & verification *(planned)* | Understand it | an invariant checker run after every operation; scoped threads for a stress test | 2b-02, 2b-04, 2b-05 |
 
 ### 2C · B+ tree index
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust; Generic code | const generics (`TOMBS`), bounds on an `impl` block | 2c-01 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums & exhaustiveness | a page-type tag as an enum, `TryFrom<u32>`, `match` that must cover every kind | 2c-01 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | page ids instead of pointers; why a tree of references fights the borrow checker | 2c-01 |
+| L7 Enums & pattern matching *(planned)* | Enums & exhaustiveness | a page-type tag as an enum, `TryFrom<u32>`, `match` that must cover every kind | 2c-01 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | page ids instead of pointers; why a tree of references fights the borrow checker | 2c-01 |
 | [F2 Data layout](/t/f2-data-layout) | Locality | a slotted page for a B-tree node: header, slot array, cell heap | 2c-01 |
-| [D6 Trees & BSTs](/t/d6-trees-bsts) *(planned)* | Trees & BSTs | search trees: split, borrow, merge | 2c-02, 2c-04 |
+| D6 Trees & BSTs *(planned)* | Trees & BSTs | search trees: split, borrow, merge | 2c-02, 2c-04 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `split_off`, `partition_point`, `insert`, `remove` | 2c-02, 2c-04 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `pop()` returns an `Option`; `let Some(x) = .. else` | 2c-02, 2c-04 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Build | implementing `Iterator`, an iterator without allocation | 2c-03 |
+| S6 Iterators *(planned)* | Build | implementing `Iterator`, an iterator without allocation | 2c-03 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs | an iterator that holds the pool by reference | 2c-03 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | latch crabbing, lock order, `RwLock` has no upgrade | 2c-05 |
-| [L6 Closures & functional Rust](/t/l6-closures) *(planned)* | Fn / FnMut / FnOnce | `impl Fn` parameters: one descent for insert and remove | 2c-05 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it; Build it | a model and a shape checker; threaded tests under a timeout | 2c-02, 2c-04, 2c-05 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | latch crabbing, lock order, `RwLock` has no upgrade | 2c-05 |
+| L6 Closures & functional Rust *(planned)* | Fn / FnMut / FnOnce | `impl Fn` parameters: one descent for insert and remove | 2c-05 |
+| Y5 Testing & verification *(planned)* | Understand it; Build it | a model and a shape checker; threaded tests under a timeout | 2c-02, 2c-04, 2c-05 |
 
 ### 2D · B+ tree tombstones
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust | const generics and associated constants decide a page layout | 2d-01 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | comparing keys through a comparator, not by bytes | 2d-01 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums as design | a state (live or deleted) that is part of an entry | 2d-01 |
+| S8 The core traits *(planned)* | Implement by hand | comparing keys through a comparator, not by bytes | 2d-01 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | a state (live or deleted) that is part of an entry | 2d-01 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `partition`, `drain`, `extend` to move tombstones with their pairs | 2d-02 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | an equivalence property over every buffer size | 2d-02 |
+| Y5 Testing & verification *(planned)* | Understand it | an equivalence property over every buffer size | 2d-02 |
 
 ### 3A · Values and types
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums as design | a `Value` enum with data, `match` on pairs of values | 3a-01, 3a-03 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `PartialOrd`/`Ord` with `total_cmp`, `From`/`TryFrom` | 3a-02, 3a-03 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Custom errors | overflow and cast errors as values | 3a-02, 3a-04 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | a `Value` enum with data, `match` on pairs of values | 3a-01, 3a-03 |
+| S8 The core traits *(planned)* | Implement by hand | `PartialOrd`/`Ord` with `total_cmp`, `From`/`TryFrom` | 3a-02, 3a-03 |
+| L8 Error design *(planned)* | Custom errors | overflow and cast errors as values | 3a-02, 3a-04 |
 | [S2 Strings & text](/t/s2-strings-text) | Understand | UTF-8, case mapping, comparing strings | 3a-01, 3a-03 |
-| [D13 Matrix, bits & math](/t/d13-matrix-bits-math) *(planned)* | Matrix, bits & math | `checked_*`, `wrapping_*`, overflow in debug and release | 3a-04 |
-| [F7 I/O & serialization](/t/f7-io-serialization) *(planned)* | Encodings | a value as bytes | 3a-05 |
+| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | `checked_*`, `wrapping_*`, overflow in debug and release | 3a-04 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | a value as bytes | 3a-05 |
 
 ### 3B · Schemas, tuples and table pages
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [F2 Data layout](/t/f2-data-layout) | Locality | the slotted page: header, slot array, cell heap | 3b-03 |
-| [F7 I/O & serialization](/t/f7-io-serialization) *(planned)* | Encodings | fixed and variable parts of a row | 3b-02 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | fixed and variable parts of a row | 3b-02 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | sub-slices, `split_at` | 3b-03, 3b-04 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Patterns in depth | matching on column types | 3b-01, 3b-02 |
+| L7 Enums & pattern matching *(planned)* | Patterns in depth | matching on column types | 3b-01, 3b-02 |
 | [S2 Strings & text](/t/s2-strings-text) | Understand | strings stored in a page | 3b-02 |
 
 ### 3C · Table heap, iterator and catalog
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Understand | an iterator that holds a position; `IntoIterator` for a borrowed collection | 3c-02 |
+| S6 Iterators *(planned)* | Understand | an iterator that holds a position; `IntoIterator` for a borrowed collection | 3c-02 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs | an iterator that borrows the heap | 3c-01, 3c-02 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | the catalog's maps | 3c-04 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | a lock around the last page; threads inserting at once | 3c-01 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | a heap checked against a `Vec`; the Halloween problem as a property | 3c-01, 3c-02, 3c-03, 3c-04 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | a lock around the last page; threads inserting at once | 3c-01 |
+| Y5 Testing & verification *(planned)* | Understand it | a heap checked against a `Vec`; the Halloween problem as a property | 3c-01, 3c-02, 3c-03, 3c-04 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Box<dyn Index>`, one trait over several key sizes | 3c-03, 3c-04 |
 
 ### 3D · Expressions and the SQL front end
@@ -245,150 +245,150 @@ Do the rows top to bottom; a module's first rows are the ones its first stages n
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Arc<dyn Expression>`, a trait object tree | 3d-01, 3d-06 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Use it | `Arc` for shared expressions, `Box<Expr>` for a recursive syntax tree | 3d-01, 3d-05 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums as design | `match` on an operator, on a pair of truth values; an AST as enums, `let else` | 3d-02, 3d-03, 3d-05 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | comparison results as values (`Ordering`, `CmpBool`) | 3d-02 |
-| [D13 Matrix, bits & math](/t/d13-matrix-bits-math) *(planned)* | Matrix, bits & math | `checked_*`, overflow as an error | 3d-02 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Custom errors | overflow errors; parse errors with messages | 3d-02, 3d-04, 3d-05 |
+| S7 Smart pointers & interior mutability *(planned)* | Use it | `Arc` for shared expressions, `Box<Expr>` for a recursive syntax tree | 3d-01, 3d-05 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | `match` on an operator, on a pair of truth values; an AST as enums, `let else` | 3d-02, 3d-03, 3d-05 |
+| S8 The core traits *(planned)* | Implement by hand | comparison results as values (`Ordering`, `CmpBool`) | 3d-02 |
+| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | `checked_*`, overflow as an error | 3d-02 |
+| L8 Error design *(planned)* | Custom errors | overflow errors; parse errors with messages | 3d-02, 3d-04, 3d-05 |
 | [S2 Strings & text](/t/s2-strings-text) | Understand | case mapping on characters; scanning characters and bytes | 3d-03, 3d-04 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Understand | `Peekable` for a lexer | 3d-04 |
-| [F3 Memory & allocation](/t/f3-memory-allocation) *(planned)* | Arenas and pools | an arena AST, a string interner (optional) | 3d-05 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser | 3d-02, 3d-03, 3d-04, 3d-05, 3d-07 |
+| S6 Iterators *(planned)* | Understand | `Peekable` for a lexer | 3d-04 |
+| [F3 Memory & allocation](/t/f3-memory-allocation) | Arenas and pools | an arena AST, a string interner (optional) | 3d-05 |
+| Y5 Testing & verification *(planned)* | Build it | a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser | 3d-02, 3d-03, 3d-04, 3d-05, 3d-07 |
 
 ### 3E · Access-method executors
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Box<dyn Executor>` children, `Box<dyn Index>` calls | 3e-01, 3e-02, 3e-04 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Understand | the iterator model: pulling by hand from an iterator, in batches | 3e-01, 3e-04 |
+| S6 Iterators *(planned)* | Understand | the iterator model: pulling by hand from an iterator, in batches | 3e-01, 3e-04 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs | an executor that borrows the catalog and the heap | 3e-01 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `Option<Iterator>`, `?` in a loop, `Result<Option<T>>` | 3e-01, 3e-02, 3e-03 |
-| [L6 Closures & functional Rust](/t/l6-closures) *(planned)* | Fn / FnMut / FnOnce | predicates and target expressions as callable trees | 3e-03 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Custom errors | execution errors | 3e-02, 3e-03 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a model of SQL in plain vectors; random sessions of statements | 3e-01, 3e-02, 3e-03, 3e-04, 3e-05 |
+| L6 Closures & functional Rust *(planned)* | Fn / FnMut / FnOnce | predicates and target expressions as callable trees | 3e-03 |
+| L8 Error design *(planned)* | Custom errors | execution errors | 3e-02, 3e-03 |
+| Y5 Testing & verification *(planned)* | Build it | a model of SQL in plain vectors; random sessions of statements | 3e-01, 3e-02, 3e-03, 3e-04, 3e-05 |
 
 ### 3F · Aggregation and joins
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [S4 Maps & sets](/t/s4-maps-sets) | Understand it | `HashMap`, the `entry` API for group-by and for a join's multimap | 3f-02, 3f-04 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Hash` and `Eq` that agree, on a key of `Value`s | 3f-01 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Understand | pulling from iterators by hand; a cursor over a `Vec` | 3f-02, 3f-03 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Understand | `VecDeque` as a buffer of pending output | 3f-03, 3f-04 |
-| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) *(planned)* | Right structure for the job | hash tables for grouping and joining; when a scan or an index is better | 3f-02, 3f-04, 3f-05 |
+| S8 The core traits *(planned)* | Implement by hand | `Hash` and `Eq` that agree, on a key of `Value`s | 3f-01 |
+| S6 Iterators *(planned)* | Understand | pulling from iterators by hand; a cursor over a `Vec` | 3f-02, 3f-03 |
+| S5 Queues & heaps *(planned)* | Understand | `VecDeque` as a buffer of pending output | 3f-03, 3f-04 |
+| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) | Right structure for the job | hash tables for grouping and joining; when a scan or an index is better | 3f-02, 3f-04, 3f-05 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | `Box<dyn Index>` behind a join | 3f-05 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | differential tests: three algorithms against each other and a naive one | 3f-01, 3f-02, 3f-03, 3f-04, 3f-05, 3f-06 |
+| Y5 Testing & verification *(planned)* | Build it | differential tests: three algorithms against each other and a naive one | 3f-01, 3f-02, 3f-03, 3f-04, 3f-05, 3f-06 |
 
 ### 3G · Sorting, limits and window functions
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Ord`/`Ordering` for a comparator with a NULL rule; a wrapper with its own `Ord` | 3g-01, 3g-04 |
+| S8 The core traits *(planned)* | Implement by hand | `Ord`/`Ordering` for a comparator with a NULL rule; a wrapper with its own `Ord` | 3g-01, 3g-04 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | `sort_by` is stable; `copy_from_slice`, `to_le_bytes`, `truncate` | 3g-01, 3g-02, 3g-04 |
-| [S6 Iterators](/t/s6-iterators) *(planned)* | Understand | an `Iterator` over pages of a run; `min_by`, `chunks` | 3g-02, 3g-03 |
+| S6 Iterators *(planned)* | Understand | an `Iterator` over pages of a run; `min_by`, `chunks` | 3g-02, 3g-03 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs | a run that borrows the buffer pool | 3g-02 |
-| [F7 I/O & serialization](/t/f7-io-serialization) *(planned)* | Encodings | length-prefixed records on a page | 3g-02 |
-| [S5 Queues & heaps](/t/s5-queues-heaps) *(planned)* | Understand | `BinaryHeap` + `Reverse` for merging and for top-N | 3g-03, 3g-04 |
-| [S9 I/O & filesystem](/t/s9-io-filesystem) *(planned)* | Understand | spilling to disk: bounded-memory reading and writing | 3g-02, 3g-03 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Encodings | length-prefixed records on a page | 3g-02 |
+| S5 Queues & heaps *(planned)* | Understand | `BinaryHeap` + `Reverse` for merging and for top-N | 3g-03, 3g-04 |
+| S9 I/O & filesystem *(planned)* | Understand | spilling to disk: bounded-memory reading and writing | 3g-02, 3g-03 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | grouping row positions by key for partitions | 3g-05 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a sorted vector as the oracle for sort, limit, top-N and rank | 3g-01, 3g-03, 3g-04, 3g-05, 3g-06 |
+| Y5 Testing & verification *(planned)* | Build it | a sorted vector as the oracle for sort, limit, top-N and rank | 3g-01, 3g-03, 3g-04, 3g-05, 3g-06 |
 
 ### 3H · Optimizer rules
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums as design | matching on plan-tree shapes: `if let`, nested patterns, downcasting expressions | 3h-01, 3h-02, 3h-03 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | owning trees: `Arc` plans you rebuild and never mutate | 3h-01, 3h-02 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | matching on plan-tree shapes: `if let`, nested patterns, downcasting expressions | 3h-01, 3h-02, 3h-03 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | owning trees: `Arc` plans you rebuild and never mutate | 3h-01, 3h-02 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `?` on `Option`, `collect::<Option<Vec<_>>>`, `bool::then` | 3h-01, 3h-03 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Define & implement | a rule as a function from plan to plan (a trait, if you like) | 3h-01 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | equivalence: the optimised plan and the plain plan return the same rows, on random tables | 3h-01, 3h-02, 3h-03, 3h-04 |
+| Y5 Testing & verification *(planned)* | Build it | equivalence: the optimised plan and the plain plan return the same rows, on random tables | 3h-01, 3h-02, 3h-03, 3h-04 |
 
 ### 4A · Timestamps, transactions and version chains
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [S4 Maps & sets](/t/s4-maps-sets) | Understand it | `BTreeMap` as an ordered multiset for the watermark | 4a-01 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | `Arc<Transaction>` with `&self` setters; interior mutability | 4a-02 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | `Mutex` lock scope: a critical section is a guard's lifetime | 4a-02 |
-| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) *(planned)* | Understand it | atomic counters for timestamps and ids | 4a-02 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | `Arc<Transaction>` with `&self` setters; interior mutability | 4a-02 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | `Mutex` lock scope: a critical section is a guard's lifetime | 4a-02 |
+| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) | Understand it | atomic counters for timestamps and ids | 4a-02 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `?` and `let else` on `Option`: following a chain | 4a-03, 4a-04, 4a-05 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Patterns in depth | undo log entries; `Option<Vec<_>>` as a three-way answer | 4a-03, 4a-04 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a model of versions; random histories and sessions | 4a-01, 4a-02, 4a-03, 4a-04, 4a-05, 4a-06 |
+| L7 Enums & pattern matching *(planned)* | Patterns in depth | undo log entries; `Option<Vec<_>>` as a three-way answer | 4a-03, 4a-04 |
+| Y5 Testing & verification *(planned)* | Build it | a model of versions; random histories and sessions | 4a-01, 4a-02, 4a-03, 4a-04, 4a-05, 4a-06 |
 
 ### 4B · MVCC writes, abort, garbage collection and serializability
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | a check repeated under the lock that makes it true; latch order and deadlock | 4b-02, 4b-04, 4b-08 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Custom errors | a conflict as an error that also taints the transaction | 4b-02, 4b-03 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | a check repeated under the lock that makes it true; latch order and deadlock | 4b-02, 4b-04, 4b-08 |
+| L8 Error design *(planned)* | Custom errors | a conflict as an error that also taints the transaction | 4b-02, 4b-03 |
 | [L4 Traits & dispatch](/t/l4-traits-dispatch) | Static vs dynamic | closures passed as `&dyn Fn` into a latched update; `Box<dyn Index>` | 4b-02, 4b-06 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Understand it | `HashSet` and `retain` for garbage collection; a `BTreeMap` as the model | 4b-05, 4b-06 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `Option` chains for links and logs | 4b-03, 4b-04, 4b-07 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | sessions of interleaved transactions against a model; an oracle that tries every serial order | 4b-03, 4b-04, 4b-05, 4b-06, 4b-07, 4b-08 |
+| Y5 Testing & verification *(planned)* | Build it | sessions of interleaved transactions against a model; an oracle that tries every serial order | 4b-03, 4b-04, 4b-05, 4b-06, 4b-07, 4b-08 |
 
 ### 4C · ACID, logging and recovery
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [F7 I/O & serialization](/t/f7-io-serialization) *(planned)* | Storage formats | write-ahead-log records: a length, a checksum, a body; a torn tail is the end of the log | 4c-01, 4c-02 |
-| [S9 I/O & filesystem](/t/s9-io-filesystem) *(planned)* | Understand | append-only files, `fsync`, what is durable when a call returns | 4c-02, 4c-04 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | a `Mutex` around bookkeeping; a checkpoint holds one lock for many steps; group commit | 4c-02, 4c-04, 4c-07 |
+| [F7 I/O & serialization](/t/f7-io-serialization) | Storage formats | write-ahead-log records: a length, a checksum, a body; a torn tail is the end of the log | 4c-01, 4c-02 |
+| S9 I/O & filesystem *(planned)* | Understand | append-only files, `fsync`, what is durable when a call returns | 4c-02, 4c-04 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | a `Mutex` around bookkeeping; a checkpoint holds one lock for many steps; group commit | 4c-02, 4c-04, 4c-07 |
 | [L3 Lifetimes](/t/l3-lifetimes) | Structs holding refs | `Store<'a>` borrowing the pool and the log | 4c-03 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Errors at scale | a recovery that never panics on a damaged log; `io::Result` and `?` | 4c-02, 4c-05, 4c-06 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums as design | a log record as an enum, matched in analysis, redo and undo | 4c-01, 4c-05, 4c-06 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | crash a disk at a random point, then recover; a model of the committed state | 4c-03, 4c-04, 4c-05, 4c-06, 4c-07, 4c-08 |
+| L8 Error design *(planned)* | Errors at scale | a recovery that never panics on a damaged log; `io::Result` and `?` | 4c-02, 4c-05, 4c-06 |
+| L7 Enums & pattern matching *(planned)* | Enums as design | a log record as an enum, matched in analysis, redo and undo | 4c-01, 4c-05, 4c-06 |
+| Y5 Testing & verification *(planned)* | Build it | crash a disk at a random point, then recover; a model of the committed state | 4c-03, 4c-04, 4c-05, 4c-06, 4c-07, 4c-08 |
 
 ### 4D · The lock manager
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | `Mutex` and `Condvar`; waiting in a loop; a detector thread stopped in `Drop` | 4d-03, 4d-04, 4d-06 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums & exhaustiveness | lock modes, isolation levels and phases matched together | 4d-01, 4d-05 |
-| [L8 Error design](/t/l8-error-design) *(planned)* | Errors at scale | an abort as a returned error with a reason | 4d-05 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | `Mutex` and `Condvar`; waiting in a loop; a detector thread stopped in `Drop` | 4d-03, 4d-04, 4d-06 |
+| L7 Enums & pattern matching *(planned)* | Enums & exhaustiveness | lock modes, isolation levels and phases matched together | 4d-01, 4d-05 |
+| L8 Error design *(planned)* | Errors at scale | an abort as a returned error with a reason | 4d-05 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Maps & sets | ordered maps for a graph whose search order is fixed | 4d-06 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | check a concurrent system by the history it leaves | 4d-02, 4d-07 |
+| Y5 Testing & verification *(planned)* | Build it | check a concurrent system by the history it leaves | 4d-02, 4d-07 |
 
 ### 0A · A persistent trie
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L1 Ownership & moves](/t/l1-ownership-moves) | Clones & drops | sharing structure instead of copying: a clone of a node clones pointers | 0a-02 |
-| [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) *(planned)* | Understand it | `Arc` for path copying and for snapshots; `Mutex` around a pointer | 0a-02, 0a-03 |
+| S7 Smart pointers & interior mutability *(planned)* | Understand it | `Arc` for path copying and for snapshots; `Mutex` around a pointer | 0a-02, 0a-03 |
 | [S1 Option & Result](/t/s1-option-result) | Understand it | `?` on `Option` in a walk down a tree | 0a-01 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums & exhaustiveness | a helper's outcomes as an enum; `dyn Any` downcasting | 0a-01, 0a-02 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | a short lock for a clone, a long one for writers | 0a-03 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | keep every version of a history and check them all | 0a-01, 0a-02, 0a-03 |
+| L7 Enums & pattern matching *(planned)* | Enums & exhaustiveness | a helper's outcomes as an enum; `dyn Any` downcasting | 0a-01, 0a-02 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | a short lock for a clone, a long one for writers | 0a-03 |
+| Y5 Testing & verification *(planned)* | Build it | keep every version of a history and check them all | 0a-01, 0a-02, 0a-03 |
 
 ### 0B · A skip list
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
 | [L5 Generics & associated types](/t/l5-generics) | Compile-time Rust | const generics for the height and the seed; a stored comparison closure | 0b-01 |
-| [D5 Linked lists](/t/d5-linked-lists) *(planned)* | Linked lists, the Rust way | index-linked nodes in a `Vec` | 0b-01, 0b-02 |
-| [F3 Memory & allocation](/t/f3-memory-allocation) *(planned)* | Arenas and pools | a node arena with a free list | 0b-01, 0b-02 |
-| [C1 Threads & shared state](/t/c1-threads-shared-state) *(planned)* | Understand it | `RwLock` around the whole structure | 0b-01, 0b-03 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | a `BTreeSet` as the oracle; a structural check after every step | 0b-01, 0b-02 |
+| D5 Linked lists *(planned)* | Linked lists, the Rust way | index-linked nodes in a `Vec` | 0b-01, 0b-02 |
+| [F3 Memory & allocation](/t/f3-memory-allocation) | Arenas and pools | a node arena with a free list | 0b-01, 0b-02 |
+| [C1 Threads & shared state](/t/c1-threads-shared-state) | Understand it | `RwLock` around the whole structure | 0b-01, 0b-03 |
+| Y5 Testing & verification *(planned)* | Build it | a `BTreeSet` as the oracle; a structural check after every step | 0b-01, 0b-02 |
 
 ### 0C · Robin Hood hashing
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) *(planned)* | Hashing; Right structure for the job | open addressing, probe distance, tombstones | 0c-01, 0c-02, 0c-03 |
+| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) | Hashing; Right structure for the job | open addressing, probe distance, tombstones | 0c-01, 0c-02, 0c-03 |
 | [S3 Vec & slices](/t/s3-vec-slices) | Understand it | a table in a `Vec`; `std::mem::replace` | 0c-02 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | a hash trait; `PartialEq` on keys | 0c-01 |
-| [L7 Enums & pattern matching](/t/l7-enums-patterns) *(planned)* | Enums & exhaustiveness | `Slot<K>`: empty, removed or live | 0c-01, 0c-03 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Build it | invariants of a table (no gaps, bounded growth of probe distance) as properties | 0c-02, 0c-03 |
+| S8 The core traits *(planned)* | Implement by hand | a hash trait; `PartialEq` on keys | 0c-01 |
+| L7 Enums & pattern matching *(planned)* | Enums & exhaustiveness | `Slot<K>`: empty, removed or live | 0c-01, 0c-03 |
+| Y5 Testing & verification *(planned)* | Build it | invariants of a table (no gaps, bounded growth of probe distance) as properties | 0c-02, 0c-03 |
 
 ### 0D · Sketches and replicated sets
 
 | Track | Stage of the track | Practise | Needed by |
 |---|---|---|---|
-| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) *(planned)* | Hashing | independent hash functions per row: a seeded hasher | 0d-01 |
-| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) *(planned)* | Understand it | atomic counters with `fetch_add`; `Ordering::Relaxed` | 0d-01 |
-| [D13 Matrix, bits & math](/t/d13-matrix-bits-math) *(planned)* | Matrix, bits & math | popcount and leading or trailing zeros; masks and shifts | 0d-02, 0d-03 |
+| [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) | Hashing | independent hash functions per row: a seeded hasher | 0d-01 |
+| [C3 Atomics & lock-free](/t/c3-atomics-lock-free) | Understand it | atomic counters with `fetch_add`; `Ordering::Relaxed` | 0d-01 |
+| D13 Matrix, bits & math *(planned)* | Matrix, bits & math | popcount and leading or trailing zeros; masks and shifts | 0d-02, 0d-03 |
 | [S4 Maps & sets](/t/s4-maps-sets) | Use it | `HashMap`/`BTreeSet` as the exact answer and as the CRDT's state | 0d-03, 0d-04 |
-| [S8 The core traits](/t/s8-core-traits) *(planned)* | Implement by hand | `Eq`/`Ord` and the laws a merge must obey | 0d-04 |
-| [Y5 Testing & verification](/t/y5-testing-verification) *(planned)* | Understand it | algebraic laws (commutative, associative, idempotent) as properties | 0d-01, 0d-04, 0d-05 |
+| S8 The core traits *(planned)* | Implement by hand | `Eq`/`Ord` and the laws a merge must obey | 0d-04 |
+| Y5 Testing & verification *(planned)* | Understand it | algebraic laws (commutative, associative, idempotent) as properties | 0d-01, 0d-04, 0d-05 |
 
 ## 3. The order to write the tracks in
 
@@ -396,27 +396,21 @@ The planned tracks, sorted by the first module that needs them (then by how many
 
 | # | Track | First needed by | Used by |
 |---|---|---|---|
-| 1 | [Y5 Testing & verification](/t/y5-testing-verification) | R | 26 modules |
-| 2 | [C1 Threads & shared state](/t/c1-threads-shared-state) | R | 14 modules |
-| 3 | [L7 Enums & pattern matching](/t/l7-enums-patterns) | R | 12 modules |
-| 4 | [S7 Smart pointers & interior mutability](/t/s7-smart-pointers) | R | 11 modules |
-| 5 | [L8 Error design](/t/l8-error-design) | R | 9 modules |
-| 6 | [S5 Queues & heaps](/t/s5-queues-heaps) | R | 6 modules |
-| 7 | [S9 I/O & filesystem](/t/s9-io-filesystem) | R | 4 modules |
-| 8 | [C3 Atomics & lock-free](/t/c3-atomics-lock-free) | R | 3 modules |
-| 9 | [F1 Measure & read the machine](/t/f1-measure-machine) | 1A | 1 modules |
-| 10 | [L6 Closures & functional Rust](/t/l6-closures) | 1B | 3 modules |
-| 11 | [C2 Message passing](/t/c2-message-passing) | 1B | 1 modules |
-| 12 | [S6 Iterators](/t/s6-iterators) | 1C | 8 modules |
-| 13 | [F3 Memory & allocation](/t/f3-memory-allocation) | 1C | 4 modules |
-| 14 | [D5 Linked lists](/t/d5-linked-lists) | 1C | 2 modules |
-| 15 | [S8 The core traits](/t/s8-core-traits) | 1D | 12 modules |
-| 16 | [F7 I/O & serialization](/t/f7-io-serialization) | 2A | 5 modules |
-| 17 | [S11 mem, ptr & alloc](/t/s11-mem-ptr-alloc) | 2A | 1 modules |
-| 18 | [D4 Binary search](/t/d4-binary-search) | 2A | 1 modules |
-| 19 | [F4 Hashing & purpose-built structures](/t/f4-hashing-structures) | 2B | 4 modules |
-| 20 | [D13 Matrix, bits & math](/t/d13-matrix-bits-math) | 2B | 4 modules |
-| 21 | [D6 Trees & BSTs](/t/d6-trees-bsts) | 2C | 1 modules |
+| 1 | Y5 Testing & verification | R | 26 modules |
+| 2 | L7 Enums & pattern matching | R | 12 modules |
+| 3 | S7 Smart pointers & interior mutability | R | 11 modules |
+| 4 | L8 Error design | R | 9 modules |
+| 5 | S5 Queues & heaps | R | 6 modules |
+| 6 | S9 I/O & filesystem | R | 4 modules |
+| 7 | F1 Measure & read the machine | 1A | 1 modules |
+| 8 | L6 Closures & functional Rust | 1B | 3 modules |
+| 9 | S6 Iterators | 1C | 8 modules |
+| 10 | D5 Linked lists | 1C | 2 modules |
+| 11 | S8 The core traits | 1D | 12 modules |
+| 12 | S11 mem, ptr & alloc | 2A | 1 modules |
+| 13 | D4 Binary search | 2A | 1 modules |
+| 14 | D13 Matrix, bits & math | 2B | 4 modules |
+| 15 | D6 Trees & BSTs | 2C | 1 modules |
 
 ## 4. Gaps the tracks do not cover yet
 

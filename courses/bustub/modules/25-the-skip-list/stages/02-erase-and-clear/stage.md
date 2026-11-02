@@ -43,7 +43,7 @@ while inner.height > 1 && inner.nodes[HEADER].next(inner.height - 1).is_none() {
 - The optional *arenas* concept.
 - [D5 Linked lists](/t/d5-linked-lists): Linked lists, the Rust way: index-linked nodes in a `Vec`.
 - [F3 Memory & allocation](/t/f3-memory-allocation): Arenas and pools: a node arena with a free list.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a `BTreeSet` as the oracle; a structural check after every step.
+- Y5 Testing & verification: Build it: a `BTreeSet` as the oracle; a structural check after every step.
 
 ## Tests
 

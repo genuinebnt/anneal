@@ -31,8 +31,8 @@ How precisely you analyse conditions. "No" is always safe; a more precise "yes" 
 
 ## If this is new
 
-- [S6 Trait objects](/t/s6-trait-objects): downcasting a `dyn Trait` with `Any`.
-- [Y5 Testing & verification](/t/y5-testing-verification): a property that compares optimized and unoptimized plans.
+- S6 Trait objects: downcasting a `dyn Trait` with `Any`.
+- Y5 Testing & verification: a property that compares optimized and unoptimized plans.
 
 ## Tests
 

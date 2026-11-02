@@ -45,11 +45,11 @@ The truth tables as a `match` on the pair, on one side then the other, or as ari
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `match` on tuples, or-patterns.
+- L7 Enums & pattern matching: `match` on tuples, or-patterns.
 - [S2 Strings & text](/t/s2-strings-text): characters versus bytes, case mapping.
 - [S1 Option & Result](/t/s1-option-result): `map`, `as_str`.
 - The optional *unicode and case mapping* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
+- Y5 Testing & verification: Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
 
 ## Tests
 

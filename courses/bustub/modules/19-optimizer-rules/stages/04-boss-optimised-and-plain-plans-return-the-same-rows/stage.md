@@ -27,7 +27,7 @@ None new: a failure belongs to one of your rules (or to an executor of an earlie
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
+- Y5 Testing & verification: Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
 
 ## Tests
 

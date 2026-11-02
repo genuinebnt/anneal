@@ -44,11 +44,11 @@ How you take the locks (`running_txns.lock()` for the whole critical section is 
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `Mutex`, lock scope, atomics.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc<Transaction>` with `&self` setters.
-- [L8 Error design](/t/l8-error-design): `Result` through `begin`.
+- S7 Smart pointers & interior mutability: `Arc<Transaction>` with `&self` setters.
+- L8 Error design: `Result` through `begin`.
 - The optional *snapshot isolation* concept.
 - [C3 Atomics & lock-free](/t/c3-atomics-lock-free): Understand it: atomic counters for timestamps and ids.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 
