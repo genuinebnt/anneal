@@ -1,0 +1,98 @@
+{
+ "id": "m37-part-month",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*), sum(val) FROM ev_p WHERE ts >= '2025-03-01' AND ts < '2025-04-01';",
+ "setup": [
+  {
+   "id": "pa-flat",
+   "sql": "CREATE TABLE ev_f AS SELECT i AS id, timestamptz '2024-01-01 00:00+00' + (i::float8 / 2400000 * 730) * interval '1 day' AS ts, 1 + (i * 7919::bigint) % 1000 AS device, (i * 31::bigint) % 10000 AS val FROM generate_series(1, 2400000) i; CREATE INDEX ev_f_ts ON ev_f (ts); CREATE INDEX ev_f_device ON ev_f (device); ALTER TABLE ev_f SET (autovacuum_enabled = false); VACUUM ANALYZE ev_f;"
+  },
+  {
+   "id": "pa-part",
+   "sql": "CREATE TABLE ev_p (id bigint, ts timestamptz NOT NULL, device int, val int) PARTITION BY RANGE (ts); DO $$ DECLARE m date; BEGIN FOR k IN 0..23 LOOP m := date '2024-01-01' + (k || ' months')::interval; EXECUTE format('CREATE TABLE ev_p_%s PARTITION OF ev_p FOR VALUES FROM (%L) TO (%L)', to_char(m, 'YYYY_MM'), m, (m + interval '1 month')::date); END LOOP; END $$; INSERT INTO ev_p SELECT * FROM ev_f ORDER BY ts; CREATE INDEX ev_p_ts ON ev_p (ts); CREATE INDEX ev_p_device ON ev_p (device); VACUUM ANALYZE ev_p;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 2688.36,
+   "Total Cost": 2688.37,
+   "Plan Rows": 1,
+   "Plan Width": 16,
+   "Actual Startup Time": 15.104,
+   "Actual Total Time": 15.105,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 650,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "ev_p_2025_03",
+     "Alias": "ev_p",
+     "Startup Cost": 0.0,
+     "Total Cost": 2178.77,
+     "Plan Rows": 101918,
+     "Plan Width": 4,
+     "Actual Startup Time": 0.006,
+     "Actual Total Time": 9.274,
+     "Actual Rows": 101918.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Filter": "((ts >= '2025-03-01 00:00:00+00'::timestamp with time zone) AND (ts < '2025-04-01 00:00:00+00'::timestamp with time zone))",
+     "Rows Removed by Filter": 0,
+     "Shared Hit Blocks": 650,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 6,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.145,
+  "Triggers": [],
+  "Execution Time": 15.125
+ },
+ "text": "Aggregate  (cost=2688.36..2688.37 rows=1 width=16) (actual time=15.208..15.210 rows=1.00 loops=1)\n  Buffers: shared hit=650\n  ->  Seq Scan on ev_p_2025_03 ev_p  (cost=0.00..2178.77 rows=101918 width=4) (actual time=0.007..9.208 rows=101918.00 loops=1)\n        Filter: ((ts >= '2025-03-01 00:00:00+00'::timestamp with time zone) AND (ts < '2025-04-01 00:00:00+00'::timestamp with time zone))\n        Buffers: shared hit=650\nPlanning:\n  Buffers: shared hit=6\nPlanning Time: 0.158 ms\nExecution Time: 15.227 ms"
+}

@@ -1,0 +1,126 @@
+{
+ "id": "m37-flat-device",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*), sum(val) FROM ev_f WHERE device = 17;",
+ "setup": [
+  {
+   "id": "pa-flat",
+   "sql": "CREATE TABLE ev_f AS SELECT i AS id, timestamptz '2024-01-01 00:00+00' + (i::float8 / 2400000 * 730) * interval '1 day' AS ts, 1 + (i * 7919::bigint) % 1000 AS device, (i * 31::bigint) % 10000 AS val FROM generate_series(1, 2400000) i; CREATE INDEX ev_f_ts ON ev_f (ts); CREATE INDEX ev_f_device ON ev_f (device); ALTER TABLE ev_f SET (autovacuum_enabled = false); VACUUM ANALYZE ev_f;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 6644.62,
+   "Total Cost": 6644.63,
+   "Plan Rows": 1,
+   "Plan Width": 40,
+   "Actual Startup Time": 2.495,
+   "Actual Total Time": 2.496,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 2405,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "ev_f",
+     "Alias": "ev_f",
+     "Startup Cost": 30.98,
+     "Total Cost": 6632.65,
+     "Plan Rows": 2393,
+     "Plan Width": 8,
+     "Actual Startup Time": 0.895,
+     "Actual Total Time": 2.318,
+     "Actual Rows": 2400.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(device = 17)",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 2400,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 2405,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "ev_f_device",
+       "Startup Cost": 0.0,
+       "Total Cost": 30.38,
+       "Plan Rows": 2393,
+       "Plan Width": 0,
+       "Actual Startup Time": 0.567,
+       "Actual Total Time": 0.568,
+       "Actual Rows": 2400.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(device = 17)",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 5,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.081,
+  "Triggers": [],
+  "Execution Time": 2.542
+ },
+ "text": "Aggregate  (cost=6644.62..6644.63 rows=1 width=40) (actual time=2.242..2.244 rows=1.00 loops=1)\n  Buffers: shared hit=2405\n  ->  Bitmap Heap Scan on ev_f  (cost=30.98..6632.65 rows=2393 width=8) (actual time=0.681..2.042 rows=2400.00 loops=1)\n        Recheck Cond: (device = 17)\n        Heap Blocks: exact=2400\n        Buffers: shared hit=2405\n        ->  Bitmap Index Scan on ev_f_device  (cost=0.00..30.38 rows=2393 width=0) (actual time=0.294..0.294 rows=2400.00 loops=1)\n              Index Cond: (device = 17)\n              Index Searches: 1\n              Buffers: shared hit=5\nPlanning Time: 0.092 ms\nExecution Time: 2.287 ms"
+}

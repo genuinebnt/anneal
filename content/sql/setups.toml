@@ -362,3 +362,14 @@ undo = "DROP TABLE pt_t;"
 id = "pt-gist"
 sql = "CREATE INDEX pt_gist ON pt_t USING gist (loc); ANALYZE pt_t;"
 undo = "DROP INDEX pt_gist;"
+
+# module 37 (partitioning): 2,400,000 events over 24 months, as one table and as 24 monthly partitions with the same rows
+[[setup]]
+id = "pa-flat"
+sql = "CREATE TABLE ev_f AS SELECT i AS id, timestamptz '2024-01-01 00:00+00' + (i::float8 / 2400000 * 730) * interval '1 day' AS ts, 1 + (i * 7919::bigint) % 1000 AS device, (i * 31::bigint) % 10000 AS val FROM generate_series(1, 2400000) i; CREATE INDEX ev_f_ts ON ev_f (ts); CREATE INDEX ev_f_device ON ev_f (device); ALTER TABLE ev_f SET (autovacuum_enabled = false); VACUUM ANALYZE ev_f;"
+undo = "DROP TABLE ev_f;"
+
+[[setup]]
+id = "pa-part"
+sql = "CREATE TABLE ev_p (id bigint, ts timestamptz NOT NULL, device int, val int) PARTITION BY RANGE (ts); DO $$ DECLARE m date; BEGIN FOR k IN 0..23 LOOP m := date '2024-01-01' + (k || ' months')::interval; EXECUTE format('CREATE TABLE ev_p_%s PARTITION OF ev_p FOR VALUES FROM (%L) TO (%L)', to_char(m, 'YYYY_MM'), m, (m + interval '1 month')::date); END LOOP; END $$; INSERT INTO ev_p SELECT * FROM ev_f ORDER BY ts; CREATE INDEX ev_p_ts ON ev_p (ts); CREATE INDEX ev_p_device ON ev_p (device); VACUUM ANALYZE ev_p;"
+undo = "DROP TABLE ev_p;"
