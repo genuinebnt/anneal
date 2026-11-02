@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEve
 import { api, type Activity, type Band, type DsaOverview, type DsaProblem, type TrackSummary } from "../api";
 import { Companies, Insight, Mark, ProblemTags, StateLegend, useLogger } from "../components/dsaBits";
 import { Header } from "../components/Header";
+import { Opt, Tog } from "../components/filterBits";
 import { PageLoading, Page3, Panel, Tile, LoadFailed } from "../components/layout";
 import { GradeGlyph } from "../components/icons";
 import { getPref, setPref } from "../prefs";
@@ -943,30 +944,6 @@ function ActivityRail({ o, activity, tracks, showDue }: { o: DsaOverview; activi
   );
 }
 
-function Opt({ label, n, on, onClick, sw, hint }: { label: string; n: number; on: boolean; onClick: () => void; sw?: string; hint?: string }) {
-  return (
-    <button className={`d-opt${on ? " on" : ""}${n === 0 && !on ? " zero" : ""}`} onClick={onClick} aria-pressed={on}>
-      {sw ? <span className="sw" style={{ background: sw }} /> : <span className="bx" />}
-      <span className="d">
-        {label}
-        {hint && <small>{hint}</small>}
-      </span>
-      <span className="c">{n}</span>
-    </button>
-  );
-}
-
-function Tog({ label, hint, on, onClick }: { label: string; hint?: string; on: boolean; onClick: () => void }) {
-  return (
-    <div className="d-tog">
-      <span>
-        {label}
-        {hint && <small>{hint}</small>}
-      </span>
-      <button className={`d-sw${on ? " on" : ""}`} aria-pressed={on} aria-label={label} onClick={onClick} />
-    </div>
-  );
-}
 
 function count<T>(items: DsaProblem[], key: (p: DsaProblem) => T | T[]): Map<T, number> {
   const m = new Map<T, number>();

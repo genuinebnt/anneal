@@ -1,11 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { marked } from "marked";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type Activity, type Band, type NextUp, type ReviewItem, type Section, type Tier, type TrackSummary } from "../api";
 import { Header } from "../components/Header";
 import { LEVEL_COLOR, pad2, pctColor } from "../components/bits";
-import { MockRoot, rise, useReady } from "../components/mock";
+import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
+import { Opt } from "../components/filterBits";
+import { Page3, Panel, Tile } from "../components/layout";
 import { BLURB, DSA_ORDER, NAV_SECTIONS, PLANNED, SECTION_NAMES, type NavArea, sectionOf } from "../curriculum";
 import { CountUp } from "../components/kit";
 
@@ -255,7 +257,7 @@ function Side({ activity, sections, live, due, ready }: { activity?: Activity; s
     return { s, pct: total ? Math.round(ts.reduce((n, t) => n + t.readiness * w(t), 0) / total) : null };
   });
   return (
-    <aside className="s-side" aria-label="Activity">
+    <div className="s-side" aria-label="Activity">
       <div className="s-card s-rv" style={rise(5).style}>
         <h5>THIS WEEK</h5>
         <div className="s-week">
@@ -325,7 +327,7 @@ function Side({ activity, sections, live, due, ready }: { activity?: Activity; s
           ))}
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -347,15 +349,16 @@ export function SectionPage({ area }: { area: NavArea }) {
   const due = (reviews.data?.queue ?? []).filter((r) => r.days_overdue >= 0 && sections.includes(sectionOf(r.track)));
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
+  const [sec, setSec] = useState("all");
   const [view, setView] = useStored<"grid" | "list">("anneal-catalog-view", "grid");
   const search = useRef<HTMLInputElement>(null);
   const ready = useReady();
-  const seg = useRef<HTMLDivElement>(null);
   const loading = tracks.isPending;
 
   useEffect(() => {
     setQ("");
     setFilter("all");
+    setSec("all");
   }, [area]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -369,21 +372,6 @@ export function SectionPage({ area }: { area: NavArea }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  // The thumb under the grid / list toggle slides to the one that is on.
-  const placeThumb = () => {
-    const box = seg.current;
-    const on = box?.querySelector<HTMLElement>("button.s-on");
-    const t = box?.querySelector<HTMLElement>(".s-thumb");
-    if (!on || !t) return;
-    t.style.width = `${on.offsetWidth}px`;
-    t.style.transform = `translateX(${on.offsetLeft - 3}px)`;
-  };
-  useLayoutEffect(placeThumb);
-  useEffect(() => {
-    addEventListener("resize", placeThumb);
-    return () => removeEventListener("resize", placeThumb);
-  }, []);
-
   const live = new Map((tracks.data ?? []).map((t) => [t.code, t]));
   // Only a track you've actually worked in is "now on"; a first pick is just a suggestion.
   const next = activity.data?.next;
@@ -400,6 +388,7 @@ export function SectionPage({ area }: { area: NavArea }) {
   const test = FILTERS.find((f) => f[0] === filter)?.[2] ?? (() => true);
   const shown = (r: Row) =>
     test(r) &&
+    (sec === "all" || sectionOf(r.code) === sec) &&
     (!needle ||
       [r.code, r.live?.name ?? r.name, r.live?.summary ?? BLURB[r.code] ?? "", ...(r.live?.stages.map((s) => s.name) ?? [])]
         .join(" ")
@@ -428,106 +417,103 @@ export function SectionPage({ area }: { area: NavArea }) {
     );
   });
 
+  const sectionRows = (sections.length > 1 ? sections : []).map((sec) => [sec, rows.filter((r) => sectionOf(r.code) === sec)] as const);
+  const tiles = (
+    <>
+      <Tile em="Tracks" strong={<CountUp value={rows.length} />} small={`${rows.filter((r) => r.live && r.live.ready > 0).length} written`} />
+      <Tile em="Problems" strong={<CountUp value={problems} />} small={`${rows.reduce((n, r) => n + (r.live?.ready ?? 0), 0)} ready to solve`} />
+      <Tile em="To finish" strong={<CountUp value={left} format={hours} />} small="at your pace" hint="An estimate of the time left: 12 minutes for each unsolved easy problem, 25 for a medium, 45 for a hard." />
+      <Tile em="Re-solves due" strong={due.length} hot={due.length > 0} color="var(--vio)" to={{ to: "/progress", hash: "reviews" }} small={due.length > 0 ? <><span className="ly-dotp" aria-hidden="true" />Re-solve now →</> : "nothing due"} />
+    </>
+  );
+  const clear = () => {
+    setQ("");
+    setFilter("all");
+    setSec("all");
+  };
+  const active = (filter !== "all" ? 1 : 0) + (sec !== "all" ? 1 : 0);
+  const leftPanel = (
+    <>
+      <Panel title="Status" aside={active > 0 ? <button className="d-clearall" onClick={clear}>clear {active}</button> : undefined}>
+        <div className="d-rail-in">
+          <div className="rbox">
+            {FILTERS.map(([key, label, fn]) => {
+              const n = rows.filter(fn).length;
+              if (!n && key !== "all") return null;
+              return <Opt key={key} label={label} n={n} on={filter === key} onClick={() => setFilter(key)} />;
+            })}
+          </div>
+        </div>
+      </Panel>
+      {sectionRows.length > 0 && (
+        <Panel title="Area">
+          <div className="d-rail-in">
+            <div className="rbox">
+              <Opt label="All areas" n={rows.length} on={sec === "all"} onClick={() => setSec("all")} />
+              {sectionRows.map(([s, rs]) => (
+                <Opt key={s} label={SECTION_NAMES[s]} n={rs.length} on={sec === s} onClick={() => setSec(sec === s ? "all" : s)} />
+              ))}
+            </div>
+          </div>
+        </Panel>
+      )}
+      <Panel title="Keys">
+        <p className="s-none"><kbd>/</kbd> search the tracks. Open a track, then <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch its tabs and <kbd>[</kbd> <kbd>]</kbd> step through the tracks.</p>
+      </Panel>
+    </>
+  );
+  const center = (
+    <>
+      {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
+      {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
+      <div className="s-tools">
+        <label className="s-search">
+          <span>⌕</span>
+          <input ref={search} type="search" placeholder="search tracks, stages, topics…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tracks" autoComplete="off" spellCheck={false} />
+          <kbd>/</kbd>
+        </label>
+        <SlidingSeg
+          label="View"
+          value={view}
+          onChange={setView}
+          options={(["grid", "list"] as const).map((v) => ({ key: v, label: v === "grid" ? "▦ grid" : "≡ list" }))}
+        />
+      </div>
+      {loading ? (
+        <div className="s-grid" style={{ marginTop: 28 }}>
+          {Array.from({ length: 6 }, (_, i) => (
+            <article key={i} className="s-trk" style={{ minHeight: 220 }} aria-hidden="true">
+              <div className="s-th">
+                <span className="s-no">··</span>
+              </div>
+              <h4>Loading</h4>
+            </article>
+          ))}
+        </div>
+      ) : (
+        groups
+      )}
+      <div className={`s-empty${visible === 0 && !loading ? " s-show" : ""}`}>
+        No track matches that.{" "}
+        <button className="s-ghost" style={{ marginLeft: 8 }} onClick={clear}>
+          Clear filters
+        </button>
+      </div>
+    </>
+  );
   return (
     <>
       <Header area={area} />
-      <MockRoot prefix="s-" className={`s-${area}`} style={{ "--s-ac": `var(--${copy.color})`, "--s-acb": `var(--${copy.color}-bg)`, "--ca": `var(--${copy.color})`, "--cab": `var(--${copy.color}-bg)` } as CSSProperties}>
-        <main className={`s-wrap${loading ? " s-sk" : ""}`} id="page">
-          <section className="s-hero">
-            <div>
-              <div className="s-eye s-rv" style={rise(0).style}>
-                <b>{copy.eyebrow}</b> / TRACKS
-              </div>
-              <h1 className="s-rv" style={rise(1).style}>
-                {copy.title[0]}
-                <em>{copy.title[1]}</em>
-              </h1>
-            </div>
-            <div className="s-stats s-rv" style={rise(3).style}>
-              <div>
-                <b>
-                  <CountUp value={rows.length} />
-                </b>
-                <span>TRACKS</span>
-              </div>
-              <div>
-                <b>
-                  <CountUp value={problems} />
-                </b>
-                <span>PROBLEMS</span>
-              </div>
-              <div>
-                <b>
-                  <CountUp value={left} format={hours} />
-                </b>
-                <span>TO FINISH</span>
-              </div>
-            </div>
-          </section>
-          {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
-          <div className="s-main">
-            <div>
-              {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
-              <div className="s-tools s-rv" style={rise(5).style}>
-                <label className="s-search">
-                  <span>⌕</span>
-                  <input ref={search} type="search" placeholder="search tracks, stages, topics…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tracks" autoComplete="off" spellCheck={false} />
-                  <kbd>/</kbd>
-                </label>
-                <div className="s-seg" ref={seg} role="group" aria-label="View">
-                  <span className="s-thumb" />
-                  {(["grid", "list"] as const).map((v) => (
-                    <button key={v} className={view === v ? "s-on" : ""} aria-pressed={view === v} onClick={() => setView(v)}>
-                      {v === "grid" ? "▦ grid" : "≡ list"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="s-flab s-rv" style={rise(6).style}>
-                FILTER BY
-              </div>
-              <div className="s-chips s-rv" style={rise(6).style}>
-                {FILTERS.map(([key, label, fn]) => {
-                  const n = rows.filter(fn).length;
-                  if (!n && key !== "all") return null;
-                  return (
-                    <button key={key} className={`s-chip${filter === key ? " s-on" : ""}`} aria-pressed={filter === key} onClick={() => setFilter(key)}>
-                      {label} <small>{n}</small>
-                    </button>
-                  );
-                })}
-              </div>
-              {loading ? (
-                <div className="s-grid" style={{ marginTop: 28 }}>
-                  {Array.from({ length: 6 }, (_, i) => (
-                    <article key={i} className="s-trk" style={{ minHeight: 220 }} aria-hidden="true">
-                      <div className="s-th">
-                        <span className="s-no">··</span>
-                      </div>
-                      <h4>Loading</h4>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                groups
-              )}
-              <div className={`s-empty${visible === 0 && !loading ? " s-show" : ""}`}>
-                No track matches that.{" "}
-                <button
-                  className="s-ghost"
-                  style={{ marginLeft: 8 }}
-                  onClick={() => {
-                    setQ("");
-                    setFilter("all");
-                  }}
-                >
-                  Clear filters
-                </button>
-              </div>
-            </div>
-            <Side activity={activity.data} sections={sections} live={tracks.data ?? []} due={due} ready={ready} />
-          </div>
-        </main>
+      <MockRoot prefix="s-" className={`s-${area} s-3`} style={{ "--s-ac": `var(--${copy.color})`, "--s-acb": `var(--${copy.color}-bg)`, "--ca": `var(--${copy.color})`, "--cab": `var(--${copy.color}-bg)` } as CSSProperties}>
+        <Page3
+          crumb={[copy.eyebrow, "TRACKS"]}
+          title={<>{copy.title[0]}<em className="d-acc">{copy.title[1]}</em></>}
+          tiles={tiles}
+          left={leftPanel}
+          center={center}
+          right={<Side activity={activity.data} sections={sections} live={tracks.data ?? []} due={due} ready={ready} />}
+          label="Filters"
+        />
       </MockRoot>
     </>
   );

@@ -60,7 +60,7 @@ test.describe("/rust", () => {
 
     test("a filter chip shows only its tracks and the all chip restores them", async ({ page }) => {
         const all = await page.locator(".s-trk:not(.s-gone)").count();
-        const chips = page.locator(".s-chip");
+        const chips = page.locator(".ly-lp .d-opt");
         expect(await chips.count()).toBeGreaterThan(2);
         await chips.nth(1).click();
         await expect(chips.nth(1)).toHaveAttribute("aria-pressed", "true");

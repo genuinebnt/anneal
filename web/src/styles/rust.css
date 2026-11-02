@@ -1,0 +1,58 @@
+/* The Rust pages (/rust, /t/<track>) and the pieces the workspace shares with them (components/trackBits.tsx). */
+.rt-learn{display:flex;flex-direction:column;gap:22px}
+.rt-lead{margin:6px 0 14px;color:var(--mut);font-size:14px;line-height:1.6;max-width:70ch}
+.rt-stage{display:flex;flex-direction:column;gap:10px}
+.rt-sh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 2px}
+.rt-sh h3{margin:0;font:700 17px var(--sans);letter-spacing:-.01em}
+.rt-sh small{font:500 12px var(--mono);color:var(--dim)}
+.rt-sh .s-ghost{margin-left:auto}
+.rt-sn{font:600 11px var(--mono);color:var(--dim)}
+.rt-brief{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.rt-brief.cur{border-color:color-mix(in oklab,var(--ca) 55%,var(--line2))}
+.rt-bh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:500 12px var(--mono);color:var(--mut)}
+.rt-bh a,.rt-draft{font:600 15px var(--sans);color:var(--fg);letter-spacing:-.005em}
+.rt-bh a:hover{color:var(--ca)}
+.rt-draft{opacity:.55}
+.rt-bh small{margin-left:auto;color:var(--dim)}
+.rt-no{color:var(--dim)}
+.rt-ph{height:42px;border-radius:8px;background:var(--raise);opacity:.6}
+.rt-teach{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.rt-teach li{position:relative;padding-left:16px;font-size:13.5px;line-height:1.55;color:var(--mut)}
+.rt-teach li::before{content:"";position:absolute;left:2px;top:.62em;width:6px;height:6px;border-radius:2px;background:var(--ca)}
+.rt-teach code,.rt-fu code{font:500 12px var(--mono);color:var(--fg)}
+.rt-rel{font:500 12px var(--mono);color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
+.rt-rel a{color:var(--ca)}
+.rt-fold>button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:8px;background:var(--raise);font:600 12px var(--mono);color:var(--mut);text-align:left}
+.rt-fold>button:hover{color:var(--fg)}
+.rt-fold>button small{color:var(--dim)}
+.rt-fold>button i{margin-left:auto;font-style:normal;color:var(--dim)}
+.rt-fb{padding:10px 2px 0}
+.rt-fu{display:flex;flex-direction:column;gap:8px;border:1px dashed var(--line);border-radius:10px;padding:12px 14px}
+.rt-fu.compact{border:0;padding:0}
+.rt-fu .lab{font:600 10.5px var(--mono);letter-spacing:.12em;color:var(--acc)}
+.rt-fu ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.rt-fu li{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;font-size:13.5px;line-height:1.55;color:var(--mut)}
+.rt-fu li i{font:700 11px var(--mono);font-style:normal;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--raise);color:var(--fg);margin-top:1px}
+.rt-stages{display:flex;flex-direction:column;gap:2px}
+.rt-st{display:grid;grid-template-columns:24px minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:7px 6px;border-radius:8px;text-align:left;font-size:13px;color:var(--mut)}
+.rt-st:hover{background:var(--raise);color:var(--fg)}
+.rt-st span,.rt-st small{font:500 11px var(--mono);color:var(--dim)}
+.rt-list{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.rt-row{display:grid;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);color:var(--fg);text-decoration:none}
+a.rt-row:hover{border-color:var(--line);background:var(--raise)}
+.rt-row.cur{border-color:color-mix(in oklab,var(--ca) 55%,var(--line2))}
+.rt-row.kb{outline:2px solid var(--ca);outline-offset:-2px}
+.rt-row .num{font:500 11px var(--mono);color:var(--dim)}
+.rt-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.rt-t b{font:600 14px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rt-t small{font:500 11px var(--mono);color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rt-row .best{display:flex;align-items:center;gap:6px;justify-content:flex-end;font:500 12px var(--mono)}
+.rt-row>.sicon:first-child{color:var(--dim)}
+.rt-row .best .sicon{display:none}
+.rt-nx{display:block;font:700 16px var(--sans);letter-spacing:-.01em;margin:6px 0 10px;color:var(--fg)}
+.rt-nx:hover{color:var(--ca)}
+.rt-near{display:block;text-decoration:none}
+@media (max-width:700px){
+    .rt-row{grid-template-columns:24px minmax(0,1fr) auto !important;gap:6px 10px}
+    .rt-row>:nth-child(2),.rt-row>:nth-child(4),.rt-row>:nth-child(6){display:none}
+}
