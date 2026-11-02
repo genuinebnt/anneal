@@ -198,3 +198,24 @@ session = "SET enable_hashagg = off;"
 id = "orders-created-id"
 sql = "CREATE INDEX orders_created_id ON orders (created_at, id); VACUUM orders;"
 undo = "DROP INDEX orders_created_id;"
+
+# module 21: the visibility map. A 500,000-row copy that autovacuum leaves alone, so every figure is the one the page prints.
+[[setup]]
+id = "vm-table"
+sql = "CREATE TABLE vm_orders AS SELECT id, customer_id, total_cents FROM orders WHERE id <= 500000; ALTER TABLE vm_orders ADD PRIMARY KEY (id); ALTER TABLE vm_orders SET (autovacuum_enabled = false); CREATE INDEX vm_orders_cover ON vm_orders (customer_id) INCLUDE (total_cents); VACUUM ANALYZE vm_orders;"
+undo = "DROP TABLE vm_orders;"
+
+[[setup]]
+id = "vm-update-few"
+sql = "UPDATE vm_orders SET total_cents = total_cents + 1 WHERE id % 5000 = 0;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "vm-update-many"
+sql = "UPDATE vm_orders SET total_cents = total_cents + 1 WHERE id % 10 = 0;"
+undo = "SELECT 1;"
+
+[[setup]]
+id = "vm-vacuum"
+sql = "VACUUM vm_orders;"
+undo = "SELECT 1;"
