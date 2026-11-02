@@ -1,0 +1,245 @@
+title = "Conditions that hide a column"
+group = "sql-indexes"
+order = 7
+minutes = 20
+lede = "An index can only answer a question asked of the column it sorts. Wrap the column in a function, add a number to it, divide it, coalesce it, or compare it with a parameter that might mean 'anything', and the planner is asked about a different thing: it has nothing sorted to walk and reads the table. The cure is nearly always the same, moving the arithmetic to the other side of the comparison, and the plans show it."
+say = "An index serves a condition only when one side is the bare indexed column; a function, arithmetic or a 'smart' optional filter on the column hides it, and the fix is to rewrite the condition so the column stands alone and the constants carry the arithmetic."
+related = ["indexes", "postgres"]
+
+summary = [
+  "`date_trunc('day', created_at) = ...` reads all **14,960 pages**; the same day as a range reads **2,993** (143 ms against 3 ms).",
+  "Arithmetic on the column hides it: `total_cents / 100 = 50` scans the table, `total_cents >= 5000 AND total_cents < 5100` uses the index.",
+  "Move the arithmetic to the constant: `created_at + interval '30 days' > X` is 258 ms; `created_at > X - interval '30 days'` is 40 ms.",
+  "`OR` between two indexed columns is fine (a `BitmapOr`, 150 pages); `coalesce(col, 0) = x` and 'optional filter' `(col = $1 OR $1 IS NULL)` are not.",
+  "The optional-filter pattern turns a 46-page lookup into a **14,960-page** scan once the statement has a generic plan; build the SQL per case instead.",
+]
+
+[[sections]]
+heading = "The rule: the column stands alone"
+body = """
+Module 4 showed that `lower(email) = $1` cannot use an index on `email`, and why an expression index fixes it. This module is the wider habit: reading a `WHERE` for **what is done to the column** before it is compared. A condition is *sargable* (search-argument-able) when one side is the bare column and the other side does not depend on the row; then the planner can ask the index "where does this value, or this range of values, start?" Everything else falls into one of two groups:
+
+1. **Rewrite the condition** so that the column stands alone and the constants move. It nearly always is possible for dates, numbers and ranges, and it needs no new index.
+2. **Index the expression** (module 4) when the condition cannot be rewritten, such as `lower(email)`.
+
+The plans below use the example schema with the one index each query needs. All of them return the right rows; they differ only in how much of the table they read to find them.
+"""
+
+[[sections]]
+heading = "Dates"
+body = """
+Truncating a timestamp to a day is the most common way to hide a column:
+
+```plan id=m7-date-trunc setup=orders-created-day
+SELECT id FROM orders WHERE date_trunc('day', created_at) = '2026-03-01';
+```
+
+The index on `created_at` is there, and the plan is a parallel scan of **all 14,960 pages**, applying `date_trunc` to each of two million rows (144 ms). The index is sorted by `created_at`, not by `date_trunc('day', created_at)`, so there is nothing to search. The question the query means is a range:
+
+```plan id=m7-date-range setup=orders-created-day
+SELECT id FROM orders WHERE created_at >= '2026-03-01' AND created_at < '2026-03-02';
+```
+
+The same 3,307 rows, 2,993 pages (12 index and 2,981 table pages, module 5), 3.4 ms. Casting does the same thing, as module 4 measured: `created_at::date = X` is a different expression from `created_at`. The same applies to `extract(year FROM created_at) = 2026`, `to_char(created_at, 'YYYY-MM') = '2026-03'` and `date_part`. Each has a range form (`>= '2026-01-01' AND < '2027-01-01'`) that costs nothing extra to write once and is a helper function in your code.
+
+**Arithmetic with dates** hides the column in exactly the same way. The question "orders in the 30 days before 25 August" can be written with the interval added to the column, or subtracted from the constant:
+
+```plan id=m7-interval-column setup=orders-created-day
+SELECT id FROM orders
+WHERE created_at + interval '30 days' > '2026-08-25' AND created_at < '2026-08-25';
+```
+
+```plan id=m7-interval-moved setup=orders-created-day
+SELECT id FROM orders
+WHERE created_at > '2026-08-25'::timestamptz - interval '30 days' AND created_at < '2026-08-25';
+```
+
+Both return 96,078 rows. The first is a sequential scan that adds an interval to every row (258 ms); the second uses the index with a bound computed once (40 ms). Note what the page counts say: the rewritten query read 15,193 pages, *more* than the table has, and was still six times faster. Page counts are the right measure for I/O, but here the cost is the CPU spent on two million additions, which a page count does not show; always look at the time as well as the buffers when a condition computes something per row.
+
+> [!TIP]
+> Put the arithmetic on the constant side: `created_at > now() - interval '30 days'`, never `now() - created_at < interval '30 days'`. `now()` is stable within a statement, so Postgres evaluates it once and uses the result as the bound.
+"""
+
+[[sections]]
+heading = "Numbers"
+body = """
+The same holds for numbers. Dividing, multiplying or adding to a column hides it:
+
+```plan id=m7-math-column setup=orders-total
+SELECT id FROM orders WHERE total_cents / 100 = 50;
+```
+
+Everything in the table is read (14,960 pages, 47 ms) although `total_cents` is indexed. Solve the equation for the column and the constant takes the arithmetic. `total_cents / 100 = 50` on integers truncates, so it means `total_cents` from 5000 to 5099:
+
+```plan id=m7-math-moved setup=orders-total
+SELECT id FROM orders WHERE total_cents >= 5000 AND total_cents < 5100;
+```
+
+The index finds 10,056 entries in 11 pages; the table visits (7,287) are the cost, 7,298 pages in all. Write the rewrite and then **check it returns the same rows**; the integer division is the usual trap, and the planner will not do this algebra for you. `total_cents + 0 = 5000`, `total_cents * 1 = ...` and similar tricks do not get simplified either; I checked: `total_cents + 0 = 5000` is also a parallel scan of the whole table.
+
+Two related shapes:
+
+- **`coalesce(col, default) = x`** hides the column: it is a function of it.
+
+```plan id=m7-coalesce setup=orders-customer
+SELECT id FROM orders WHERE coalesce(customer_id, 0) = 4242;
+```
+
+Even though `customer_id` is `NOT NULL` in this schema and indexed, the plan reads every page. Write `customer_id = 4242` when you know the column is never null, and `customer_id = 4242 OR customer_id IS NULL` when it might be and the default is what you are after (or index the `coalesce` expression).
+- **Redundant clauses** are harmless when the planner can see through them. On this schema `customer_id = 4242 AND customer_id IS NOT NULL` used the index as the plain condition did, because the column is declared `NOT NULL`. A redundant clause that the planner cannot simplify (a function call) can become a filter: it is cheap to test with `EXPLAIN` rather than to reason about.
+"""
+
+[[sections]]
+heading = "OR, and the 'smart' optional filter"
+body = """
+`OR` has a bad reputation among performance folk that is half right. When both sides are conditions on indexed columns, Postgres combines the indexes with a `BitmapOr`:
+
+```plan id=m7-or-two-columns setup=orders-customer,orders-total
+SELECT id FROM orders WHERE customer_id = 4242 OR total_cents = 5000;
+```
+
+Each side finds its entries (44 and 101) and the table is read for the 145 rows in 150 pages. The slow case is an `OR` with a side that cannot use an index (module 5), or a condition on the *same* parameter that makes both sides depend on it, the next shape.
+
+The **optional filter** is the pattern behind most "the report page is slow only sometimes" tickets. One statement serves a search form with several optional fields: `WHERE (customer_id = $1 OR $1 IS NULL)`, repeated for each field. With the value known, Postgres simplifies it:
+
+```plan id=m7-optional-literal setup=orders-customer
+SELECT id FROM orders WHERE (customer_id = 4242 OR 4242 IS NULL) LIMIT 50;
+```
+
+`4242 IS NULL` is false, the plan reduces to `customer_id = 4242` and uses the index: 46 pages, 0.06 ms. Now the same statement as a prepared one with a **generic plan** (made before the value is known, module 4), which is what a driver gives you after a few executions:
+
+```sql title=optional.sql
+PREPARE optional_customer (int) AS
+  SELECT id FROM orders WHERE (customer_id = $1 OR $1 IS NULL) LIMIT 50;
+```
+
+```plan id=m7-optional-generic setup=orders-customer,generic-optional
+EXECUTE optional_customer(4242);
+```
+
+The plan must be correct for `$1 = NULL`, which returns *all* rows, so it is a sequential scan with `Filter: ((customer_id = $1) OR ($1 IS NULL))`: it reads **14,960 pages** (102 ms here) to find 44 rows, where the literal version read 46. The statement is right for every input and fast for none.
+
+The fix is to not send one statement for every shape: **build the SQL from the filters that are present**, binding only their values. The number of different statements is small, and each gets the plan it deserves; the variant with no filter is a different statement and a different plan, as it should be.
+
+```rust title=optional_filter.rs
+use sqlx::{PgPool, QueryBuilder};
+
+async fn search(pool: &PgPool, customer: Option<i32>, min_total: Option<i32>) -> sqlx::Result<Vec<i64>> {
+    let mut q = QueryBuilder::new("SELECT id FROM orders WHERE true");
+    if let Some(c) = customer {
+        q.push(" AND customer_id = ").push_bind(c);   // bound value, but no 'OR $1 IS NULL'
+    }
+    if let Some(t) = min_total {
+        q.push(" AND total_cents >= ").push_bind(t);
+    }
+    q.push(" LIMIT 50");
+    q.build_query_scalar().fetch_all(pool).await
+}
+```
+
+`QueryBuilder` only concatenates the SQL text you wrote here; the values are still bound parameters, so there is no injection risk. Never put a user's value into the text itself.
+
+> [!WARNING]
+> `LIKE '%' || $1 || '%'`, `COALESCE($1, col) = col` and `col = ANY($1) OR cardinality($1) = 0` are the same shape, and the same cure: decide in the application which statement applies, and let each statement say exactly what it filters.
+"""
+
+[[sections]]
+heading = "The same ideas in other engines"
+body = """
+| Engine | Hidden columns |
+|---|---|
+| MySQL InnoDB | The same rule: a function on an indexed column keeps the index from being used for it. Since 8.0.13 an index can be built on an expression (a *functional key part*), the counterpart of Postgres's expression index. Comparing a string column with a number makes MySQL convert the **column** to a number for every row and read the whole table, the engine-specific way to hide a column (from the manual, not run here) |
+| SQLite | Measured on 3.53.1: `created_at >= '2026-03-01' AND created_at < '2026-03-02'` showed `SEARCH ... (created_at>? AND created_at<?)`, and `date(created_at) = '2026-03-01'` showed a `SCAN` of the whole index. The same rewrite works |
+| ClickHouse, DuckDB | A function on the sort key or on a column with min/max statistics stops them from skipping blocks, with the same cure: compare the bare column with a range |
+
+Across engines the habit is the same: the column stands alone on one side of the comparison.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+A cheap guard is to look for these shapes in review: any `WHERE` where a column appears inside parentheses, arithmetic or a cast, and any `OR $n IS NULL`. For a service you can go further: with the monitoring views of Part IX, the queries that read the most pages per call are listed in `pg_stat_statements`, and the shapes above are usually the cause.
+
+```sql title=heavy_statements.sql
+-- statements that read the most pages per call (needs the pg_stat_statements extension)
+SELECT calls, shared_blks_hit + shared_blks_read AS pages, (shared_blks_hit + shared_blks_read) / calls AS pages_per_call, left(query, 80) AS query
+FROM pg_stat_statements
+WHERE calls > 100
+ORDER BY pages_per_call DESC
+LIMIT 10;
+```
+
+A statement that reads thousands of pages per call and returns a handful of rows is the signature of a hidden column, and the fix is the rewrite from this module.
+"""
+
+[[checks]]
+prompt = "A report filters orders with WHERE EXTRACT(YEAR FROM created_at) = 2026 and reads the whole table although created_at is indexed. Rewrite the condition and explain why the rewrite uses the index."
+answer = "created_at >= '2026-01-01' AND created_at < '2027-01-01'. The index is sorted by created_at, so it can find where 2026 starts and walk to where it ends. EXTRACT(YEAR FROM created_at) is a different expression, not sorted in the index, so the planner can only compute it for every row. The year's range form is the same question with the column left alone."
+
+[[checks]]
+prompt = "Two ways to ask for orders in the last 30 days: now() - created_at < interval '30 days' and created_at > now() - interval '30 days'. Which one uses an index on created_at, and why does it matter that now() is stable within a statement?"
+answer = "The second: the column stands alone and the right side does not depend on the row. now() is stable within a statement, so Postgres computes now() - interval '30 days' once and uses it as the start of a range. The first computes a value from the column for every row, so the index cannot be searched. (Timings on this schema for the equivalent pair were 258 ms against 40 ms.)"
+
+[[checks]]
+prompt = "A search form has five optional filters, implemented as one statement with (col = $n OR $n IS NULL) for each. It is fast in the tests and slow in production. What happens, and how do you change the code?"
+answer = "The statement is prepared and, after a few runs, gets a generic plan that must be correct for any combination of NULLs, so it cannot use an index for any filter: it reads the table (14,960 pages instead of 46 in the one-filter example). In tests the first executions had custom plans that saw the literal values. Build the SQL from the filters that are actually present, binding only their values (a QueryBuilder in sqlx), so each combination is its own statement with its own plan."
+
+[[checks]]
+prompt = "total_cents / 100 = 50 returns 10,056 rows on the example data. Write an equivalent condition that can use an index on total_cents, and say what you would check before shipping it."
+answer = "total_cents >= 5000 AND total_cents < 5100. Integer division truncates, so 50 covers the 100 values from 5000 to 5099. Before shipping, check that the two forms return the same rows (the count here is 10,056 for both) and that the plan actually uses the index (EXPLAIN (ANALYZE, BUFFERS)); the planner does not do this algebra, and a wrong rewrite changes the answer silently."
+
+[[terms]]
+term = "Sargable"
+means = "A condition shaped so an index can be searched: the bare column on one side, a row-independent value on the other."
+section = "The rule: the column stands alone"
+
+[[terms]]
+term = "Range rewrite"
+means = "Replacing a function of the column (date_trunc, EXTRACT, ::date) by a pair of bounds on the bare column."
+section = "Dates"
+
+[[terms]]
+term = "BitmapOr"
+means = "Unites the bitmaps of two indexes for an OR whose sides are both indexed."
+section = "OR, and the 'smart' optional filter"
+
+[[terms]]
+term = "Optional filter"
+means = "(col = $1 OR $1 IS NULL): one statement for 'filter if given'; correct for every input, indexed for none once the plan is generic."
+section = "OR, and the 'smart' optional filter"
+
+[[sources]]
+title = "PostgreSQL: indexes and ORDER BY / expression indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-expressional.html"
+
+[[sources]]
+title = "PostgreSQL: date/time functions (now() is stable within a statement)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-datetime.html"
+
+[[sources]]
+title = "PostgreSQL: PREPARE (generic and custom plans)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"
+
+[[sources]]
+title = "PostgreSQL: function volatility categories"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/xfunc-volatility.html"
+
+[[sources]]
+title = "sqlx: QueryBuilder"
+kind = "docs"
+url = "https://docs.rs/sqlx/latest/sqlx/struct.QueryBuilder.html"
+
+[[sources]]
+title = "MySQL: functional key parts"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/create-index.html#create-index-functional-key-parts"
+
+[[sources]]
+title = "Use The Index, Luke: obfuscated conditions"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/obfuscation"
+note = "further reading"

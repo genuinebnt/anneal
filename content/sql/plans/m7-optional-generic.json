@@ -1,0 +1,92 @@
+{
+ "id": "m7-optional-generic",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "EXECUTE optional_customer(4242);",
+ "setup": [
+  {
+   "id": "orders-customer",
+   "sql": "CREATE INDEX orders_customer ON orders (customer_id);"
+  },
+  {
+   "id": "generic-optional",
+   "sql": "SET plan_cache_mode = force_generic_plan; PREPARE optional_customer (int) AS SELECT id FROM orders WHERE (customer_id = $1 OR $1 IS NULL) LIMIT 50;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.0,
+   "Total Cost": 199.0,
+   "Plan Rows": 50,
+   "Plan Width": 8,
+   "Actual Startup Time": 3.134,
+   "Actual Total Time": 101.845,
+   "Actual Rows": 44.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 14960,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.0,
+     "Total Cost": 39960.0,
+     "Plan Rows": 10040,
+     "Plan Width": 8,
+     "Actual Startup Time": 3.133,
+     "Actual Total Time": 101.816,
+     "Actual Rows": 44.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Filter": "((customer_id = $1) OR ($1 IS NULL))",
+     "Rows Removed by Filter": 1999956,
+     "Shared Hit Blocks": 14960,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "plan_cache_mode": "force_generic_plan"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.014,
+  "Triggers": [],
+  "Execution Time": 101.884
+ },
+ "text": "Limit  (cost=0.00..199.00 rows=50 width=8) (actual time=4.033..113.394 rows=44.00 loops=1)\n  Buffers: shared hit=14960\n  ->  Seq Scan on orders  (cost=0.00..39960.00 rows=10040 width=8) (actual time=4.032..113.361 rows=44.00 loops=1)\n        Filter: ((customer_id = $1) OR ($1 IS NULL))\n        Rows Removed by Filter: 1999956\n        Buffers: shared hit=14960\nPlanning Time: 0.015 ms\nExecution Time: 113.432 ms"
+}

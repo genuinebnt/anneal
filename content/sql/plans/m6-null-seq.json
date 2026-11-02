@@ -1,0 +1,65 @@
+{
+ "id": "m6-null-seq",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM tickets WHERE assignee_id IS NULL;",
+ "setup": [
+  {
+   "id": "tickets",
+   "sql": "CREATE TABLE tickets AS SELECT i AS id, CASE WHEN i % 50 = 0 THEN NULL ELSE (1 + (i::bigint * 7919) % 200)::int END AS assignee_id, timestamptz '2026-01-01' + (i % 100000) * interval '5 minutes' AS created_at FROM generate_series(1, 500000) AS i; ALTER TABLE tickets ADD PRIMARY KEY (id); VACUUM ANALYZE tickets;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Seq Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "tickets",
+   "Alias": "tickets",
+   "Startup Cost": 0.0,
+   "Total Cost": 7752.0,
+   "Plan Rows": 9783,
+   "Plan Width": 4,
+   "Actual Startup Time": 0.017,
+   "Actual Total Time": 25.881,
+   "Actual Rows": 10000.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Filter": "(assignee_id IS NULL)",
+   "Rows Removed by Filter": 490000,
+   "Shared Hit Blocks": 2752,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.073,
+  "Triggers": [],
+  "Execution Time": 26.575
+ },
+ "text": "Seq Scan on tickets  (cost=0.00..7752.00 rows=9783 width=4) (actual time=0.018..24.535 rows=10000.00 loops=1)\n  Filter: (assignee_id IS NULL)\n  Rows Removed by Filter: 490000\n  Buffers: shared hit=2752\nPlanning Time: 0.058 ms\nExecution Time: 25.092 ms"
+}

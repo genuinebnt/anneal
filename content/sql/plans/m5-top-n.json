@@ -1,0 +1,87 @@
+{
+ "id": "m5-top-n",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, total_cents FROM orders ORDER BY created_at DESC LIMIT 10;",
+ "setup": [
+  {
+   "id": "orders-created-day",
+   "sql": "CREATE INDEX orders_created ON orders (created_at);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.43,
+   "Total Cost": 0.99,
+   "Plan Rows": 10,
+   "Plan Width": 20,
+   "Actual Startup Time": 0.007,
+   "Actual Total Time": 0.021,
+   "Actual Rows": 10.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 13,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Backward",
+     "Index Name": "orders_created",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 111785.66,
+     "Plan Rows": 2000000,
+     "Plan Width": 20,
+     "Actual Startup Time": 0.006,
+     "Actual Total Time": 0.02,
+     "Actual Rows": 10.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 13,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.045,
+  "Triggers": [],
+  "Execution Time": 0.03
+ },
+ "text": "Limit  (cost=0.43..0.99 rows=10 width=20) (actual time=0.004..0.009 rows=10.00 loops=1)\n  Buffers: shared hit=13\n  ->  Index Scan Backward using orders_created on orders  (cost=0.43..111785.66 rows=2000000 width=20) (actual time=0.004..0.007 rows=10.00 loops=1)\n        Index Searches: 1\n        Buffers: shared hit=13\nPlanning Time: 0.023 ms\nExecution Time: 0.014 ms"
+}

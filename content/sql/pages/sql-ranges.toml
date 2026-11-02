@@ -1,0 +1,321 @@
+title = "Ranges, LIKE and combining indexes"
+group = "sql-indexes"
+order = 5
+minutes = 24
+lede = "A B-tree is sorted, so it answers a range as easily as one value: find where the range starts and walk along the leaves until it ends. The walk is cheap. What a range query pays for is the table pages behind the entries it walks over, and that is why a one-day range can cost thousands of page reads while a customer's two months cost nine."
+say = "A range is an index walk plus one table visit per entry, so its cost is set by how many rows match and how scattered they are; LIKE is a range too, but only when the pattern starts with fixed text and the index was built to sort text byte by byte."
+related = ["indexes", "postgres"]
+
+summary = [
+  "A range (`>`, `<`, `BETWEEN`, a `LIKE` prefix) is one descent plus a walk along the leaf pages; the **table visits** decide the cost.",
+  "Write time ranges **half-open** (`>= a AND < b`): `BETWEEN` includes both ends, so adjacent ranges double-count the boundary.",
+  "In a two-column index, put the **equality** column first and the range column second: `(customer_id, created_at)` reads 9 pages for a customer's two months.",
+  "`LIKE 'user42%'` uses a plain index only in the `C` collation; otherwise build it `text_pattern_ops`. A leading `%` never uses a B-tree.",
+  "Two single-column indexes can be combined with a **bitmap** `AND` or `OR`, but one concatenated index does the same job with far less work.",
+]
+
+[[sections]]
+heading = "A range is a walk along the leaves"
+body = """
+Module 1 showed the leaf level: every key in order, each leaf linked to the next. A condition such as `created_at >= '2026-03-01' AND created_at < '2026-03-02'` therefore costs one descent to the first matching entry, then a walk along the leaves until the first entry that no longer matches. Nothing is sorted or searched on the way; the work is proportional to the number of entries in the range, not to the table.
+
+```sql title=day_range.sql
+-- an index on orders (created_at); one day of orders
+SELECT id, total_cents FROM orders
+WHERE created_at >= '2026-03-01' AND created_at < '2026-03-02';
+```
+
+```plan id=m5-day setup=orders-created-day
+SELECT id, total_cents FROM orders
+WHERE created_at >= '2026-03-01' AND created_at < '2026-03-02';
+```
+
+The index part is tiny: 12 pages for 3,307 entries. The whole cost is the other 2,981 pages, the **table pages** of the matching rows. Orders were inserted in random date order in this schema, so one day's 3,307 orders are spread over almost as many pages as they have rows, about 0.9 table pages per row. Postgres chose a **bitmap heap scan** here: it first collects every matching TID from the index, sorts them by page, then visits each table page once, in order, instead of jumping back and forth.
+
+Widen the range and the cost stops looking like an index lookup at all:
+
+```plan id=m5-month setup=orders-created-day
+SELECT id, total_cents FROM orders
+WHERE created_at >= '2026-03-01' AND created_at < '2026-04-01';
+```
+
+A month is 103,253 rows, about 5% of the table, and the query touches 15,235 pages: **more than the 14,960 pages of the table itself**, because the 285 index pages come on top of reading nearly every table page. An index is not a discount on reading a table; once a range matches a few percent of the rows and they are scattered, it is a surcharge. Part IV shows how to make the matching rows adjacent (clustering) or avoid the table entirely (covering indexes).
+
+> [!TIP]
+> Before adding an index for a range, ask how many rows it returns and whether they sit together. A range over an ever-growing column such as `created_at` is usually physically ordered in a table that is only appended to, and then the walk is cheap; in this example schema the dates are shuffled on purpose to show the case where they are not.
+
+The mirror image is the case a range index is made for: reading from one end. With the same index, the ten newest orders need the end of the tree, not a range:
+
+```plan id=m5-top-n setup=orders-created-day
+SELECT id, total_cents FROM orders ORDER BY created_at DESC LIMIT 10;
+```
+
+Thirteen pages: the descent to the rightmost leaf, then ten entries read **backwards** (an index can be scanned in either direction, so one ascending index serves `ASC` and `DESC`), each with its table page. No sort is needed, because the index already is the sort order. Part III returns to `ORDER BY` and pagination.
+"""
+
+[[sections]]
+heading = "Half-open ranges, not BETWEEN"
+body = """
+`BETWEEN a AND b` is shorthand for `>= a AND <= b`: **both ends are included**. For integers that is fine. For timestamps it is a trap, because the last instant of one range is also the first instant of the next:
+
+```sql title=boundary.sql
+-- every order at exactly midnight on the 2nd is counted by both of these days
+SELECT count(*) FROM orders WHERE created_at BETWEEN '2026-03-01' AND '2026-03-02';
+SELECT count(*) FROM orders WHERE created_at BETWEEN '2026-03-02' AND '2026-03-03';
+```
+
+On the example schema no order sits exactly on the boundary (the check `count(*) FILTER (WHERE created_at = '2026-03-02')` returns 0, and `BETWEEN` and the half-open form both return 3,307 rows), so the difference stays invisible until a row with a timestamp of exactly `00:00:00` arrives, usually from a batch import. The reliable form is **half-open**: include the start, exclude the end.
+
+```sql title=half_open.sql
+WHERE created_at >= '2026-03-01' AND created_at < '2026-03-02'   -- one day, no overlap with the next
+WHERE created_at >= '2026-03-01' AND created_at < '2026-04-01'   -- one month, whatever its length
+```
+
+It also costs nothing in the index: both forms are the same two bounds, and the half-open one never needs `'2026-03-01 23:59:59.999'`, a bound that is wrong for any column with more precision than you guessed. PostgreSQL's **range types** (`tstzrange`) make the same choice by default (`'[)'`, start included and end excluded), and a GiST index on them is covered in Part VII.
+
+When both bounds are on the same column, Postgres sees one range and shows one index condition. When they are on different columns, the order of the columns in the index decides how much of the range is a real narrowing, and that is the next section.
+"""
+
+[[sections]]
+heading = "A range on the second column of an index"
+body = """
+Module 3 showed that the order of the columns in a multi-column index decides which conditions narrow the search. Ranges follow the same rule, with one refinement: **only one range can narrow the search, and it must be the last column that matters**. Entries are sorted by the first column, then by the second inside each first-column value. An equality on the first column picks one contiguous block, inside which the second column is sorted, so a range on the second column narrows to a sub-block. A *range* on the first column picks many blocks, and the second column is no longer sorted across them.
+
+A customer's orders in January and February:
+
+```plan id=m5-customer-range setup=orders-customer-created
+SELECT id, total_cents FROM orders
+WHERE customer_id = 4242 AND created_at >= '2026-01-01' AND created_at < '2026-03-01';
+```
+
+Nine pages for six rows: the descent to `(4242, 2026-01-01)`, a leaf walk of one page and six table visits, and `Index Cond` holds all three bounds, so nothing is read and thrown away. Compare the other order, `(created_at, customer_id)`: it would have to walk every entry of the two months (about 200,000) to find the six that belong to customer 4242, which is the 3,116 versus 23 page difference module 3 measured.
+
+The rule of thumb that falls out is **equality columns first, then the one range column, then nothing that depends on it**. A third column after the range column can still be used to *filter* entries inside the index (the condition is checked without visiting the table), but it cannot make the walk shorter.
+
+:::deeper When both columns are ranges | 1 min
+`WHERE customer_id BETWEEN 100 AND 400 AND created_at >= '2026-06-01'` on an index `(customer_id, created_at)`: the first range picks 301 customers' blocks, and in each block the second range could start somewhere else. Postgres descends once for the first bound, then **checks the second condition on every entry** it walks (it is still in the `Index Cond`, but it only discards entries rather than skipping ahead). Only the first column's range shortens the walk. If the second condition is the selective one, a second index may serve better, as the combining section below shows.
+:::
+"""
+
+[[sections]]
+heading = "LIKE is a range, sometimes"
+body = """
+`email LIKE 'user4242%'` matches every email from `user4242` up to, but not including, `user4243`. That is a range, and a B-tree can walk it. The planner does exactly this rewrite: it turns the pattern into `email >= 'user4242' AND email < 'user4243'` and keeps the original `LIKE` as a filter. It can only do that when it knows how the index sorts text, and that is where most surprises come from.
+
+The `customers` table has a plain index on `email`, and the database collation is `C.UTF-8` (the default in the course's container). Postgres only trusts the byte-by-byte `C` collation for this rewrite, and treats `C.UTF-8` as an ordinary locale-aware collation:
+
+```plan id=m5-like-prefix setup=customers-email
+SELECT id FROM customers WHERE email LIKE 'user4242%';
+```
+
+A sequential scan of 515 pages, although the index is right there. A locale-aware collation sorts by language rules (case and punctuation can be ignored at first, `a` can sort next to `ä`), so entries starting with `user4242` are not guaranteed to be adjacent in the index. The same happens in any database created with `en_US.UTF-8` or another language collation. There are two fixes.
+
+**Build the index in the `C` collation** for the column, and ask the question in it:
+
+```plan id=m5-like-collate-c setup=customers-email-c
+SELECT id FROM customers WHERE email COLLATE "C" LIKE 'user4242%';
+```
+
+**Or use the pattern operator class**, `text_pattern_ops`, which sorts text byte by byte whatever the collation. This is the usual choice, because the column keeps its normal collation for ordering and comparison:
+
+```plan id=m5-like-pattern-ops setup=customers-email-pattern
+SELECT id FROM customers WHERE email LIKE 'user4242%';
+```
+
+```sql title=pattern_index.sql
+CREATE INDEX customers_email_pattern ON customers (email text_pattern_ops);
+-- serves LIKE 'abc%' and ~ '^abc', but not =  with a language collation's ordering, and not ORDER BY
+```
+
+Five pages, and the filter is `LIKE` while the index condition is the two bounds (`~>=~` and `~<~` are the pattern class's comparison operators). Two things to know about this index:
+
+- It serves `LIKE 'abc%'` and equality, but **not** ordinary comparisons such as `email < 'm'`, and not `ORDER BY email` under the column's collation. If you need both, you need two indexes.
+- The pattern must be **fixed text at the start**. Both `LIKE '%4242@example.com'` and `LIKE '%42%'` have no start to search from:
+
+```plan id=m5-like-suffix setup=customers-email
+SELECT id FROM customers WHERE email LIKE '%4242@example.com';
+```
+
+A suffix search reads the whole table, with any B-tree. For suffixes, store the reversed text in an indexed expression (`reverse(email)`) and search `reverse(email) LIKE 'moc.elpmaxe@2424%'`; for a pattern with wildcards anywhere, Part VII's trigram index (`pg_trgm`) is the tool.
+
+Three more cases measured on this schema, without a plan each:
+
+- `ILIKE 'USER4242%'` (case-insensitive) reads the whole table, even with the pattern index: the index sorts case-sensitively. Index `lower(email)` and search `lower(email) LIKE 'user4242%'` (module 4), or use a trigram index.
+- The same `LIKE $1` sent as a prepared statement with a **generic plan** also reads the whole table (`Filter: (email ~~ $1)`), because a generic plan is made before the value is known and nothing says it starts with fixed text. Postgres 18 makes a custom plan for the first five runs of a statement, so this shows up only when it switches to the generic one (module 11 covers when), or when a driver forces it.
+- `email ^@ 'user4242'` (`starts_with`) did use the pattern index in this test (the same two bounds in the `Index Cond`), and has the advantage that `%` and `_` in the input are not wildcards. If you build a search box from user input, either use `^@` or escape `%`, `_` and the backslash before building the pattern.
+"""
+
+[[sections]]
+heading = "Combining indexes: bitmap AND and OR"
+body = """
+Postgres can use more than one index for one table in one query. Each **bitmap index scan** produces a bitmap of the table pages (and rows within them) that match; the bitmaps are then combined with AND or OR in memory, and one **bitmap heap scan** visits only the pages that remain.
+
+With separate indexes on `customer_id` and on `created_at`, a range on both:
+
+```plan id=m5-combine-and setup=orders-customer,orders-created-day
+SELECT id FROM orders
+WHERE customer_id BETWEEN 100 AND 400 AND created_at >= '2026-06-01' AND created_at < '2026-06-15';
+```
+
+The first index finds 11,948 entries, the second 46,674; their intersection is 301 rows. The query reads 443 pages: 14 and 131 for the two index scans and 298 table pages. Each index had to be read completely for its condition, although only 301 rows survive, which is the price of two separate indexes: neither one knows about the other's condition.
+
+`OR` is where a combined plan is the *only* good option, because one concatenated index cannot serve "this or that":
+
+```plan id=m5-combine-or setup=orders-customer,orders-created-day
+SELECT id FROM orders
+WHERE customer_id = 4242 OR (created_at >= '2026-08-20' AND created_at < '2026-08-21');
+```
+
+The two bitmaps are united: 44 orders of one customer plus 3,345 of one day, 3,045 pages in all. Without an index on **each side** of the OR, there is no such plan, and Postgres reads the table. This is why a single unindexed condition on one side of an `OR` makes the whole query slow.
+
+> [!NOTE]
+> Bitmaps lose the order of the index. A bitmap scan can never feed an `ORDER BY` or give the first rows quickly, so it is not used for `LIMIT` queries that an ordered index scan can serve, and it always needs the whole bitmap built before the first row appears.
+
+When the same pair of conditions appears together in many queries, a concatenated index `(customer_id, created_at)` does the work of both single indexes in a single narrow range, as the customer example earlier showed with nine pages. Keep the single-column indexes only for the conditions that also appear alone or in `OR`s.
+"""
+
+[[sections]]
+heading = "The same ideas in other engines"
+body = """
+The range walk is the same in every B-tree engine; what changes is what the walk costs after the entries are found, and what is allowed in a `LIKE` pattern.
+
+| Engine | Range and LIKE |
+|---|---|
+| MySQL InnoDB | Ranges are B-tree walks. A secondary index range then looks up each primary key in the clustered index, so a wide range pays a second tree descent per row (module 1). The manual says an index is used for `LIKE` when the pattern is a constant that does not start with a wildcard; not run here |
+| SQLite | `LIKE` is case-insensitive for ASCII by default, so a plain index (which is case-sensitive) is not usable for it; measured on SQLite 3.53.1, `LIKE 'user4242%'` scanned the whole index until the column was indexed `COLLATE NOCASE`, after which it showed `SEARCH ... (email>? AND email<?)`. A half-open date range showed `SEARCH ... (created_at>? AND created_at<?)` |
+| ClickHouse, DuckDB | A range on the table's sort key (ClickHouse) or on a column with min/max statistics (DuckDB) skips whole blocks of rows; there are no per-row index entries to walk, so the cost model is "how many blocks does the range touch" |
+
+SQLite's measurement is the same lesson in different clothes: an index serves a condition only when it sorts the way the condition compares, and the collation is part of that.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Two decisions in the application code determine whether these plans are the ones you get. First, **time ranges are built half-open by the caller**, with the end bound exclusive, and bound as `timestamptz` parameters so no cast lands on the column:
+
+```rust title=day_orders.rs
+use chrono::{DateTime, Duration, Utc};
+
+async fn orders_on(pool: &sqlx::PgPool, day: DateTime<Utc>) -> sqlx::Result<Vec<(i64, i32)>> {
+    sqlx::query_as(
+        "SELECT id, total_cents FROM orders WHERE created_at >= $1 AND created_at < $2",
+    )
+    .bind(day)
+    .bind(day + Duration::days(1)) // exclusive end: the next day starts exactly here
+    .fetch_all(pool)
+    .await
+}
+```
+
+Second, a **prefix search** should send the prefix, not a pattern. With `starts_with` (`^@`) a user typing `50%_off` searches for that text, and no escaping is needed:
+
+```rust title=email_prefix.rs
+async fn emails_starting(pool: &sqlx::PgPool, prefix: &str) -> sqlx::Result<Vec<i32>> {
+    // email ^@ $1 is "starts with"; with the text_pattern_ops index it is the same two-bound range as LIKE 'x%'
+    sqlx::query_scalar("SELECT id FROM customers WHERE email ^@ $1 LIMIT 20")
+        .bind(prefix)
+        .fetch_all(pool)
+        .await
+}
+```
+
+Whichever form you use, run `EXPLAIN` on it with the parameter as the driver sends it (module 4's section on bind parameters), because a generic plan reads the table for `LIKE $1`.
+"""
+
+[[checks]]
+prompt = "A query selects one day of orders through an index on created_at and returns 3,307 rows, but it reads about 3,000 pages although the index holds them in 12. Where do the other pages go, and what would make the number small?"
+answer = "To the table: each matching entry points to a row, and the rows of one day are spread over almost as many table pages as there are rows because the table is not stored in date order. The index walk is 12 pages; the other 2,981 are table visits. It would be small if the matching rows were adjacent in the table (a table that is only appended to in date order, or CLUSTER), or if the index contained every column the query needs so the table is not visited at all (a covering index, Part IV)."
+
+[[checks]]
+prompt = "You need orders for a customer within a date range, and a colleague proposes an index on (created_at, customer_id) because 'dates are more selective'. What do you say, and what would you measure?"
+answer = "Put the equality column first: (customer_id, created_at). With the range column first the index must walk every entry of the date range, about 200,000 for two months, and look at customer_id inside each one, because customer_id is not sorted across the range. With customer_id first, one customer's entries are contiguous and sorted by date, so the range is a few entries. Measure pages with EXPLAIN (ANALYZE, BUFFERS): on this schema the difference is 3,116 against 23 pages for a similar question (module 3), and 9 pages for this one."
+
+[[checks]]
+prompt = "email LIKE 'user42%' reads the whole customers table although email is indexed. Give two possible reasons and the fix for each."
+answer = "First, the index sorts with a locale-aware collation (anything but C), so entries with the prefix are not guaranteed to be adjacent, and the planner cannot rewrite the pattern into a range: build the index with text_pattern_ops, or in the C collation. Second, the pattern arrives as a parameter in a generic plan, so the planner does not know it starts with fixed text: send the prefix with starts_with (^@), or make sure a custom plan is used. (A third: the pattern starts with a wildcard, which no B-tree can serve.)"
+
+[[checks]]
+prompt = "Why can a query with condition A OR condition B be fast when each has its own single-column index, but slow if only A has an index?"
+answer = "With an index on each side, Postgres runs a bitmap index scan for each, unites the two bitmaps and visits only the matching pages (a BitmapOr). If B has no index, there is no way to find B's rows except by reading the table, and the OR means those rows must be returned too, so the whole table is read and the index on A cannot help."
+
+[[checks]]
+prompt = "Write the condition for 'all of March 2026' on a timestamptz column so that it can use an index and cannot double-count a row stamped exactly midnight on 1 April."
+answer = "created_at >= '2026-03-01' AND created_at < '2026-04-01'. The start is included, the end excluded, so a row at exactly 2026-04-01 00:00:00 belongs only to April. BETWEEN would include it in March as well. Both bounds are plain comparisons on the bare column, so a B-tree on created_at can walk the range."
+
+[[terms]]
+term = "Range scan"
+means = "One descent to the first matching entry, then a walk along the leaf pages until the first entry that no longer matches."
+section = "A range is a walk along the leaves"
+
+[[terms]]
+term = "Bitmap heap scan"
+means = "Collects matching TIDs from one or more indexes, sorts them by table page, then visits each page once."
+section = "A range is a walk along the leaves"
+
+[[terms]]
+term = "Half-open range"
+means = "Includes the start and excludes the end (>= a AND < b); consecutive ranges never share a row."
+section = "Half-open ranges, not BETWEEN"
+
+[[terms]]
+term = "Equality before range"
+means = "In a multi-column index, columns compared with = go first and the one range column last, so the range is a contiguous slice."
+section = "A range on the second column of an index"
+
+[[terms]]
+term = "text_pattern_ops"
+means = "An operator class that sorts text byte by byte, so LIKE 'abc%' can use the index in any collation."
+section = "LIKE is a range, sometimes"
+
+[[terms]]
+term = "Collation"
+means = "The rules a text index sorts by; only the byte-by-byte C collation lets Postgres turn a LIKE prefix into a range."
+section = "LIKE is a range, sometimes"
+
+[[terms]]
+term = "BitmapAnd / BitmapOr"
+means = "Combines the page bitmaps of several indexes in memory before the table is read."
+section = "Combining indexes: bitmap AND and OR"
+
+[[sources]]
+title = "PostgreSQL: multicolumn indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+note = "which conditions narrow the scan"
+
+[[sources]]
+title = "PostgreSQL: operator classes and operator families"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-opclass.html"
+note = "text_pattern_ops and why LIKE needs it outside the C locale"
+
+[[sources]]
+title = "PostgreSQL: combining multiple indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-bitmap-scans.html"
+
+[[sources]]
+title = "PostgreSQL: pattern matching (LIKE, starts_with)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-matching.html"
+
+[[sources]]
+title = "PostgreSQL: collation support"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/collation.html"
+
+[[sources]]
+title = "SQLite: the query optimizer overview (the LIKE optimization)"
+kind = "docs"
+url = "https://www.sqlite.org/optoverview.html"
+
+[[sources]]
+title = "MySQL: how MySQL uses indexes"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/mysql-indexes.html"
+
+[[sources]]
+title = "Use The Index, Luke: the where clause"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause"
+note = "further reading"

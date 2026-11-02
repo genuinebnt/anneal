@@ -1,0 +1,60 @@
+{
+ "id": "m6-null-equals",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM tickets WHERE assignee_id = NULL;",
+ "setup": [
+  {
+   "id": "tickets",
+   "sql": "CREATE TABLE tickets AS SELECT i AS id, CASE WHEN i % 50 = 0 THEN NULL ELSE (1 + (i::bigint * 7919) % 200)::int END AS assignee_id, timestamptz '2026-01-01' + (i % 100000) * interval '5 minutes' AS created_at FROM generate_series(1, 500000) AS i; ALTER TABLE tickets ADD PRIMARY KEY (id); VACUUM ANALYZE tickets;"
+  },
+  {
+   "id": "tickets-assignee",
+   "sql": "CREATE INDEX tickets_assignee ON tickets (assignee_id);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Result",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.0,
+   "Total Cost": 0.0,
+   "Plan Rows": 0,
+   "Plan Width": 0,
+   "Actual Startup Time": 0.0,
+   "Actual Total Time": 0.001,
+   "Actual Rows": 0.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "One-Time Filter": "false",
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.029,
+  "Triggers": [],
+  "Execution Time": 0.005
+ },
+ "text": "Result  (cost=0.00..0.00 rows=0 width=0) (actual time=0.000..0.000 rows=0.00 loops=1)\n  One-Time Filter: false\nPlanning Time: 0.009 ms\nExecution Time: 0.003 ms"
+}
