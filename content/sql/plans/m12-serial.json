@@ -1,0 +1,95 @@
+{
+ "id": "m12-serial",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT status, count(*), sum(total_cents) FROM orders GROUP BY status;",
+ "setup": [
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Hashed",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 49960.0,
+   "Total Cost": 49960.04,
+   "Plan Rows": 4,
+   "Plan Width": 22,
+   "Actual Startup Time": 473.518,
+   "Actual Total Time": 473.521,
+   "Actual Rows": 4.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Group Key": [
+    "status"
+   ],
+   "Planned Partitions": 0,
+   "HashAgg Batches": 1,
+   "Peak Memory Usage": 32,
+   "Disk Usage": 0,
+   "Shared Hit Blocks": 14620,
+   "Shared Read Blocks": 340,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.0,
+     "Total Cost": 34960.0,
+     "Plan Rows": 2000000,
+     "Plan Width": 10,
+     "Actual Startup Time": 0.014,
+     "Actual Total Time": 120.811,
+     "Actual Rows": 2000000.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Shared Hit Blocks": 14620,
+     "Shared Read Blocks": 340,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.093,
+  "Triggers": [],
+  "Execution Time": 473.574
+ },
+ "text": "HashAggregate  (cost=49960.00..49960.04 rows=4 width=22) (actual time=530.919..530.922 rows=4.00 loops=1)\n  Group Key: status\n  Batches: 1  Memory Usage: 32kB\n  Buffers: shared hit=14714 read=246\n  ->  Seq Scan on orders  (cost=0.00..34960.00 rows=2000000 width=10) (actual time=0.008..133.081 rows=2000000.00 loops=1)\n        Buffers: shared hit=14714 read=246\nPlanning Time: 0.071 ms\nExecution Time: 530.960 ms"
+}

@@ -1,0 +1,186 @@
+title = "Parallel query"
+group = "sql-plans"
+order = 12
+minutes = 16
+lede = "One query can use more than one CPU core: Postgres starts worker processes, splits a big scan between them and combines their partial answers. It speeds up the queries that read a lot, aggregate a lot or join a lot, and does nothing for the lookups that fill most application code. This page measures what it buys, what it costs and the four ways a query ends up without it."
+say = "A parallel plan has a Gather node above the work and Workers Launched below it; each worker does part of the scan and a partial aggregate, and the leader combines them. It pays for big reads (here 450 ms became 155 ms with 2 workers), is not used for small tables or point lookups, and is blocked by anything marked parallel-unsafe, which a user-defined function is by default."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "Reading `Gather` or `Gather Merge`: **Workers Planned** is what the planner decided, **Workers Launched** is what it got. Below the Gather every node shows `loops=` equal to workers plus the leader, and its `actual rows` is per loop.",
+  "Measured on a 2,000,000-row aggregate: **450 ms serial, 155 ms with 2 workers, 124 ms with 3** (median of 7 runs). Three times faster for two extra processes, and each extra worker buys less.",
+  "It is not used where it cannot pay: a 50,000-row table runs in 5.5 ms with no Gather, and an indexed lookup is far below the cost of starting workers (`parallel_setup_cost` = 1000).",
+  "A **parallel-unsafe** function in the query forbids parallelism for the whole query: the same aggregate with an unmarked-unsafe function took about 510 ms serial and 180 ms once the function was declared `PARALLEL SAFE`.",
+  "A parallel join (`Parallel Hash Join`) cut a 2,000,000-row join and aggregate from 1,041 ms to 431 ms. JIT compilation is off this course's build (`pg_jit_available()` is false), so it is described from the manual, not measured.",
+]
+
+[[sections]]
+heading = "What a parallel plan looks like"
+body = """
+The serial plan first, for an aggregate that reads the whole table:
+
+```plan id=m12-serial setup=no-parallel
+SELECT status, count(*), sum(total_cents) FROM orders GROUP BY status;
+```
+
+One process reads 2,000,000 rows and aggregates them: 450 ms. By default Postgres is allowed two workers per query (`max_parallel_workers_per_gather = 2`), so the planner can do this instead:
+
+```plan id=m12-parallel
+SELECT status, count(*), sum(total_cents) FROM orders GROUP BY status;
+```
+
+Read it from the bottom. A **Parallel Seq Scan** is shared by three processes, the two workers and the *leader* (your own backend, which works too): they take the table's pages in turn, so each reads about 666,667 rows (`loops=3`, and the `rows` shown is the average per loop). Each runs a **Partial HashAggregate** on the rows it saw. The **Gather Merge** node collects the three partial results (12 rows in total, four statuses from each process), and the **Finalize GroupAggregate** adds them together. 155 ms: three processes did the work in about a third of the time, which is what to expect when the work divides cleanly and the answer is small.
+
+Two numbers to check on any Gather: `Workers Planned` against `Workers Launched`. The planner plans with the number of workers it wants; the server may have fewer available (`max_parallel_workers` is shared by all queries, 8 by default), and a query that planned 2 and launched 0 is a serial query that paid for a parallel plan. When the two differ under load, that is the cause of timings that vary from run to run.
+
+> [!NOTE]
+> The leader also reads tuples that the workers send up through the Gather, so a very wide result is the limit of parallelism: `parallel_tuple_cost` (0.1) charges each row that crosses a process boundary. An aggregate sends 12 rows; `SELECT *` of a million rows sends a million, and the planner will usually choose a serial plan for it.
+"""
+
+[[sections]]
+heading = "How many workers, and what each one buys"
+body = """
+The number of workers a table gets depends on its size: one worker once the table is over `min_parallel_table_scan_size` (8 MB), and one more each time the size triples, up to `max_parallel_workers_per_gather`. `orders` is 117 MB, which would justify three workers, but the limit of 2 applies. Raising it (timings on this page are the median of 7 warm runs on a 4-core machine; the plan files hold single runs):
+
+```plan id=m12-four setup=parallel-4
+SELECT status, count(*), sum(total_cents) FROM orders GROUP BY status;
+```
+
+Three workers (plus the leader, four processes): 124 ms against 155 with two. Doubling the processes from 2 to 4 did not halve the time and the machine this was measured on has only four cores, so the leader and workers compete for them. Each worker also uses its own `work_mem` for each sort or hash it runs, so a plan with a parallel hash can use several times the memory that the same plan would use serially (module 8).
+
+Raise `max_parallel_workers_per_gather` for a reporting role, not for the database: a web application that serves hundreds of short queries does not want each one to start processes, and an analytics query that runs once an hour does.
+"""
+
+[[sections]]
+heading = "When there is no Gather"
+body = """
+A table below `min_parallel_table_scan_size` is not split:
+
+```plan id=m12-small
+SELECT count(*) FROM customers;
+```
+
+50,000 rows, 5.5 ms, no Gather. Starting a worker costs time, so the planner charges `parallel_setup_cost` (1000) for any Gather and `parallel_tuple_cost` for every row passed up, and for a small scan the charge is more than the saving. The same is true of an indexed lookup: it reads a handful of pages, so there is nothing to divide. This is why parallel query is invisible to most application queries and decisive for reports.
+
+Four more reasons a plan stays serial, in the order worth checking:
+
+- **A parallel-unsafe function.** Functions you write are `PARALLEL UNSAFE` unless you say otherwise. One in the select list or the `WHERE` clause blocks parallelism for the *whole* query.
+- **A write.** `INSERT`, `UPDATE`, `DELETE` and `SELECT ... FOR UPDATE` do not run in parallel (a `CREATE TABLE AS` or `SELECT` feeding an insert may parallelise the select part).
+- **A cursor or a `LIMIT` that stops early** may use a serial plan that returns the first rows sooner.
+- **Settings:** `max_parallel_workers_per_gather = 0`, or no free workers at execution time.
+"""
+
+[[sections]]
+heading = "A function that blocks it"
+body = """
+A function written in SQL or PL/pgSQL is `PARALLEL UNSAFE` by default, because the planner cannot know it is safe to run in a worker (it might write, or depend on session state that workers do not share). Compute the same aggregate through such a function:
+
+```plan id=m12-unsafe setup=plus1-unsafe
+SELECT status, count(*), sum(plus1(total_cents)) FROM orders GROUP BY status;
+```
+
+A plain Seq Scan, one process, about 510 ms: the function had no side effects but nothing said so. Declare it:
+
+```plan id=m12-safe setup=plus1-safe
+SELECT status, count(*), sum(plus1(total_cents)) FROM orders GROUP BY status;
+```
+
+`CREATE FUNCTION ... PARALLEL SAFE` and the Gather is back, about 180 ms. Mark a function `PARALLEL SAFE` only when it does not write to the database, does not use temporary tables, sequences or `SET`, and does not rely on anything that differs between processes. For an expression like `x + 1` it is obvious; for a function that calls other functions, check each one (the catalog column is `pg_proc.proparallel`: `s` safe, `r` restricted, `u` unsafe).
+
+> [!WARNING]
+> Functions in extensions and in your own migrations are the usual hidden cause of "why is this report not parallel". List the unsafe ones: `SELECT proname FROM pg_proc WHERE proparallel = 'u' AND pronamespace = 'public'::regnamespace;`.
+"""
+
+[[sections]]
+heading = "Joins in parallel"
+body = """
+A join can run in parallel too. With each worker scanning part of `orders`, the planner builds a **Parallel Hash** of the other table that all the workers share, and probes it from each worker:
+
+```plan id=m12-join
+SELECT c.id, count(*) FROM orders o JOIN customers c ON c.id = o.customer_id
+GROUP BY c.id ORDER BY 2 DESC LIMIT 5;
+```
+
+The same query with parallelism off:
+
+```plan id=m12-join-serial setup=no-parallel
+SELECT c.id, count(*) FROM orders o JOIN customers c ON c.id = o.customer_id
+GROUP BY c.id ORDER BY 2 DESC LIMIT 5;
+```
+
+The `Parallel Hash Join`, one hash table in shared memory, built cooperatively and probed by three processes, makes the join about 2.4 times faster than the same plan with parallelism off (431 ms against 1,041 ms; the serial plan is the one above). The fraction of the time spent in the part that cannot divide (combining 50,000 group rows, sorting for the `LIMIT`) is why it is not 3 times: the part of a query that stays serial sets the limit of what parallelism can do.
+"""
+
+[[sections]]
+heading = "JIT compilation, and the other engines"
+body = """
+Postgres can compile the expressions of a query to machine code with LLVM (**JIT**) when its estimated cost passes `jit_above_cost` (100,000). For a long analytical query with many expressions it can save time; for a query that is estimated high but runs briefly, the compile time is pure loss, which is why a plan that shows `JIT:` with a large `Timing` for `Generation` and `Optimization` is a known cause of "fast query, slow first run". The build used for this course has no LLVM (`pg_jit_available()` returns `f`), so this section is from the manual and **was not measured**. If you see JIT overhead dominating short queries in production, raise `jit_above_cost` or turn `jit` off for the role.
+
+| Engine | Parallel query |
+|---|---|
+| MySQL (InnoDB) | Parallel reads exist only for specific cases (`innodb_parallel_read_threads` for `CHECK TABLE` and `SELECT COUNT(*)` on a primary-key scan); general query parallelism is in the HeatWave cloud service, not in the server. From the manual; not run here |
+| SQLite | No intra-query parallelism: one thread per connection. From the manual; not run here |
+| DuckDB, ClickHouse | Parallel by design: they split every scan across all cores. Not run here |
+"""
+
+[[checks]]
+prompt = "A plan shows Gather with Workers Planned: 2 and Workers Launched: 0. What happened and what is the cost?"
+answer = "The planner planned for two workers, but none were available when the query started (max_parallel_workers, shared by all running queries, was used up). The leader ran the whole plan alone, so the query is serial in speed while it carries the cost of the Gather. It explains a report that is fast when the server is quiet and slow at busy times."
+
+[[checks]]
+prompt = "An aggregate over 2,000,000 rows takes about 510 ms with no Gather, though max_parallel_workers_per_gather is 2. The select list has a function you wrote. What do you check and change?"
+answer = "That the function is marked PARALLEL SAFE; functions are PARALLEL UNSAFE by default, and one unsafe function in the query stops parallelism for all of it. If it does not write, use temporary tables or sequences or depend on session state, ALTER FUNCTION ... PARALLEL SAFE. Here that returned the plan to a Gather and about 180 ms."
+
+[[checks]]
+prompt = "Why does a lookup by primary key never use a Gather?"
+answer = "It reads a few pages, so there is nothing to divide; the planner adds parallel_setup_cost (1000) for starting workers and parallel_tuple_cost for each row passed up, which dwarfs the 6-unit cost of the lookup. Parallel query pays only when a large amount of work divides and the result is small."
+
+[[checks]]
+prompt = "Going from 2 to 4 processes took the aggregate from 155 ms to 124 ms. Why not 78?"
+answer = "Only the scan divides cleanly; the aggregation of each worker's rows, the combine step and the startup of workers are not reduced by adding more, and the machine has four cores, which the leader and the workers share. Each extra worker buys less, and each uses its own work_mem."
+
+[[terms]]
+term = "Gather"
+means = "The plan node that starts parallel workers and collects their rows; Gather Merge keeps their sort order."
+section = "What a parallel plan looks like"
+
+[[terms]]
+term = "Partial and Finalize aggregate"
+means = "Each process aggregates the rows it saw (Partial); the leader combines those results (Finalize)."
+section = "What a parallel plan looks like"
+
+[[terms]]
+term = "PARALLEL SAFE"
+means = "A function declaration saying it can run in a worker; without it a function forbids parallelism for the query that calls it."
+section = "A function that blocks it"
+
+[[terms]]
+term = "JIT"
+means = "Compiling a query's expressions to machine code with LLVM when its cost passes jit_above_cost."
+section = "JIT compilation, and the other engines"
+
+[[sources]]
+title = "PostgreSQL: parallel query"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/parallel-query.html"
+
+[[sources]]
+title = "PostgreSQL: parallel safety"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/parallel-safety.html"
+
+[[sources]]
+title = "PostgreSQL: when can parallel query be used"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/when-can-parallel-query-be-used.html"
+
+[[sources]]
+title = "PostgreSQL: just-in-time compilation"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/jit.html"
+
+[[sources]]
+title = "MySQL: InnoDB parallel read threads"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html#sysvar_innodb_parallel_read_threads"
