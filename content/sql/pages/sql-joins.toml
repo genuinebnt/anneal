@@ -1,0 +1,194 @@
+title = "Joins: nested loop, hash and merge"
+group = "sql-shapes"
+order = 13
+minutes = 20
+lede = "Postgres has three ways to join two tables, and which one it picks decides whether a query takes a millisecond or a second. A nested loop looks up each outer row in the inner table and wants an index. A hash join reads one side into memory and streams the other past it and wants no index at all. A merge join walks two sorted inputs together. This page measures each on the example schema and shows the index each one is waiting for."
+say = "A nested loop runs the inner side once per outer row, so it needs an index on the join column and wins when the outer side is small; a hash join builds a hash table from one side and probes it with the other, wins on large inputs and spills when it does not fit in work_mem; a merge join needs both sides sorted and wins when an index already provides the order. The most common join slowness is a missing index on the foreign key."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Nested loop**: for each outer row, one inner lookup. One customer's 44 orders took **0.2 ms** with an index on `orders(customer_id)` and **127 ms** without, when the inner side became a Seq Scan of 2,000,000 rows. Read `loops=` on the inner node: the work is per loop.",
+  "**Hash join**: build a hash table of the smaller side, probe it with the other. All 2,000,000 orders joined to 50,000 customers took about 720 ms with one batch; with `work_mem` at 64 kB the table split into **16 batches** and took about 910 ms.",
+  "**Merge join**: both inputs sorted on the join key, walked together. With an index on each side supplying the order it needs no sort: about 580 ms here, in the range of the hash join (and a little faster), which is why the planner picks it when the order is free or the query needs it anyway.",
+  "**The foreign key needs an index.** Postgres creates one for a primary key and a unique constraint, never for the referencing column of a foreign key, and a join (or a `DELETE` on the parent) from the other direction then scans the child table.",
+  "The planner picks a join method from its row estimates (module 10). A nested loop chosen because it expected one row and met a million is the classic misestimate (module 11).",
+]
+
+[[sections]]
+heading = "Nested loop: one lookup per outer row"
+body = """
+Take one customer and their orders. The join column is `orders.customer_id`:
+
+Timings on this page are the median of 7 warm runs on a 4-core machine; the plan files hold single runs.
+
+```plan id=m13-nl-indexed setup=orders-customer,no-parallel
+SELECT o.id, c.email FROM customers c JOIN orders o ON o.customer_id = c.id
+WHERE c.id = 4242;
+```
+
+Read a join from the top. A **Nested Loop** has two children: the first is the *outer* side, run once (an Index Scan finds customer 4242), and the second is the *inner* side, run **once for each row the outer side produced**, here one time, through the index on `customer_id`. 44 rows, 0.2 ms.
+
+The inner node's `loops=` is the number to read. If the outer side returns 19 customers instead of one, the inner node runs 19 times and its `actual time` and `rows` are *per loop* (multiply by `loops` for the total):
+
+```plan id=m13-nl-many setup=orders-customer,no-parallel
+SELECT o.id FROM customers c JOIN orders o ON o.customer_id = c.id
+WHERE c.id < 20;
+```
+
+`loops=19`, 36.8 rows per loop, 700 rows in all, 1.6 ms. A nested loop does a fixed amount of work for each outer row, so it is the right join when the outer side is small and the inner side has an index to look up by. It is also the only join method that can use a condition from the outer row to drive an index on the inner side (the `Index Cond: (customer_id = c.id)` above).
+
+Now remove the index on `customer_id` and run the one-customer query again:
+
+```plan id=m13-nl-noindex setup=no-parallel
+SELECT o.id, c.email FROM customers c JOIN orders o ON o.customer_id = c.id
+WHERE c.id = 4242;
+```
+
+Same join, same 44 rows, **127 ms** instead of 0.2, some 600 times slower: the inner side is a Seq Scan of all 2,000,000 orders with `Rows Removed by Filter: 1999956`. With 19 customers it would run that scan 19 times, which is the pattern behind "my page was fast with a hundred rows and takes seconds now". (19 outer rows would be about 19 × 127 ms, roughly 2.4 seconds: arithmetic, not a measured plan.) Postgres creates an index for a primary key and for a `UNIQUE` constraint, but **not** for the referencing side of a foreign key; `orders(customer_id)` has no index until you create one, and every join from customers to their orders, and every `DELETE FROM customers` (which has to check that no order refers to the row), pays for that.
+
+> [!TIP]
+> Create the index on every foreign-key column you join through or delete through, unless the table is tiny. List the ones missing in a database: compare `pg_constraint` (type `f`) to `pg_index` for the same column; the query is in the sources.
+"""
+
+[[sections]]
+heading = "Hash join: no index needed"
+body = """
+When both sides are large, doing an index lookup for every outer row is slower than reading each side once. All orders with their customers:
+
+```plan id=m13-hash setup=no-parallel
+SELECT count(*) FROM customers c JOIN orders o ON o.customer_id = c.id;
+```
+
+A **Hash Join** has two phases. The planner reads the *inner* side (the second child, a **Hash** node over `customers`, the smaller table) into a hash table in memory, keyed on the join column: 50,000 rows, 2,270 kB, `Batches: 1`. Then it reads the other side, the 2,000,000 orders, and for each row looks up the hash table, which takes constant time per row. Two sequential reads, no index, about 720 ms.
+
+The hash table has to fit in `work_mem` (4 MB by default, per hash node). When it does not, Postgres splits both sides into **batches** by the hash of the key, writes the batches it cannot keep to temporary files, and joins them one pair at a time. Setting `work_mem` to 64 kB for one session:
+
+```plan id=m13-hash-batches setup=small-work-mem,no-parallel
+SELECT count(*) FROM customers c JOIN orders o ON o.customer_id = c.id;
+```
+
+`Batches: 16`, `Memory Usage: 176kB`, and the join takes about 910 ms: the same plan, about 25% slower, from writing and reading the batches. A batch count above 1 is the hash join's equivalent of a sort that spilled to disk (module 8), and the fix is the same: a larger `work_mem` for that query, or a smaller build side (an earlier filter, or fewer columns).
+
+Limits of the hash join: it needs an equality condition (`ON a = b`, not `<`), and it cannot return the first row before the whole inner side is built.
+"""
+
+[[sections]]
+heading = "Merge join: two sorted inputs"
+body = """
+A **Merge Join** reads both inputs in order of the join key and walks them together, like merging two sorted lists. It needs no hash table and uses almost no memory, but it needs both inputs sorted, and a sort is expensive unless an index already supplies the order. To see it, the planner has to be steered (module 11): turn the other two methods off for the session, with an index on `orders(customer_id)` available.
+
+```plan id=m13-merge setup=orders-customer,no-parallel,no-hash-nestloop
+SELECT count(*) FROM customers c JOIN orders o ON o.customer_id = c.id;
+```
+
+An **Index Only Scan** on each side delivers the rows already sorted by customer, so no Sort node appears, and the join finishes in about 580 ms, in the same range as the hash join. This is the case where merge wins: both sides ordered by an index, or the query's `ORDER BY` is on the join key and the order would be produced for free. When one side has to be sorted first, add the cost of the sort (and of its spill, if any), and the planner usually prefers the hash join.
+
+| Join | Wants | Cost grows with | Fits when |
+|---|---|---|---|
+| Nested loop | an index on the inner side's join column | outer rows × one lookup | the outer side is small |
+| Hash | memory for the smaller side (`work_mem`) | both sides, once | large inputs, equality condition |
+| Merge | both sides sorted on the key, ideally from indexes | both sides, once, plus sorting | sorted input is free, or the result must be ordered |
+"""
+
+[[sections]]
+heading = "Choosing and debugging a join"
+body = """
+The planner chooses by estimated cost, and the estimate that matters most is the **outer side's row count**. A nested loop is cheap for 1 outer row and ruinous for 1,000,000; if the planner thinks it is 1 and it is 1,000,000, the plan is wrong in a way no index can repair (module 10 and 11 cover the causes and the fixes). To read a slow join:
+
+1. Find the join node and its two children. Which one is outer (first), which inner (second)?
+2. For a nested loop, read `loops=` on the inner node and multiply. A cheap inner node run a million times is the cost.
+3. For a hash join, read `Batches` on the Hash node. More than 1 means a spill.
+4. Compare `rows=` with the actual rows on both children: a big gap there is the estimate that picked the method.
+5. Ask whether the join column has an index on the side being looked up. The foreign key usually does not.
+
+> [!NOTE]
+> MySQL has had hash joins since 8.0.18 (earlier versions used only nested loops, with a block variant) and no merge join; SQLite uses nested loops only, building an automatic temporary index when it needs one. From their documentation; not run here.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+A migration that adds the missing foreign-key index without blocking writes (module 3 explains why `CONCURRENTLY` cannot run in a transaction, and how sqlx handles it):
+
+```sql title=migrations/0042_orders_customer_idx.sql
+-- no-transaction
+CREATE INDEX CONCURRENTLY IF NOT EXISTS orders_customer_id_idx ON orders (customer_id);
+```
+
+And a query that lists the foreign keys of a database whose referencing columns have no index starting with them, for a one-off audit or a CI check:
+
+```sql title=missing_fk_indexes.sql
+SELECT c.conrelid::regclass AS "table", a.attname AS "column", c.confrelid::regclass AS references
+FROM pg_constraint c
+JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+WHERE c.contype = 'f'
+  AND NOT EXISTS (
+      SELECT 1 FROM pg_index i
+      WHERE i.indrelid = c.conrelid AND i.indkey[0] = c.conkey[1]
+  );
+```
+
+It checks only the first column of each key (a composite foreign key is rare, and the first column is what a join lookup needs).
+"""
+
+[[checks]]
+prompt = "A page that lists a customer's orders runs in a few ms for one customer and over two seconds for the 19 customers of a manager. The plan is a Nested Loop whose inner node is a Seq Scan on orders with loops=19. What is missing and what is the fix?"
+answer = "An index on orders(customer_id), the foreign key. Postgres does not create one for the referencing column. Each of the 19 outer rows scans all 2,000,000 orders (about 127 ms each). CREATE INDEX CONCURRENTLY on orders (customer_id) turns each inner scan into an index lookup of a few milliseconds."
+
+[[checks]]
+prompt = "A Hash Join node shows Batches: 16. What happened, what did it cost and what are two ways to fix it?"
+answer = "The hash table did not fit in work_mem, so Postgres split both sides into 16 batches and wrote them to temporary files, joining them pair by pair. Here that made the join about 25% slower. Raise work_mem for that query (SET LOCAL in a transaction), or shrink the build side: filter it earlier, or select fewer columns."
+
+[[checks]]
+prompt = "When does the planner choose a merge join, and why did we have to turn the other two methods off to see one on the example tables?"
+answer = "When both inputs arrive sorted on the join key, typically from indexes, or the query wants its result ordered by the join key; then it needs no sort and no hash table. On the example tables the hash join was estimated cheaper, because reading the 2,000,000 orders once and probing a small hash is cheap, so only with enable_hashjoin and enable_nestloop off did the merge appear."
+
+[[checks]]
+prompt = "Why can only a nested loop use a condition from the outer row to drive an index on the inner table?"
+answer = "A nested loop runs the inner side once per outer row, so it can pass that row's value into the inner scan (Index Cond: customer_id = c.id). A hash and a merge join read each side independently, once, so neither side can be filtered by values from the other's current row."
+
+[[terms]]
+term = "Nested loop"
+means = "A join that runs the inner side once for each row of the outer side; efficient with a small outer side and an index on the inner."
+section = "Nested loop: one lookup per outer row"
+
+[[terms]]
+term = "Hash join"
+means = "A join that builds an in-memory hash table from one side and probes it with the other; needs an equality condition and work_mem."
+section = "Hash join: no index needed"
+
+[[terms]]
+term = "Merge join"
+means = "A join that walks two inputs sorted on the join key together; cheap when the order comes from indexes."
+section = "Merge join: two sorted inputs"
+
+[[terms]]
+term = "Batches"
+means = "The number of pieces a hash join splits its inputs into when the hash table does not fit in work_mem; above 1 means temporary files."
+section = "Hash join: no index needed"
+
+[[sources]]
+title = "PostgreSQL: planner and optimizer, join methods"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/planner-optimizer.html"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
+
+[[sources]]
+title = "PostgreSQL: foreign keys do not create indexes (constraints)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-constraints.html#DDL-CONSTRAINTS-FK"
+
+[[sources]]
+title = "Use The Index, Luke: joins"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/join"
+
+[[sources]]
+title = "MySQL: hash join optimization"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/hash-joins.html"
