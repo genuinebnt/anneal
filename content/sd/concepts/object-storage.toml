@@ -19,7 +19,7 @@ heading = "The model"
 body = """
 - A **bucket** holds **objects**; each object is bytes plus metadata, found by a **key** such as `videos/2026/10/abc.mp4`. There are no real folders: `/` is just a character, and listing by **prefix** imitates them.
 - Objects are **immutable**: you replace the whole object, never edit a byte range in place. Versioning keeps old versions.
-- Size: up to **5 TB** per object; one `PUT` carries up to 5 GB, larger needs **multipart upload**.
+- Size: up to **50 TB** per object (10,000 parts of up to 5 GiB; older documentation and many articles still say 5 TB); one `PUT` carries up to 5 GB, larger needs **multipart upload**.
 - Since December 2020 S3 gives **strong read-after-write consistency** for every request, including overwrites, deletes and lists.
 """
 
@@ -44,7 +44,10 @@ body = """
 | cost | per GB stored by class (standard, infrequent access, Glacier archive), per request, and per GB sent out |
 
 **Lifecycle rules** move old objects to cheaper classes or delete them; that is how a video site keeps cold uploads cheap.
-"""
+
+
+> [!NOTE]
+> **How these figures were checked.** The 50 TB object limit, the 5 GB single-copy limit, the 5 MB minimum part size, 1,000 keys per delete request and conditional `PutObject` (`If-None-Match`) come from the S3 API model published in the botocore repository on GitHub. Not verified (the S3 user guide could not be opened): the 10,000-part maximum, 3,500 and 5,500 requests a second per prefix, the 99.99% availability figure, the storage-class minimum durations and the price used in the estimate."""
 
 [[sections]]
 heading = "Inside, roughly"
