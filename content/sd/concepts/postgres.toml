@@ -1,17 +1,56 @@
 title = "Postgres"
 group = "technology"
 order = 3
-minutes = 10
+minutes = 22
 lede = "The default relational database: transactions, joins, constraints and rich indexes, MVCC so readers never block writers, and a write-ahead log that makes commits durable and feeds replicas."
 say = "Postgres for links and users: a unique index on the code enforces no duplicates, and a primary with two streaming replicas carries the reads."
-related = ["indexes", "replication", "contention", "data-modeling"]
+related = ["indexes", "replication", "contention", "data-modeling", "storage-engines", "isolation-anomalies", "sharding"]
+
+summary = [
+  "Postgres is the default choice for a system of record: **ACID transactions**, constraints, joins and many index types. Start here unless the workload says otherwise.",
+  "**MVCC**: an `UPDATE` writes a **new row version** and leaves the old one for readers who still need it, so readers never block writers. The cost is **bloat** that `VACUUM` must clean (measured: three full-table updates grew 13 MB to 54 MB).",
+  "Every commit appends to the **write-ahead log** and flushes it; the same log feeds replicas and point-in-time recovery.",
+  "The default isolation is **Read Committed**, which does not stop lost updates or double booking by itself: use `FOR UPDATE`, a conditional `UPDATE`, a unique constraint, or `SERIALIZABLE` with retries.",
+  "One primary takes all writes. Grow with **read replicas** (asynchronous, so lagging), a **connection pooler** (each connection is a process), **partitioning**, then sharding.",
+]
+
 
 [[sections]]
-heading = "Inside"
+heading = "Inside: the heap, MVCC and vacuum"
 body = """
-- **Write-ahead log (WAL)**: every change is written to the log and flushed before the commit returns; data pages are written later. A crash replays the log. Replicas stream the same log.
-- **MVCC**: an update writes a new version of the row; readers see the snapshot from when their transaction started, so reads do not block writes. Old versions are cleaned up by **vacuum**.
-- **B-tree indexes** by default; also GIN (full text, JSON), GiST (geometry), BRIN (huge append-only tables).
+A table is a **heap** of 8 KB pages holding row versions ("tuples"). Each tuple carries a header with `xmin` (the transaction that created it) and `xmax` (the one that deleted or replaced it). A query takes a **snapshot**: it sees the versions created by transactions that committed before the snapshot and not yet deleted by one. That is MVCC, and it is why a long `SELECT` and a stream of `UPDATE`s do not block each other.
+
+An `UPDATE` is an insert of a new version plus marking the old one dead. The old version stays until **vacuum** removes it once no snapshot can still see it. **Measured** (Postgres 16.15, 100,000 rows of about 130 bytes):
+
+| step | table size |
+|---|---|
+| after inserting 100,000 rows | 13 MB |
+| after 3 updates of every row, no vacuum | 54 MB |
+| after plain `VACUUM` | 54 MB (the space is reusable, but not returned to the OS) |
+| after `VACUUM FULL` (rewrites the table, takes an exclusive lock) | 13 MB |
+
+Three consequences for design:
+
+- **Updates are not cheap in place.** A row updated a million times is a million dead versions waiting for vacuum. Counters that change on every request belong in Redis or a batched write, not in a hot row.
+- **Long transactions hold vacuum back.** An old snapshot, a forgotten `idle in transaction` session or a stalled replica with `hot_standby_feedback` keeps every newer dead version alive, and the table and indexes bloat. Set `idle_in_transaction_session_timeout`.
+- **Autovacuum must keep up.** It runs when dead rows exceed a fraction of the table (20% by default); on very large, busy tables lower `autovacuum_vacuum_scale_factor` for that table.
+
+**HOT updates.** If an update changes no indexed column and the new version fits on the same page, Postgres makes a **heap-only tuple** and does not touch the indexes at all, which saves a lot of write work. Free space on the page is the condition, and a full page (the default `fillfactor` is 100) leaves none. **Measured:** updating every row of a full table gave 31 HOT updates out of 400,000 across four passes; with `fillfactor = 70`, **45,000 of 100,000** were HOT on the first pass. When the updated column was itself indexed, **0** were. So an index on a frequently updated column has a hidden price on every update.
+
+Transaction ids are 32 bits and wrap around; vacuum "freezes" old rows to keep them visible forever. If autovacuum is blocked for too long, Postgres stops accepting writes near the limit to protect the data: a known production incident worth being able to name.
+"""
+
+[[sections]]
+heading = "The write-ahead log, durability and replication"
+body = """
+Every change is written to the **WAL** and flushed (`fsync`) before the commit returns; data pages are written later by the background writer and checkpoints. A crash replays the log from the last checkpoint. See the storage engines page for torn pages and `full_page_writes`.
+
+- **`synchronous_commit = off`** returns before the flush: up to a few hundred milliseconds of commits can be lost in a crash, but the database stays consistent. A fair trade for non-critical events, never for payments.
+- **Streaming replication** ships WAL to replicas that replay it. By default it is **asynchronous**: a replica lags by the network plus replay time, and a promoted replica may lack the last commits. `synchronous_standby_names` makes a commit wait for a replica's flush, trading latency and availability for no loss.
+- **Reads from replicas see old data.** After a write, a read on a replica may not show it. Route "read your own writes" to the primary, or remember the WAL position (LSN) and wait for the replica to pass it.
+- **Replay conflicts.** A long query on a replica can be cancelled because replay needs to remove rows it still reads, unless `hot_standby_feedback` is on (which then delays vacuum on the primary).
+- **Logical replication** sends row changes by table. It carries data between major versions, to another system (Debezium reads it for change data capture), or into a different shape; physical replication copies the whole cluster byte for byte.
+- **Backups and point-in-time recovery**: a base backup plus archived WAL restores the database to any moment, such as the minute before a bad deploy. Test the restore; an untested backup is a hope.
 """
 
 [[sections]]
@@ -21,12 +60,58 @@ body = """
 - **Repeatable read** / **serializable**: stronger; serializable aborts one of two conflicting transactions, which the app retries.
 - `SELECT … FOR UPDATE` locks the rows you read, the usual way to stop a double booking.
 - Constraints (unique, foreign keys, checks) are enforced by the database even when the code forgets.
+
+The tools, from cheapest to strongest, for "only one of these two requests may win":
+
+1. **A conditional update**: `UPDATE seats SET holder = $1 WHERE id = $2 AND holder IS NULL`, then check the row count. One statement, atomic, no explicit lock.
+2. **A unique constraint** on the thing that must be unique (`(event_id, seat)`): the second insert fails with a unique violation you catch.
+3. **`SELECT … FOR UPDATE`** inside a transaction: later transactions wait for the lock. Add `NOWAIT` to fail at once or `SKIP LOCKED` to let workers take different rows (a job queue).
+4. **A version column** (optimistic): `UPDATE … SET …, version = version + 1 WHERE id = $1 AND version = $2`. Zero rows updated means someone else got there first; retry.
+5. **`SERIALIZABLE`**: Postgres detects dangerous patterns (serializable snapshot isolation) and aborts one transaction with SQLSTATE `40001`. Your code must retry the whole transaction.
+
+Deadlocks happen when two transactions lock rows in opposite orders; Postgres detects them after `deadlock_timeout` (1 s) and aborts one. Lock rows in a consistent order. The contention and isolation anomalies pages show these running.
+"""
+
+[[sections]]
+heading = "Indexes and the planner"
+body = """
+B-tree is the default and serves equality, range and `ORDER BY`. Others: **GIN** (arrays, JSONB, full-text), **GiST** and **SP-GiST** (geometry, ranges, nearest neighbour), **BRIN** (tiny index for huge, naturally ordered tables such as time series), **hash** (equality only).
+
+Ways to make an index smaller or faster:
+
+- A **composite** index `(a, b)` serves `WHERE a = ?` and `WHERE a = ? AND b = ?` but not `WHERE b = ?` alone. Put equality columns first, then the range or sort column.
+- A **partial** index (`WHERE status = 'pending'`) indexes only the rows a query cares about.
+- A **covering** index (`INCLUDE (col)`) lets Postgres answer from the index alone: an **index-only scan**. **Measured** on 1 million rows with 1,000 rows matching: reading just `id` from an index on `(a, id)` took **0.19 ms** with 7 buffers; reading the 200-byte `pad` column from the same match took **3.5 ms** with about 1,000 heap pages. The visibility map must be up to date (vacuum) for index-only scans to skip the heap.
+- Each index costs: space, and work on every insert and non-HOT update. Drop the ones nothing uses (`pg_stat_user_indexes.idx_scan = 0`).
+
+Use `EXPLAIN (ANALYZE, BUFFERS)` and read the plan: a sequential scan on a big table, a nested loop over millions of rows, or estimated rows far from actual rows (stale statistics; run `ANALYZE`) point at the fix.
 """
 
 [[sections]]
 heading = "Limits and how to grow"
 body = """
 One primary takes all writes (thousands to tens of thousands a second). Grow with read replicas, connection pooling (PgBouncer: each connection is a process), partitioning big tables by time, and finally sharding (Citus, or by hand). Many products never need the last step.
+
+In order of effort:
+
+1. **Fix queries and indexes.** Most "Postgres is slow" problems are a missing index or a bad plan.
+2. **Pool connections.** Each connection is an OS process with its own memory (default `max_connections` is 100). Thousands of app instances must go through **PgBouncer** in transaction mode; remember that session state (`SET`, prepared statements, advisory locks) does not survive transaction pooling.
+3. **Read replicas** for reads that tolerate lag; cache the hottest ones.
+4. **Partition** a big table (`PARTITION BY RANGE (created_at)`): queries on the key prune partitions, and dropping an old partition is instant, where `DELETE` plus vacuum is not.
+5. **Move heavy or odd workloads out**: search to Elasticsearch, analytics to a warehouse, counters to Redis, events to Kafka, fed by logical replication or an outbox table.
+6. **Shard** (Citus, or by tenant in your own code) when one primary's writes or disk are the limit. This is a large step: cross-shard joins and transactions go, so push it off as long as the numbers allow.
+
+A single well-tuned primary on current hardware holds several terabytes and tens of thousands of simple transactions a second; say so before reaching for a distributed database.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+- Default to Postgres for users, orders, bookings and anything that needs transactions or constraints, and say why: ACID, a unique index to enforce rules, mature tooling.
+- Name the **write path** (WAL, then pages) and the **read path** (snapshot, indexes), and say that replicas are asynchronous.
+- Pick a concurrency tool on purpose: conditional update, unique constraint, `FOR UPDATE`, version column or serializable with retry, and say what the loser sees.
+- Show you know the costs of MVCC: bloat, vacuum, long transactions, and that a hot row updated constantly is a bad fit.
+- Give the growth path: indexes, pooling, replicas, partitions, then sharding, and the point at which you would switch technology.
 """
 
 [[checks]]
@@ -36,3 +121,118 @@ answer = "Do it in one transaction that locks or conditions on the seat: SELECT 
 [[checks]]
 prompt = "Why do long-running read queries not block writers in Postgres?"
 answer = "MVCC: writers create new row versions and readers keep reading the snapshot taken when they started, so neither waits for the other; vacuum later removes versions nobody can see."
+
+[[checks]]
+prompt = "A table with 100,000 rows grows from 13 MB to 54 MB after three updates of every row, and stays 54 MB after VACUUM. Explain both, and what would return the space."
+answer = "An UPDATE writes a new row version and leaves the old one for readers with older snapshots, so three updates leave about four versions of each row. VACUUM marks the dead versions' space reusable for new rows but does not shrink the file. VACUUM FULL (or pg_repack) rewrites the table compactly, at the cost of an exclusive lock for the first; the better fix is fewer updates, a lower fillfactor so updates can be HOT, and autovacuum tuned to keep up."
+
+[[checks]]
+prompt = "Why can an index on a frequently updated column make writes slower even if the query never uses it?"
+answer = "An update of an indexed column cannot be a HOT update, so Postgres writes a new index entry in every index for the new row version. In the measurement, updating a non-indexed column gave 45,000 HOT updates out of 100,000 with a spare-room fillfactor, and updating an indexed column gave none. Drop unused indexes and avoid indexing columns that change on every request."
+
+[[checks]]
+prompt = "Users read a page right after saving and sometimes see the old data. The reads go to a streaming replica. What is happening and how do you fix it?"
+answer = "Streaming replication is asynchronous, so the replica has not replayed the write yet. Send reads that follow a write (read your own writes) to the primary for a short time, or record the WAL position (LSN) of the commit and have the replica wait until it has replayed past it. Synchronous replication removes the lag at a cost in latency and availability."
+
+[[checks]]
+prompt = "Your app opens 2,000 connections to Postgres and it falls over although the queries are light. Why, and what do you do?"
+answer = "Each connection is a separate server process with its own memory and the scheduler and lock manager cope badly with thousands of them; the default max_connections is only 100. Put a pooler such as PgBouncer in transaction mode in front, so many app connections share a few dozen server connections, and keep session state out of the connection."
+
+[[checks]]
+prompt = "You must delete a year of old rows from a 2 TB events table without hours of locking and bloat. How?"
+answer = "Partition the table by time. Dropping or detaching an old partition is a metadata change that frees the files at once, where DELETE writes dead versions, generates WAL, and leaves bloat for vacuum to clean. Without partitions, delete in small batches and let autovacuum run, but that is the slow path."
+
+[[terms]]
+term = "Heap"
+means = "The unordered pages that hold row versions; indexes point into it."
+section = "Inside: the heap, MVCC and vacuum"
+
+[[terms]]
+term = "MVCC"
+means = "Multi-version concurrency control: readers see a snapshot while writers create new row versions."
+section = "Inside: the heap, MVCC and vacuum"
+
+[[terms]]
+term = "Vacuum"
+means = "The process that removes dead row versions and freezes old ones."
+section = "Inside: the heap, MVCC and vacuum"
+
+[[terms]]
+term = "HOT update"
+means = "An update that changes no indexed column and fits on the same page, so no index is touched."
+section = "Inside: the heap, MVCC and vacuum"
+
+[[terms]]
+term = "LSN"
+means = "Log sequence number: a position in the write-ahead log."
+section = "The write-ahead log, durability and replication"
+
+[[terms]]
+term = "Logical replication"
+means = "Row-level changes streamed by table, usable across versions and into other systems."
+section = "The write-ahead log, durability and replication"
+
+[[terms]]
+term = "Serializable snapshot isolation"
+means = "Snapshot isolation plus detection of dangerous read-write patterns, aborting one transaction."
+section = "Transactions and isolation"
+
+[[terms]]
+term = "Index-only scan"
+means = "A query answered from the index alone, without reading the heap."
+section = "Indexes and the planner"
+
+[[terms]]
+term = "PgBouncer"
+means = "A lightweight connection pooler that shares few server connections among many clients."
+section = "Limits and how to grow"
+
+[[sources]]
+title = "PostgreSQL: Concurrency control (MVCC)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/mvcc.html"
+
+[[sources]]
+title = "PostgreSQL: Routine vacuuming"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"
+note = "bloat, freezing and transaction id wraparound"
+
+[[sources]]
+title = "PostgreSQL: Heap-only tuples"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/heap/README.HOT"
+note = "the README next to the code"
+
+[[sources]]
+title = "PostgreSQL: Write-ahead logging"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/wal-intro.html"
+
+[[sources]]
+title = "PostgreSQL: High availability and replication"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/high-availability.html"
+note = "synchronous and asynchronous standbys"
+
+[[sources]]
+title = "PostgreSQL: Explicit locking"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/explicit-locking.html"
+note = "FOR UPDATE, NOWAIT, SKIP LOCKED"
+
+[[sources]]
+title = "PostgreSQL: Index-only scans"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+
+[[sources]]
+title = "PostgreSQL: Table partitioning"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/ddl-partitioning.html"
+
+[[sources]]
+title = "Ports and Grittner: Serializable snapshot isolation in PostgreSQL (VLDB 2012)"
+kind = "paper"
+url = "https://arxiv.org/abs/1208.4179"
+

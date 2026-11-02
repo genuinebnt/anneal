@@ -1,10 +1,18 @@
 title = "DynamoDB"
 group = "technology"
 order = 5
-minutes = 12
+minutes = 22
 lede = "AWS's managed key-value and document store: items are found by a partition key and an optional sort key, latency stays in single-digit milliseconds at any size, and you pay for (or provision) reads and writes rather than servers."
 say = "Bookings go in DynamoDB with the show as partition key and the seat as sort key; a conditional write `attribute_not_exists(holder)` makes the seat hold atomic, and a GSI on user id serves 'my bookings'."
-related = ["data-modeling", "sharding", "cassandra", "contention"]
+related = ["data-modeling", "sharding", "cassandra", "contention", "scaling-writes", "storage-engines"]
+
+summary = [
+  "DynamoDB is a **managed key-value and document store**: single-digit-millisecond reads and writes at any size, with capacity you buy rather than servers you run.",
+  "Access is by **key**: `GetItem`, `Query` on a partition key (plus a sort-key range), and almost never `Scan`. **Design keys from your access patterns first.**",
+  "Every partition serves about **3,000 read units and 1,000 write units a second**, so a hot key throttles however large the table is.",
+  "**Conditional writes** and **transactions** give optimistic locking and all-or-nothing multi-item writes without a lock service; **GSIs** are eventually consistent copies.",
+  "Cost follows request count and item size: keep items small, project only needed attributes to indexes, and choose on-demand or provisioned capacity on purpose.",
+]
 
 [[sections]]
 heading = "Keys and items"
@@ -60,6 +68,64 @@ Because there are no joins, related entities are often stored in **one table** w
 > Global tables replicate a table across regions, active-active, resolving concurrent writes by last writer wins. Fine for profiles and carts; not for a balance that must never go negative.
 """
 
+[[sections]]
+heading = "Limits worth knowing"
+body = """
+Numbers an interviewer may probe, and that change what you can design:
+
+| Limit | Value |
+|---|---|
+| item size | 400 KB, including attribute names |
+| `Query` or `Scan` response | 1 MB per page; the caller follows `LastEvaluatedKey` |
+| `BatchGetItem` / `BatchWriteItem` | 100 reads / 25 writes per call, not atomic |
+| `TransactWriteItems` | up to 100 items, all or nothing |
+| partition throughput | about 3,000 RCU and 1,000 WCU per partition |
+| default per-table quota | 40,000 read and 40,000 write units |
+| streams retention | 24 hours |
+| point-in-time recovery | any second in the last 35 days |
+
+Partitions **split on size and on traffic**: a table starts with few partitions and DynamoDB adds them as data grows or traffic is sustained. **Adaptive capacity** lets a hot partition borrow unused capacity from the table and splits a hot item collection when it can, but a single key still cannot exceed the 1,000 write units a second one partition serves. A new table in on-demand mode can absorb up to roughly double its previous peak immediately; a sudden jump far beyond that can still be throttled for a few minutes.
+"""
+
+[[sections]]
+heading = "Reads: consistency, cost and caching"
+body = """
+A read is **eventually consistent** by default (it may miss a write from the last second) and **strongly consistent** if you ask (`ConsistentRead=true`), which reads from the partition leader and costs twice as much. GSIs only support eventually consistent reads. Transactional reads cost twice again.
+
+Rough read cost: one unit reads up to 4 KB strongly consistent; eventually consistent reads cost half. A 100 KB item therefore costs 25 units to read strongly, so wide items on a hot path are expensive; store the big parts in S3 and the key in the item, or split the item.
+
+**DAX** is an in-memory cache in front of DynamoDB with microsecond reads for repeated `GetItem` and `Query`. It suits read-heavy, skewed access (a hot product); it does not help writes and returns eventually consistent data.
+"""
+
+[[sections]]
+heading = "Patterns that come up"
+body = """
+- **Idempotent writes.** Put a client-supplied request id in the item (or in a separate item written in the same transaction) with `attribute_not_exists`, so a retried request does nothing the second time.
+- **Hot key sharding.** Add a random suffix `0..N-1` to the partition key on write, and query all N and merge on read (**write sharding**). Choose N from the target write rate divided by 1,000.
+- **Leaderboards and rankings** are awkward: there is no sorted rank. Keep a GSI whose sort key is the score within a bounded partition, or use Redis.
+- **Time series**: partition by entity and time bucket (`SENSOR#7#2026-11`), sort by timestamp, and set TTL so old buckets disappear; or write to a new table per period and drop the old one.
+- **Counters** with `ADD` are not idempotent under retry. Use them for approximate counts, or use a conditional write with a request id for exact ones.
+- **Change data capture.** Streams feed a Lambda that updates a search index, a cache or an aggregate; handle at-least-once delivery.
+"""
+
+[[sections]]
+heading = "DynamoDB against the alternatives"
+body = """
+| | DynamoDB | Cassandra | Postgres |
+|---|---|---|---|
+| operate it | nothing; managed | a cluster team | a primary and replicas |
+| query model | keys, a few indexes | partition key, clustering | any SQL |
+| transactions | up to 100 items | single partition (LWT) | full |
+| scale-out | automatic | add nodes | read replicas, then sharding |
+| cost shape | per request and GB | per node | per node |
+| lock-in | AWS | none | none |
+
+Choose DynamoDB when the access patterns are known and key-based, traffic is spiky or very large, and you want no cluster to run. Choose Postgres when queries are flexible or relational, and Cassandra when you need multi-cloud or on-prem scale with no lock-in.
+
+> [!INTERVIEW]
+> Write the access patterns as a list first, show the key schema that serves each, say which are GSIs, and say how you would shard the hottest key.
+"""
+
 [[checks]]
 prompt = "A table of votes uses the candidate id as partition key. During a live final, two candidates get almost all the votes and writes are throttled. Why, and what do you do?"
 answer = "Each partition key maps to one partition with about 1,000 write units a second, so two keys cannot absorb the load however large the table. Shard the key (`CANDIDATE#7#<0..N-1>`, chosen at random per write) and sum the shards on read, or buffer votes in a stream and write aggregates."
@@ -71,3 +137,82 @@ answer = "Make the booking a conditional write on the seat's item: `UpdateItem` 
 [[checks]]
 prompt = "Why can a read from a GSI miss an item you wrote a moment ago?"
 answer = "A GSI is updated asynchronously from the table and only supports eventually consistent reads, so for a short time after a write the index may not have it yet. Read from the base table with a strongly consistent read when you must see your own write."
+
+[[checks]]
+prompt = "A table stores orders with partition key = customer id. One enterprise customer generates 8,000 writes a second. Why is it throttled, and what are the options?"
+answer = "One partition serves about 1,000 write units a second, and every item of one customer shares a partition key, so adaptive capacity cannot lift one key past that. Shard the key with a suffix chosen at random from 0..N-1 (N around 10), query the N shards and merge on read, or change the key to something with higher cardinality such as customer id plus order date bucket."
+
+[[checks]]
+prompt = "How much does it cost, in read units, to read a 10 KB item strongly consistently, eventually consistently, and inside a transaction?"
+answer = "One read unit covers 4 KB strongly consistent, so 10 KB rounds up to 3 units. Eventually consistent reads cost half, 1.5 units. A transactional read costs twice the strongly consistent price, 6 units."
+
+[[checks]]
+prompt = "Two requests with the same request id arrive because a client retried after a timeout. How do you make sure the order is created once?"
+answer = "Write the order with a ConditionExpression attribute_not_exists on a key that includes the request id (or write a dedupe item with that id in the same TransactWriteItems). The second write fails the condition, and the handler treats ConditionalCheckFailed as success and returns the existing order."
+
+[[terms]]
+term = "Partition key / sort key"
+means = "The key that is hashed to choose the partition, and the key that orders items within it."
+section = "Keys and items"
+
+[[terms]]
+term = "Item collection"
+means = "All items sharing one partition key."
+section = "Keys and items"
+
+[[terms]]
+term = "GSI / LSI"
+means = "A global secondary index (any keys, eventually consistent) and a local one (same partition key, another sort key)."
+section = "Secondary indexes"
+
+[[terms]]
+term = "RCU / WCU"
+means = "Read and write capacity units: 4 KB strongly consistent reads and 1 KB writes per second."
+section = "Capacity and cost"
+
+[[terms]]
+term = "Adaptive capacity"
+means = "DynamoDB moving unused throughput to hot partitions and splitting hot item collections."
+section = "Limits worth knowing"
+
+[[terms]]
+term = "Write sharding"
+means = "Adding a random suffix to a hot key so writes spread over several partitions."
+section = "Patterns that come up"
+
+[[terms]]
+term = "DAX"
+means = "A managed in-memory cache that sits in front of DynamoDB."
+section = "Reads: consistency, cost and caching"
+
+[[sources]]
+title = "Amazon DynamoDB Developer Guide: core components and limits"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html"
+
+[[sources]]
+title = "Amazon DynamoDB Developer Guide: read consistency and capacity units"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html"
+
+[[sources]]
+title = "Amazon DynamoDB Developer Guide: best practices for designing and using partition keys"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html"
+
+[[sources]]
+title = "Amazon DynamoDB Developer Guide: transactions"
+kind = "docs"
+url = "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html"
+
+[[sources]]
+title = "Elhemali et al.: Amazon DynamoDB, a scalable, predictably performant, and fully managed NoSQL database service (USENIX ATC 2022)"
+kind = "paper"
+url = "https://www.usenix.org/conference/atc22/presentation/elhemali"
+
+[[sources]]
+title = "DeCandia et al.: Dynamo (SOSP 2007)"
+kind = "paper"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+note = "the earlier internal system, not the same as the service"
+

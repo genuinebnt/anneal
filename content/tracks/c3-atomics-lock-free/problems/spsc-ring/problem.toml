@@ -1,0 +1,32 @@
+slug = "spsc-ring"
+title = "A wait-free SPSC ring buffer"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 5
+status = "ready"
+tags = ["SPSC", "Acquire/Release", "head/tail", "MaybeUninit", "Drop"]
+teaches = [
+  "Single-producer single-consumer needs no CAS: each index has exactly one writer.",
+  "Each side reads its own index Relaxed and the other side's Acquire, and publishes its own with Release.",
+  "Initialized-region bookkeeping with `MaybeUninit`, and dropping what is left in the buffer.",
+]
+follow_up = "1) Why does `std::sync::mpsc` not work like this? What do you pay for multiple producers? 2) Power-of-two capacity: replace `% capacity` with `& mask`. What breaks at `usize` overflow when the capacity is not a power of two? 3) Cache lines: where do `head` and `tail` live, and what does padding each to 64 bytes (and caching the other side's index locally) buy? (rtrb and crossbeam do both.) 4) Add a blocking `recv` using `thread::park`/`unpark`: where is the lost-wakeup race? 5) What does `loom` check that a stress test cannot?"
+related = ["C2", "F6"]
+
+[[hints]]
+kind = "approach"
+text = "Two counters that only ever grow: `tail` (pushed so far, written by the producer) and `head` (popped so far, written by the consumer). Used = `tail - head`; the slot for count `i` is `i % capacity`. Full means `tail - head == capacity`."
+
+[[hints]]
+kind = "rust"
+text = "Producer: load `tail` Relaxed (it is the only writer), load `head` Acquire, write the slot, then `tail.store(tail+1, Release)`. The consumer mirrors it. The `Release` store is what publishes the slot's contents."
+
+[[hints]]
+kind = "edge"
+text = "Drop lives on the shared block (it runs when the second end goes away): drop the initialized range `head..tail` with `assume_init_drop`. `is_abandoned` is `Arc::strong_count == 1`."
+
+[solution]
+explanation = "There is no compare-exchange: each counter has one writer, so a plain store is enough. The Release store of `tail` makes the freshly written slot visible to a consumer that Acquire-loads `tail`; symmetrically the consumer's Release store of `head` tells the producer that a slot has been read and may be overwritten. Counters grow without wrapping to a modulo so full and empty are never ambiguous. Producer and consumer are `&mut self` so the type system enforces 'one thread per end'."
+time = "O(1) push and pop, wait-free"
+space = "O(capacity)"

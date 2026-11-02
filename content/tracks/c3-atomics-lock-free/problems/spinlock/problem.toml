@@ -1,0 +1,32 @@
+slug = "spinlock"
+title = "A spinlock with a guard"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 3
+status = "ready"
+tags = ["AtomicBool", "Acquire/Release", "RAII guard", "test-and-test-and-set"]
+teaches = [
+  "`compare_exchange(Acquire)` to take the lock and `store(Release)` to give it back: the pair that makes a critical section.",
+  "An RAII guard (`Deref`, `DerefMut`, `Drop`) so the lock cannot be forgotten, with lifetimes tying the data to the guard.",
+  "Test-and-test-and-set: spin on a read so waiting cores do not fight over the cache line.",
+]
+follow_up = "1) Why is a spinlock a bad idea in user space when the holder can be descheduled (priority inversion, wasted quantum)? What does `std::sync::Mutex` do instead? 2) Make it fair with a ticket lock (two counters): what does fairness cost? 3) Why is test-and-test-and-set faster than a plain CAS loop on a many-core machine? 4) What would change if a panic happens while the guard is held (poisoning)? 5) Which of the two orderings could you weaken to Relaxed, and what breaks?"
+related = ["C1", "F6"]
+
+[[hints]]
+kind = "approach"
+text = "`locked: AtomicBool`. `try_lock` is one `compare_exchange(false, true, Acquire, Relaxed)`. `Guard::drop` is one `store(false, Release)`."
+
+[[hints]]
+kind = "rust"
+text = "`lock` loops on `try_lock`; between attempts spin on `load(Relaxed)` while it is still `true` (`std::hint::spin_loop()` inside), so waiting cores only read the cache line."
+
+[[hints]]
+kind = "edge"
+text = "The `Sync` bound is `T: Send`, not `T: Sync`: the lock hands out `&mut T` to one thread at a time, so even a `Cell<u32>` is safe inside."
+
+[solution]
+explanation = "Acquire on the successful swap and Release on unlock form the happens-before edge: all writes made under one hold are visible to the next holder, so the plain `u64` is safe. `Relaxed` is enough for the failure case and for the spin-wait load because neither reads protected data. The guard borrows the lock, so the borrow checker prevents using the data after unlock."
+time = "O(1) uncontended"
+space = "O(1)"

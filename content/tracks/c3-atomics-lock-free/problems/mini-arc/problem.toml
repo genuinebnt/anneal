@@ -1,0 +1,32 @@
+slug = "mini-arc"
+title = "MiniArc: your own Arc"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 4
+status = "ready"
+tags = ["Arc", "Release/Acquire fence", "NonNull", "Send/Sync", "clone-on-write"]
+teaches = [
+  "A relaxed increment on clone, a Release decrement on drop, and an Acquire fence before freeing.",
+  "`Send`/`Sync` for a shared owner require `T: Send + Sync`: why `Arc<Cell<_>>` is not `Send`.",
+  "`try_unwrap` with compare-exchange(1, 0) and `make_mut`: how `Arc` gives mutation back safely.",
+]
+follow_up = "1) Why is `Arc<RefCell<T>>` not `Send`, and `Arc<Mutex<T>>` is? 2) The `abort` when the count passes `isize::MAX`: what attack or bug does it prevent? 3) Add `Weak<T>`: how many counts, and why does `upgrade` need a compare-exchange loop and not `fetch_add`? 4) How would you support `MiniArc<dyn Trait>` and `MiniArc<[T]>` (unsized `NonNull<Inner<T>>`, `CoerceUnsized`)? 5) Why does `std::sync::Arc` use `Release` on drop and `Acquire` as a fence rather than `AcqRel` on every decrement?"
+related = ["S7", "Y2"]
+
+[[hints]]
+kind = "approach"
+text = "One heap block: `Inner { strong: AtomicUsize, data: T }`. `new` leaks a `Box` into a `NonNull`; the last owner rebuilds the box with `Box::from_raw` and drops it."
+
+[[hints]]
+kind = "rust"
+text = "Clone: `fetch_add(1, Relaxed)`. Drop: `fetch_sub(1, Release) == 1`, and only then `fence(Acquire)` and free, so the freeing thread sees every other owner's writes. `try_unwrap`: `compare_exchange(1, 0)`, then move `data` out of the rebuilt box and `mem::forget` the handle."
+
+[[hints]]
+kind = "edge"
+text = "`make_mut` on a shared handle replaces `*this` with a brand new `MiniArc` of a clone; assigning drops the old handle (and decrements the old count) for you."
+
+[solution]
+explanation = "Clone needs no ordering because holding a handle already proves the allocation is alive. Drop is the subtle part: Release on every decrement publishes each owner's last writes, and the thread that sees the count reach zero issues an Acquire fence before it destroys the data. `Send` and `Sync` both need `T: Send + Sync` because a `MiniArc` lets any thread both read the value and (as last owner) drop it. `Weak` adds a second count and is the next step."
+time = "O(1) per clone or drop"
+space = "O(1) extra per allocation"

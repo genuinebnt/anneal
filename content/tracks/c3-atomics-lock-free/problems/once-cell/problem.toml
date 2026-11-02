@@ -1,0 +1,32 @@
+slug = "once-cell"
+title = "A thread-safe write-once cell"
+mode = "write"
+level = "hard"
+stage = "understand-it"
+order = 2
+status = "ready"
+tags = ["AtomicU8", "UnsafeCell", "MaybeUninit", "Acquire/Release", "Sync"]
+teaches = [
+  "A state machine in one atomic (EMPTY → RUNNING → READY): one thread wins the compare-exchange and writes.",
+  "Release on the READY store and Acquire on the READY load publish the written value to readers.",
+  "`unsafe impl Sync` with the right bounds, and a drop guard that makes initialization panic-safe.",
+]
+follow_up = "1) Why `Send + Sync` (not just `Sync`) for `T`? Give a type that breaks if you only require `Sync`. 2) Replace the `yield_now` spin with parking: what does `std::sync::Once` do (futex on Linux), and why is spinning a problem when the initializer takes seconds? 3) What goes wrong if `f` calls `get_or_init` on the same cell (re-entrancy), and how does std react? 4) Which orderings could be weakened here, and which cannot? 5) How would you build `Lazy<T>` and a global `static` on top of it?"
+related = ["S7", "Y2"]
+
+[[hints]]
+kind = "approach"
+text = "Three states in one `AtomicU8`. `compare_exchange(EMPTY, RUNNING)` picks the single winner; losers see `RUNNING` and wait, or `READY` and return."
+
+[[hints]]
+kind = "rust"
+text = "Store `READY` with `Release` after writing the slot, and load it with `Acquire` before reading: that pair is what makes the value visible. A small guard struct with `Drop` resets the state on unwind; `mem::forget` it on success."
+
+[[hints]]
+kind = "edge"
+text = "`into_inner(self)` still runs `Drop` for the `Once`: set the state back to `EMPTY` (use `get_mut`, no atomics needed with `&mut self`) so the value isn't dropped twice."
+
+[solution]
+explanation = "The compare-exchange gives mutual exclusion for the write; Release/Acquire on READY gives visibility of what was written. Readers that see anything but READY never touch the slot. The reset guard is the panic story: without it a panicking initializer leaves RUNNING forever and every other caller spins. This is the shape of `std::sync::Once` and `OnceLock`, minus the futex parking."
+time = "O(1) after init"
+space = "O(1)"

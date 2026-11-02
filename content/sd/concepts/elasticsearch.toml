@@ -1,10 +1,18 @@
 title = "Elasticsearch"
 group = "technology"
 order = 6
-minutes = 12
+minutes = 24
 lede = "A distributed search engine on Lucene: documents are analysed into terms and stored in inverted indexes, spread over shards, and ranked by relevance. It is the usual answer for full-text search, filters with facets, and log search, but not for the system of record."
 say = "Postgres stays the source of truth; changes flow through CDC into Elasticsearch, which serves the search box with BM25 relevance plus filters on price and category, and a second of lag is acceptable."
-related = ["indexes", "typeahead-tries", "replication", "sharding"]
+related = ["indexes", "typeahead-tries", "replication", "sharding", "storage-engines", "probabilistic-structures"]
+
+summary = [
+  "Elasticsearch is a **distributed search engine** over Lucene: an **inverted index** maps terms to documents, which makes full-text search, filters and aggregations fast on data that would be slow to scan.",
+  "Use it as a **derived view** of your database, fed by change data capture or an outbox, with a way to **rebuild** it. It is not a system of record.",
+  "Documents are **near real time**: a refresh makes them searchable about a second later. Writes are not transactional across documents.",
+  "An index is **primary shards plus replicas**; a query fans out to every shard and merges (scatter-gather). Shard count is fixed at creation, and aim for tens of GB per shard.",
+  "Know the traps: `text` vs `keyword`, deep paging, mapping explosions, and cost of fields you never search.",
+]
 
 [[sections]]
 heading = "The inverted index"
@@ -61,6 +69,56 @@ body = """
 > Say what is analysed (text) and what is filtered (keyword), how the index is fed (CDC, not dual writes), and that results lag by about a second.
 """
 
+[[sections]]
+heading = "Mappings: text, keyword and doc values"
+body = """
+A field's **mapping** decides how it is stored and what you can do with it:
+
+| Type | Indexed as | Use for |
+|---|---|---|
+| `text` | analysed into terms | full-text search on titles, descriptions |
+| `keyword` | the exact value as one term | filters, sorting, aggregations: status, country, id |
+| numeric, `date`, `boolean` | BKD tree | ranges and sorting |
+| `dense_vector` | HNSW graph | nearest-neighbour search on embeddings |
+| `nested` | each object as its own hidden document | arrays of objects that must match together |
+
+Two copies of the same string field are common: `title` as `text` for search and `title.keyword` for sorting and exact filters. Sorting and aggregations read **doc values**, a column-oriented structure on disk built at index time; a `text` field has none by default, which is why you cannot sort on it.
+
+Changing a mapping for existing data is not possible: you create a new index with the new mapping and **reindex**, then move an alias. Plan for this from day one by always reading and writing through an alias.
+"""
+
+[[sections]]
+heading = "Inside a shard: segments, merges and the translog"
+body = """
+Each shard is a Lucene index made of immutable **segments**. A write goes to an in-memory buffer and to the **translog** (fsynced per request by default). A **refresh** (every second by default) turns the buffer into a new segment that search can see; a **flush** commits segments to disk and clears the translog. Because segments are never edited, an update is a delete flag on the old document plus a new document, and a **background merge** combines small segments into bigger ones and finally drops deleted documents: the same idea as an LSM tree.
+
+Consequences:
+
+- Many tiny refreshes create many small segments and heavy merging. For a bulk load set `refresh_interval` to `-1` (or 30s), load, then restore it.
+- A document updated often is rewritten each time; keep frequently changing counters (view counts) out of the search index.
+- Shards are fixed in count, and a document's shard is `hash(_routing or _id) mod primary shards`. This is why the count cannot change without reindexing, split or shrink.
+- A node should keep about 20 shards or fewer per GB of heap; thousands of tiny shards are a common cause of slow clusters.
+"""
+
+[[sections]]
+heading = "Operating it"
+body = """
+- **Cluster state**: a master-eligible quorum (three dedicated nodes) manages the cluster's metadata; a split brain is prevented by requiring a majority. Data nodes hold shards; coordinating nodes route queries.
+- **Health**: `green` means all shards are assigned, `yellow` means a replica is missing, `red` means a primary is missing and some data is unavailable.
+- **Hot-warm-cold**: time-series data (logs) goes into a new index per day or size, with **index lifecycle management** moving old indices to cheaper nodes and then deleting them. Dropping a whole index is instant; deleting millions of documents is not.
+- **Capacity**: size by shards of 10 to 50 GB, document count, query load and the heap (the JVM heap should stay at or below about 31 GB so that object pointers stay compressed, the rest of memory is the file system cache that Lucene relies on).
+- **Backups**: snapshots to object storage; rebuild from the source of truth if you can.
+"""
+
+[[sections]]
+heading = "Elasticsearch against the alternatives"
+body = """
+Postgres full-text search (`tsvector` with a GIN index) handles modest search with no extra system and transactional consistency; use it first for a few million documents. Elasticsearch (or OpenSearch, its fork) earns its place when you need relevance tuning, facets, typo tolerance, many fields, scale across nodes, or log analytics. Dedicated engines such as Typesense and Meilisearch are simpler for small product-search cases. Vector search (embeddings) is now in Elasticsearch, Postgres (`pgvector`) and dedicated vector stores; choose by scale and by whether you also need filters and keyword matches in the same query (hybrid search).
+
+> [!INTERVIEW]
+> Say the index is derived from the database, name the sync method, give the shard sizing, and say the result lags by about a second.
+"""
+
 [[checks]]
 prompt = "Why should the product catalogue's source of truth be Postgres rather than Elasticsearch, and how do the two stay in sync?"
 answer = "Elasticsearch is near real time, has no multi-document transactions and can lose recently acknowledged writes in some failure cases, so it is a derived index. Keep Postgres as the source, stream changes through CDC (or an outbox) into a consumer that indexes them, and be able to reindex from Postgres when needed."
@@ -72,6 +130,94 @@ answer = "from + size = 40,000 exceeds the default max_result_window of 10,000, 
 [[checks]]
 prompt = "What is the difference between a `text` and a `keyword` field, and which do you use for a category filter?"
 answer = "A text field is analysed into terms for full-text matching and scoring; a keyword field stores the exact value for filtering, sorting and aggregations. A category filter uses keyword in filter context (exact, unscored, cached)."
+
+[[checks]]
+prompt = "A search for `Shoes` should match `shoes`, but filtering `brand = Nike` returns nothing for the document with brand `nike`. What is wrong?"
+answer = "The brand field is probably mapped as keyword, which stores the exact value, so Nike and nike are different terms. A text field would be lowercased by the analyser. Use a keyword field with a lowercase normalizer for exact but case-insensitive filters, or normalise the value on write."
+
+[[checks]]
+prompt = "Why can you not change the number of primary shards of an existing index, and what can you do instead?"
+answer = "A document's shard is chosen by hashing its routing value modulo the number of primary shards, so changing the count would move almost every document. Create a new index with the right number and reindex into it, or use the split or shrink API when the new count is a multiple or factor of the old; read through an alias so the switch is invisible."
+
+[[checks]]
+prompt = "An index receives 20,000 updates a second to a view-count field and search slows down. Why, and what do you change?"
+answer = "Segments are immutable, so each update writes a whole new document and marks the old one deleted; constant updates mean heavy indexing, many small segments, merges and deleted-document overhead. Keep counters in another store (Redis or a database), update the search document in batches every few minutes, or store only a coarse bucket."
+
+[[checks]]
+prompt = "The product team wants infinite scroll through search results. Why does from + size break at page 1,000, and what do you use?"
+answer = "Each shard must collect from + size hits and send them to the coordinator, so deep pages cost memory and time and are capped at 10,000 by default. Use search_after with the sort values of the last hit as a cursor, with a point-in-time for a stable view while the index changes."
+
+[[terms]]
+term = "Inverted index"
+means = "A map from each term to the list of documents containing it."
+section = "The inverted index"
+
+[[terms]]
+term = "Analyzer"
+means = "The tokenizer and filters that turn text into terms."
+section = "The inverted index"
+
+[[terms]]
+term = "BM25"
+means = "The default relevance score: term frequency with diminishing returns, rarity of the term, and field length."
+section = "Relevance"
+
+[[terms]]
+term = "Segment"
+means = "An immutable Lucene file set; refreshes create them and merges combine them."
+section = "Inside a shard: segments, merges and the translog"
+
+[[terms]]
+term = "Translog"
+means = "A write-ahead log for operations not yet committed into segments."
+section = "Inside a shard: segments, merges and the translog"
+
+[[terms]]
+term = "Doc values"
+means = "A column-oriented on-disk structure used for sorting and aggregations."
+section = "Mappings: text, keyword and doc values"
+
+[[terms]]
+term = "search_after"
+means = "A cursor-style way to page deeply by passing the sort values of the last hit."
+section = "Pagination and other traps"
+
+[[sources]]
+title = "Elasticsearch Guide: mapping"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html"
+
+[[sources]]
+title = "Elasticsearch Guide: near real-time search and refresh"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/near-real-time.html"
+
+[[sources]]
+title = "Elasticsearch Guide: size your shards"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/size-your-shards.html"
+note = "shard size and shards per heap"
+
+[[sources]]
+title = "Elasticsearch Guide: paginate search results"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/paginate-search-results.html"
+note = "from and size cap, search_after, point in time"
+
+[[sources]]
+title = "Elasticsearch Guide: translog"
+kind = "docs"
+url = "https://www.elastic.co/guide/en/elasticsearch/reference/current/index-modules-translog.html"
+
+[[sources]]
+title = "Apache Lucene: scoring and BM25Similarity"
+kind = "docs"
+url = "https://lucene.apache.org/core/9_10_0/core/org/apache/lucene/search/similarities/BM25Similarity.html"
+
+[[sources]]
+title = "Robertson and Zaragoza: The probabilistic relevance framework, BM25 and beyond (2009)"
+kind = "paper"
+url = "https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf"
 
 [[figures]]
 name = "inverted-index"

@@ -1,10 +1,18 @@
 title = "Cassandra"
 group = "technology"
 order = 4
-minutes = 13
+minutes = 24
 lede = "A wide-column store built for writes at any scale: data is spread over a ring of equal nodes by partition key, every write is an append to a log-structured engine, and you choose per query how many replicas must answer."
 say = "Messages go in Cassandra, partitioned by conversation id and clustered by time descending, so loading a chat is one partition read; I'd write and read at LOCAL_QUORUM with a replication factor of 3."
-related = ["storage-engines", "quorums", "consistent-hashing", "data-modeling"]
+related = ["storage-engines", "quorums", "consistent-hashing", "data-modeling", "leases-and-fencing", "clocks-and-ordering"]
+
+summary = [
+  "Cassandra is a **leaderless ring** of equal nodes over a **log-structured** engine: writes are appends, so it takes very high write rates and survives losing nodes or whole data centres.",
+  "You **design the table for the query**: the partition key picks the nodes, the clustering columns sort inside the partition. No joins; denormalise and write each fact to several tables.",
+  "**Partition size is the main design risk**: keep it near 100 MB or 100,000 cells at most, bucket the key by time or hash when it would grow without bound.",
+  "Consistency is **per request**: `R + W > RF` gives read-your-writes; `LOCAL_QUORUM` for both is the usual production setting. Conflicts resolve by **last write wins**.",
+  "Deletes are **tombstones** kept for `gc_grace_seconds` (10 days); skipping repair for longer than that can bring deleted data back.",
+]
 
 [[sections]]
 heading = "The data model: design for the query"
@@ -92,6 +100,40 @@ body = """
 > Name the partition key and the clustering order out loud, say how big a partition gets, and say which consistency level you read and write at.
 """
 
+[[sections]]
+heading = "Operating it: what goes wrong"
+body = """
+Most Cassandra incidents are one of these, so name them when you pick it:
+
+- **Wide or hot partitions.** One partition far larger than the rest makes one replica set do most of the work; reads page through huge sorted data and compaction of that partition is slow. Check with `nodetool tablehistograms`. Fix the key, not the hardware.
+- **Tombstone storms.** A read must skip every tombstone in the range it scans. Cassandra logs a warning at 1,000 tombstones in one read and fails the query at 100,000 (`tombstone_warn_threshold`, `tombstone_failure_threshold`). Queues, "delete then insert" status columns and TTL-heavy tables on size-tiered compaction cause them; time-window compaction with a bounded partition avoids it.
+- **Compaction falling behind.** Under size-tiered compaction a big merge needs temporary free disk (plan to keep disks well under 50% full); when pending compactions pile up, reads touch more files and latency climbs.
+- **Zombie data.** A replica down longer than `gc_grace_seconds` rejoins holding values whose tombstones were already purged elsewhere; repair then copies the old values back. Rebuild such a node instead of letting it rejoin, and schedule repair at least once inside the grace period.
+- **Clock skew.** Last write wins on timestamps, so a client with a clock 5 seconds ahead overwrites newer writes from correct clients for that long. Run NTP, and let the server assign timestamps for single writes where you can.
+- **Read-before-write.** Counters, lightweight transactions and collection updates by index read first and lose the cheap write path.
+"""
+
+[[sections]]
+heading = "Multi-data-centre, counters and transactions"
+body = """
+`NetworkTopologyStrategy` sets the replication factor **per data centre** (say 3 in each of two regions). With `LOCAL_QUORUM` a request is served by the local data centre without waiting for the far one, and the other region is brought up to date in the background, so both regions take writes (**active-active**) and a whole region can fail. The price: two regions can accept conflicting writes to the same row, and last write wins decides.
+
+- **Lightweight transactions** (`IF NOT EXISTS`, `IF col = ?`) run Paxos among the replicas of that partition, around four round trips, and reads at `SERIAL` consistency. Use them for rare unique claims (a username), not for every write.
+- **Counters** (`UPDATE … SET views = views + 1`) are a special column type, not idempotent: a retried increment after a timeout may count twice, so treat them as approximate.
+- **Batches** in Cassandra mean atomicity (all or none eventually) for writes to several tables, **not** speed. A `LOGGED` batch across partitions costs more, not less; batch only the denormalised copies of one logical write.
+- **Secondary indexes.** The classic ones work poorly at scale; Cassandra 5.0 adds storage-attached indexes (SAI), which are better, but a query by partition key stays the model to design for.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+- Open with the **queries**, then the **tables**: "load a conversation" gives `PRIMARY KEY ((conversation_id), sent_at)`; "a user's conversations by recent activity" gives a second table written alongside.
+- Give a partition size estimate: rows per partition times row bytes, and the bucket you add if it exceeds roughly 100 MB.
+- State the replication factor and the consistency level for reads and writes, and why `R + W > RF` holds.
+- Say what you give up: joins, ad-hoc queries, cheap updates and deletes, strong cross-row consistency, simple operations.
+- If the data is small, relational and transactional, say Postgres instead; Cassandra earns its cost at write rates and sizes one primary cannot hold.
+"""
+
 [[checks]]
 prompt = "Events for every user go into a table with `PRIMARY KEY ((user_id), event_time)`. A few users generate millions of events a day. What goes wrong and how do you fix the key?"
 answer = "Those users' partitions grow without bound: one node holds a huge, hot partition and reads slow down. Add a time bucket to the partition key, such as `((user_id, day), event_time)`, so each partition is bounded; a read for a range spans a known number of buckets."
@@ -103,3 +145,97 @@ answer = "Yes: the write may have reached one replica and the read may ask a dif
 [[checks]]
 prompt = "Why are writes in Cassandra cheaper than in a B-tree database such as Postgres?"
 answer = "A write is a sequential append to the commit log plus an in-memory insert into the memtable; there is no read of the old row and no in-place page update. Sorting and merging happen later in bulk, when memtables flush to SSTables and compaction runs."
+
+[[checks]]
+prompt = "A column family stores a status that moves new, then processing, then done, by deleting the old row and inserting a new one. Reads get slower over days. Why?"
+answer = "Every delete leaves a tombstone, and a read over the partition must skip all tombstones that have not yet been purged (kept for gc_grace_seconds, 10 days by default). A queue-like pattern builds up many, and reads slow down or fail past the tombstone threshold. Update the status in place with one row per item, keep partitions bounded, or use a real queue."
+
+[[checks]]
+prompt = "Why is last write wins dangerous, and when is it acceptable?"
+answer = "It resolves conflicts by comparing timestamps, so a client whose clock runs ahead overwrites later writes made by correct clocks, and two concurrent updates to different columns of one row are merged per column while two updates to the same column silently drop one. It is acceptable for data that is overwritten wholesale or where the latest value of a field is all that matters, such as a profile field or a sensor reading, and not for balances or counters."
+
+[[checks]]
+prompt = "You run two data centres at RF 3 each and a request must be fast and see your own latest write within a region. What consistency level do you use, and what can still go wrong across regions?"
+answer = "LOCAL_QUORUM for reads and writes: 2 of the 3 local replicas, so R + W > RF within the region and the request never waits for the remote region. Across regions replication is asynchronous, so a read in the other region may be stale for a moment, and concurrent writes to the same cell in both regions are settled by last write wins."
+
+[[checks]]
+prompt = "Estimate: a chat service stores 200-byte messages in partitions keyed by conversation id. One busy group chat gets 50 messages a second. How long until its partition passes 100 MB, and what do you do?"
+answer = "100 MB is 500,000 messages at 200 bytes (ignoring overhead); at 50 a second that is 10,000 seconds, under three hours, so this partition would become huge. Bucket the key, for example (conversation_id, day) or a numbered bucket, so each partition covers a bounded time and the read for recent messages touches the newest one or two buckets."
+
+[[terms]]
+term = "Partition key"
+means = "The part of the primary key hashed to choose the nodes that hold a row."
+section = "The data model: design for the query"
+
+[[terms]]
+term = "Clustering column"
+means = "A primary key column that sorts rows inside a partition."
+section = "The data model: design for the query"
+
+[[terms]]
+term = "Token / vnode"
+means = "A position on the hash ring; a node owns many small token ranges."
+section = "The ring and replication"
+
+[[terms]]
+term = "Coordinator"
+means = "The node that received a request and forwards it to the replicas."
+section = "The ring and replication"
+
+[[terms]]
+term = "Consistency level"
+means = "How many replicas must answer a read or write."
+section = "Tunable consistency"
+
+[[terms]]
+term = "Lightweight transaction"
+means = "A compare-and-set run through Paxos among a partition's replicas."
+section = "Multi-data-centre, counters and transactions"
+
+[[terms]]
+term = "Hinted handoff"
+means = "A coordinator holds writes for a down replica and replays them later."
+section = "Repair: how replicas converge"
+
+[[terms]]
+term = "gc_grace_seconds"
+means = "How long a tombstone is kept before compaction may purge it (10 days by default)."
+section = "Operating it: what goes wrong"
+
+[[sources]]
+title = "Apache Cassandra documentation: data modeling"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/index.html"
+
+[[sources]]
+title = "Apache Cassandra documentation: architecture (dynamo, storage engine, guarantees)"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/architecture/index.html"
+
+[[sources]]
+title = "Apache Cassandra documentation: repair"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html"
+
+[[sources]]
+title = "Apache Cassandra documentation: hints"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/hints.html"
+
+[[sources]]
+title = "Apache Cassandra documentation: tombstones"
+kind = "docs"
+url = "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html"
+note = "tombstone thresholds and gc_grace_seconds"
+
+[[sources]]
+title = "Lakshman and Malik: Cassandra, a decentralized structured storage system (2009)"
+kind = "paper"
+url = "https://www.cs.cornell.edu/projects/ladis2009/papers/lakshman-ladis2009.pdf"
+
+[[sources]]
+title = "DeCandia et al.: Dynamo (SOSP 2007)"
+kind = "paper"
+url = "https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf"
+note = "the ring, quorums, hinted handoff"
+

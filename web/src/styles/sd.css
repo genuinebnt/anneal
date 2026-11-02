@@ -47,6 +47,7 @@
 .sd-md strong{color:var(--fg)}
 .sd-md ul,.sd-md ol{margin:0 0 10px;padding-left:20px}.sd-md li{margin:3px 0}
 .sd-md code{font:500 12.5px var(--mono);padding:1px 5px;border-radius:5px;background:var(--inset);color:var(--fg)}
+.sd-md :not(pre)>code{overflow-wrap:anywhere}
 .sd-md pre{margin:10px 0;padding:12px 14px;border-radius:12px;background:var(--inset);overflow-x:auto;scrollbar-width:none}
 .sd-md pre::-webkit-scrollbar{display:none}
 .sd-md pre code{padding:0;background:none;font-size:12.5px;line-height:1.6}
