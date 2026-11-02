@@ -125,3 +125,12 @@ session = "SET plan_cache_mode = force_generic_plan; PREPARE optional_customer (
 [[setup]]
 id = "no-parallel"
 session = "SET max_parallel_workers_per_gather = 0;"
+
+# the same sort twice: a work_mem too small for it (it spills to disk) and one large enough (it stays in memory)
+[[setup]]
+id = "sort-small-mem"
+session = "SET work_mem = '1MB'; SET max_parallel_workers_per_gather = 0;"
+
+[[setup]]
+id = "sort-big-mem"
+session = "SET work_mem = '64MB'; SET max_parallel_workers_per_gather = 0;"
