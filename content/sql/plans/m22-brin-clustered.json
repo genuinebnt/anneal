@@ -1,0 +1,138 @@
+{
+ "id": "m22-brin-clustered",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT sum(total_cents) FROM cl_orders WHERE created_at >= '2025-06-01' AND created_at < '2025-06-01 14:00';",
+ "setup": [
+  {
+   "id": "cl-orders",
+   "sql": "CREATE TABLE cl_orders AS SELECT * FROM orders; ALTER TABLE cl_orders ADD PRIMARY KEY (id); ALTER TABLE cl_orders SET (autovacuum_enabled = false); CREATE INDEX cl_created ON cl_orders (created_at); VACUUM ANALYZE cl_orders;"
+  },
+  {
+   "id": "cl-cluster",
+   "sql": "CLUSTER cl_orders USING cl_created; ANALYZE cl_orders;"
+  },
+  {
+   "id": "cl-drop-btree",
+   "sql": "DROP INDEX cl_created;"
+  },
+  {
+   "id": "cl-brin",
+   "sql": "CREATE INDEX cl_brin ON cl_orders USING brin (created_at); ANALYZE cl_orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 15957.76,
+   "Total Cost": 15957.77,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 1.293,
+   "Actual Total Time": 1.293,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 130,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "cl_orders",
+     "Alias": "cl_orders",
+     "Startup Cost": 12.57,
+     "Total Cost": 15952.4,
+     "Plan Rows": 2144,
+     "Plan Width": 4,
+     "Actual Startup Time": 0.541,
+     "Actual Total Time": 1.191,
+     "Actual Rows": 1993.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "((created_at >= '2025-06-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-06-01 14:00:00+00'::timestamp with time zone))",
+     "Rows Removed by Index Recheck": 15129,
+     "Exact Heap Blocks": 0,
+     "Lossy Heap Blocks": 128,
+     "Shared Hit Blocks": 130,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "cl_brin",
+       "Startup Cost": 0.0,
+       "Total Cost": 12.03,
+       "Plan Rows": 17094,
+       "Plan Width": 0,
+       "Actual Startup Time": 0.031,
+       "Actual Total Time": 0.031,
+       "Actual Rows": 1280.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "((created_at >= '2025-06-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-06-01 14:00:00+00'::timestamp with time zone))",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 2,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 1,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.054,
+  "Triggers": [],
+  "Execution Time": 1.309
+ },
+ "text": "Aggregate  (cost=15957.76..15957.77 rows=1 width=8) (actual time=1.278..1.279 rows=1.00 loops=1)\n  Buffers: shared hit=130\n  ->  Bitmap Heap Scan on cl_orders  (cost=12.57..15952.40 rows=2144 width=4) (actual time=0.497..1.153 rows=1993.00 loops=1)\n        Recheck Cond: ((created_at >= '2025-06-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-06-01 14:00:00+00'::timestamp with time zone))\n        Rows Removed by Index Recheck: 15129\n        Heap Blocks: lossy=128\n        Buffers: shared hit=130\n        ->  Bitmap Index Scan on cl_brin  (cost=0.00..12.03 rows=17094 width=0) (actual time=0.018..0.018 rows=1280.00 loops=1)\n              Index Cond: ((created_at >= '2025-06-01 00:00:00+00'::timestamp with time zone) AND (created_at < '2025-06-01 14:00:00+00'::timestamp with time zone))\n              Index Searches: 1\n              Buffers: shared hit=2\nPlanning:\n  Buffers: shared hit=1\nPlanning Time: 0.040 ms\nExecution Time: 1.292 ms"
+}
