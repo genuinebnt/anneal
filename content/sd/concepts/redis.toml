@@ -1,17 +1,54 @@
 title = "Redis"
 group = "technology"
 order = 2
-minutes = 10
+minutes = 20
 lede = "An in-memory data structure server: single-threaded command execution over strings, hashes, lists, sets, sorted sets and streams, with optional persistence. Sub-millisecond, and every command is atomic."
 say = "A Redis sorted set per leaderboard, scores updated with ZINCRBY; the top 100 is one ZREVRANGE, and the whole board fits in memory."
-related = ["caching", "contention", "scaling-reads"]
+related = ["caching", "contention", "scaling-reads", "leases-and-fencing", "queues-and-streams", "sharding"]
+
+summary = [
+  "Redis runs every command **one at a time on one thread** over data in memory, so each command is atomic and latency is flat. One node handles about **100k commands a second** with 50 clients, and over **1 million** with pipelining (measured below).",
+  "The value is the **data structures**: counters, hashes, sets, sorted sets, streams, geo. Most design questions are \"which structure turns this into one command?\".",
+  "Persistence is optional and weak by default: an **RDB** snapshot loses the last minutes, **AOF** with `everysec` loses about a second. Replication is **asynchronous**, so a failover can lose acknowledged writes.",
+  "Scale reads with replicas and writes with **Redis Cluster**: 16,384 hash slots over the nodes, and a multi-key command must stay in one slot.",
+  "Memory is the budget. Set `maxmemory` and an eviction policy, and watch for **hot keys**, **big keys** and slow commands, which stall everyone because the thread is shared.",
+]
+
 
 [[sections]]
 heading = "Inside"
 body = """
-Commands run **one at a time** on a single thread over data in memory, so each command is atomic without locks and latency is predictable. Network I/O can use extra threads; the data work does not. Throughput is about 100k operations a second per node.
+Commands run **one at a time** on a single thread over data in memory, so each command is atomic without locks and latency is predictable. Since Redis 6 extra threads can do the network reads and writes (`io-threads`); the data work is still one thread. A `MULTI`/`EXEC` block and a Lua script (`EVAL`) also run without another client's command in between, which is how you make a small read-modify-write atomic.
 
-Persistence is optional: **RDB** snapshots (fast restart, lose the last minutes) or the **AOF** log (every write, slower). Treat Redis as a cache or a fast store you can rebuild, unless you have configured and tested durability.
+**Measured** on this 4-vCPU cloud VM, Redis 7.0.15, client and server on the same machine, `redis-benchmark` with 50 connections:
+
+| | commands/s | median latency |
+|---|---|---|
+| `SET` | 114,000 | 0.24 ms |
+| `GET` | 99,000 | 0.24 ms |
+| `INCR` | 91,000 | 0.26 ms |
+| `SET`, 16 commands per round trip (pipeline) | 1,205,000 | 0.45 ms |
+| `GET`, pipeline of 16 | 1,064,000 | 0.40 ms |
+
+The server is not the limit at 100k a second; the **round trip** is. Pipelining sends many commands before reading the replies and gave ten times the throughput. A real network adds 0.1 to 1 ms per round trip, so batch calls (`MGET`, pipelines) when one request needs many keys. The numbers vary with the machine; use the shape, not the digits.
+
+> [!WARNING]
+> Because the thread is shared, **one slow command slows every client**. `KEYS *`, `SMEMBERS` on a set of millions, `DEL` of a huge key, and a long Lua script all block everything behind them. Use `SCAN` (a cursor that returns a few keys at a time), `UNLINK` (frees the memory in the background) and keep scripts short.
+
+Strings are binary-safe up to 512 MB, but keep values small: a 1 MB value takes time to copy and send, during which nothing else runs. Memory per element depends on the encoding: small hashes, lists, sets and sorted sets use a compact **listpack**, big ones switch to a hash table or skip list. **Measured:** a sorted set of 100 members used **816 bytes** (listpack), and a sorted set of 100,000 members used **9.7 MB** (skip list, about 97 bytes a member). Budget around 100 bytes per element for a structure plus the member itself.
+"""
+
+[[sections]]
+heading = "Persistence and durability"
+body = """
+Redis keeps all data in memory and can write it to disk two ways:
+
+- **RDB** snapshots: a forked child writes the whole dataset to a file every so often (`save 3600 1 300 100 60 10000` is the shipped schedule). Fast restart and a compact file, but a crash loses everything since the last snapshot.
+- **AOF** (append-only file): every write command is appended to a log, and the log is rewritten in the background to stay small. `appendfsync` sets how hard it tries: `always` (fsync each write, slow), `everysec` (the default; lose at most about a second), `no` (the OS decides).
+
+Use both on a node whose data matters: the AOF for recent writes, the RDB for fast restarts and backups. Even so, **Redis is not a durable primary store for data you cannot rebuild** unless you accept those windows. The fork also costs: with large datasets and heavy writes, copy-on-write can briefly double memory, so leave headroom.
+
+**Replication is asynchronous.** A replica copies the primary's command stream, so the primary acknowledges a write before the replica has it. If the primary dies, the promoted replica may be missing the last writes. `WAIT n timeout` blocks until `n` replicas have acknowledged, which narrows the window but does not make Redis strongly consistent (a failover can still pick a replica that missed it).
 """
 
 [[sections]]
@@ -27,6 +64,26 @@ body = """
 | stream | an append-only log with consumer groups |
 | geo | drivers near a point |
 | pub/sub | fan a message out to live subscribers (not kept) |
+
+How the harder ones work, since interviews ask:
+
+- **Sorted set** (`ZADD`, `ZINCRBY`, `ZRANGE`, `ZREVRANK`): a skip list ordered by score plus a hash from member to score. Insert, rank and range-by-rank are O(log N); fetching the top 100 is O(log N + 100). A leaderboard for 10 million players is one key. Ties are broken by the member name.
+- **HyperLogLog** (`PFADD`, `PFCOUNT`): counts distinct items in a fixed 12 KB with about 0.81% standard error. Use it for unique visitors when an exact set would be too big.
+- **Bitmaps** (`SETBIT`, `BITCOUNT`): one bit per user id, so "was user 42 active today" for 100 million users is 12.5 MB per day.
+- **Streams** (`XADD`, `XREADGROUP`, `XACK`): an append-only log with consumer groups, a pending list for unacknowledged messages and `XAUTOCLAIM` to take over from a dead consumer. It is Kafka-shaped but limited by memory and one node per stream; see the queues page.
+- **Geo** (`GEOADD`, `GEOSEARCH`): a sorted set whose score is a 52-bit geohash. Radius search is a few range scans; it fits "drivers within 2 km", not polygons.
+- **Pub/sub**: fire and forget. A subscriber that is disconnected misses the message, and nothing is stored. If you need delivery, use a stream.
+
+A fixed-window rate limiter is two commands:
+
+```redis title=rate-limit.redis
+MULTI
+INCR rl:user42:2026-11-02T13:44
+EXPIRE rl:user42:2026-11-02T13:44 60
+EXEC
+```
+
+The caller allows the request when the returned count is at most the limit. Windows reset at the boundary, so a client can burst twice the limit across two windows; a sorted set of timestamps (sliding log) or a token bucket in a Lua script avoids that.
 """
 
 [[sections]]
@@ -36,6 +93,32 @@ body = """
 - **Redis Cluster** shards keys over 16,384 hash slots across nodes; a multi-key command must stay in one slot (use `{tags}` in keys).
 - A **hot key** still lands on one node: replicate it or keep a local copy.
 - Memory is the limit: set `maxmemory` and an eviction policy.
+
+**Cluster in more detail.** A key's slot is `CRC16(key) mod 16384`; each primary owns a range of slots and each has replicas. The client library keeps a slot map and sends each command to the right node; a wrong guess gets a `MOVED` reply with the new owner, and during a resharding an `ASK` reply. There is no proxy and no consistent hashing ring, just a fixed slot table that moves slot by slot. Failure detection is gossip: when most primaries agree a node is unreachable, one of its replicas is promoted. Cross-slot commands (`MGET a b` on different slots, a transaction over two keys) return an error, so design keys that are used together to share a `{tag}`; a tag also concentrates load on one node, so use it sparingly.
+
+**Sentinel** (without Cluster) is one primary, replicas and a few Sentinel processes that watch it, agree it is down by quorum, and promote a replica. It adds failover but not capacity: the whole dataset must fit on one node.
+
+**Eviction.** With `maxmemory` set, `noeviction` returns errors on writes when full; `allkeys-lru` and `allkeys-lfu` evict across all keys (the right choice for a cache); `volatile-*` only evict keys that have a TTL. LRU and LFU are **approximated** by sampling a few keys (`maxmemory-samples`, 5 by default), not a true list. Expired keys are removed lazily when touched and by a background sampler, so memory does not drop the instant a TTL passes.
+
+**Hot keys and big keys** are the usual production incidents. A hot key (a celebrity's profile) saturates one node whatever the cluster size: keep a short-lived copy in each app server, or store N copies under `key:1`..`key:N` and read a random one. A big key (a list of 10 million items) makes `DEL`, replication and snapshots lumpy: split it into buckets.
+"""
+
+[[sections]]
+heading = "Redis as a lock, and why that is subtle"
+body = """
+`SET lock:order42 <random> NX PX 30000` takes a lock that expires in 30 seconds; release it with a short Lua script that deletes only if the value is still yours. On one node this is a good **efficiency** lock: it avoids duplicate work most of the time.
+
+It is not a **correctness** lock. A client can pause (garbage collection, a slow network) past the expiry, wake up and write while a second client holds the lock; and a failover to a replica that never saw the lock hands it to a second client. Martin Kleppmann's critique of Redlock makes the point and the fix: give each lock grant a **fencing token** that the protected resource checks, which Redis alone does not provide. Use it to avoid duplicates, and put the real guarantee in the database (a unique constraint, a version column). See the leases and fencing page.
+"""
+
+[[sections]]
+heading = "In the interview"
+body = """
+- Reach for Redis when the answer is **speed on small, hot, rebuildable data**: a cache, a counter, a rate limiter, a leaderboard, a session store, a short queue.
+- Say what happens when it **loses data**: the cache refills from the database; a leaderboard is rebuilt from events. If you cannot say that, the data belongs in a durable store.
+- Name the numbers: roughly 100k commands a second a node and sub-millisecond latency, memory around 100 bytes an element.
+- Do not use it as the system of record, as a lock for money, or as a queue you cannot lose (use Kafka, SQS or a database table).
+- Know the failure modes you would be asked about: hot key, big key, thundering herd on expiry (see caching), failover losing writes.
 """
 
 [[checks]]
@@ -45,6 +128,100 @@ answer = "Redis executes commands one at a time on one thread, so each INCR read
 [[checks]]
 prompt = "How would you build a top-100 leaderboard for 10 million players that updates in real time?"
 answer = "A sorted set: ZINCRBY player score on each event, ZREVRANGE 0 99 WITHSCORES for the top 100 and ZREVRANK for a player's position; each is logarithmic. Ten million members fit in memory on one node; shard by region or time window if it grows."
+
+[[checks]]
+prompt = "A cache of 50 million keys must keep the hottest ones and stay within 100 GB. Which Redis settings do you choose, and why is the eviction only approximate?"
+answer = "Set maxmemory to the budget with allkeys-lfu (or allkeys-lru) so any key can be evicted. Redis samples a few random keys (maxmemory-samples, 5 by default) and evicts the worst of them, because keeping an exact LRU list would cost memory and time on every access; raising the sample count gets closer to true LRU at some CPU cost."
+
+[[checks]]
+prompt = "Your Redis primary dies right after acknowledging a write and a replica is promoted. Can the write be lost? What would you do about it?"
+answer = "Yes. Replication is asynchronous, so the replica may not have received the write. WAIT narrows the window by blocking until N replicas acknowledge but does not make it strongly consistent. If the data matters, keep it in a durable database and use Redis as a cache or accelerator that can be rebuilt."
+
+[[checks]]
+prompt = "Production latency of every Redis call jumps to 200 ms at the same moment. What are the likely causes in a single-threaded server?"
+answer = "A slow command blocking the one thread: KEYS or a huge SMEMBERS, a big-key DEL, a long Lua script, or a large value being serialised. Other causes are a fork for an RDB snapshot or AOF rewrite stalling on a big dataset, swapping when memory is exhausted, or a network problem. Use SLOWLOG GET and LATENCY DOCTOR to find the command, and replace it with SCAN, UNLINK or smaller keys."
+
+[[checks]]
+prompt = "How would you count unique visitors per day for 100 million users, and what would you give up compared with a set?"
+answer = "PFADD into a HyperLogLog per day: it uses a fixed 12 KB and counts distinct ids with about 0.81% standard error. A set would be exact but need gigabytes. A bitmap with one bit per user id (12.5 MB for 100 million ids) is exact if ids are dense integers. The HyperLogLog gives up exactness and the ability to list or test membership."
+
+[[checks]]
+prompt = "Why can a multi-key command fail on Redis Cluster, and how do you design keys so it works?"
+answer = "Each key lives in one of 16,384 slots owned by one node, and a command touching keys in different slots cannot be run atomically on one node, so Redis returns a CROSSSLOT error. Give keys that are used together a shared hash tag, such as {user42}:cart and {user42}:profile, so they land in one slot; the cost is that the tag concentrates load on one node."
+
+[[terms]]
+term = "Pipelining"
+means = "Sending many commands before reading replies, which removes most round-trip waits."
+section = "Inside"
+
+[[terms]]
+term = "Listpack"
+means = "The compact encoding Redis uses for small hashes, lists, sets and sorted sets."
+section = "Inside"
+
+[[terms]]
+term = "RDB / AOF"
+means = "A point-in-time snapshot file, and an append-only log of write commands."
+section = "Persistence and durability"
+
+[[terms]]
+term = "Hash slot"
+means = "One of 16,384 buckets a key maps to with CRC16; each cluster primary owns a range."
+section = "Scaling it"
+
+[[terms]]
+term = "Hash tag"
+means = "The part of a key in braces, hashed alone so related keys share a slot."
+section = "Scaling it"
+
+[[terms]]
+term = "HyperLogLog"
+means = "A fixed-size probabilistic counter of distinct items."
+section = "The structures, and what they solve"
+
+[[terms]]
+term = "Fencing token"
+means = "A number that grows with each lock grant, checked by the resource to reject stale holders."
+section = "Redis as a lock, and why that is subtle"
+
+[[sources]]
+title = "Redis documentation: data types"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/data-types/"
+
+[[sources]]
+title = "Redis documentation: persistence"
+kind = "docs"
+url = "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/"
+
+[[sources]]
+title = "Redis documentation: Cluster specification"
+kind = "docs"
+url = "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/"
+note = "hash slots, MOVED and ASK"
+
+[[sources]]
+title = "Redis documentation: key eviction"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/reference/eviction/"
+note = "approximated LRU and LFU"
+
+[[sources]]
+title = "Redis documentation: distributed locks"
+kind = "docs"
+url = "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/"
+note = "Redlock"
+
+[[sources]]
+title = "Kleppmann: How to do distributed locking"
+kind = "article"
+url = "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html"
+note = "fencing tokens"
+
+[[sources]]
+title = "Flajolet et al.: HyperLogLog (2007)"
+kind = "paper"
+url = "https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"
 
 [[figures]]
 name = "redis-structures"
