@@ -1,0 +1,16 @@
+code = "Y2"
+name = "Unsafe Rust"
+section = "Y"
+tier = "sde3"
+order = 2
+summary = "Unsafe Rust by building the standard containers yourself: an inline array vector, a vector on raw allocation, and a doubly linked list."
+
+[[stages]]
+slug = "understand-it"
+name = "Understand it"
+band = "medium"
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"
