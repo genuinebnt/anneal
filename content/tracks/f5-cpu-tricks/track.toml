@@ -1,0 +1,21 @@
+code = "F5"
+name = "CPU-level tricks"
+section = "F"
+tier = "sde3"
+order = 5
+summary = "Bit-level and word-level tricks that real systems lean on: bitsets, bit-packed vectors, varints and SWAR byte scans."
+
+[[stages]]
+slug = "first-bits"
+name = "First bits"
+band = "easy"
+
+[[stages]]
+slug = "pack-and-scan"
+name = "Pack and scan"
+band = "medium"
+
+[[stages]]
+slug = "roaring"
+name = "Scan eight bytes at a time"
+band = "hard"

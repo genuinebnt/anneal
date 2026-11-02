@@ -1,0 +1,32 @@
+slug = "bit-packed-vec"
+title = "A bit-packed integer vector"
+mode = "write"
+level = "medium"
+stage = "pack-and-scan"
+order = 2
+status = "ready"
+tags = ["bit packing", "masks and shifts", "word boundaries", "columnar storage"]
+teaches = [
+  "Value `i` starts at bit `i * width`: word index, bit offset, and the case where it straddles two words.",
+  "Masks that work for every width including 64 (`1 << 64` overflows), and set that clears before it ORs.",
+  "Why columnar formats (Parquet, Arrow dictionary indices, FastLanes) store small integers this way.",
+]
+follow_up = "1) How would you unpack 64 values of the same width in a tight loop without a branch per value (specialise on width with const generics)? 2) What does an Arrow dictionary-encoded column do with this (indices of ceil(log2(distinct)) bits)? 3) Frame-of-reference: store `value - min` so the width shrinks; what happens with outliers (patched FOR)? 4) Why do SIMD-friendly formats pack in 4-lane interleaved order instead of sequentially? 5) Make `get` return a value without bounds checks using `unsafe`: is the speedup worth losing the safety here?"
+related = ["F2", "F5", "D13"]
+
+[[hints]]
+kind = "approach"
+text = "Value `i` occupies bits `i * width .. (i + 1) * width`. Its word is `bit / 64` and its offset inside the word is `bit % 64`. If `offset + width > 64` the top part of the value is in the next word."
+
+[[hints]]
+kind = "rust"
+text = "Read: `(words[w] >> off) | (words[w + 1] << (64 - off))` (only when it straddles; `off > 0` then), then AND with the mask. Write: clear the slot's bits first (`word & !(mask << off)`), OR the new bits in, and do the same on the next word with the leftover bits."
+
+[[hints]]
+kind = "edge"
+text = "`1u64 << 64` panics in debug builds: build the mask with an `if width == 64` branch (or `u64::MAX >> (64 - width)`). Keep the storage dense: `ceil(len * width / 64)` words, grown on push."
+
+[solution]
+explanation = "Packing trades a few shifts and masks per access for an 6x or more smaller footprint on small values, which is what decides cache behaviour on large columns. The straddling case is the bug magnet: a value's bits can be split across two words, so reads combine two shifted halves and writes update both. Columnar formats go further (Parquet's bit-packing hybrid, FastLanes) by laying values out so SIMD can unpack many at once."
+time = "O(1) get/set/push"
+space = "len * width / 8 bytes"

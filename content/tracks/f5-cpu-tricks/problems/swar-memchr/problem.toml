@@ -1,0 +1,32 @@
+slug = "swar-memchr"
+title = "memchr without SIMD: eight bytes per step"
+mode = "write"
+level = "hard"
+stage = "roaring"
+order = 4
+status = "ready"
+tags = ["SWAR", "memchr", "zero-byte trick", "endianness", "chunks_exact", "count_ones"]
+teaches = [
+  "SWAR (SIMD within a register): treat a `u64` as eight byte lanes and test all of them with a few integer operations.",
+  "The zero-byte trick, and why the famous cheap form `(w - LO) & !w & HI` is only trustworthy for 'is there one' and its lane bits can lie above the first hit.",
+  "Little-endian lane order: the first byte in memory is the low byte, so `trailing_zeros` finds the first match and `leading_zeros` the last.",
+]
+follow_up = "1) Why is the cheap form fine for `find_byte` but not `count_byte`? Construct the smallest failing word. 2) Replace `from_le_bytes` with an unaligned read through `ptr::read_unaligned`: is it faster, and is it sound at the slice end? 3) Write the SSE2 version with `_mm_cmpeq_epi8` / `_mm_movemask_epi8` and compare the mask handling (16 bits, `trailing_zeros` directly). 4) Extend to two needles at once (`memchr2`). 5) Where does hashbrown use the same mask trick for its control bytes?"
+related = ["F1", "F5", "S9"]
+
+[[hints]]
+kind = "approach"
+text = "`x = word ^ splat(needle)` has a zero lane wherever the needle matched. `zero_bytes(x)` flags those lanes. The first match is `m.trailing_zeros() / 8` (little-endian: lane 0 is the lowest byte), the last is `7 - m.leading_zeros() / 8`, the count is `m.count_ones()` if the mask is exact."
+
+[[hints]]
+kind = "rust"
+text = "`hay.chunks_exact(8)` gives full words and `.remainder()` the tail (take the remainder before consuming the iterator). `u64::from_le_bytes(chunk.try_into().unwrap())` is free after optimisation and avoids unaligned-pointer tricks."
+
+[[hints]]
+kind = "edge"
+text = "Exact zero test: `!(((w & 0x7F..) + 0x7F..) | w | 0x7F..)`. Masking off the high bit before adding means a lane can never carry into its neighbour; the OR with `w` catches lanes whose high bit was set."
+
+[solution]
+explanation = "The `memchr` crate does this (and AVX2/NEON beyond it); `std`'s `memchr` fallback and `str::find` for a single byte use the SWAR trick. Doing eight lanes per step turns a latency-bound byte loop into a throughput-bound one, and the same lane masks are the building block for SIMD movemask scans, UTF-8 validation and hash-table group probing (hashbrown's generic group is exactly this)."
+time = "O(n / 8) steps"
+space = "O(1) extra"

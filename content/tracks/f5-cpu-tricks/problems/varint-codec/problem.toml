@@ -1,0 +1,32 @@
+slug = "varint-codec"
+title = "Varints, zigzag and delta-encoded lists"
+mode = "write"
+level = "medium"
+stage = "pack-and-scan"
+order = 3
+status = "ready"
+tags = ["LEB128", "zigzag", "delta encoding", "wire format", "untrusted input"]
+teaches = [
+  "7-bit groups with a continuation bit: the integer encoding of protobuf, Thrift, DWARF, WebAssembly and SQLite4.",
+  "Zigzag turns signed numbers into small unsigned ones, including `i64::MIN`, without a branch.",
+  "Decoding untrusted bytes: truncation, 64-bit overflow in the 10th byte, and a length prefix that lies.",
+]
+follow_up = "1) Why do protobuf varints cost a branch per byte, and how does Stream VByte / group varint decode with SIMD (`pshufb`)? 2) Add a canonical-only decoder that rejects `[0x80, 0x00]`: when do protocols require it (signatures, hashes of encoded data)? 3) Compare with fixed-width big-endian ids and with Elias-gamma / Golomb-Rice codes for the gaps. 4) How would you make `decode_sorted` streaming (an iterator that borrows the buffer, no allocation)? 5) What do you do about a hostile `count` of 2^40 with a valid short prefix (limits, incremental growth)?"
+related = ["S9", "F7", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Encode: while the value is `>= 0x80`, emit its low 7 bits with the high bit set and shift right by 7; emit the last group as is. Decode: OR each byte's low 7 bits shifted by `7 * index` until a byte without the high bit."
+
+[[hints]]
+kind = "rust"
+text = "Zigzag: `(v << 1) ^ (v >> 63)` (the `>>` on `i64` is arithmetic and gives 0 or -1); inverse `(u >> 1) as i64 ^ -((u & 1) as i64)`. For overflow: the 10th byte (shift 63) may only be 0 or 1, and an 11th byte is an overflow."
+
+[[hints]]
+kind = "edge"
+text = "Never `Vec::with_capacity(count)` for a count you read from the input: cap it by what the buffer could possibly hold (`buf.len()`). Use `checked_add` when summing deltas."
+
+[solution]
+explanation = "LEB128 makes small numbers short at the price of a data-dependent loop. Zigzag keeps negative numbers short too (plain two's complement would make `-1` ten bytes). Delta encoding sorted ids turns big numbers into small gaps, which is how search-engine posting lists shrink by an order of magnitude. The security lesson is general for parsers: every length, count and offset in the input is attacker-controlled."
+time = "O(bytes)"
+space = "O(output)"
