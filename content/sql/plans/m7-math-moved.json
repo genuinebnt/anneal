@@ -1,0 +1,91 @@
+{
+ "id": "m7-math-moved",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE total_cents >= 5000 AND total_cents < 5100;",
+ "setup": [
+  {
+   "id": "orders-total",
+   "sql": "CREATE INDEX orders_total ON orders (total_cents);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Bitmap Heap Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 142.35,
+   "Total Cost": 14510.8,
+   "Plan Rows": 10334,
+   "Plan Width": 8,
+   "Actual Startup Time": 2.706,
+   "Actual Total Time": 10.379,
+   "Actual Rows": 10056.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Recheck Cond": "((total_cents >= 5000) AND (total_cents < 5100))",
+   "Rows Removed by Index Recheck": 0,
+   "Exact Heap Blocks": 7287,
+   "Lossy Heap Blocks": 0,
+   "Shared Hit Blocks": 7298,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Index Name": "orders_total",
+     "Startup Cost": 0.0,
+     "Total Cost": 139.77,
+     "Plan Rows": 10334,
+     "Plan Width": 0,
+     "Actual Startup Time": 1.477,
+     "Actual Total Time": 1.478,
+     "Actual Rows": 10056.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "((total_cents >= 5000) AND (total_cents < 5100))",
+     "Index Searches": 1,
+     "Shared Hit Blocks": 11,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.075,
+  "Triggers": [],
+  "Execution Time": 10.928
+ },
+ "text": "Bitmap Heap Scan on orders  (cost=142.35..14510.80 rows=10334 width=8) (actual time=2.281..9.485 rows=10056.00 loops=1)\n  Recheck Cond: ((total_cents >= 5000) AND (total_cents < 5100))\n  Heap Blocks: exact=7287\n  Buffers: shared hit=7298\n  ->  Bitmap Index Scan on orders_total  (cost=0.00..139.77 rows=10334 width=0) (actual time=1.244..1.245 rows=10056.00 loops=1)\n        Index Cond: ((total_cents >= 5000) AND (total_cents < 5100))\n        Index Searches: 1\n        Buffers: shared hit=11\nPlanning Time: 0.062 ms\nExecution Time: 10.073 ms"
+}

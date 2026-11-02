@@ -1,0 +1,59 @@
+{
+ "id": "m5-like-suffix",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM customers WHERE email LIKE '%4242@example.com';",
+ "setup": [
+  {
+   "id": "customers-email",
+   "sql": "CREATE INDEX customers_email ON customers (email);"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Seq Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "customers",
+   "Alias": "customers",
+   "Startup Cost": 0.0,
+   "Total Cost": 1140.0,
+   "Plan Rows": 5,
+   "Plan Width": 4,
+   "Actual Startup Time": 0.444,
+   "Actual Total Time": 5.29,
+   "Actual Rows": 5.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Filter": "(email ~~ '%4242@example.com'::text)",
+   "Rows Removed by Filter": 49995,
+   "Shared Hit Blocks": 515,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.061,
+  "Triggers": [],
+  "Execution Time": 5.304
+ },
+ "text": "Seq Scan on customers  (cost=0.00..1140.00 rows=5 width=4) (actual time=0.422..4.887 rows=5.00 loops=1)\n  Filter: (email ~~ '%4242@example.com'::text)\n  Rows Removed by Filter: 49995\n  Buffers: shared hit=515\nPlanning Time: 0.043 ms\nExecution Time: 4.896 ms"
+}

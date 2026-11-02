@@ -76,3 +76,52 @@ undo = "DROP INDEX customers_lower_email;"
 id = "orders-day-utc"
 sql = "CREATE INDEX orders_day_utc ON orders (((created_at AT TIME ZONE 'UTC')::date));"
 undo = "DROP INDEX orders_day_utc;"
+
+[[setup]]
+id = "customers-email-pattern"
+sql = "CREATE INDEX customers_email_pattern ON customers (email text_pattern_ops);"
+undo = "DROP INDEX customers_email_pattern;"
+
+[[setup]]
+id = "customers-email-c"
+sql = "CREATE INDEX customers_email_c ON customers (email COLLATE \"C\");"
+undo = "DROP INDEX customers_email_c;"
+
+[[setup]]
+id = "orders-total"
+sql = "CREATE INDEX orders_total ON orders (total_cents);"
+undo = "DROP INDEX orders_total;"
+
+[[setup]]
+id = "orders-pending-partial"
+sql = "CREATE INDEX orders_pending ON orders (created_at) WHERE status = 'pending';"
+undo = "DROP INDEX orders_pending;"
+
+[[setup]]
+id = "generic-pending"
+session = "SET plan_cache_mode = force_generic_plan; PREPARE pending_orders (text) AS SELECT id FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT 20;"
+
+# a nullable column for the NULL pages: 500,000 tickets, every 50th one unassigned (10,000), deterministic
+[[setup]]
+id = "tickets"
+sql = "CREATE TABLE tickets AS SELECT i AS id, CASE WHEN i % 50 = 0 THEN NULL ELSE (1 + (i::bigint * 7919) % 200)::int END AS assignee_id, timestamptz '2026-01-01' + (i % 100000) * interval '5 minutes' AS created_at FROM generate_series(1, 500000) AS i; ALTER TABLE tickets ADD PRIMARY KEY (id); VACUUM ANALYZE tickets;"
+undo = "DROP TABLE tickets;"
+
+[[setup]]
+id = "tickets-assignee"
+sql = "CREATE INDEX tickets_assignee ON tickets (assignee_id);"
+undo = "DROP INDEX tickets_assignee;"
+
+[[setup]]
+id = "tickets-unassigned"
+sql = "CREATE INDEX tickets_unassigned ON tickets (created_at) WHERE assignee_id IS NULL;"
+undo = "DROP INDEX tickets_unassigned;"
+
+[[setup]]
+id = "generic-optional"
+session = "SET plan_cache_mode = force_generic_plan; PREPARE optional_customer (int) AS SELECT id FROM orders WHERE (customer_id = $1 OR $1 IS NULL) LIMIT 50;"
+
+# a table this small is on the edge of the planner's parallel-scan threshold, so a plan that must keep one shape says so
+[[setup]]
+id = "no-parallel"
+session = "SET max_parallel_workers_per_gather = 0;"

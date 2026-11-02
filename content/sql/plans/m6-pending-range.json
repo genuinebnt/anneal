@@ -1,0 +1,91 @@
+{
+ "id": "m6-pending-range",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM orders WHERE status = 'pending' AND created_at < '2025-02-01';",
+ "setup": [
+  {
+   "id": "orders-pending-partial",
+   "sql": "CREATE INDEX orders_pending ON orders (created_at) WHERE status = 'pending';"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Bitmap Heap Scan",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Relation Name": "orders",
+   "Alias": "orders",
+   "Startup Cost": 120.03,
+   "Total Cost": 11674.78,
+   "Plan Rows": 6143,
+   "Plan Width": 8,
+   "Actual Startup Time": 1.33,
+   "Actual Total Time": 5.664,
+   "Actual Rows": 5678.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Recheck Cond": "((created_at < '2025-02-01 00:00:00+00'::timestamp with time zone) AND (status = 'pending'::text))",
+   "Rows Removed by Index Recheck": 0,
+   "Exact Heap Blocks": 4753,
+   "Lossy Heap Blocks": 0,
+   "Shared Hit Blocks": 4771,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Index Name": "orders_pending",
+     "Startup Cost": 0.0,
+     "Total Cost": 118.49,
+     "Plan Rows": 6143,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.739,
+     "Actual Total Time": 0.739,
+     "Actual Rows": 5678.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "(created_at < '2025-02-01 00:00:00+00'::timestamp with time zone)",
+     "Index Searches": 1,
+     "Shared Hit Blocks": 18,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.071,
+  "Triggers": [],
+  "Execution Time": 5.947
+ },
+ "text": "Bitmap Heap Scan on orders  (cost=120.03..11674.78 rows=6143 width=8) (actual time=1.318..4.882 rows=5678.00 loops=1)\n  Recheck Cond: ((created_at < '2025-02-01 00:00:00+00'::timestamp with time zone) AND (status = 'pending'::text))\n  Heap Blocks: exact=4753\n  Buffers: shared hit=4771\n  ->  Bitmap Index Scan on orders_pending  (cost=0.00..118.49 rows=6143 width=0) (actual time=0.662..0.662 rows=5678.00 loops=1)\n        Index Cond: (created_at < '2025-02-01 00:00:00+00'::timestamp with time zone)\n        Index Searches: 1\n        Buffers: shared hit=18\nPlanning Time: 0.051 ms\nExecution Time: 5.162 ms"
+}

@@ -1,0 +1,163 @@
+{
+ "id": "m6-pending-other-status",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, customer_id FROM orders WHERE status = 'shipped' ORDER BY created_at DESC LIMIT 20;",
+ "setup": [
+  {
+   "id": "orders-pending-partial",
+   "sql": "CREATE INDEX orders_pending ON orders (created_at) WHERE status = 'pending';"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 31330.53,
+   "Total Cost": 31332.86,
+   "Plan Rows": 20,
+   "Plan Width": 20,
+   "Actual Startup Time": 62.244,
+   "Actual Total Time": 64.725,
+   "Actual Rows": 20.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 15036,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Gather Merge",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 31330.53,
+     "Total Cost": 83367.87,
+     "Plan Rows": 446801,
+     "Plan Width": 20,
+     "Actual Startup Time": 62.242,
+     "Actual Total Time": 64.718,
+     "Actual Rows": 20.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Workers Planned": 2,
+     "Workers Launched": 2,
+     "Shared Hit Blocks": 15036,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Sort",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Startup Cost": 30330.5,
+       "Total Cost": 30795.92,
+       "Plan Rows": 186167,
+       "Plan Width": 20,
+       "Actual Startup Time": 60.056,
+       "Actual Total Time": 60.059,
+       "Actual Rows": 16.0,
+       "Actual Loops": 3,
+       "Disabled": false,
+       "Sort Key": [
+        "created_at DESC"
+       ],
+       "Sort Method": "top-N heapsort",
+       "Sort Space Used": 27,
+       "Sort Space Type": "Memory",
+       "Shared Hit Blocks": 15036,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0,
+       "Workers": [
+        {
+         "Worker Number": 0,
+         "Sort Method": "top-N heapsort",
+         "Sort Space Used": 27,
+         "Sort Space Type": "Memory"
+        },
+        {
+         "Worker Number": 1,
+         "Sort Method": "top-N heapsort",
+         "Sort Space Used": 27,
+         "Sort Space Type": "Memory"
+        }
+       ],
+       "Plans": [
+        {
+         "Node Type": "Seq Scan",
+         "Parent Relationship": "Outer",
+         "Parallel Aware": true,
+         "Async Capable": false,
+         "Relation Name": "orders",
+         "Alias": "orders",
+         "Startup Cost": 0.0,
+         "Total Cost": 25376.67,
+         "Plan Rows": 186167,
+         "Plan Width": 20,
+         "Actual Startup Time": 0.012,
+         "Actual Total Time": 44.454,
+         "Actual Rows": 148268.33,
+         "Actual Loops": 3,
+         "Disabled": false,
+         "Filter": "(status = 'shipped'::text)",
+         "Rows Removed by Filter": 518398,
+         "Shared Hit Blocks": 14960,
+         "Shared Read Blocks": 0,
+         "Shared Dirtied Blocks": 0,
+         "Shared Written Blocks": 0,
+         "Local Hit Blocks": 0,
+         "Local Read Blocks": 0,
+         "Local Dirtied Blocks": 0,
+         "Local Written Blocks": 0,
+         "Temp Read Blocks": 0,
+         "Temp Written Blocks": 0,
+         "Workers": []
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.089,
+  "Triggers": [],
+  "Execution Time": 64.748
+ },
+ "text": "Limit  (cost=31330.53..31332.86 rows=20 width=20) (actual time=66.558..69.252 rows=20.00 loops=1)\n  Buffers: shared hit=15036\n  ->  Gather Merge  (cost=31330.53..83367.87 rows=446801 width=20) (actual time=66.556..69.247 rows=20.00 loops=1)\n        Workers Planned: 2\n        Workers Launched: 2\n        Buffers: shared hit=15036\n        ->  Sort  (cost=30330.50..30795.92 rows=186167 width=20) (actual time=64.624..64.626 rows=16.67 loops=3)\n              Sort Key: created_at DESC\n              Sort Method: top-N heapsort  Memory: 27kB\n              Buffers: shared hit=15036\n              Worker 0:  Sort Method: top-N heapsort  Memory: 27kB\n              Worker 1:  Sort Method: top-N heapsort  Memory: 27kB\n              ->  Parallel Seq Scan on orders  (cost=0.00..25376.67 rows=186167 width=20) (actual time=0.012..46.730 rows=148268.33 loops=3)\n                    Filter: (status = 'shipped'::text)\n                    Rows Removed by Filter: 518398\n                    Buffers: shared hit=14960\nPlanning Time: 0.085 ms\nExecution Time: 69.277 ms"
+}
