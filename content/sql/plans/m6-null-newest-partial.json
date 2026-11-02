@@ -1,0 +1,91 @@
+{
+ "id": "m6-null-newest-partial",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM tickets WHERE assignee_id IS NULL ORDER BY created_at DESC LIMIT 5;",
+ "setup": [
+  {
+   "id": "tickets",
+   "sql": "CREATE TABLE tickets AS SELECT i AS id, CASE WHEN i % 50 = 0 THEN NULL ELSE (1 + (i::bigint * 7919) % 200)::int END AS assignee_id, timestamptz '2026-01-01' + (i % 100000) * interval '5 minutes' AS created_at FROM generate_series(1, 500000) AS i; ALTER TABLE tickets ADD PRIMARY KEY (id); VACUUM ANALYZE tickets;"
+  },
+  {
+   "id": "tickets-unassigned",
+   "sql": "CREATE INDEX tickets_unassigned ON tickets (created_at) WHERE assignee_id IS NULL;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.29,
+   "Total Cost": 5.52,
+   "Plan Rows": 5,
+   "Plan Width": 12,
+   "Actual Startup Time": 0.011,
+   "Actual Total Time": 0.013,
+   "Actual Rows": 5.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 7,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Backward",
+     "Index Name": "tickets_unassigned",
+     "Relation Name": "tickets",
+     "Alias": "tickets",
+     "Startup Cost": 0.29,
+     "Total Cost": 10821.25,
+     "Plan Rows": 10333,
+     "Plan Width": 12,
+     "Actual Startup Time": 0.01,
+     "Actual Total Time": 0.012,
+     "Actual Rows": 5.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 7,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {},
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.039,
+  "Triggers": [],
+  "Execution Time": 0.026
+ },
+ "text": "Limit  (cost=0.29..5.52 rows=5 width=12) (actual time=0.005..0.008 rows=5.00 loops=1)\n  Buffers: shared hit=7\n  ->  Index Scan Backward using tickets_unassigned on tickets  (cost=0.29..10821.25 rows=10333 width=12) (actual time=0.005..0.007 rows=5.00 loops=1)\n        Index Searches: 1\n        Buffers: shared hit=7\nPlanning Time: 0.024 ms\nExecution Time: 0.012 ms"
+}

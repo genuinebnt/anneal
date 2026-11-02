@@ -1,0 +1,297 @@
+title = "Partial indexes and NULL"
+group = "sql-indexes"
+order = 6
+minutes = 22
+lede = "Most tables have a small, interesting slice: the pending orders, the unassigned tickets, the rows nobody has processed yet. An index on the whole column spends most of its pages on rows no query asks about. A partial index holds only the slice, and the same idea explains how Postgres treats NULL, which is just the most common slice of all."
+say = "A partial index (CREATE INDEX ... WHERE condition) stores only the rows that satisfy the condition, so it can be 26 times smaller than the full index and costs nothing for rows outside the slice; the planner uses it only when it can prove the query's condition implies the index's."
+related = ["indexes", "postgres"]
+
+summary = [
+  "A partial index on `WHERE status = 'pending'` is **308 pages** against 7,950 for `(status, created_at)`, and answers the same top-20 query in the same 23 pages.",
+  "The planner uses it only when the query's `WHERE` **provably implies** the index's: `status = 'pending'` yes; the same query as a generic prepared plan (`status = $1`) no.",
+  "Postgres B-trees **store NULLs**, so `IS NULL` is indexable; `= NULL` is never true and returns nothing at all.",
+  "For a rare NULL (the unassigned tickets), a partial index on `WHERE assignee_id IS NULL` is 17 pages against 428, and serves 'newest 5' in 7 pages where the full index needs 2,715.",
+  "A unique index treats NULLs as distinct by default, so many NULLs may coexist; `NULLS NOT DISTINCT` (Postgres 15) changes that.",
+]
+
+[[sections]]
+heading = "An index for the slice that matters"
+body = """
+The example schema's orders are mostly `paid` and `shipped`. Only 5.5% are `pending`, and a pending-orders screen asks for exactly those, newest first. An index that serves it, built the way module 3 taught, is `(status, created_at)`:
+
+```plan id=m6-pending-full setup=orders-status-created
+SELECT id, customer_id FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20;
+```
+
+Twenty-three pages: the descent into the `pending` block, twenty entries read backwards and twenty table visits. It works well. But look at what the index holds: an entry for every one of the 2 million orders, **7,950 pages (62 MB)**, of which the queries use the end of one block. Every insert, and every update that changes `status` or `created_at`, writes to that index, for rows nobody will ever look up by status.
+
+A **partial index** has a `WHERE` clause and stores only the rows that satisfy it:
+
+```sql title=partial.sql
+CREATE INDEX orders_pending ON orders (created_at) WHERE status = 'pending';
+```
+
+```plan id=m6-pending-partial setup=orders-pending-partial
+SELECT id, customer_id FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20;
+```
+
+The same 23 pages, but the index is **308 pages (2.4 MB)**, 26 times smaller. Two details are worth reading in the plan: the index has no `status` column at all (every entry is pending, so the column would add nothing), and the plan shows no `Index Cond`; the condition lives in the index definition, and the planner matched it from the query. A partial index is not faster for this query; the full index was already fast. What it buys is **space and write cost**: 2.4 MB stays in memory where 62 MB competes with everything else, and an insert of a `paid` order touches the table and the other indexes but not this one.
+
+Range queries on the slice use it too, with the ordinary bounds on the indexed column:
+
+```plan id=m6-pending-range setup=orders-pending-partial
+SELECT id FROM orders WHERE status = 'pending' AND created_at < '2025-02-01';
+```
+
+Eighteen index pages for 5,678 entries (the cost of the range is again the 4,753 table pages, module 5's lesson). The condition `status = 'pending'` has already been satisfied by the choice of index; only the `created_at` bound is checked in it.
+
+> [!TIP]
+> Good candidates are a small, steady slice that queries ask for by name: unprocessed jobs, unread notifications, active rows in a table of soft-deleted ones (`WHERE deleted_at IS NULL`), the latest version of each record. A bad candidate is a slice that is half the table, which saves little and complicates the planner's job.
+"""
+
+[[sections]]
+heading = "When the planner can use it"
+body = """
+A partial index is a promise: "every row that satisfies my condition is in here, and no other row is." So the planner may use it for a query only if the query's `WHERE` **implies** the index's condition. For a query on another status the index is useless:
+
+```plan id=m6-pending-other-status setup=orders-pending-partial
+SELECT id, customer_id FROM orders WHERE status = 'shipped' ORDER BY created_at DESC LIMIT 20;
+```
+
+Shipped orders are not in the index, so the query reads the whole table (14,960 pages, sorting in parallel). That is the expected cost of a partial index: it is only for the slice, and every other query needs another index.
+
+The proof the planner does is **simple**. It recognises the same condition, a stricter version of a comparison (`x > 10` implies `x > 5`) and a few other textbook cases; it does not reason about your data or your application's rules. Writing the query's condition the way the index is written is always safe. The case that bites most is a **parameter**. In an application the status is sent as a bind parameter. A prepared statement may run with a *generic plan*, made without knowing the value (module 4 and module 11), and a generic plan cannot assume that `$1` is `'pending'`:
+
+```sql title=generic.sql
+SET plan_cache_mode = force_generic_plan;   -- what a statement does after enough executions
+PREPARE pending_orders (text) AS
+  SELECT id FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT 20;
+EXECUTE pending_orders('pending');
+```
+
+```plan id=m6-pending-generic setup=orders-pending-partial,generic-pending
+EXECUTE pending_orders('pending');
+```
+
+The index exists, the value is `'pending'`, and the plan is a parallel sequential scan of the whole table with `Filter: (status = $1)`. With a literal, or with a custom plan for each execution (which Postgres uses for the first five runs of a prepared statement and keeps while it is no worse than a generic plan), the index is used. When a query must keep using a partial index through bind parameters, put the constant in the SQL text (`WHERE status = 'pending'` in the function that serves the pending screen), and let the parameter carry only what varies.
+
+:::deeper What 'implies' covers | 1 min
+The planner proves implication with a small set of rules (`predicate_implied_by` in the source). Equal expressions, and comparisons of the same expression with constants such as `x < 5` implying `x < 10`, are proved. `status <> 'paid' AND status <> 'shipped'` does **not** imply `status IN ('pending', 'refunded')`, however true that is for your data, because the planner knows nothing about which values exist. If you rely on a partial index, check with `EXPLAIN` that the query you wrote is the one that uses it.
+:::
+"""
+
+[[sections]]
+heading = "NULL in an index"
+body = """
+A NULL is not a value; it means "unknown" or "absent", and SQL's comparisons with it are neither true nor false. Whether an index can help with NULL is a separate question from what SQL says about it. Postgres B-trees **do store NULLs** (they sort after all other values by default, `NULLS LAST` for ascending), so conditions on NULL can use an ordinary index. The tickets in this module's examples have 500,000 rows, a nullable `assignee_id`, and every 50th ticket unassigned: 10,000 NULLs, 2%.
+
+Without an index on `assignee_id`, the NULLs cost a full read of the table (parallel workers switched off for this plan, because a table this small is on the edge of the planner's threshold for them):
+
+```plan id=m6-null-seq setup=tickets,no-parallel
+SELECT id FROM tickets WHERE assignee_id IS NULL;
+```
+
+With an index, `IS NULL` is an indexable condition like any other:
+
+```plan id=m6-null-index setup=tickets,tickets-assignee
+SELECT id FROM tickets WHERE assignee_id IS NULL;
+```
+
+The index scan takes 12 pages to find the 10,000 entries; the table visits take the other 2,703 (the NULL tickets are scattered). The *conditions* are different from equality in only one way you must remember:
+
+```plan id=m6-null-equals setup=tickets,tickets-assignee
+SELECT id FROM tickets WHERE assignee_id = NULL;
+```
+
+`assignee_id = NULL` is never true, for any row, so Postgres does not even look: the plan is a `Result` with `One-Time Filter: false`, zero pages and zero rows. This is correct SQL and a common bug: the ORM that builds `= NULL` from a null parameter returns an empty list with a fast plan. Use `IS NULL`, or `IS NOT DISTINCT FROM` to compare a column with a parameter that may be null (`IS NOT DISTINCT FROM` treats two NULLs as equal, and is the ANSI form; Postgres does not use an index for it, so prefer `IS NULL` where you know which case you have).
+
+A few other facts that follow from "NULLs are stored":
+
+- `col <> 5` and `col NOT IN (...)` **do not return rows where `col` is NULL**, because `NULL <> 5` is unknown. That is a correctness trap (module 17 returns to `NOT IN`), not an index matter.
+
+**Unique indexes and NULL.** A unique index lets any number of NULLs coexist, because no NULL equals another:
+
+```sql title=unique_null.sql
+CREATE TABLE u (a int, b int, UNIQUE (a));
+INSERT INTO u VALUES (NULL, 1), (NULL, 2), (1, 3);    -- accepted: both NULLs are 'different'
+-- a second row with a = 1 would be rejected
+
+CREATE TABLE u2 (a int, UNIQUE NULLS NOT DISTINCT (a));   -- Postgres 15 and later
+INSERT INTO u2 VALUES (NULL);
+INSERT INTO u2 VALUES (NULL);
+-- ERROR:  duplicate key value violates unique constraint "u2_a_key"
+```
+
+This is the ANSI default, and what you want for an optional unique field (a nullable phone number). Where you want "at most one row with no value", say so with `NULLS NOT DISTINCT`, or with a partial unique index: `CREATE UNIQUE INDEX ... (customer_id) WHERE deleted_at IS NULL`, the common way to make a value unique only among the live rows.
+"""
+
+[[sections]]
+heading = "NULL is the classic partial index"
+body = """
+The rare-NULL case combines the two halves. Unassigned tickets are 2% of the table, and a support screen shows the newest five. With the full index on `assignee_id`, which holds all 500,000 entries, 10,000 of them NULL:
+
+```plan id=m6-null-newest-full setup=tickets,tickets-assignee
+SELECT id FROM tickets WHERE assignee_id IS NULL ORDER BY created_at DESC LIMIT 5;
+```
+
+The index finds the NULLs but not in `created_at` order, so Postgres reads all 10,000 rows (2,715 pages) and sorts them to keep five. A partial index that stores only the NULLs, **in the order the screen wants**, does it directly:
+
+```sql title=partial_null.sql
+CREATE INDEX tickets_unassigned ON tickets (created_at) WHERE assignee_id IS NULL;
+```
+
+```plan id=m6-null-newest-partial setup=tickets,tickets-unassigned
+SELECT id FROM tickets WHERE assignee_id IS NULL ORDER BY created_at DESC LIMIT 5;
+```
+
+Seven pages. And the index is **17 pages**, against 428 for the full index on `assignee_id` and 2,752 for the table: the index holds 10,000 entries and a `created_at` key, and its size follows the slice, not the table. In the same way, "the rows still waiting" is the usual shape of a job or outbox table where almost every row is already done; an index over just the waiting rows stays small and fast however large the table grows, which is the base of the queue patterns in Part VI.
+
+:::steps Why a partial index scales with the slice
+- insert | a new ticket arrives unassigned | The row satisfies the index condition, so one entry is added to the partial index.
+- assign | the ticket gets an assignee | The row stops satisfying the condition, so its entry is removed (at the next VACUUM); the table keeps it.
+- steady state | most tickets are assigned | The index holds only the open ones, which stay few: the 17 pages above, not the 428 of the full index.
+:::
+"""
+
+[[sections]]
+heading = "The same idea in other engines"
+body = """
+| Engine | Partial indexes and NULL |
+|---|---|
+| Postgres | Partial indexes (`CREATE INDEX ... WHERE`); NULLs stored in B-trees; `NULLS NOT DISTINCT` since 15 |
+| SQLite | Partial indexes with a `WHERE`, supported for a long time. Measured on 3.53.1: `WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20` showed `SCAN orders USING COVERING INDEX op` for a partial index `op ON orders (created_at) WHERE status = 'pending'`, and the same query for `'paid'` fell back to the full index on `created_at` |
+| MySQL | The manual has no partial-index clause for `CREATE INDEX`; the usual substitutes are a generated column that is NULL outside the slice, with an index on it, or a separate table. Not run here |
+| ClickHouse, DuckDB | No row-level indexes to make partial; a materialised view or a table holding just the slice does the job |
+
+Partial indexes are a Postgres strength, and a reason to look at what your database offers before a design that works around its absence.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+In Rust with sqlx, the queries that use these indexes carry the constants in the SQL text, and only the varying part is bound:
+
+```rust title=pending_orders.rs
+// The index is partial on status = 'pending', so the literal stays in the SQL:
+// a bound $1 can make a generic plan that cannot use it.
+async fn pending(pool: &sqlx::PgPool) -> sqlx::Result<Vec<(i64, i32)>> {
+    sqlx::query_as(
+        "SELECT id, customer_id FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+// An optional assignee: two statements beat one 'smart' statement (module 7),
+// and IS NULL is spelled out, never = NULL.
+async fn tickets_for(pool: &sqlx::PgPool, assignee: Option<i32>) -> sqlx::Result<Vec<i64>> {
+    match assignee {
+        Some(a) => sqlx::query_scalar("SELECT id FROM tickets WHERE assignee_id = $1").bind(a).fetch_all(pool).await,
+        None => sqlx::query_scalar("SELECT id FROM tickets WHERE assignee_id IS NULL ORDER BY created_at DESC").fetch_all(pool).await,
+    }
+}
+```
+
+And to see which indexes earn their keep, find the ones never scanned and how big they are:
+
+```sql title=unused_indexes.sql
+SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS size, idx_scan
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0 AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid = pg_stat_user_indexes.indexrelid AND i.indisunique)
+ORDER BY pg_relation_size(indexrelid) DESC;
+```
+
+An unused index that is not a constraint is pure write cost, and replacing a large one with a partial index over the slice that is actually queried is often the fix.
+"""
+
+[[checks]]
+prompt = "The pending-orders query reads 23 pages with either a full index on (status, created_at) or a partial index on created_at WHERE status = 'pending'. Why bother with the partial index?"
+answer = "Not for the speed of this query. The partial index is 308 pages against 7,950, so it uses a fraction of the memory and its entries are only written for orders that are pending: inserting or updating a paid or shipped order does not touch it. The saving is space, cache and write cost, and it grows with the share of rows outside the slice."
+
+[[checks]]
+prompt = "You created CREATE INDEX ... (created_at) WHERE status = 'pending', and the query WHERE status = $1 with $1 = 'pending' reads the whole table when run through a prepared statement. Why, and what do you change?"
+answer = "A generic plan is made without knowing the parameter, so the planner cannot prove status = $1 implies status = 'pending' and cannot use the partial index (Filter: status = $1 on a Seq Scan). Custom plans, which Postgres uses for the first executions, see the value and do use it. Put the constant in the SQL text for the statement that serves the pending slice, or force custom plans; check with EXPLAIN on the statement as the driver sends it."
+
+[[checks]]
+prompt = "A list endpoint returns an empty list whenever the optional assignee filter is null, and the query log shows WHERE assignee_id = NULL. What is wrong, and why was it fast?"
+answer = "= NULL is never true, because a comparison with NULL is unknown, so the query matches no rows. It was fast because Postgres knows that and plans a Result with a one-time filter of false, reading no pages. The fix is IS NULL (or a separate statement for the null case); for a parameter that may be null, IS NOT DISTINCT FROM compares correctly, but will not use an index, so choose the statement by case."
+
+[[checks]]
+prompt = "Sketch the index for 'the newest 20 jobs that are not done yet' on a table of 100 million jobs of which 5,000 are pending, and say what happens to its size and cost as jobs finish."
+answer = "A partial index on the sort column covering only the pending jobs: CREATE INDEX ON jobs (created_at) WHERE state = 'pending'. It holds about 5,000 entries however large the table is, serves the query with a backward scan and no sort, and shrinks as jobs finish (their entries are removed at the next VACUUM). A full index on state would hold all 100 million entries and be written for every finished job as well."
+
+[[checks]]
+prompt = "A table has UNIQUE (email) and a user can have no email. Two users both have no email. Is that allowed, and what if the business rule is 'at most one user without an email'?"
+answer = "Allowed: a unique index treats NULLs as distinct, so any number of rows may have a NULL email. To allow at most one, create the constraint as UNIQUE NULLS NOT DISTINCT (Postgres 15 and later), which treats NULLs as equal; a partial unique index over the NULL rows with a constant key, such as CREATE UNIQUE INDEX ON users ((true)) WHERE email IS NULL, also works on earlier versions."
+
+[[terms]]
+term = "Partial index"
+means = "An index with a WHERE clause that stores entries only for the rows satisfying it."
+section = "An index for the slice that matters"
+
+[[terms]]
+term = "Predicate implication"
+means = "The planner's proof that a query's WHERE guarantees the index's WHERE; without it a partial index is not used."
+section = "When the planner can use it"
+
+[[terms]]
+term = "Generic plan"
+means = "A prepared statement's plan made without knowing the parameter values; it cannot assume a parameter equals a constant."
+section = "When the planner can use it"
+
+[[terms]]
+term = "IS NULL"
+means = "The test for an absent value; = NULL is never true. Indexable in Postgres B-trees."
+section = "NULL in an index"
+
+[[terms]]
+term = "NULLS NOT DISTINCT"
+means = "A unique constraint option (Postgres 15) that treats NULLs as equal, so only one NULL is allowed."
+section = "NULL in an index"
+
+[[terms]]
+term = "Slice"
+means = "The small, steadily queried subset of a table (pending, unassigned, live) that a partial index stores."
+section = "NULL is the classic partial index"
+
+[[sources]]
+title = "PostgreSQL: partial indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-partial.html"
+
+[[sources]]
+title = "PostgreSQL: indexes and ordering (NULLS FIRST and LAST)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-ordering.html"
+
+[[sources]]
+title = "PostgreSQL: unique indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-unique.html"
+note = "NULLs and NULLS NOT DISTINCT"
+
+[[sources]]
+title = "PostgreSQL: comparison functions and operators (IS NULL, IS DISTINCT FROM)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-comparison.html"
+
+[[sources]]
+title = "PostgreSQL: PREPARE (generic and custom plans)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-prepare.html"
+
+[[sources]]
+title = "SQLite: partial indexes"
+kind = "docs"
+url = "https://www.sqlite.org/partialindex.html"
+
+[[sources]]
+title = "MySQL: CREATE INDEX"
+kind = "docs"
+url = "https://dev.mysql.com/doc/refman/8.4/en/create-index.html"
+
+[[sources]]
+title = "Use The Index, Luke: partial indexes"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/where-clause/null/partial-index"
+note = "further reading"
