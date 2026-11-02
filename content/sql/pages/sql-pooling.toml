@@ -1,0 +1,108 @@
+title = "Connections and pooling: how many is too many"
+group = "sql-scale"
+order = 39
+minutes = 12
+lede = "Every Postgres connection is a server process. Opening one costs far more than running a short query, and having many open at once does not make the database faster, because the CPU cores it runs on stay the same. This page measures both with pgbench on a four-core machine: the price of connecting for every query, and how throughput and latency change as the number of concurrent clients goes up. That is the argument for a connection pool, and for keeping its size small. PgBouncer itself was not installed here, so what a pooler changes in practice is argued from these numbers and the documentation, not measured."
+say = "On 4 cores, a select-only workload (pgbench scale 10, 1,000,000 account rows) ran at 99,071 transactions a second with 4 persistent connections (0.040 ms each) and at 1,038 a second when each transaction opened a new connection (3.854 ms), about 95 times fewer. Raising the number of concurrent clients did not raise throughput: read-write transactions went from 953 a second with 1 client to 4,535 with 8, then stayed between 3,884 and 4,435 up to 90 clients while the average latency grew from 1.8 ms to 23.2 ms. Select-only peaked at 4 clients (115,447 and 113,561 a second in two runs) and sat between 58,746 and 80,787 from 8 to 90."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** `pgbench -i -s 10` in a scratch database (1,000,000 rows in `pgbench_accounts`), Postgres 18.6 with `shared_buffers = 128MB` and `max_connections = 100`, on a machine with 4 cores. Client and server on the same host over loopback TCP. Each run is 6 to 8 seconds, **single runs**, so differences of a few percent mean nothing. `-S` is the select-only built-in script (one primary-key lookup); the default script is the read-write TPC-B-like one (three updates, a select and an insert per transaction).",
+  "**Price of a connection:** select-only, 4 clients. Persistent connections: **99,071 transactions/s, 0.040 ms**. With `-C` (a new connection for every transaction, which includes the TCP connect, authentication and process start): **1,038/s, 3.854 ms**. The connection costs about 3.8 ms against a query of 0.04. This is what an application that connects per request pays, and what a pool removes by keeping connections open.",
+  "**More clients is not more throughput:** the read-write script, clients from 1 to 90 (`-j 4`): **954, 1,867, 2,779, 4,535, 4,435, 4,378, 4,223 and 3,884 transactions/s** for 1, 2, 4, 8, 16, 32, 64 and 90 clients; the average latency was 1.05, 1.07, 1.44, 1.76, 3.61, 7.31, 15.15 and 23.18 ms. Throughput stops rising near 8 clients (two per core); beyond that each extra client only adds queueing: the latency is roughly the client count divided by the throughput.",
+  "**Select-only, the same sweep, two runs:** 1 client 13,661 and 12,653/s; 2 clients 27,275 and 24,498; **4 clients 115,447 and 113,561**; 8 clients 64,297 and 74,783; 16: 68,874 and 80,787; 32: 68,738 and 74,782; 64: 58,746 and 72,051; 90: 63,042 and 72,012. The best figure came with as many clients as cores. The low numbers for 1 and 2 clients (latency 0.073 ms against 0.035 at 4) repeated in both runs; their cause (loopback round trips, wake-ups between client and server) was not investigated, so they should not be taken as a general rule.",
+  "**What this says about pool size:** the database does its work on a few cores; connections beyond what those cores can run are waiting in a queue either way. The queue is cheaper in a pool (a client waits for a free connection) than inside the server (processes competing, more memory, more lock traffic). In the read-write test the full throughput was already reached with 8 clients; no pooler was in the path, so this shows the client count to aim for, not a pool's own overhead. The PostgreSQL wiki page on the number of connections (linked below) argues for a small pool for the same reason; the knee here at 8 clients, two per core, is what this machine and these two scripts showed, and the best size depends on the workload.",
+  "**What a pooler adds, from the documentation only:** in transaction pooling mode a client gets a server connection for one transaction at a time, so session state (`SET`, advisory locks, session-level prepared statements, `LISTEN`) cannot be relied on between transactions; protocol-level prepared statements need a pooler version that supports them. Whether and how well that works with a given driver was not tested here.",
+  "**Memory per connection was not measured:** `ps` shows about 11 MB resident for a fresh idle backend and about 109 MB after one query, but resident size counts the shared memory a process has touched, so it overstates what each connection costs.",
+]
+
+[[sections]]
+heading = "The price of opening a connection"
+body = """
+A client connecting to Postgres makes a TCP connection, the server starts a process for it, they authenticate and set up the session, and only then can a query run. The test used `pgbench -S` (a single primary-key lookup, 0.04 ms of work) with 4 clients:
+
+```
+pgbench -S -c 4 -j 4 -T 8            # persistent connections
+  latency average = 0.040 ms   tps = 99071
+
+pgbench -S -c 4 -j 4 -T 8 -C         # a new connection for every transaction
+  latency average = 3.854 ms   tps = 1037.9
+```
+
+About 3.8 ms of setup around 0.04 ms of query: roughly a 95-fold drop. The server and client were on the same machine; across a network the connect would cost more (the TLS handshake and extra round trips), which was not measured. An application framework that opens a connection per request, or a serverless function that cannot keep one, pays this on every call. Keeping the connection open (a client-side pool in the application, or a separate pooler process in front of the database) removes it.
+"""
+
+[[sections]]
+heading = "More clients, same four cores"
+body = """
+A pool is also a limit. If 90 application threads each hold a connection and all run queries at once, the database has 90 processes competing for four cores. The read-write sweep, 6 seconds per point:
+
+| clients | transactions/s | average latency (ms) |
+|---|---|---|
+| 1 | 954 | 1.05 |
+| 2 | 1,867 | 1.07 |
+| 4 | 2,779 | 1.44 |
+| 8 | 4,535 | 1.76 |
+| 16 | 4,435 | 3.61 |
+| 32 | 4,378 | 7.31 |
+| 64 | 4,223 | 15.15 |
+| 90 | 3,884 | 23.18 |
+
+Throughput climbs until about 8 clients and then does not: from 8 to 90 it is flat and then a little lower, while latency grows 13-fold. Those extra clients did no extra work, they waited. The sweep is a single run per point on one machine. On a machine with more cores, or when most of a transaction is waiting for the disk or for the application between statements, the knee is further out. What carries over is the shape: past saturation, more connections only convert throughput into latency.
+
+The select-only sweep peaked at 4 clients (115,447 and 113,561 transactions a second in two runs) and sat at 58,746 to 80,787 from 8 to 90. That test has no waiting time inside a transaction at all, so it saturates the cores sooner.
+"""
+
+[[sections]]
+heading = "What a pool changes, and what it was not tested for"
+body = """
+A pooler such as PgBouncer sits between the application and the database, keeps a few server connections open and hands them to clients, so the application can have hundreds of connections while the database sees a handful. This addresses both measurements above: the connect cost is paid once, and the number of busy server processes is kept near what the cores can run. PgBouncer was not installed in this environment, so no pooler was measured on this page.
+
+The trade-off, from the documentation: in transaction pooling (the mode that gives the best sharing) a client may get a different server connection for each transaction, so anything that lives in a session does not survive: `SET` commands, session-level advisory locks, `LISTEN`, temporary tables, and session-level prepared statements unless the pooler supports protocol-level prepared statements. Check the version and the driver's documentation before relying on them, and test with the application's own driver.
+"""
+
+[[checks]]
+prompt = "An API server opens a new database connection for each request and each request runs one 0.5 ms query. p99 latency is 6 ms. What is the likely cause and what do you change?"
+answer = "Connection setup: in the test, opening a connection per transaction cost about 3.8 ms against 0.04 ms for the query, 99,071 against 1,038 transactions a second. Keep connections open with a client-side pool or a pooler in front of the database; measure again, since over a network (TLS) the connect would cost even more."
+[[checks]]
+prompt = "A service has 200 application instances, each with a pool of 20 connections, against a 4-core database. Query latency has grown as instances were added. What does the sweep suggest?"
+answer = "The database now has up to 4,000 connections competing for 4 cores. Throughput stopped rising near 8 clients in the test and latency grew with every extra one (1.76 ms at 8 clients to 23.18 ms at 90). Put a pooler in transaction mode between the services and the database with a small pool (a small multiple of the cores) and size the application pools to what they need, not to the sum."
+[[checks]]
+prompt = "You move to transaction pooling and a feature that uses SET LOCAL timezone inside a transaction works, but one that does SET timezone at connection start no longer does. Why?"
+answer = "In transaction pooling a client may get a different server connection for each transaction, so a session-level SET made on one connection does not follow the client; SET LOCAL lasts only for the transaction, which is within one connection. Set it per transaction, in the connection string options if the pooler passes them, or in the role's settings."
+
+[[terms]]
+term = "Connection pool"
+means = "A set of already-open database connections that clients borrow and return, so opening a connection is not paid per request and the number of server processes stays bounded."
+section = "What a pool changes, and what it was not tested for"
+
+[[terms]]
+term = "Transaction pooling"
+means = "A pooler mode where a client holds a server connection only for the duration of a transaction, so a few connections serve many clients but session state does not persist."
+section = "What a pool changes, and what it was not tested for"
+
+[[terms]]
+term = "pgbench"
+means = "The benchmark tool shipped with Postgres: -S runs a select-only script, the default runs a read-write TPC-B-like one, -c sets the number of clients and -C reconnects for every transaction."
+section = "The price of opening a connection"
+
+[[terms]]
+term = "Saturation"
+means = "The point where adding load no longer raises throughput because a resource (here the CPU cores) is fully used; beyond it latency rises instead."
+section = "More clients, same four cores"
+
+[[sources]]
+title = "PostgreSQL: pgbench"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/pgbench.html"
+
+[[sources]]
+title = "PgBouncer: features and pool modes"
+kind = "docs"
+url = "https://www.pgbouncer.org/features.html"
+
+[[sources]]
+title = "PostgreSQL wiki: number of database connections"
+kind = "docs"
+url = "https://wiki.postgresql.org/wiki/Number_Of_Database_Connections"
