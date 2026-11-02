@@ -1,0 +1,207 @@
+title = "sqlx from Rust: binds, statement cache, pool size and plan assertions"
+group = "sql-rust"
+order = 41
+minutes = 14
+lede = "The earlier modules measured the database. This one measures the client: what sqlx does with a query on its way to Postgres, whether its prepared-statement cache earns anything on a fast lookup, how the size of the connection pool changes throughput, and what batching is worth from Rust. It ends with a test that fails when a query's plan gets worse: an EXPLAIN assertion you can put in your test suite so that dropping an index, or a change that makes the planner sort, fails in CI instead of in production."
+say = "With sqlx 0.8.6 on one connection, 50,000 primary-key lookups took 11.3 s whether the statement was prepared and cached or sent unnamed every time (226 against 225 microseconds each): on loopback the round trip, not the parse, was the cost. Pool size mattered: 64 concurrent tasks got 7,021 queries a second from a pool of 1, 11,920 from 2, 42,473 from 4 and between 34,000 and 44,000 from 8 up to 64. Inserting 50,000 rows one statement at a time in a transaction took 3,441 ms; one UNNEST statement took 82 ms. A plan-assertion test passed with the index (customer_id, created_at) and failed without it, naming the Seq Scan and Sort nodes."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**What was run:** a scratch Rust crate outside the repository, depending on `sqlx 0.8.6` (features `runtime-tokio`, `postgres`, `json`, the same version the API uses) and `tokio`, built in release mode for the benchmarks, against the test database on the same 4-core machine over loopback. A private 2,000,000-row copy of `orders` (`ord41`, primary key on `id`) so the example table is never changed. Medians of 3 runs. Client and database share the cores.",
+  "**Binds:** values go as parameters (`.bind(x)`), not into the SQL text. The server receives the statement text and the values separately, so the same statement text can be parsed once and reused, and a value can never be read as SQL. Building a different string for each value defeats both.",
+  "**The statement cache:** by default `sqlx::query` prepares a statement once per connection and keeps it in an LRU cache; `.persistent(false)` sends it unnamed each time. 50,000 lookups `WHERE id = $1`, one connection: cached **11,302 ms (226 us each)**, unnamed **11,232 ms (225 us)**. No measurable difference: each lookup costs a loopback round trip and a 4-core scheduler wake-up, and the parse of a one-table query is a few microseconds. The cache matters more for complex statements and over slower links; it was not measured for those here. It is also the feature that a transaction-mode pooler can break (module 39).",
+  "**Pool size, 64 concurrent tasks x 2,000 lookups:** `max_connections` 1: **7,021 queries/s**; 2: **11,920**; 4: **42,473**; 8: 34,853; 16: 34,338; 32: 37,900; 64: **43,535** (medians of 3; individual runs varied by up to 30%, 29,597 to 40,436 at 16). A pool of 1 serialises everything, which is a hidden bottleneck if a service has one by accident; beyond the core count (4 here, shared with the client) more connections did not add throughput, the same shape as the pgbench sweep in module 39, and the noise means the differences between 8 and 64 should not be read as a ranking.",
+  "**Batching from Rust:** 50,000 rows into a table with a primary key. `INSERT ... VALUES ($1, $2)` once per row, inside one transaction: **3,441 ms** (about 69 us per row, a round trip each). One statement `INSERT INTO t SELECT * FROM UNNEST($1::bigint[], $2::int[])` with two bound arrays: **82 ms**, 42 times faster. Module 28 measured the same idea from Python and compared the other batching methods (multi-row VALUES, COPY).",
+  "**The plan assertion:** `EXPLAIN (FORMAT JSON)` returns the plan as JSON; the test walks the tree and fails if it finds a forbidden node type. With an index on `(customer_id, created_at)` the query for a customer's 20 latest orders passes `assert_plan_lacks(&plan, &[\"Seq Scan\", \"Sort\"])`; without the index it fails with `plan contains [\"Sort\", \"Seq Scan\"]; full plan: [\"Limit\", \"Gather Merge\", \"Sort\", \"Seq Scan\"]`. On a 300,000-row copy of the table, the assertion failed even *with* the index, because the planner chose a Bitmap Heap Scan with a Sort (about 6 rows per customer): see the section on brittleness.",
+  "**Not measured here:** sqlx's compile-time checked macros (`query!`, which need a live database or saved metadata at build time), the `QueryBuilder` for multi-row inserts, `COPY` from Rust (`copy_in_raw`), connection acquisition timeouts and the cost of a pool waiting for a free connection, and any other Rust driver (tokio-postgres, deadpool).",
+]
+
+[[sections]]
+heading = "Binds and the statement cache"
+body = """
+sqlx sends the SQL text and the values separately. A query such as
+
+```rust
+let (cents,): (i32,) = sqlx::query_as("SELECT total_cents FROM orders WHERE id = $1")
+    .bind(id)
+    .fetch_one(&pool)
+    .await?;
+```
+
+is parsed once per connection, kept in a per-connection cache of prepared statements (100 statements by default in 0.8.6, least recently used out), and executed with a fresh value each time. Two consequences. First, the value cannot change the meaning of the statement, which is the protection against SQL injection; do not build the text with `format!`. Second, the text must be the same string for the cache to hit; code that formats the id into the query defeats it.
+
+How much does the cache save? On a one-connection benchmark, 50,000 lookups of one row by primary key took 11,302 ms with the cache and 11,232 ms with `.persistent(false)`, which sends an unnamed statement every time: 226 against 225 microseconds. For a statement this simple on a loopback connection the parse is too small to see against the round trip. A statement with many joins parses and plans for much longer, and the cache saves the parse (the planning is a separate step, whose reuse was not measured here). Where a pooler in transaction mode sits in between, the cache can also cause errors; module 39 has the details.
+"""
+
+[[sections]]
+heading = "Pool size"
+body = """
+The same lookup, run by 64 concurrent tokio tasks, 2,000 each, through a pool whose `max_connections` was varied:
+
+| pool size | queries/s (median of 3) |
+|---|---|
+| 1 | 7,021 |
+| 2 | 11,920 |
+| 4 | 42,473 |
+| 8 | 34,853 |
+| 16 | 34,338 |
+| 32 | 37,900 |
+| 64 | 43,535 |
+
+One connection serves one query at a time, so 64 tasks queue for it; 2 roughly doubles that; 4 (the number of cores) is a large step. Past that, runs ranged widely (at 16, from 29,597 to 40,436), the client program shares the four cores with the server, and no clear rise appeared. The practical reading, as in module 39: a pool of a small multiple of the cores is enough, a pool of 1 is a trap, and a pool of hundreds buys nothing but memory on the server. Check what `max_connections` your pool actually has: the default in sqlx 0.8.6 is 10 (read from its source).
+"""
+
+[[sections]]
+heading = "Batching from Rust"
+body = """
+50,000 rows into a table with a primary key:
+
+```rust
+// one round trip per row, inside a transaction: 3,441 ms
+let mut tx = pool.begin().await?;
+for i in 0..50_000i64 {
+    sqlx::query("INSERT INTO ins41 VALUES ($1, $2)").bind(i).bind(i as i32).execute(&mut *tx).await?;
+}
+tx.commit().await?;
+
+// one statement with two bound arrays: 82 ms
+sqlx::query("INSERT INTO ins41 SELECT * FROM UNNEST($1::bigint[], $2::int[])")
+    .bind(&ids).bind(&values).execute(&pool).await?;
+```
+
+The loop pays a network round trip per row (about 69 microseconds on loopback; over a network it would be far more); the array version sends all the rows in one message. This is the Rust form of the first lesson of module 28. Postgres limits a statement to 65,535 bound parameters, which is why `UNNEST` (two parameters for any number of rows) is preferable to a long `VALUES` list with one parameter per column per row.
+"""
+
+[[sections]]
+heading = "Tests that fail when a plan gets worse"
+body = """
+Most performance regressions in a query are a plan change: an index dropped in a migration, a `WHERE` clause rewritten so the index no longer applies, a new `ORDER BY` that adds a Sort. They are invisible in unit tests, because the answers are the same. A test can ask the database for the plan and assert on its shape. This is the helper (`src/lib.rs` of the test crate):
+
+```rust
+use serde_json::Value;
+use sqlx::{PgPool, Row};
+
+/// Runs EXPLAIN (FORMAT JSON) and returns the root "Plan" object.
+pub async fn explain(pool: &PgPool, sql: &str) -> Value {
+    let row = sqlx::query(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let doc: Value = row.get(0);
+    doc[0]["Plan"].clone()
+}
+
+/// Every node type in the plan tree, depth first.
+pub fn node_types(plan: &Value, out: &mut Vec<String>) {
+    out.push(plan["Node Type"].as_str().unwrap().to_string());
+    if let Some(children) = plan["Plans"].as_array() {
+        for c in children {
+            node_types(c, out);
+        }
+    }
+}
+
+/// Panics, naming the forbidden nodes it found, if the plan contains any of them.
+pub fn assert_plan_lacks(plan: &Value, forbidden: &[&str]) {
+    let mut nodes = Vec::new();
+    node_types(plan, &mut nodes);
+    let found: Vec<_> = nodes.iter().filter(|n| forbidden.contains(&n.as_str())).collect();
+    assert!(found.is_empty(), "plan contains {found:?}; full plan: {nodes:?}");
+}
+```
+
+And the tests, which build a copy of the table and the index in a scratch database:
+
+```rust
+use sqlx::postgres::PgPoolOptions;
+use sqlx41::{assert_plan_lacks, explain};
+
+const DB: &str = "postgres://anneal@127.0.0.1:5418/sqlperf";
+const QUERY: &str = "SELECT id, total_cents FROM ord41 WHERE customer_id = 4242 ORDER BY created_at DESC LIMIT 20";
+
+async fn setup() -> sqlx::PgPool {
+    let pool = PgPoolOptions::new().max_connections(2).connect(DB).await.unwrap();
+    for s in [
+        "DROP TABLE IF EXISTS ord41",
+        "CREATE TABLE ord41 AS SELECT * FROM orders",
+        "ANALYZE ord41",
+    ] {
+        sqlx::query(s).execute(&pool).await.unwrap();
+    }
+    pool
+}
+
+#[tokio::test]
+async fn latest_orders_use_the_index() {
+    let pool = setup().await;
+    sqlx::query("CREATE INDEX ord41_cust_created ON ord41 (customer_id, created_at)").execute(&pool).await.unwrap();
+    sqlx::query("ANALYZE ord41").execute(&pool).await.unwrap();
+    let plan = explain(&pool, QUERY).await;
+    assert_plan_lacks(&plan, &["Seq Scan", "Sort"]);
+}
+
+#[tokio::test]
+async fn without_the_index_the_assertion_fails() {
+    let pool = setup().await;
+    let plan = explain(&pool, QUERY).await;
+    assert_plan_lacks(&plan, &["Seq Scan", "Sort"]);
+}
+```
+
+Run against the 2,000,000-row copy, the first test passes. The second, with no index, fails, and the message shows why:
+
+```
+thread 'without_the_index_the_assertion_fails' panicked at src/lib.rs:29:5:
+plan contains ["Sort", "Seq Scan"]; full plan: ["Limit", "Gather Merge", "Sort", "Seq Scan"]
+```
+
+In the real suite you would not keep the second test; it is here to show that the assertion can fail. The pattern for the first is: create the index in the test setup or run the real migrations, load enough rows that the planner prefers the index (see the next paragraph), `ANALYZE`, and assert.
+
+**Brittleness.** The assertion judges the planner's choice, which depends on the data. On a 300,000-row copy of the same table (about 6 orders per customer) the first test failed even with the index: the plan was `Limit, Sort, Bitmap Heap Scan, Bitmap Index Scan`, because with so few rows a Sort of six rows is cheaper than anything else, and the plan is perfectly good. A test like this therefore needs data of production-like size and shape, a fresh `ANALYZE`, and assertions that name the nodes that matter for this query (no Seq Scan on the big table) rather than a blanket 'no Sort'. It cannot catch every regression (a plan with the same shape can read ten times the rows). Reading the buffer counts from `EXPLAIN (ANALYZE, BUFFERS)` in a test would catch that, with the flakiness of any measured number; that was not tried here.
+"""
+
+[[checks]]
+prompt = "A service uses one sqlx pool with max_connections = 1 'to be safe on the database'. Throughput is poor under load. What did the pool-size test show, and what do you choose?"
+answer = "With 64 concurrent tasks, a pool of 1 gave 7,021 queries/s, a pool of 2 gave 11,920 and a pool of 4 gave 42,473 on a 4-core machine; everything queues behind the one connection. Choose a small multiple of the database's cores (and keep the total across all service instances below max_connections), not 1."
+[[checks]]
+prompt = "You set .persistent(false) on every query to avoid prepared statement errors behind a pooler. What does it cost, according to the test?"
+answer = "For a single-table primary-key lookup nothing measurable: 226 against 225 microseconds per query, since the round trip dominates. For long, many-join statements the parse is more significant, which was not measured; if the pooler is in transaction mode and the driver's statement cache is the cause of the errors, the option is a reasonable workaround."
+[[checks]]
+prompt = "A plan-assertion test says 'plan contains Sort' after you added a perfectly good index. What are the possible reasons and what do you check?"
+answer = "The planner may choose a Sort legitimately when the table is small or the filter returns very few rows (in the test, a 300,000-row table with 6 rows per customer chose a Bitmap Heap Scan plus Sort even with the index). Check that the test data has production-like size and distribution, that ANALYZE ran, and that the assertion names the node that matters (a Seq Scan on the big table) rather than every Sort."
+
+[[terms]]
+term = "Prepared statement"
+means = "A statement the server has parsed and named, so later executions send only the name and the values; sqlx keeps these per connection in an LRU cache."
+section = "Binds and the statement cache"
+
+[[terms]]
+term = "Bind parameter"
+means = "A value sent separately from the SQL text ($1, $2), which cannot be interpreted as SQL and lets the same text be reused."
+section = "Binds and the statement cache"
+
+[[terms]]
+term = "Plan assertion"
+means = "A test that runs EXPLAIN on a query and fails if the plan contains an unwanted node such as a Seq Scan or a Sort."
+section = "Tests that fail when a plan gets worse"
+
+[[terms]]
+term = "UNNEST batching"
+means = "Binding one array per column and expanding them to rows with UNNEST, so any number of rows is inserted by one statement with a fixed number of parameters."
+section = "Batching from Rust"
+
+[[sources]]
+title = "sqlx documentation (docs.rs)"
+kind = "docs"
+url = "https://docs.rs/sqlx/0.8.6/sqlx/"
+
+[[sources]]
+title = "PostgreSQL: EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-explain.html"
+
+[[sources]]
+title = "PostgreSQL: protocol, extended query"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY"
