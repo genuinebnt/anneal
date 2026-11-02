@@ -1,0 +1,94 @@
+{
+ "id": "m16-offset-100k",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, created_at FROM orders ORDER BY created_at, id LIMIT 20 OFFSET 100000;",
+ "setup": [
+  {
+   "id": "orders-created-id",
+   "sql": "CREATE INDEX orders_created_id ON orders (created_at, id); VACUUM orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 3038.83,
+   "Total Cost": 3039.44,
+   "Plan Rows": 20,
+   "Plan Width": 16,
+   "Actual Startup Time": 20.359,
+   "Actual Total Time": 20.365,
+   "Actual Rows": 20.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 387,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Only Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "orders_created_id",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 60768.43,
+     "Plan Rows": 2000000,
+     "Plan Width": 16,
+     "Actual Startup Time": 0.031,
+     "Actual Total Time": 14.724,
+     "Actual Rows": 100020.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Heap Fetches": 0,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 387,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.074,
+  "Triggers": [],
+  "Execution Time": 20.386
+ },
+ "text": "Limit  (cost=3038.83..3039.44 rows=20 width=16) (actual time=18.411..18.416 rows=20.00 loops=1)\n  Buffers: shared hit=387\n  ->  Index Only Scan using orders_created_id on orders  (cost=0.43..60768.43 rows=2000000 width=16) (actual time=0.016..13.264 rows=100020.00 loops=1)\n        Heap Fetches: 0\n        Index Searches: 1\n        Buffers: shared hit=387\nPlanning Time: 0.075 ms\nExecution Time: 18.433 ms"
+}
