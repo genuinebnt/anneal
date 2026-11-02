@@ -1,0 +1,184 @@
+title = "Pagination: OFFSET against keyset"
+group = "sql-shapes"
+order = 16
+minutes = 16
+lede = "Page 1 of a list is fast with any method. The difference shows on page 5,000, where OFFSET has to read and throw away every row before the page and the next page costs more than the last. Keyset pagination (also called seek) asks for the rows after the last one you showed and costs the same on every page. This page measures both on 2,000,000 rows, writes the keyset condition correctly with a row-value comparison, and shows the one way to write it that quietly throws the benefit away."
+say = "OFFSET n reads and discards n rows, so deep pages cost linearly more: 0.25 ms at offset 1,000, 18 ms at 100,000, 150 ms at 1,000,000. Keyset pagination remembers the last row's sort key and uses WHERE (key, id) > (last_key, last_id) ORDER BY key, id LIMIT n against an index on (key, id), which costs the same on any page. Write the condition as a row-value comparison, not an OR, or the index stops being the access condition."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**OFFSET** (index on `(created_at, id)`, covering): page 1 **0.02 ms**, offset 1,000 **0.25 ms**, offset 100,000 **18 ms**, offset 1,000,000 **150 ms**. The scan reads `offset + 20` index entries and the `Limit` discards the first `offset`.",
+  "**Keyset**: `WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id LIMIT 20` read 20 entries and took **0.05 ms**, the same cost on any page, because the row-value comparison is an `Index Cond` and the scan starts at the right place.",
+  "The same condition written with `OR` (`created_at > $1 OR (created_at = $1 AND id > $2)`) is a **Filter**, not an index condition: it read 197,569 index entries to find the first match and took 15 ms (module 9's access and filter conditions again).",
+  "Keyset needs a **unique, total order** (the key plus the primary key as a tie-breaker), and it cannot jump to 'page 400' or show a total count; that is the price. OFFSET also shows duplicates or skips rows when data changes between pages; keyset does not.",
+  "Non-covered pages are worse: OFFSET 100,000 through an index that does not cover the query also fetches 100,000 table rows only to discard them.",
+]
+
+[[sections]]
+heading = "OFFSET reads what it skips"
+body = """
+The standard pagination query: sort, skip some rows, take a page.
+
+```plan id=m16-offset-0 setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at, id LIMIT 20;
+```
+
+Page 1 reads 20 index entries: 0.02 ms, with `(created_at, id)` as a covering index so there is no table access. Now page 51 of the same list (skip 1,000):
+
+```plan id=m16-offset-1k setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at, id LIMIT 20 OFFSET 1000;
+```
+
+Look at the Index Only Scan: `rows=1020`. The scan produced 1,020 rows; the `Limit` above it threw away the first 1,000 and passed on 20. OFFSET is not a way to jump to a position, it is a way to read and discard: the scan has no idea where row 1,001 is, so it reads the previous 1,000 to find out. The cost is linear in the offset:
+
+```plan id=m16-offset-100k setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at, id LIMIT 20 OFFSET 100000;
+```
+
+100,020 index entries, 387 buffers, **18 ms**; and a million rows deep:
+
+```plan id=m16-offset-1m setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at, id LIMIT 20 OFFSET 1000000;
+```
+
+1,000,020 entries, 3,835 buffers, **150 ms**, for the same 20 rows of output. That is the best case: the index covers the query. If the page needs columns that are not in the index, each of the discarded rows also costs a visit to the table, and the deep page becomes a random-read problem on top.
+
+| Offset | Index entries read | Time |
+|---|---|---|
+| 0 | 20 | 0.02 ms |
+| 1,000 | 1,020 | 0.25 ms |
+| 100,000 | 100,020 | 18 ms |
+| 1,000,000 | 1,000,020 | 150 ms |
+
+Whether that matters depends on how deep anyone really goes. A UI that shows ten pages never gets past offset 200; an API that lets a crawler walk the whole list with `?page=N` does, and an API that exposes `offset` as a parameter invites it.
+"""
+
+[[sections]]
+heading = "Keyset: start where the last page ended"
+body = """
+Instead of counting rows to skip, remember where you stopped. The last row of the page has a sort key and an id; the next page is the rows after that key:
+
+```plan id=m16-keyset setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders
+WHERE (created_at, id) > ('2025-03-01 00:00:00+00', 12345)
+ORDER BY created_at, id LIMIT 20;
+```
+
+`Index Cond: (ROW(created_at, id) > ROW(...))` is the access condition: the index scan **starts at that key** and reads 20 entries, 0.05 ms, whether the key is at the beginning of the table or the end. The cost of a page no longer depends on the page number.
+
+The pieces, each doing a job:
+
+- **A row-value comparison** `(created_at, id) > (a, b)` means 'after this row in the order (created_at, id)': created_at greater, or equal with a greater id. It is a single condition on the index's two columns, in the same order.
+- **A unique order.** `created_at` alone is not enough, because many rows may share one value, and `>` would skip the others while `>=` would repeat them. Appending the primary key `id` makes every row's position unique; the `ORDER BY` and the index have the same columns.
+- **The index** `(created_at, id)`, so the `ORDER BY` needs no sort and the condition is an index condition.
+
+Write the same thing with `OR`, as many tutorials do, and the access condition is lost:
+
+```plan id=m16-keyset-or setup=orders-created-id,no-parallel
+SELECT id, created_at FROM orders
+WHERE created_at > '2025-03-01 00:00:00+00'
+   OR (created_at = '2025-03-01 00:00:00+00' AND id > 12345)
+ORDER BY created_at, id LIMIT 20;
+```
+
+The same rows, and the condition is now a `Filter`, with `Rows Removed by Filter: 197569`: the planner cannot turn the `OR` into one starting point, so it scans the index from the beginning, discarding everything before the key. 15 ms against 0.05, and the cost grows with how far into the list the key is. It is the same `OFFSET` problem in different clothes. If you port this to another engine, check with its `EXPLAIN` that the row-value comparison is an access condition there too; this page measured Postgres only.
+"""
+
+[[sections]]
+heading = "What keyset gives up, and what it fixes"
+body = """
+Keyset pagination is a different contract, not a faster OFFSET:
+
+| | OFFSET | Keyset |
+|---|---|---|
+| Cost of page N | grows with N | the same for every page |
+| Jump to page 400 | yes | no: only next (and previous, with the order reversed) |
+| Total count and page numbers | yes, from a separate `count(*)` | no |
+| Rows inserted or deleted between requests | rows repeat or are skipped on the following page | stable: the next page starts after the key you hold |
+| Sort by a non-unique column | works | needs the id appended, and the index to include it |
+| Sort by several columns, mixed direction | works | needs a matching index and a hand-built condition |
+
+The stability row is the one that matters most for feeds: with OFFSET, if a new row appears at the top between page 1 and page 2, the last row of page 1 is shown again at the top of page 2. With keyset the next page starts after the last key you saw.
+
+Choose by the product: an infinite scroll, an API listing or an export wants keyset; a small admin table with page numbers is fine with OFFSET, with a limit on how deep the offset goes (a page cap, or a message to narrow the filter). The cheap middle path for numbered pages is to use keyset between neighbouring pages and a one-off OFFSET only for a jump.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+The cursor is just the last row's key, encoded so the client treats it as opaque. With sqlx, an API handler:
+
+```rust title=list_orders.rs
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Cursor { created_at: chrono::DateTime<chrono::Utc>, id: i64 }
+
+async fn list_orders(pool: &sqlx::PgPool, after: Option<Cursor>) -> sqlx::Result<(Vec<Order>, Option<Cursor>)> {
+    let rows: Vec<Order> = match after {
+        None => sqlx::query_as("SELECT id, created_at, total_cents FROM orders ORDER BY created_at, id LIMIT 21")
+            .fetch_all(pool).await?,
+        Some(c) => sqlx::query_as(
+            "SELECT id, created_at, total_cents FROM orders WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id LIMIT 21")
+            .bind(c.created_at).bind(c.id).fetch_all(pool).await?,
+    };
+    // fetch one more than the page size: if it is there, there is a next page
+    let has_next = rows.len() > 20;
+    let page: Vec<Order> = rows.into_iter().take(20).collect();
+    let next = if has_next { page.last().map(|o| Cursor { created_at: o.created_at, id: o.id }) } else { None };
+    Ok((page, next))
+}
+```
+
+Fetching `LIMIT 21` instead of 20 tells you whether another page exists without a `count(*)`. Check the plan once with `EXPLAIN` (the `Index Cond` line) and keep a test for it (module 41).
+"""
+
+[[checks]]
+prompt = "A paginated API takes 20 ms for page 1 and 4 s for page 20,000 on a 2-million-row table. The query uses ORDER BY created_at, id LIMIT 20 OFFSET n with a matching index. What do you see in the plan and what do you change?"
+answer = "An Index (Only) Scan that produces offset + 20 rows under a Limit, which discards the first n: the scan has to read everything before the page. Replace OFFSET with keyset pagination: remember the last row's (created_at, id) and query WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id LIMIT 20; the cost is the same on every page."
+
+[[checks]]
+prompt = "Your keyset query uses WHERE created_at > $1 OR (created_at = $1 AND id > $2) and gets slower as the cursor moves later in time. Why, and what is the fix?"
+answer = "The OR form is evaluated as a Filter, not an index condition: the planner scans the index from the beginning and discards rows until the condition is true (Rows Removed by Filter grows with how late the cursor is). Write it as a row-value comparison, (created_at, id) > ($1, $2), which is a single Index Cond that starts the scan at the right place."
+
+[[checks]]
+prompt = "Why must the keyset ORDER BY include the primary key even though created_at already orders the rows?"
+answer = "created_at values can repeat, so created_at alone does not give every row a unique position: > would skip the other rows with the same value and >= would repeat them. Adding the id makes the order total, so the cursor identifies exactly one place in it."
+
+[[checks]]
+prompt = "Name two things an OFFSET-paginated list does that keyset does not, and one thing keyset does that OFFSET cannot."
+answer = "OFFSET can jump to an arbitrary page and can show page numbers and a total (from a count). Keyset can only move to the next or previous page. Keyset keeps a stable view when rows are inserted or deleted between requests, where OFFSET repeats or skips rows, and its cost does not grow with the page number."
+
+[[terms]]
+term = "Keyset pagination"
+means = "Paging by the last row's sort key (WHERE key > last ORDER BY key LIMIT n) instead of counting rows to skip; also called seek."
+section = "Keyset: start where the last page ended"
+
+[[terms]]
+term = "Row-value comparison"
+means = "Comparing tuples, (a, b) > (x, y), meaning a later position in the order a, b; usable as a single index condition."
+section = "Keyset: start where the last page ended"
+
+[[terms]]
+term = "Cursor"
+means = "The encoded key of the last row shown, handed to the client and sent back to ask for the next page."
+section = "In real code"
+
+[[sources]]
+title = "Use The Index, Luke: paging through results"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/partial-results/fetch-next-page"
+
+[[sources]]
+title = "PostgreSQL: row constructor comparison"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-comparisons.html#ROW-WISE-COMPARISON"
+
+[[sources]]
+title = "PostgreSQL: LIMIT and OFFSET"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/queries-limit.html"
+
+[[sources]]
+title = "Markus Winand: We need tool support for keyset pagination"
+kind = "guide"
+url = "https://use-the-index-luke.com/no-offset"

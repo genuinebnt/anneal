@@ -192,3 +192,9 @@ session = "SET enable_hashjoin = off; SET enable_nestloop = off;"
 [[setup]]
 id = "no-hashagg"
 session = "SET enable_hashagg = off;"
+
+# module 16: pagination
+[[setup]]
+id = "orders-created-id"
+sql = "CREATE INDEX orders_created_id ON orders (created_at, id); VACUUM orders;"
+undo = "DROP INDEX orders_created_id;"
