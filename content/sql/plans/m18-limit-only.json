@@ -1,0 +1,95 @@
+{
+ "id": "m18-limit-only",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, created_at FROM orders WHERE status = 'paid' ORDER BY created_at, id LIMIT 20;",
+ "setup": [
+  {
+   "id": "orders-created-id",
+   "sql": "CREATE INDEX orders_created_id ON orders (created_at, id); VACUUM orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.43,
+   "Total Cost": 2.48,
+   "Plan Rows": 20,
+   "Plan Width": 16,
+   "Actual Startup Time": 0.019,
+   "Actual Total Time": 0.037,
+   "Actual Rows": 20.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 33,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "orders_created_id",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 125608.43,
+     "Plan Rows": 1222600,
+     "Plan Width": 16,
+     "Actual Startup Time": 0.018,
+     "Actual Total Time": 0.035,
+     "Actual Rows": 20.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Filter": "(status = 'paid'::text)",
+     "Rows Removed by Filter": 10,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 33,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.049,
+  "Triggers": [],
+  "Execution Time": 0.047
+ },
+ "text": "Limit  (cost=0.43..2.48 rows=20 width=16) (actual time=0.007..0.020 rows=20.00 loops=1)\n  Buffers: shared hit=33\n  ->  Index Scan using orders_created_id on orders  (cost=0.43..125608.43 rows=1222600 width=16) (actual time=0.007..0.017 rows=20.00 loops=1)\n        Filter: (status = 'paid'::text)\n        Rows Removed by Filter: 10\n        Index Searches: 1\n        Buffers: shared hit=33\nPlanning Time: 0.028 ms\nExecution Time: 0.025 ms"
+}
