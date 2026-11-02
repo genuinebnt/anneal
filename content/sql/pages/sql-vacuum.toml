@@ -1,0 +1,132 @@
+title = "VACUUM, autovacuum and HOT updates"
+group = "sql-internals"
+order = 24
+minutes = 15
+lede = "Dead row versions have to be cleaned up by someone, and that someone is VACUUM. This page reads what one vacuum actually does, measures when autovacuum decides to run (it did not run for 25,000 dead rows and did for 150,000), and shows the two ways to make the work smaller: HOT updates and a lower fillfactor."
+say = "VACUUM removes dead row versions and their index entries, marks the freed space reusable, sets the visibility map and freezes old rows; it did all that to a 63 MB table in 0.15 s of CPU and 6 MB of WAL. Autovacuum fires when dead rows exceed 50 plus 20% of the table (100,050 for 500,000 rows): 25,000 dead rows waited more than two minutes untouched, 150,000 triggered it within about 25 s (the check runs every 60 s). For a huge hot table lower autovacuum_vacuum_scale_factor per table. HOT updates avoid creating index entries at all: 0 of 500,000 updates were HOT at fillfactor 100 and 217,056 at 70."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "`VACUUM (VERBOSE)` on the 500,000-row table after two updates of every row (8,108 pages): it scanned all 8,108 pages, removed **999,945 dead item identifiers**, made **1 index scan** of the primary key (3,144 pages), set all 8,108 pages **all-visible** in the visibility map, and used about 6 MB of WAL (19,349 records). Elapsed **0.15 s** on this cached table. It removed no pages from the file (`pages: 0 removed`).",
+  "Autovacuum starts a table when dead rows exceed `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × reltuples` = **50 + 0.2 × rows**: 100,050 for this table. After **25,000** dead rows (a 5% update) nothing ran in 130 s. After **150,000** dead rows it ran about **25 s** later (a check every `autovacuum_naptime`, 60 s) and left `n_dead_tup = 0`.",
+  "The same formula on a 500-million-row table is **100,000,050** dead rows. Lower it per table: `ALTER TABLE t SET (autovacuum_vacuum_scale_factor = 0.01)` makes it 5,000,050; or use a fixed threshold with a scale factor of 0.",
+  "**HOT updates** (heap-only tuples) put the new version on the same page and add no index entries, when no indexed column changed and the page has room. One pass of `UPDATE ... SET total_cents = total_cents + 1` over 500,000 rows: fillfactor 100 gave **0 HOT** updates and a 42 MB table; fillfactor 70 gave **217,056 HOT** (the 30% free space holds one new version for about 43% of the rows) and 47 MB. The index was 21 MB in both, because the other updates still needed index entries.",
+  "Look at `n_dead_tup`, `last_autovacuum` and `autovacuum_count` in `pg_stat_user_tables`, the ratio `n_tup_hot_upd` to `n_tup_upd` for updated tables, and `pg_stat_progress_vacuum` for a vacuum that is running.",
+]
+
+[[sections]]
+heading = "What one VACUUM does"
+body = """
+Module 23 left a table with 500,000 live rows and 1,000,000 dead versions in 8,108 pages. The output of `VACUUM (VERBOSE) mv_t` on it, abridged:
+
+```
+finished vacuuming "sqlperf.public.mv_t": index scans: 1
+pages: 0 removed, 8108 remain, 8108 scanned (100.00% of total)
+tuples: 500000 removed, 500000 remain, 0 are dead but not yet removable
+visibility map: 8108 pages set all-visible, 5404 pages set all-frozen
+index scan needed: 5406 pages from table had 999945 dead item identifiers removed
+index "mv_t_pkey": pages: 3144 in total, 0 newly deleted, 0 currently deleted, 0 reusable
+WAL usage: 19349 records, 1 full page images, 6018058 bytes
+system usage: CPU: user: 0.15 s, system: 0.00 s, elapsed: 0.15 s
+```
+
+Reading it as the steps VACUUM takes:
+
+1. **Scan the heap** for versions no transaction can still see (`0 are dead but not yet removable`: nothing was holding them) and collect their addresses.
+2. **Clean the indexes**: `index scans: 1`, one pass over `mv_t_pkey` removing the entries that point at those addresses. This is the part that cost time on large tables, and why one vacuum pass is limited by `maintenance_work_mem`: if the list of dead addresses does not fit, vacuum needs several index passes.
+3. **Free the line pointers** in the heap: `999945 dead item identifiers removed`. The space becomes available to new versions. The file does not shrink (`pages: 0 removed`), except that empty pages at the very end can be truncated.
+4. **Update the visibility map**: `8108 pages set all-visible`, which is what module 21's index-only scans need, and mark old rows frozen so the transaction id counter can wrap around safely (`all-frozen`).
+5. **Write WAL** for all of it: 6 MB here (module 26). Vacuum is not free of write cost.
+
+`VACUUM` takes only a light lock (`SHARE UPDATE EXCLUSIVE`): reads and writes carry on. It is the removal of old versions that another transaction's old snapshot prevents (module 31: a long transaction makes the "not yet removable" count grow).
+"""
+
+[[sections]]
+heading = "When autovacuum runs"
+body = """
+You do not run `VACUUM` by hand. A background launcher checks every table every `autovacuum_naptime` (60 s here) and starts a vacuum worker on those over their threshold. A table qualifies when its dead rows exceed:
+
+`autovacuum_vacuum_threshold (50) + autovacuum_vacuum_scale_factor (0.2) × reltuples`
+
+(Inserts have a similar rule, `autovacuum_vacuum_insert_threshold` 1,000 plus 0.2 × rows, so insert-only tables still get their visibility map set.) A fresh 500,000-row table, left alone, was picked up by the insert rule about two minutes after loading. Then:
+
+| Dead rows | Threshold (100,050) | What happened |
+|---|---|---|
+| 25,000 (5% updated) | not reached | nothing in the 130 s I waited |
+| 150,000 (25% updated, dead count at the moment of check) | passed | autovacuum ran within about 25 s; `n_dead_tup` went to 0, `autovacuum_count` from 1 to 2 |
+
+The thresholds are percentages of the table, which is the problem for big tables:
+
+| Rows | Dead rows before autovacuum, default | With `autovacuum_vacuum_scale_factor = 0.01` |
+|---|---|---|
+| 500,000 | 100,050 | 5,050 |
+| 50,000,000 | 10,000,050 | 500,050 |
+| 500,000,000 | 100,000,050 | 5,000,050 |
+
+100 million dead versions in a 500-million-row table is a lot of bloat and a lot of heap fetches for module 21's index-only scans before the first vacuum even starts, and the vacuum, when it does run, has that much more to do. The usual practice is to set the scale factor much lower (0.01 or less) on the large, frequently updated tables, and leave the default for the rest. Autovacuum is also **throttled**: a cost-based delay (`autovacuum_vacuum_cost_delay` 2 ms and a shared cost limit of 200 here) makes it sleep so it does not starve queries. On a table where it cannot keep up, raising the cost limit is the lever, and `autovacuum_max_workers` (3 here) caps how many tables are processed at once.
+"""
+
+[[sections]]
+heading = "HOT updates and fillfactor"
+body = """
+The best dead version is the one that costs no index work. A **heap-only tuple** (HOT) update stores the new version on the *same page* as the old one, links the two, and adds no entry to any index: the index still points at the first version and the executor follows the chain. Two conditions: no indexed column changed, and the page has room.
+
+A freshly loaded table has no room (fillfactor defaults to 100, packed full). One pass of `UPDATE mv_t SET total_cents = total_cents + 1` on 500,000 rows (no indexed column touched), counted from `pg_stat_user_tables`:
+
+| fillfactor | HOT updates | Table after | Primary key index after |
+|---|---|---|---|
+| 100 (default) | 0 of 500,000 | 42 MB | 21 MB |
+| 70 | 217,056 of 500,000 | 47 MB | 21 MB |
+
+At 100 every new version went to a new page and every one added an entry to the primary key index: both table and index doubled. At 70 the free 30% of each page held one new version for about 43% of the rows (30 ÷ 70), and those updates added nothing to the index. The rest needed new pages as before, which is why the index grew just the same in this single pass; HOT also depends on **pruning**: when a page is read or updated, dead HOT versions on it are cleaned up on the spot, without waiting for vacuum, and that frees room for the next update.
+
+So fillfactor is a trade you make on tables that are updated often and not on indexed columns: a larger table to start with (47 MB against 42 MB after one pass here, and 30% more pages to read for scans) for updates that stay cheap and indexes that stay small. It does nothing for append-only tables, and for a table whose updates touch an indexed column no fillfactor makes them HOT.
+"""
+
+[[checks]]
+prompt = "A 100-million-row table is updated all day and autovacuum seems never to run on it. What do you check?"
+answer = "The threshold: with defaults it needs 50 + 20% of the rows, 20 million dead rows, before it starts, so it runs rarely and does a lot at once. Look at n_dead_tup and last_autovacuum in pg_stat_user_tables and set a lower autovacuum_vacuum_scale_factor (0.01 or less) for that table with ALTER TABLE ... SET. Also check that a long-running transaction is not holding the cutoff back (dead but not yet removable in VACUUM VERBOSE) and that the throttle (cost limit, worker count) lets it finish."
+
+[[checks]]
+prompt = "n_tup_hot_upd is 0 against n_tup_upd of 500,000 for a table whose updates change only an unindexed column. What can you change?"
+answer = "The pages are full, so the new version has to go to another page and cannot be a HOT update. Lower the table's fillfactor (for example 70 to 90) so each page keeps room, rebuild the table once so the setting applies to existing pages (new pages follow it; existing ones need a rewrite), and keep vacuum or pruning running so room is reused."
+
+[[checks]]
+prompt = "VACUUM VERBOSE reports 'tuples: 4,000,000 removed, 0 remain... 1,200,000 are dead but not yet removable'. What does the last number tell you?"
+answer = "That many dead versions could not be removed because some transaction's snapshot is old enough that it might still need them, typically a long-running or idle-in-transaction session. Vacuum cannot help until that transaction ends; find it in pg_stat_activity (backend_xmin, xact_start) and deal with it (module 31)."
+
+[[terms]]
+term = "VACUUM"
+means = "The maintenance operation that removes dead row versions and their index entries, makes the space reusable, sets visibility map bits and freezes old rows, without blocking reads or writes."
+section = "What one VACUUM does"
+
+[[terms]]
+term = "Autovacuum"
+means = "The background launcher and workers that run VACUUM and ANALYZE on a table once its dead or inserted rows pass 50 plus 20% of the table, by default."
+section = "When autovacuum runs"
+
+[[terms]]
+term = "HOT update"
+means = "Heap-only tuple update: the new row version stays on the same page and no index entries are added, which needs no indexed column to change and free space on the page."
+section = "HOT updates and fillfactor"
+
+[[terms]]
+term = "Fillfactor"
+means = "The percentage of each table or index page that inserts fill; the free rest is room for updated versions, and HOT updates depend on it."
+section = "HOT updates and fillfactor"
+
+[[sources]]
+title = "PostgreSQL: routine vacuuming"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"
+
+[[sources]]
+title = "PostgreSQL: the autovacuum daemon settings"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/runtime-config-autovacuum.html"
+
+[[sources]]
+title = "PostgreSQL: heap-only tuples (README.HOT)"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/heap/README.HOT"
