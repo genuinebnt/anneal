@@ -1,0 +1,98 @@
+{
+ "id": "m35-knn-gist",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id FROM pt_t ORDER BY loc <-> point(500, 500) LIMIT 5;",
+ "setup": [
+  {
+   "id": "pt-t",
+   "sql": "SELECT setseed(0.31); CREATE TABLE pt_t AS SELECT i AS id, point(random() * 1000, random() * 1000) AS loc FROM generate_series(1, 1000000) i; ALTER TABLE pt_t ADD PRIMARY KEY (id); ALTER TABLE pt_t SET (autovacuum_enabled = false); VACUUM ANALYZE pt_t;"
+  },
+  {
+   "id": "pt-gist",
+   "sql": "CREATE INDEX pt_gist ON pt_t USING gist (loc); ANALYZE pt_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.29,
+   "Total Cost": 0.68,
+   "Plan Rows": 5,
+   "Plan Width": 12,
+   "Actual Startup Time": 0.051,
+   "Actual Total Time": 0.055,
+   "Actual Rows": 5.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 9,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "pt_gist",
+     "Relation Name": "pt_t",
+     "Alias": "pt_t",
+     "Startup Cost": 0.29,
+     "Total Cost": 78308.29,
+     "Plan Rows": 1000000,
+     "Plan Width": 12,
+     "Actual Startup Time": 0.05,
+     "Actual Total Time": 0.053,
+     "Actual Rows": 5.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Order By": "(loc <-> '(500,500)'::point)",
+     "Index Searches": 1,
+     "Shared Hit Blocks": 9,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.035,
+  "Triggers": [],
+  "Execution Time": 0.065
+ },
+ "text": "Limit  (cost=0.29..0.68 rows=5 width=12) (actual time=0.049..0.056 rows=5.00 loops=1)\n  Buffers: shared hit=9\n  ->  Index Scan using pt_gist on pt_t  (cost=0.29..78308.29 rows=1000000 width=12) (actual time=0.048..0.055 rows=5.00 loops=1)\n        Order By: (loc <-> '(500,500)'::point)\n        Index Searches: 1\n        Buffers: shared hit=9\nPlanning Time: 0.052 ms\nExecution Time: 0.078 ms"
+}
