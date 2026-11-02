@@ -4,6 +4,7 @@ import { createContext, useContext } from "react";
 import { CODE_LANGS, highlightLines } from "../highlight";
 import { fromPostgresJson, type PlanFile } from "../plan";
 import { PlanView } from "./PlanView";
+import { EXPLORER_HANDOFF } from "../pages/sd/SdPlans";
 
 /** The callouts a system design page can use: `> [!NOTE]` and the like at the start of a quote. */
 const CALLOUTS: Record<string, { label: string; icon: string }> = {
@@ -212,7 +213,19 @@ function PlanBlock({ id }: { id?: string }) {
     const file = id ? plans[id] : undefined;
     const plan = useMemo(() => (file ? fromPostgresJson(file.json) : null), [file]);
     if (!file || !plan) return <p className="sd-dim">This plan has not been captured yet ({id ?? "no id"}).</p>;
-    return <PlanView plan={plan} query={file.query} setup={file.setup} version={file.version} text={file.text} json={file.json} />;
+    const open = () => {
+        try {
+            sessionStorage.setItem(EXPLORER_HANDOFF, JSON.stringify({ text: file.text, query: file.query }));
+        } catch {
+            /* the explorer opens empty when storage is unavailable */
+        }
+    };
+    return (
+        <>
+            <PlanView plan={plan} query={file.query} setup={file.setup} version={file.version} text={file.text} json={file.json} />
+            <p className="sd-dim"><a href="/sd/plans" onClick={open}>Open in the plan explorer</a></p>
+        </>
+    );
 }
 
 /** The controls the Idea tab's lab uses: back, next, play or pause, restart, the step count and a tick per step. */
