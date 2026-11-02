@@ -40,11 +40,8 @@ test.describe("/rust", () => {
         await expect.poll(() => card.evaluate((e) => (e as HTMLElement).style.getPropertyValue("--mx"))).toMatch(/^\d+(\.\d+)?px$/);
     });
 
-    test("a planned track is hatched and not a link", async ({ page }) => {
-        const planned = page.locator(".s-trk.s-plan").first();
-        await expect(planned).toBeVisible();
-        expect(await planned.evaluate((e) => e.tagName)).toBe("ARTICLE");
-        expect(await planned.evaluate((e) => getComputedStyle(e).backgroundImage)).toContain("repeating-linear-gradient");
+    test("no planned or placeholder track is shown", async ({ page }) => {
+        await expect(page.locator(".s-trk.s-plan")).toHaveCount(0);
     });
 
     test("search narrows the cards, the empty state offers a way back, and / focuses the box", async ({ page }) => {
