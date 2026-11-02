@@ -20,7 +20,7 @@ Everything. These tests exercise the interface from the earlier stages; a bug fo
 
 ## If this is new
 
-- [Y5 Testing & verification](/t/y5-testing-verification): checking a system by the history it leaves.
+- Y5 Testing & verification: checking a system by the history it leaves.
 
 ## Tests
 

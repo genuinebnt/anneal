@@ -27,7 +27,7 @@ None new: a failure belongs to one of your four functions or the manager.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 

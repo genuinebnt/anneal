@@ -38,7 +38,7 @@ How the variable part is arranged (BusTub's: each text after the fixed part in c
 - [S3 Vec & slices](/t/s3-vec-slices): `vec![0; n]`, slicing with `[a..b]`, `copy_from_slice`, `try_into`.
 - [F7 I/O & serialization](/t/f7-io-serialization): fixed and variable parts, length prefixes.
 - [L2 Borrowing](/t/l2-borrowing): writing into disjoint parts of one buffer.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Patterns in depth: matching on column types.
+- L7 Enums & pattern matching: Patterns in depth: matching on column types.
 - [S2 Strings & text](/t/s2-strings-text): Understand: strings stored in a page.
 
 ## Tests

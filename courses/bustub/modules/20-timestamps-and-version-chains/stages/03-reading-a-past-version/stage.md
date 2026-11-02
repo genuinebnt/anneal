@@ -46,9 +46,9 @@ How you walk the chain (a loop, recursion), and how you build the tuple (a `Vec<
 
 - [S1 Option & Result](/t/s1-option-result): `?` on `Option`, `filter`, `while let`.
 - [S3 Vec & slices](/t/s3-vec-slices): building and overwriting `Vec<Value>`.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `Option<Vec<UndoLog>>` as three-way answer (visible / logs / nothing).
+- L7 Enums & pattern matching: `Option<Vec<UndoLog>>` as three-way answer (visible / logs / nothing).
 - The optional *version chains and undo logs* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 

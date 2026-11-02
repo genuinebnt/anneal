@@ -36,7 +36,7 @@ Nothing about the data model (it is BusTub's); how you write the matches and in 
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): enums with data, exhaustive `match`.
+- L7 Enums & pattern matching: enums with data, exhaustive `match`.
 - [S1 Option & Result](/t/s1-option-result): `Option` for "no number", `Result` for errors.
 - The optional concepts *enums with data and match*, *SQL types and three-valued logic* and *integers and casts* are the three ideas of the module.
 - [S2 Strings & text](/t/s2-strings-text): Understand: UTF-8, case mapping, comparing strings.

@@ -32,7 +32,7 @@ How the open transaction is represented, and whether `begin` and friends are han
 ## If this is new
 
 - [L1 Ownership and moves](/t/l1-ownership-moves): `take` and a destructor that consumes a field.
-- [S7 Smart pointers](/t/s7-smart-pointers): the transaction is shared between the session and the manager.
+- S7 Smart pointers: the transaction is shared between the session and the manager.
 
 ## Tests
 

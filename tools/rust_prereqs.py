@@ -3,7 +3,6 @@
 
 Single source for three things:
   1. docs/RUST_PREREQUISITES.md  (what to practise from the Rust tracks before each module, and the order to write the tracks in)
-  2. web/src/trackSlugs.ts       (the slug of every Rust track, written or planned, so a link to a planned track lands on a "planned" page)
   3. the "If this is new" section of each stage page: every track is linked as [CODE Name](/t/<slug>), planned or not, so the
      links never need redoing when a track is written. The track's directory under content/tracks must be named exactly its slug.
 
@@ -339,6 +338,9 @@ def slug_of(code):
 
 
 def link(code):
+    # only a written track is linked; an unwritten one is plain text so no planned page is reachable
+    if not os.path.isdir(os.path.join(ROOT, "content", "tracks", slug_of(code))):
+        return f"{code} {BY_CODE[code][0]}"
     return f"[{code} {BY_CODE[code][0]}](/t/{slug_of(code)})"
 
 
@@ -447,7 +449,6 @@ def rewrite_stage(path, stage_id, rows):
 def main():
     args = sys.argv[1:]
     open(os.path.join(ROOT, "docs", "RUST_PREREQUISITES.md"), "w").write(build_doc())
-    open(os.path.join(ROOT, "web", "src", "trackSlugs.ts"), "w").write(build_ts())
     mod_rows = {m: rows for m, _, rows in MODULES}
     bad = 0
     changed = 0

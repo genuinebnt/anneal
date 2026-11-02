@@ -26,8 +26,8 @@ How you remember what each transaction holds (needed for the row rules); where t
 
 ## If this is new
 
-- [L8 Error design](/t/l8-error-design): an error enum with reasons.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): a `match` on isolation level and phase.
+- L8 Error design: an error enum with reasons.
+- L7 Enums & pattern matching: a `match` on isolation level and phase.
 
 ## Tests
 

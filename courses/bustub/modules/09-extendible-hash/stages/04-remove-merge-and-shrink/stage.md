@@ -38,7 +38,7 @@ How you find and repair the directory, whether a merge scans the whole directory
 - [S3 Vec & slices](/t/s3-vec-slices), [L2 Borrowing](/t/l2-borrowing): collect indices before mutating.
 - The optional *deadlock and lock ordering* concept for the two-bucket case.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it: latch crabbing: take the child, then let go of the parent; lock ordering.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: an invariant checker run after every operation; scoped threads for a stress test.
+- Y5 Testing & verification: Understand it: an invariant checker run after every operation; scoped threads for a stress test.
 
 ## Tests
 

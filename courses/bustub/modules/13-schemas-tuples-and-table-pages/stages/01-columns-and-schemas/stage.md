@@ -36,7 +36,7 @@ How the schema computes its layout (a loop, a `fold`, `scan`) and what extra it 
 - [L1 Ownership & moves](/t/l1-ownership-moves) and [L2 Borrowing](/t/l2-borrowing): `Vec<Column>` by value, `&Column` out.
 - [S3 Vec & slices](/t/s3-vec-slices): `iter`, `position`, `into_iter().enumerate()`.
 - [S1 Option & Result](/t/s1-option-result).
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Patterns in depth: matching on column types.
+- L7 Enums & pattern matching: Patterns in depth: matching on column types.
 
 ## Tests
 

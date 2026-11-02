@@ -31,8 +31,8 @@ The algorithm for precedence (climbing with a minimum level, two functions, a sh
 
 ## If this is new
 
-- [S5 Enums and pattern matching](/t/s5-enums-pattern-matching): ranks as a `match`.
-- [Y2 Functions and tooling](/t/y2-functions-tooling): small private helpers.
+- S5 Enums and pattern matching: ranks as a `match`.
+- Y2 Functions and tooling: small private helpers.
 
 ## Tests
 

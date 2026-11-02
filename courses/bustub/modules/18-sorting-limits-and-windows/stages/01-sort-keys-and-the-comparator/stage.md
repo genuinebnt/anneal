@@ -34,11 +34,11 @@ How you write the comparison (a loop over the keys with an early return, `Iterat
 
 ## If this is new
 
-- [S8 The core traits](/t/s8-core-traits): `Ord`, `Ordering`, what a total order requires.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `match` on a tuple of booleans.
+- S8 The core traits: `Ord`, `Ordering`, what a total order requires.
+- L7 Enums & pattern matching: `match` on a tuple of booleans.
 - [S3 Vec & slices](/t/s3-vec-slices): `sort_by`, stability.
 - The optional *sort keys and NULL ordering* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
+- Y5 Testing & verification: Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
 
 ## Tests
 

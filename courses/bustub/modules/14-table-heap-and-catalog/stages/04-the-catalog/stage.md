@@ -38,10 +38,10 @@ How you store the registry (maps keyed by oid and by name, a `Vec` indexed by oi
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): `HashMap`, `entry`.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc`.
+- S7 Smart pointers & interior mutability: `Arc`.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `Box<dyn Trait>` with different concrete types.
 - The optional *the catalog* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
+- Y5 Testing & verification: Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
 
 ## Tests
 

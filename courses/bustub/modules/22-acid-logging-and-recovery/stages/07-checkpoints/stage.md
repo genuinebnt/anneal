@@ -36,9 +36,9 @@ How you stop writers during the checkpoint (hold the store's lock for the whole 
 ## If this is new
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): holding a lock for a multi-step operation.
-- [S6 Iterators](/t/s6-iterators): `rposition`, scanning with an index.
+- S6 Iterators: `rposition`, scanning with an index.
 - The optional *ARIES recovery* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: crash a disk at a random point, then recover; a model of the committed state.
+- Y5 Testing & verification: Build it: crash a disk at a random point, then recover; a model of the committed state.
 
 ## Tests
 

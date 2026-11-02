@@ -39,9 +39,9 @@ Where the buffer lives in the page (before the pairs is the obvious place; after
 ## If this is new
 
 - [L5 Generics & associated types](/t/l5-generics): const generics and associated constants.
-- [S8 The core traits](/t/s8-core-traits): `Ord`/comparators and equality.
+- S8 The core traits: `Ord`/comparators and equality.
 - The optional *tombstones and lazy deletion* concept explains the idea.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Enums as design: a state (live or deleted) that is part of an entry.
+- L7 Enums & pattern matching: Enums as design: a state (live or deleted) that is part of an entry.
 
 ## Tests
 

@@ -36,7 +36,7 @@ while let Some(mut node) = cur { cur = node.next.take(); }   // node is dropped 
 ## If this is new
 
 - [L1 Ownership & moves](/t/l1-ownership-moves): moving out of a place; `take`, `replace`.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Box`, `Drop`.
+- S7 Smart pointers & interior mutability: `Box`, `Drop`.
 - [S3 Vec & slices](/t/s3-vec-slices): indexing, `get`, `swap_remove`.
 
 ## Tests

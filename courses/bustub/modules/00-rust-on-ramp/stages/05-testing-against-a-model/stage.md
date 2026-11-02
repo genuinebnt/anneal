@@ -46,9 +46,9 @@ An `enum Op` of the operations; a strategy that makes a `Vec<Op>`; `prop_assert_
 
 ## If this is new
 
-- [Y5 Testing & verification](/t/y5-testing-verification): properties, models, shrinking.
-- [S5 Queues & heaps](/t/s5-queues-heaps): `VecDeque`.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): an operation as an enum.
+- Y5 Testing & verification: properties, models, shrinking.
+- S5 Queues & heaps: `VecDeque`.
+- L7 Enums & pattern matching: an operation as an enum.
 
 ## Tests
 

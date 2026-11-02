@@ -35,12 +35,12 @@ How you pick the smallest head (a scan or a binary heap), how you group runs int
 
 ## If this is new
 
-- [S5 Queues & heaps](/t/s5-queues-heaps): `BinaryHeap`, `Reverse`, `VecDeque`.
-- [S6 Iterators](/t/s6-iterators): `min_by`, `filter_map`, `chunks`.
+- S5 Queues & heaps: `BinaryHeap`, `Reverse`, `VecDeque`.
+- S6 Iterators: `min_by`, `filter_map`, `chunks`.
 - [S3 Vec & slices](/t/s3-vec-slices): `drain`, `take`.
 - The optional *external merge sort* concept.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Understand: spilling to disk: bounded-memory reading and writing.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
+- S9 I/O & filesystem: Understand: spilling to disk: bounded-memory reading and writing.
+- Y5 Testing & verification: Build it: a sorted vector as the oracle for sort, limit, top-N and rank.
 
 ## Tests
 

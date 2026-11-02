@@ -41,10 +41,10 @@ How you structure the loop (a `while` over the iterator with early `continue`s) 
 ## If this is new
 
 - [S1 Option & Result](/t/s1-option-result): `let else`, `Option` chains.
-- [S6 Iterators](/t/s6-iterators): pulling by hand, as in module 3e.
+- S6 Iterators: pulling by hand, as in module 3e.
 - [L3 Lifetimes](/t/l3-lifetimes): executor fields that borrow the catalog.
 - The optional *snapshot isolation* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of versions; random histories and sessions.
+- Y5 Testing & verification: Build it: a model of versions; random histories and sessions.
 
 ## Tests
 

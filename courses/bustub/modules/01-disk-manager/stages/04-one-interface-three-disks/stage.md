@@ -39,7 +39,7 @@ How the memory disks store their pages (one big buffer, a vector of boxes, a map
 - [L4 Traits & dispatch](/t/l4-traits-dispatch), the first four problems: defining a trait, implementing it, `dyn` versus generics.
 - [L5 Generics & associated types](/t/l5-generics), the first two: what a trait bound means.
 - [S4 Maps & sets](/t/s4-maps-sets) or [S3 Vec & slices](/t/s3-vec-slices) for the storage you choose.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a fake behind an injected trait; a model test with proptest.
+- Y5 Testing & verification: Understand it: a fake behind an injected trait; a model test with proptest.
 
 ## Tests
 

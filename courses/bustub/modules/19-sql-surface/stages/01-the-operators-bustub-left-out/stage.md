@@ -34,7 +34,7 @@ How you split type checking from evaluation, whether `compute` reuses `Value::ad
 ## If this is new
 
 - [S1 Option and Result](/t/s1-option-result): carrying "no value" and "failed" separately.
-- [Y5 Testing & verification](/t/y5-testing-verification): comparing an engine with a small model.
+- Y5 Testing & verification: comparing an engine with a small model.
 
 ## Tests
 

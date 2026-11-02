@@ -31,7 +31,7 @@ None new: a failure belongs to one of your earlier stages.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: crash a disk at a random point, then recover; a model of the committed state.
+- Y5 Testing & verification: Build it: crash a disk at a random point, then recover; a model of the committed state.
 
 ## Tests
 

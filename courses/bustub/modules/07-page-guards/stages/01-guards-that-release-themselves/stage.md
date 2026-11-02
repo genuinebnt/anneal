@@ -42,8 +42,8 @@ What a guard stores: the pool and page id; the latch guard itself (`RwLockReadGu
 - [L2 Borrowing](/t/l2-borrowing) and [L1 Ownership & moves](/t/l1-ownership-moves): why `take()` and `drop()` exist.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `Deref`, `Drop` are traits.
 - The optional concept *RAII guards and lifetimes* is the whole idea with examples.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `Deref`/`DerefMut`, `Drop` order.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Understand it: `Deref` coercions, `RwLockReadGuard`.
+- S8 The core traits: Implement by hand: `Deref`/`DerefMut`, `Drop` order.
+- S7 Smart pointers & interior mutability: Understand it: `Deref` coercions, `RwLockReadGuard`.
 
 ## Tests
 

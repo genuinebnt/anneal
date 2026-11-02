@@ -44,7 +44,7 @@ The wording around the phrases. Whether the eight `From`s are written by hand or
 
 ## If this is new
 
-- [S6 Trait objects](/t/s6-trait-objects): why a type needs `Display` and `Debug` before it can be an `Error`.
+- S6 Trait objects: why a type needs `Display` and `Debug` before it can be an `Error`.
 
 ## Tests
 

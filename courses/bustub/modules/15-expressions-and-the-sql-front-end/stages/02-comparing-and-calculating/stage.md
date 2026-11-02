@@ -38,11 +38,11 @@ How the two nodes share code (one helper for evaluating both children and one fo
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `match` on an enum with no missing arm, `let else`.
-- [S8 The core traits](/t/s8-core-traits): `PartialOrd`, comparison results as values.
-- [L8 Error design](/t/l8-error-design): `Result`, `?`, an error type with a kind.
+- L7 Enums & pattern matching: `match` on an enum with no missing arm, `let else`.
+- S8 The core traits: `PartialOrd`, comparison results as values.
+- L8 Error design: `Result`, `?`, an error type with a kind.
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): `checked_*`, `wrapping_*`, overflow in debug and release.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
+- Y5 Testing & verification: Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
 
 ## Tests
 

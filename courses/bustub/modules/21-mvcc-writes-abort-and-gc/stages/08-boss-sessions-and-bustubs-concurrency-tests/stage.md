@@ -28,7 +28,7 @@ None new: a failure belongs to one of your earlier stages.
 
 - Everything is in the earlier stages of this module.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it: a check repeated under the lock that makes it true; latch order and deadlock.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
+- Y5 Testing & verification: Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
 
 ## Tests
 

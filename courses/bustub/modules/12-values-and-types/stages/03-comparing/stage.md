@@ -37,8 +37,8 @@ One private function returning `Option<Ordering>` and six one-liners (the refere
 
 ## If this is new
 
-- [S8 The core traits](/t/s8-core-traits): `PartialOrd`, `Ord`, `Ordering`, and why `f64` only has the first.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): matching on pairs `(a, b)`.
+- S8 The core traits: `PartialOrd`, `Ord`, `Ordering`, and why `f64` only has the first.
+- L7 Enums & pattern matching: matching on pairs `(a, b)`.
 - [S1 Option & Result](/t/s1-option-result): `Option<Ordering>`.
 - [S2 Strings & text](/t/s2-strings-text): Understand: UTF-8, case mapping, comparing strings.
 

@@ -46,9 +46,9 @@ pred.evaluate(&version, &table.schema)?.as_bool() == Some(true)
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `Option` ladders in the validation.
-- [S6 Iterators](/t/s6-iterators): `any`, `filter`, nested loops over write sets.
-- [Y5 Testing & verification](/t/y5-testing-verification): an oracle that tries every serial order.
+- L7 Enums & pattern matching: `Option` ladders in the validation.
+- S6 Iterators: `any`, `filter`, nested loops over write sets.
+- Y5 Testing & verification: an oracle that tries every serial order.
 - The optional *serializable validation by predicates* concept.
 - [S1 Option & Result](/t/s1-option-result): Understand it: `Option` chains for links and logs.
 

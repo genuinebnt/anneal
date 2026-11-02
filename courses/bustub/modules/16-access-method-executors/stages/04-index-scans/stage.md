@@ -37,8 +37,8 @@ Collecting all rids at `init` (simple, holds a list in memory) or asking the ind
 
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): calling `scan_all` / `scan_key` on a `Box<dyn Index>`.
 - [S1 Option & Result](/t/s1-option-result): `?` for the heap fetch.
-- [S6 Iterators](/t/s6-iterators): `extend`, slicing a `Vec` as a cursor.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of SQL in plain vectors; random sessions of statements.
+- S6 Iterators: `extend`, slicing a `Vec` as a cursor.
+- Y5 Testing & verification: Build it: a model of SQL in plain vectors; random sessions of statements.
 
 ## Tests
 

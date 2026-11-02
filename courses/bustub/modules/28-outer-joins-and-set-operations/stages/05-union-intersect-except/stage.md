@@ -32,8 +32,8 @@ The key of a row (a string of the values and types, a vector of values with a ha
 
 ## If this is new
 
-- [S2 Collections](/t/s2-collections): `HashMap` entry API.
-- [Y5 Testing & verification](/t/y5-testing-verification): a model written in the style of the specification.
+- S2 Collections: `HashMap` entry API.
+- Y5 Testing & verification: a model written in the style of the specification.
 
 ## Tests
 

@@ -41,8 +41,8 @@ vec![Slot::Empty; capacity]                          // needs Slot: Clone
 
 ## If this is new
 
-- [S8 The core traits](/t/s8-core-traits): a trait for the hash, `PartialEq` on keys.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `Slot<K>` and `match`.
+- S8 The core traits: a trait for the hash, `PartialEq` on keys.
+- L7 Enums & pattern matching: `Slot<K>` and `match`.
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): modular arithmetic.
 - The optional *Robin Hood hashing and open addressing* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Hashing; Right structure for the job: open addressing, probe distance, tombstones.

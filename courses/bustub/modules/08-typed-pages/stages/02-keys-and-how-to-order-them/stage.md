@@ -37,7 +37,7 @@ How you copy bytes and read the integer; whether the comparator decodes the keys
 - [L5 Generics & associated types](/t/l5-generics): type parameters; const generics are the same idea for numbers.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `trait KeyComparator<K>`.
 - [S3 Vec & slices](/t/s3-vec-slices): `sort_by`, `split_at`, `copy_from_slice`.
-- [S8 The core traits](/t/s8-core-traits): Implement by hand: `TryFrom` (slice to array), `Ord` for a comparator.
+- S8 The core traits: Implement by hand: `TryFrom` (slice to array), `Ord` for a comparator.
 - [F7 I/O & serialization](/t/f7-io-serialization): Encodings: byte order, fixed-width encodings, `bytemuck` as the safe cast.
 
 ## Tests

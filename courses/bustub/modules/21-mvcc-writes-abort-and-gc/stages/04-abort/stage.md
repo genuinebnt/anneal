@@ -53,7 +53,7 @@ table.table.with_page_mut(rid, |page| -> Result<()> {
 - [C1 Threads & shared state](/t/c1-threads-shared-state): read-modify-write under one lock.
 - [S1 Option & Result](/t/s1-option-result): `from_ref`, `filter` on options.
 - The optional *rolling back with undo logs* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
+- Y5 Testing & verification: Build it: sessions of interleaved transactions against a model; an oracle that tries every serial order.
 
 ## Tests
 

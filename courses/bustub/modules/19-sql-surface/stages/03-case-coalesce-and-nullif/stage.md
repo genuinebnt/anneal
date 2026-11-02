@@ -31,8 +31,8 @@ How the branches are stored (pairs, or a flat list of children as BusTub stores 
 
 ## If this is new
 
-- [L7 Enums and patterns](/t/l7-enums-patterns): matching on shapes, not types.
-- [Y5 Testing & verification](/t/y5-testing-verification): a model written as a `match`.
+- L7 Enums and patterns: matching on shapes, not types.
+- Y5 Testing & verification: a model written as a `match`.
 
 ## Tests
 

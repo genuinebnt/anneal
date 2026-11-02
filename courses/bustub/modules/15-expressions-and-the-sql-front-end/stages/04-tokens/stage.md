@@ -42,10 +42,10 @@ Everything inside `tokenize`: a `Vec<char>` and an index, a `Peekable<Chars>`, `
 ## If this is new
 
 - [S2 Strings & text](/t/s2-strings-text): `char` versus byte, `chars()`, why slicing a `str` can panic.
-- [S6 Iterators](/t/s6-iterators): `Peekable`, `while let Some(..) = it.peek()`.
-- [L8 Error design](/t/l8-error-design): returning `Err` early with `?` and `return Err(..)`.
+- S6 Iterators: `Peekable`, `while let Some(..) = it.peek()`.
+- L8 Error design: returning `Err` early with `?` and `return Err(..)`.
 - The optional *lexers and precedence climbing* concept has a complete tiny lexer to read first.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
+- Y5 Testing & verification: Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
 
 ## Tests
 

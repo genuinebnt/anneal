@@ -34,10 +34,10 @@ Which candidate you try first (the first usable one wins in the tests), and how 
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): downcasts and `if let` ladders.
+- L7 Enums & pattern matching: downcasts and `if let` ladders.
 - [S1 Option & Result](/t/s1-option-result): `?` on options, `then`, `zip`.
 - The optional *access paths* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
+- Y5 Testing & verification: Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
 
 ## Tests
 

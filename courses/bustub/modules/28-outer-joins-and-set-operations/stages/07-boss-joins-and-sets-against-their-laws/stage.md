@@ -21,7 +21,7 @@ Everything. A failure here is a bug in an earlier stage, and the minimal failing
 
 ## If this is new
 
-- [Y5 Testing & verification](/t/y5-testing-verification): properties, models and shrinking.
+- Y5 Testing & verification: properties, models and shrinking.
 
 ## Tests
 

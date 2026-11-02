@@ -43,8 +43,8 @@ How live frames are stored, and how you will keep four lists in the next stages.
 - [S1 Option & Result](/t/s1-option-result): `let ... else`.
 - [L1 Ownership & moves](/t/l1-ownership-moves): why you cannot keep a `&mut` into one list while changing another; store handles, not references.
 - Concept *adaptive replacement cache* (optional) has the whole algorithm with pictures.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Understand it: handles instead of references between list nodes.
-- [S8 The core traits](/t/s8-core-traits): Derive: `Hash`, `Eq`, `Copy` on id newtypes.
+- S7 Smart pointers & interior mutability: Understand it: handles instead of references between list nodes.
+- S8 The core traits: Derive: `Hash`, `Eq`, `Copy` on id newtypes.
 
 ## Tests
 

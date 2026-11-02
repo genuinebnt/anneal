@@ -41,7 +41,7 @@ How you find the parent after a split (remember the path on the way down, or sea
 - [S1 Option & Result](/t/s1-option-result): `pop()` returns an `Option`; `let Some(x) = .. else { .. }`.
 - The optional *splitting and promoting* concept draws the copy-up and the move-up.
 - [D6 Trees & BSTs](/t/d6-trees-bsts): Trees & BSTs: search trees: split, borrow, merge.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
+- Y5 Testing & verification: Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
 
 ## Tests
 

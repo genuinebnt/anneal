@@ -32,7 +32,7 @@ The shape of the state (a flag next to the optional transaction, or an enum), th
 
 ## If this is new
 
-- [L8 Error design](/t/l8-error-design): an error that carries enough to act on, and errors that are states.
+- L8 Error design: an error that carries enough to act on, and errors that are states.
 - [S1 Option and Result](/t/s1-option-result): an outcome with three cases.
 
 ## Tests

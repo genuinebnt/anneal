@@ -67,7 +67,7 @@ for (_, new) in changes { insert_mvcc(txn, txn_mgr, self.table_info, &self.index
 
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): calling the index through `Box<dyn Index>`.
 - [S4 Maps & sets](/t/s4-maps-sets): the model as a `BTreeMap`.
-- [Y5 Testing & verification](/t/y5-testing-verification): a model of a key-value table; checking a bound (tuples at most distinct keys).
+- Y5 Testing & verification: a model of a key-value table; checking a bound (tuples at most distinct keys).
 - The optional *unique indexes and tombstone reuse* concept.
 
 ## Tests

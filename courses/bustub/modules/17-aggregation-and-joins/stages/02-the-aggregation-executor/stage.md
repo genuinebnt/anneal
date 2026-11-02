@@ -36,11 +36,11 @@ Whether you build the output rows in `init` or lazily, how you iterate the table
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): iterating a `HashMap`, the order is not defined.
-- [S6 Iterators](/t/s6-iterators): `take`, `skip`, slicing as a cursor.
+- S6 Iterators: `take`, `skip`, slicing as a cursor.
 - [S1 Option & Result](/t/s1-option-result): collecting `Result`s.
 - The optional *hash aggregation* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Right structure for the job: hash tables for grouping and joining; when a scan or an index is better.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: differential tests: three algorithms against each other and a naive one.
+- Y5 Testing & verification: Build it: differential tests: three algorithms against each other and a naive one.
 
 ## Tests
 

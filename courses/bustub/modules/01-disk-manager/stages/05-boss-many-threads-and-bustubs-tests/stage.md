@@ -35,9 +35,9 @@ The same as before: the design is yours. If a stress test fails, the fix may be 
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state) if you have written it already; otherwise the examples in the `mutex-owns-its-data` concept are enough.
 - [L3 Lifetimes](/t/l3-lifetimes), first problem: why `thread::spawn` needs `move` and `'static`.
-- [S9 I/O & filesystem](/t/s9-io-filesystem): Use; Understand (I/O errors): open and create files, positional reads and writes, `io::Result`, `sync_all`.
+- S9 I/O & filesystem: Use; Understand (I/O errors): open and create files, positional reads and writes, `io::Result`, `sync_all`.
 - [L1 Ownership & moves](/t/l1-ownership-moves): Clones & drops: `Drop` and RAII: a file closes when its owner goes away.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a fake behind an injected trait; a model test with proptest.
+- Y5 Testing & verification: Understand it: a fake behind an injected trait; a model test with proptest.
 
 ## Tests
 

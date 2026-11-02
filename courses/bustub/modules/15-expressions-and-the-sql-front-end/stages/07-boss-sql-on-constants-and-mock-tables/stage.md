@@ -42,7 +42,7 @@ Cells are separated by one space; NULLs print as `integer_null`, `varlen_null`, 
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
+- Y5 Testing & verification: Build it: a model for three-valued logic; print-then-parse round trips; fuzzing a lexer and a parser.
 
 ## Tests
 

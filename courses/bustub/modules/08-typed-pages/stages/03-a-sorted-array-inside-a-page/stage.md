@@ -40,7 +40,7 @@ How you compute offsets, whether you decode through `T::decode` for every access
 - [S3 Vec & slices](/t/s3-vec-slices): ranges, `copy_from_slice`, bounds panics.
 - [L5 Generics & associated types](/t/l5-generics): bounds on `impl` blocks, `PhantomData`.
 - [L2 Borrowing](/t/l2-borrowing): why two `&mut` into one buffer are refused, and why `copy_within` exists.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: round-trip properties and a `Vec` model.
+- Y5 Testing & verification: Understand it: round-trip properties and a `Vec` model.
 
 ## Tests
 

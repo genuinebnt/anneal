@@ -23,7 +23,7 @@ Everything. A failure here is a bug in one of the four stages before, or in 4a a
 
 ## If this is new
 
-- [Y5 Testing & verification](/t/y5-testing-verification): a model that applies effects only at commit.
+- Y5 Testing & verification: a model that applies effects only at commit.
 - [C1 Threads and shared state](/t/c1-threads-shared-state): sharing one database between sessions.
 
 ## Tests

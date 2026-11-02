@@ -35,11 +35,11 @@ Not much here, because the contract is exact; the freedom is in how you write th
 
 ## If this is new
 
-- [S8 The core traits](/t/s8-core-traits): `Eq`, `Hash` and their contract.
+- S8 The core traits: `Eq`, `Hash` and their contract.
 - [S4 Maps & sets](/t/s4-maps-sets): `HashMap`, keys that are structs.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `match` on the aggregate kind.
+- L7 Enums & pattern matching: `match` on the aggregate kind.
 - The optional *Eq, Hash, Ord contracts* concept.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: differential tests: three algorithms against each other and a naive one.
+- Y5 Testing & verification: Build it: differential tests: three algorithms against each other and a naive one.
 
 ## Tests
 

@@ -29,7 +29,7 @@ For DISTINCT: a planner rewrite into two aggregations (what the reference soluti
 
 ## If this is new
 
-- [S5 Queues and heaps](/t/s5-queues-heaps): why a bounded heap beats sorting for the first rows.
+- S5 Queues and heaps: why a bounded heap beats sorting for the first rows.
 - [S4 Maps and sets](/t/s4-maps-sets): sets as "have I seen this".
 
 ## Tests

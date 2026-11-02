@@ -43,8 +43,8 @@ Everything inside `LruReplacer`. You can use the `IndexList` you built, a `HashM
 - [S4 Maps & sets](/t/s4-maps-sets): `HashMap`, `entry`, `remove`, `contains_key`.
 - [S1 Option & Result](/t/s1-option-result): `?` on an `Option`, `if let Some(..)`.
 - The *replacement policies* concept (optional) explains LRU, CLOCK and their cousins, and a hit-rate simulator you can reuse.
-- [S5 Queues & heaps](/t/s5-queues-heaps): Use; Understand: `VecDeque` rotation, lazy deletion.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: model-based tests: a four-line model of the policy.
+- S5 Queues & heaps: Use; Understand: `VecDeque` rotation, lazy deletion.
+- Y5 Testing & verification: Understand it: model-based tests: a four-line model of the policy.
 
 ## Tests
 

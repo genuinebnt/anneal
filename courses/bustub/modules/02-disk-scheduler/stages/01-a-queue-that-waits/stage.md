@@ -43,8 +43,8 @@ What holds the elements and how the lock and the condition variable are arranged
 - There is no threads track yet: the optional concepts *condvars and blocking queues* and *mutex owns its data* carry the concurrency, and *reading compiler errors* covers the messages you will meet.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it; Build it: poisoning, `RwLock`, deadlock and lock order, a bounded blocking queue with `Condvar` (`while`, never `if`).
 - [C2 Message passing](/t/c2-message-passing): Use it; Understand it: a worker loop that stops when told, graceful shutdown with no lost jobs, a bounded channel from `Mutex` + `Condvar`.
-- [S5 Queues & heaps](/t/s5-queues-heaps): Use: `VecDeque` as a queue.
-- [L6 Closures & functional Rust](/t/l6-closures): Closure basics; Fn / FnMut / FnOnce: `move` closures, a callback that mutates state.
+- S5 Queues & heaps: Use: `VecDeque` as a queue.
+- L6 Closures & functional Rust: Closure basics; Fn / FnMut / FnOnce: `move` closures, a callback that mutates state.
 
 ## Tests
 

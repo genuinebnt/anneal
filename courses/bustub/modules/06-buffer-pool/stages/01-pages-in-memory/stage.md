@@ -47,8 +47,8 @@ Everything inside the pool: how frames are stored, how the page table is kept, w
 - [F2 Data layout](/t/f2-data-layout) for why 8 KiB pages and what a page is in memory.
 - The optional concepts *buffer pool anatomy* and *pin counts and dirty pages* are the two to read if the vocabulary is new.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): Understand it: `Mutex<Inner>` plus a latch per frame; never wait for a latch while holding the lock; lock ordering.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Understand it: `Box<dyn Trait>` in a field, `Arc`.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a spy test double; threads sharing a pool; running a test many times.
+- S7 Smart pointers & interior mutability: Understand it: `Box<dyn Trait>` in a field, `Arc`.
+- Y5 Testing & verification: Build it: a spy test double; threads sharing a pool; running a test many times.
 
 ## Tests
 

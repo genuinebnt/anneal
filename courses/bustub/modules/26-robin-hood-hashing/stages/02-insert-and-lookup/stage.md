@@ -47,9 +47,9 @@ bucket = (bucket + 1) % self.capacity;
 ## If this is new
 
 - [S4 Maps & sets](/t/s4-maps-sets): open addressing, what a `HashSet` does inside.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `std::mem::replace`.
+- S7 Smart pointers & interior mutability: `std::mem::replace`.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `RwLock`.
-- [Y5 Testing & verification](/t/y5-testing-verification): structural invariants of a table, not just its contents.
+- Y5 Testing & verification: structural invariants of a table, not just its contents.
 - The optional *Robin Hood hashing and open addressing* concept.
 - [F4 Hashing & purpose-built structures](/t/f4-hashing-structures): Hashing; Right structure for the job: open addressing, probe distance, tombstones.
 - [S3 Vec & slices](/t/s3-vec-slices): Understand it: a table in a `Vec`; `std::mem::replace`.

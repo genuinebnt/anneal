@@ -44,8 +44,8 @@ The layout of all three page types and of the page-type tag they share; whether 
 - [L3 Lifetimes](/t/l3-lifetimes): a view that borrows a guard.
 - [S3 Vec & slices](/t/s3-vec-slices): byte ranges.
 - Module 2a (`FixedSize`, `PageArray`, `lower_bound`) and 1g (guards) are what you build on.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Enums & exhaustiveness: a page-type tag as an enum, `TryFrom<u32>`, `match` that must cover every kind.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Understand it: page ids instead of pointers; why a tree of references fights the borrow checker.
+- L7 Enums & pattern matching: Enums & exhaustiveness: a page-type tag as an enum, `TryFrom<u32>`, `match` that must cover every kind.
+- S7 Smart pointers & interior mutability: Understand it: page ids instead of pointers; why a tree of references fights the borrow checker.
 - [F2 Data layout](/t/f2-data-layout): Locality: a slotted page for a B-tree node: header, slot array, cell heap.
 
 ## Tests

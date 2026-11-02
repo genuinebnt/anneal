@@ -43,7 +43,7 @@ Which sibling you prefer when both could lend, how you repair the parent, whethe
 - The optional *underflow, borrow and merge* concept has the diagrams.
 - [D6 Trees & BSTs](/t/d6-trees-bsts): Trees & BSTs: search trees: split, borrow, merge.
 - [S3 Vec & slices](/t/s3-vec-slices): Understand it: `split_off`, `partition_point`, `insert`, `remove`.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
+- Y5 Testing & verification: Understand it; Build it: a model and a shape checker; threaded tests under a timeout.
 
 ## Tests
 

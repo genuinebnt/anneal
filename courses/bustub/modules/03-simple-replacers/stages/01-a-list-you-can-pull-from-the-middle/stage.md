@@ -42,11 +42,11 @@ How the nodes are stored and linked, what a `Handle` contains, how freed space i
 - [S3 Vec & slices](/t/s3-vec-slices): indexing, `push`, `pop`, `swap`.
 - [S1 Option & Result](/t/s1-option-result): `take`, `as_ref`, `?` on an `Option`.
 - [F2 Data layout](/t/f2-data-layout), if you want to see what a node looks like in memory.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): Use it; Understand it: `Box`, `Rc`, choosing the cheapest correct pointer; why linked structures fight the borrow checker.
+- S7 Smart pointers & interior mutability: Use it; Understand it: `Box`, `Rc`, choosing the cheapest correct pointer; why linked structures fight the borrow checker.
 - [D5 Linked lists](/t/d5-linked-lists): Linked lists, the Rust way: index arenas, cursors, `take()`.
 - [F3 Memory & allocation](/t/f3-memory-allocation): Arenas and pools: a typed-index arena with generations (stale handles).
 - [L5 Generics & associated types](/t/l5-generics): Generic code: `IndexList<T>`: a generic container.
-- [S6 Iterators](/t/s6-iterators): Use; Understand: returning `impl Iterator`, `iter::from_fn`.
+- S6 Iterators: Use; Understand: returning `impl Iterator`, `iter::from_fn`.
 
 ## Tests
 

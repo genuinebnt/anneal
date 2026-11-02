@@ -31,7 +31,7 @@ How timing is taken (one clock read around each call is the simplest), whether t
 ## If this is new
 
 - [L4 Traits and dispatch](/t/l4-traits-dispatch): a trait object wrapping another trait object.
-- [S7 Smart pointers](/t/s7-smart-pointers): `Arc` for counters shared between the wrapper and the report.
+- S7 Smart pointers: `Arc` for counters shared between the wrapper and the report.
 
 ## Tests
 

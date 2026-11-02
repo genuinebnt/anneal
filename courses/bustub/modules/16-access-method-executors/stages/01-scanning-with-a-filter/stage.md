@@ -37,12 +37,12 @@ How you hold the iterator (an `Option` set by `init`, built lazily in `next`), w
 
 ## If this is new
 
-- [S6 Iterators](/t/s6-iterators): pulling from an iterator by hand, `let else`.
+- S6 Iterators: pulling from an iterator by hand, `let else`.
 - [L3 Lifetimes](/t/l3-lifetimes): `TableIterator<'e>` borrows the heap for as long as the executor lives.
 - [S1 Option & Result](/t/s1-option-result): `Option<Iterator>`, `?` in a loop.
 - The optional *the iterator model* and *three-valued logic* concepts.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): Static vs dynamic: `Box<dyn Executor>` children, `Box<dyn Index>` calls.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: a model of SQL in plain vectors; random sessions of statements.
+- Y5 Testing & verification: Build it: a model of SQL in plain vectors; random sessions of statements.
 
 ## Tests
 

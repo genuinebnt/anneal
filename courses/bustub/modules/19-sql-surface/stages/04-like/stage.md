@@ -31,7 +31,7 @@ The algorithm (the remembered-percent loop, a dynamic-programming table, a compi
 ## If this is new
 
 - [S2 Strings and text](/t/s2-strings-text): bytes, chars and `char_indices`.
-- [Y5 Testing & verification](/t/y5-testing-verification): a slow, obviously-right model.
+- Y5 Testing & verification: a slow, obviously-right model.
 
 ## Tests
 

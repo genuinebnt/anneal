@@ -41,8 +41,8 @@ if let Some((txn, txn_mgr)) = &self.txn { ... }                                 
 
 ## If this is new
 
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc<Transaction>` and its `&self` methods.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `Option<(Arc<Transaction>, &TransactionManager)>` as the 'is there a transaction' switch.
+- S7 Smart pointers & interior mutability: `Arc<Transaction>` and its `&self` methods.
+- L7 Enums & pattern matching: `Option<(Arc<Transaction>, &TransactionManager)>` as the 'is there a transaction' switch.
 - The optional *multi-version concurrency control* concept.
 
 ## Tests

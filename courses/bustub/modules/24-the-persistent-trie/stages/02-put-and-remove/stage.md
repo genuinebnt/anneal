@@ -70,10 +70,10 @@ match Self::remove_at(child, rest) {
 
 ## If this is new
 
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc`, clone-on-write, sharing.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): a small enum for a helper's three outcomes.
+- S7 Smart pointers & interior mutability: `Arc`, clone-on-write, sharing.
+- L7 Enums & pattern matching: a small enum for a helper's three outcomes.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `Any`, `Send + Sync` bounds.
-- [Y5 Testing & verification](/t/y5-testing-verification): keeping every version and checking all of them at the end.
+- Y5 Testing & verification: keeping every version and checking all of them at the end.
 - The optional *persistent data structures and path copying* concept.
 - [L1 Ownership & moves](/t/l1-ownership-moves): Clones & drops: sharing structure instead of copying: a clone of a node clones pointers.
 

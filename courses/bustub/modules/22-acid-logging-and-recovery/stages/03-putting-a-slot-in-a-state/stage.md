@@ -42,7 +42,7 @@ How `Store` keeps its parts (fields are yours), and how you detect "the next slo
 - [S1 Option & Result](/t/s1-option-result): `Option<Vec<u8>>` as a state; early returns with errors.
 - [C1 Threads & shared state](/t/c1-threads-shared-state): a guard as a lock scope.
 - The optional *ARIES recovery* and *slotted pages* concepts.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: crash a disk at a random point, then recover; a model of the committed state.
+- Y5 Testing & verification: Build it: crash a disk at a random point, then recover; a model of the committed state.
 
 ## Tests
 

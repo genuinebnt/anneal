@@ -43,7 +43,7 @@ How the heap remembers the last page (a field under a lock, or by following the 
 - [L3 Lifetimes](/t/l3-lifetimes): why the heap holds `&'a BufferPoolManager`.
 - [S1 Option & Result](/t/s1-option-result): `Result`, `?`, `map_or`.
 - The optional *heap files* and *coarse and fine-grained locking* concepts.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
+- Y5 Testing & verification: Understand it: a heap checked against a `Vec`; the Halloween problem as a property.
 
 ## Tests
 

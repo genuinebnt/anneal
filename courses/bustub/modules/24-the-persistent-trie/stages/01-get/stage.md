@@ -43,11 +43,11 @@ node.value.clone()?.downcast::<T>().ok()          // Option<Arc<T>>
 ## If this is new
 
 - [S1 Option & Result](/t/s1-option-result): `?` on `Option`, `as_ref`, `and_then`.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc` and sharing.
+- S7 Smart pointers & interior mutability: `Arc` and sharing.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): `dyn Any` and downcasting.
 - The optional *tries* concept.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): Enums & exhaustiveness: a helper's outcomes as an enum; `dyn Any` downcasting.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: keep every version of a history and check them all.
+- L7 Enums & pattern matching: Enums & exhaustiveness: a helper's outcomes as an enum; `dyn Any` downcasting.
+- Y5 Testing & verification: Build it: keep every version of a history and check them all.
 
 ## Tests
 

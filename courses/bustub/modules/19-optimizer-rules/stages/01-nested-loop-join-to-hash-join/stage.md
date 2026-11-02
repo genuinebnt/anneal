@@ -34,12 +34,12 @@ How you walk the conjuncts (a loop with `?`, an iterator `collect::<Option<Vec<_
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `PlanKind` is an enum; `matches!`, `if let`.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): plans are `Arc` trees you rebuild, never mutate.
+- L7 Enums & pattern matching: `PlanKind` is an enum; `matches!`, `if let`.
+- S7 Smart pointers & interior mutability: plans are `Arc` trees you rebuild, never mutate.
 - [S1 Option & Result](/t/s1-option-result): `?` on `Option`, collecting options.
 - The optional *rule-based query optimization* concept.
 - [L4 Traits & dispatch](/t/l4-traits-dispatch): Define & implement: a rule as a function from plan to plan (a trait, if you like).
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
+- Y5 Testing & verification: Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
 
 ## Tests
 

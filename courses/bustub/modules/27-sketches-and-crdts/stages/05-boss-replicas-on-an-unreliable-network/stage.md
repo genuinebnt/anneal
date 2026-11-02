@@ -27,7 +27,7 @@ None new.
 ## If this is new
 
 - Everything is in the earlier stages of this module.
-- [Y5 Testing & verification](/t/y5-testing-verification): Understand it: algebraic laws (commutative, associative, idempotent) as properties.
+- Y5 Testing & verification: Understand it: algebraic laws (commutative, associative, idempotent) as properties.
 
 ## Tests
 

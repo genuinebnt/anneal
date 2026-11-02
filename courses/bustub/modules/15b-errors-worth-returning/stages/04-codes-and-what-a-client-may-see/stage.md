@@ -48,7 +48,7 @@ Where the table lives (a `match`, a lookup, a method on each layer's error); whe
 
 ## If this is new
 
-- [S6 Trait objects](/t/s6-trait-objects): `is::<T>()` and `downcast_ref::<T>()`.
+- S6 Trait objects: `is::<T>()` and `downcast_ref::<T>()`.
 
 ## Tests
 

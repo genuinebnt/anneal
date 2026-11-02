@@ -12,7 +12,6 @@ import { Page3, Panel, ReadingPath, RingTile, Tile, type PathStep } from "../com
 import { MockRoot } from "../components/mock";
 import { FollowUps, Fold, PhaseBar, PhaseTag, Teaches, TestResults } from "../components/trackBits";
 import { BLURB, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
-import { TRACK_SLUGS } from "../trackSlugs";
 
 const TIER = { core: "CORE", light: "LIGHT", sde3: "SDE-3" } as const;
 const MINUTES: Record<Band, number> = { easy: 12, medium: 25, hard: 45 };
@@ -145,18 +144,7 @@ export function TrackPage({ slug }: { slug: string }) {
         <Header />
         <main className="page">
           <div className="wrap">
-            {q.isError && TRACK_SLUGS[slug] ? (
-              <div className="notice" data-testid="planned-track">
-                <b>
-                  {TRACK_SLUGS[slug].code} · {TRACK_SLUGS[slug].name}
-                </b>{" "}
-                is planned and not written yet. The BusTub course already links here, so the link will work once the track exists.
-                {BLURB[TRACK_SLUGS[slug].code] && <p>{BLURB[TRACK_SLUGS[slug].code]}</p>}
-                <p>
-                  <Link to="/rust">Back to the Rust tracks</Link>
-                </p>
-              </div>
-            ) : q.isError ? (
+            {q.isError ? (
               <p className="notice bad">{`Couldn't load track ${slug}.`}</p>
             ) : (
               <Skeleton lines={6} />

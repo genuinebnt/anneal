@@ -27,9 +27,9 @@ How you destructure the plan (`if let` chains, `match` on `(&plan.kind, &child.k
 
 ## If this is new
 
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): `if let` and nested patterns on enums.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): rebuilding `Arc` trees.
-- [Y5 Testing & verification](/t/y5-testing-verification): Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
+- L7 Enums & pattern matching: `if let` and nested patterns on enums.
+- S7 Smart pointers & interior mutability: rebuilding `Arc` trees.
+- Y5 Testing & verification: Build it: equivalence: the optimised plan and the plain plan return the same rows, on random tables.
 
 ## Tests
 

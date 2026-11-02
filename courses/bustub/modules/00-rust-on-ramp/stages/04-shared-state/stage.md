@@ -39,7 +39,7 @@ loop {
 
 - [C1 Threads & shared state](/t/c1-threads-shared-state): `Arc`, `Mutex`, `Condvar`, scoped threads.
 - [C3 Atomics & lock-free](/t/c3-atomics-lock-free): `fetch_add` and orderings.
-- [S7 Smart pointers & interior mutability](/t/s7-smart-pointers): `Arc`.
+- S7 Smart pointers & interior mutability: `Arc`.
 
 ## Tests
 

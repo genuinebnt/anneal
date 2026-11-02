@@ -43,9 +43,9 @@ Whether you compute in `i128` or use four `checked_*` families, how you share co
 
 - [D13 Matrix, bits & math](/t/d13-matrix-bits-math): overflow, `checked_*`, `wrapping_*`, `saturating_*`.
 - [S1 Option & Result](/t/s1-option-result): `ok_or_else`, `?`.
-- [L7 Enums & pattern matching](/t/l7-enums-patterns): an `Op` enum.
+- L7 Enums & pattern matching: an `Op` enum.
 - The optional *overflow and checked arithmetic* concept has the full table.
-- [L8 Error design](/t/l8-error-design): Custom errors: overflow and cast errors as values.
+- L8 Error design: Custom errors: overflow and cast errors as values.
 
 ## Tests
 
