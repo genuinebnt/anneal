@@ -1,0 +1,11 @@
+code = "Y8"
+name = "Classic engines: regex and diff"
+section = "Y"
+tier = "sde3"
+order = 8
+summary = "Two programs everyone uses and few have written: a linear-time regular-expression engine and a shortest-edit-script diff."
+
+[[stages]]
+slug = "build-it"
+name = "Build it"
+band = "hard"

@@ -1,0 +1,32 @@
+slug = "regex-nfa-matcher"
+title = "A regex engine that cannot be made to blow up"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 2
+status = "ready"
+tags = ["regular expressions", "Thompson NFA", "state sets", "parsing", "linear time", "ReDoS", "leftmost-longest"]
+teaches = [
+  "A regex is a tiny language: parse it (alternation binds loosest, then concatenation, then the postfix `* + ?`) into a tree, then compile the tree to a small program of `Char` / `Split` / `Jmp` / `Match` instructions.",
+  "Running the program as a **set of states** (Thompson's construction) advances all alternatives at once, so matching takes O(text x program) with no backtracking: `(a*)*b` against 5 000 `a`s finishes instantly, where a backtracking engine takes longer than the age of the universe.",
+  "Empty loops (`(a*)*`) make the epsilon closure cyclic: a per-step 'already visited' set is what keeps the closure finite.",
+]
+follow_up = "1) Make `find` linear in the text by prefixing the program with `.*?` (an unanchored search that keeps one set, tracking where each thread started) so only one pass is needed. 2) Add capture groups (Pike's VM: each thread carries its capture slots) and `captures()`. 3) Add character classes `[a-z]`, `[^0-9]` and the anchors `^`, `$`: where do they live in the program? 4) Add counted repetition `a{2,4}` by expanding the tree, and note why the program size can explode for nested counts. 5) Convert the NFA to a DFA lazily (cache the state sets you reach) and measure the speedup on a long text."
+related = ["Y6", "S2", "F4"]
+
+[[hints]]
+kind = "approach"
+text = "Three stages. (1) A recursive-descent parser with one function per precedence level (`alt` calls `cat` calls `repeat` calls `atom`) builds a tree. (2) Compile the tree into instructions: `Split(x, y)` continues at both `x` and `y`, `Jmp(t)` continues at `t`, `Match` accepts. `a*` is `L: Split(L+1, out); a; Jmp L`. (3) Simulate: keep the *set* of program counters that are alive, and for each character build the next set."
+
+[[hints]]
+kind = "rust"
+text = "Write `add_thread(list, seen, pc)` that follows `Jmp` and `Split` (with a `seen: Vec<bool>` reset per step) and pushes only `Char`/`Any`/`Match` states: that is the epsilon closure, and `seen` is what stops `(a*)*` from looping forever. `find` = for each start index, run the simulation and remember the **last** position at which `Match` was in the set; take the first start that has any."
+
+[[hints]]
+kind = "edge"
+text = "`a**` and `a+?` are errors in this problem (a quantifier right after a quantifier). `()` and `a|` give `Node::Empty`. A `)` left over after the top-level parse means an unmatched close; a missing `)` inside `atom` means an unmatched open. Count characters, not bytes: collect `chars()` first."
+
+[solution]
+explanation = "This is Russ Cox's 'Regular Expression Matching Can Be Simple And Fast': Thompson's 1968 construction, the basis of RE2, Go's `regexp` and Rust's `regex` crate, versus the backtracking engines (Perl, Python `re`, JavaScript) whose exponential cases cause real outages (the Stack Overflow and Cloudflare incidents were both a single regex). Leftmost-longest is POSIX; Perl-style engines pick the leftmost-*first* alternative instead, which needs priority-ordered threads."
+time = "O(text x pattern) per start position (find is O(n^2 m) worst case)"
+space = "O(pattern)"
