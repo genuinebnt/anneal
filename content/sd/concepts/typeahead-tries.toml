@@ -184,7 +184,10 @@ body = """
 
 > [!INTERVIEW]
 > "The hard requests are one and two letters, because a subtree there is huge; storing the top ten at every node makes them as cheap as any other: a walk and a read of ten ids."
-"""
+
+
+> [!NOTE]
+> **How these were checked.** Lucene's suggesters (`AnalyzingSuggester`, `FreeTextSuggester`) are built on its `FST` class, which is in the apache/lucene repository on GitHub."""
 
 [[checks]]
 prompt = "Why store the top K completions at every trie node instead of computing them per request?"

@@ -114,7 +114,7 @@ Most Cassandra incidents are one of these, so name them when you pick it:
 
 
 > [!NOTE]
-> **How these figures were checked.** Checked against the apache/cassandra repository on GitHub: `gc_grace_seconds` 864000 (10 days), `max_hint_window` 3 hours, tombstone warn 1,000 and failure 100,000 thresholds, size-tiered compaction as the default, and storage-attached indexes in 5.0. Not verified: the roughly 100 MB partition guideline (community advice, not a limit), the 50% free-disk rule of thumb and the four round trips for a lightweight transaction."""
+> **How these figures were checked.** Checked against the apache/cassandra repository on GitHub: `gc_grace_seconds` 864000 (10 days), `max_hint_window` 3 hours, tombstone warn 1,000 and failure 100,000 thresholds, size-tiered compaction as the default, and storage-attached indexes in 5.0. Cassandra's own documentation (in the repository) confirms that lightweight transactions use Paxos and carry a "non-negligible performance cost". Not verified: the roughly 100 MB partition guideline (community advice, not a limit), the 50% free-disk rule of thumb and the count of four round trips for a lightweight transaction."""
 
 [[sections]]
 heading = "Multi-data-centre, counters and transactions"
