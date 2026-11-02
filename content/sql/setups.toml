@@ -261,3 +261,14 @@ undo = "SELECT 1;"
 id = "mv-vacuum-full"
 sql = "VACUUM FULL mv_t;"
 undo = "SELECT 1;"
+
+# module 25: TOAST. 20,000 rows with a 6,400-byte incompressible text (stored out of line) and an 8,104-byte compressible one (compressed to 137 bytes, stays in the row); and the same with a jsonb document.
+[[setup]]
+id = "toast-t"
+sql = "CREATE TABLE toast_t AS SELECT i AS id, 'title ' || i AS title, (i % 7) AS kind, (SELECT string_agg(md5(i::text || g::text), '') FROM generate_series(1, 200) g) AS body_inc, repeat('lorem ipsum dolor sit amet ', 300) || i AS body_cmp FROM generate_series(1, 20000) i; ALTER TABLE toast_t ADD PRIMARY KEY (id); ALTER TABLE toast_t SET (autovacuum_enabled = false); VACUUM ANALYZE toast_t;"
+undo = "DROP TABLE toast_t;"
+
+[[setup]]
+id = "toast-j"
+sql = "CREATE TABLE toast_j AS SELECT i AS id, (SELECT jsonb_object_agg('k' || g, md5(i::text || g::text)) FROM generate_series(1, 200) g) || jsonb_build_object('n', i % 100) AS payload FROM generate_series(1, 20000) i; ALTER TABLE toast_j ADD PRIMARY KEY (id); ALTER TABLE toast_j SET (autovacuum_enabled = false); VACUUM ANALYZE toast_j;"
+undo = "DROP TABLE toast_j;"
