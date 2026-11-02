@@ -1,0 +1,94 @@
+{
+ "id": "my-idx-default",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*), sum(total_cents) FROM orders WHERE status = 'paid';",
+ "setup": [
+  {
+   "id": "orders-status",
+   "sql": "CREATE INDEX orders_status ON orders (status);"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 46009.0,
+   "Total Cost": 46009.01,
+   "Plan Rows": 1,
+   "Plan Width": 16,
+   "Actual Startup Time": 226.032,
+   "Actual Total Time": 226.033,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 14960,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.0,
+     "Total Cost": 39960.0,
+     "Plan Rows": 1209800,
+     "Plan Width": 4,
+     "Actual Startup Time": 0.015,
+     "Actual Total Time": 148.56,
+     "Actual Rows": 1221501.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Filter": "(status = 'paid'::text)",
+     "Rows Removed by Filter": 778499,
+     "Shared Hit Blocks": 14960,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.086,
+  "Triggers": [],
+  "Execution Time": 226.061
+ },
+ "text": "Aggregate  (cost=46009.00..46009.01 rows=1 width=16) (actual time=238.689..238.690 rows=1.00 loops=1)\n  Buffers: shared hit=14960\n  ->  Seq Scan on orders  (cost=0.00..39960.00 rows=1209800 width=4) (actual time=0.013..157.206 rows=1221501.00 loops=1)\n        Filter: (status = 'paid'::text)\n        Rows Removed by Filter: 778499\n        Buffers: shared hit=14960\nPlanning Time: 0.083 ms\nExecution Time: 238.715 ms"
+}

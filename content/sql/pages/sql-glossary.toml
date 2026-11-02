@@ -1,0 +1,473 @@
+title = "Glossary"
+group = "sql-reference"
+order = 3
+minutes = 15
+lede = "The terms defined across the SQL performance course, in alphabetical order, each with the page it comes from. 180 terms."
+say = "The words of this course are few and exact: a plan node, a buffer, selectivity, a covering index, an index-only scan, a lock. If you can say what each means and where you saw it measured, you can read a plan."
+
+related = ["indexes", "postgres"]
+
+summary = ["**What this is:** every `term` entry from the course's pages, one definition each (a term defined on several pages shows its first definition and lists all the pages). Built from the pages as they stand now; a term added later appears here when this page is regenerated."]
+
+[[sections]]
+heading = "A"
+body = """
+**ACCESS EXCLUSIVE.** The strongest table lock, taken by most ALTER TABLE forms, DROP and VACUUM FULL; it conflicts with every other lock including a plain SELECT's, and later requests queue behind it. *Page: Long transactions and what they block.*
+
+**Access type.** MySQL's EXPLAIN column for how a table is read: const, eq_ref, ref, range, index, ALL. *Page: Equality, primary keys and checking index use.*
+
+**Advisory lock.** A lock on an application-chosen number that Postgres enforces but does not attach to any table or row. *Page: Row locks, job queues and deadlocks.*
+
+**Anti-join.** A join that keeps an outer row only if no inner row matches; what NOT EXISTS becomes. *Page: Subqueries: IN, EXISTS and NOT IN.*
+
+**Append.** The plan node that runs each of its children (here the partitions that survived pruning) and returns their rows in turn. *Page: Partitioning: what it speeds up and what it only moves.*
+
+**auto_explain.** A module that logs the execution plan of statements slower than a threshold, optionally with actual row counts and buffers. *Page: Monitoring: finding the slow query in a running system.*
+
+**Autovacuum.** The background launcher and workers that run VACUUM and ANALYZE on a table once its dead or inserted rows pass 50 plus 20% of the table, by default. *Page: The visibility map: when index-only scans lie; VACUUM, autovacuum and HOT updates.*
+"""
+
+[[sections]]
+heading = "B"
+body = """
+**Batches.** The number of pieces a hash join splits its inputs into when the hash table does not fit in work_mem; above 1 means temporary files. *Page: Joins: nested loop, hash and merge.*
+
+**Bind parameter.** A $1 placeholder whose value is sent separately from the SQL text. *Page: Functions, case-insensitive search and bind parameters; sqlx from Rust: binds, statement cache, pool size and plan assertions.*
+
+**Bitmap heap scan.** Collects matching TIDs from one or more indexes, sorts them by table page, then visits each page once. *Page: Equality, primary keys and checking index use; Ranges, LIKE and combining indexes.*
+
+**BitmapAnd / BitmapOr.** Combines the page bitmaps of several indexes in memory before the table is read. *Page: Ranges, LIKE and combining indexes.*
+
+**BitmapOr.** Unites the bitmaps of two indexes for an OR whose sides are both indexed. *Page: Conditions that hide a column.*
+
+**Bloat.** Space taken by dead row versions and the extra index entries they leave, which grows a table and its indexes beyond what the live rows need. *Page: MVCC: row versions, snapshots and bloat.*
+
+**BRIN.** A block range index: a min/max summary per run of table pages, tiny, and useful only when the column's values follow the table's physical order. *Page: Physical order: correlation, CLUSTER and BRIN.*
+
+**btree_gist.** A contrib extension giving GiST operator classes for ordinary scalar types (integers, text, timestamps) so they can share a GiST index with ranges or be used with = in an exclusion constraint. *Page: GiST: ranges, nearest neighbours and no double bookings.*
+
+**Buffers.** Pages a query touched, from memory (hit) or read from the OS (read). *Page: Anatomy of an index.*
+"""
+
+[[sections]]
+heading = "C"
+body = """
+**Case folding.** Mapping text to a form for case-insensitive comparison; ß folds to ss. *Page: Functions, case-insensitive search and bind parameters.*
+
+**Checkpoint.** The operation that writes all dirty pages to disk and sets the point from which crash recovery has to replay the WAL. *Page: The write-ahead log, commits and checkpoints.*
+
+**citext.** An extension type that compares text without regard to case. *Page: Functions, case-insensitive search and bind parameters.*
+
+**CLUSTER.** A command that rewrites a table in the order of one of its indexes, under an exclusive lock; the order is not maintained afterwards. *Page: Physical order: correlation, CLUSTER and BRIN.*
+
+**Clustered index.** A table stored as a B-tree on its primary key (InnoDB, SQLite). *Page: Anatomy of an index.*
+
+**Collation.** The rules a text index sorts by; only the byte-by-byte C collation lets Postgres turn a LIKE prefix into a range. *Page: Ranges, LIKE and combining indexes.*
+
+**Conflict with recovery.** A query on a standby that needs rows the primary has vacuumed away; the standby waits up to max_standby_streaming_delay and then cancels the query. *Page: Read replicas: lag, stale reads and query conflicts.*
+
+**Connection pool.** A set of already-open database connections that clients borrow and return, so opening a connection is not paid per request and the number of server processes stays bounded. *Page: Connections and pooling: how many is too many.*
+
+**COPY.** A bulk load and export command that streams rows in a compact format with no per-row statement, the fastest way to insert many rows. *Page: Batching writes: multi-row INSERT, UNNEST and COPY.*
+
+**Correlation.** A pg_stats value from -1 to 1 comparing a column's sort order with the physical order of the rows; the planner uses it to price index range scans. *Page: Equality, primary keys and checking index use; Physical order: correlation, CLUSTER and BRIN; Statistics: what the planner knows.*
+
+**Cost.** The planner's estimate of work in units of one sequential page read: startup..total, summed up the tree. *Page: Reading EXPLAIN.*
+
+**Cost constants.** The numbers the planner uses to price a plan: seq_page_cost, random_page_cost, cpu_tuple_cost and others; a model of the hardware, not a speed setting. *Page: When the planner is wrong.*
+
+**Covering index.** Any index holding every column one particular query touches, so that query can run as an index-only scan. *Page: Covering indexes and index-only scans.*
+
+**Covering index (SQLite).** An index that contains every column the query needs, so the plan says USING COVERING INDEX and the table is not read. *Page: SQLite: the same indexing rules in an embedded engine.*
+
+**ctid.** A row version's physical address, as (page, slot); it changes when an update writes a new version. *Page: MVCC: row versions, snapshots and bloat.*
+
+**Cursor.** The encoded key of the last row shown, handed to the client and sent back to ask for the next page. *Page: Pagination: OFFSET against keyset.*
+
+**Custom plan.** A plan made for one execution with its actual parameter values. *Page: Functions, case-insensitive search and bind parameters.*
+"""
+
+[[sections]]
+heading = "D"
+body = """
+**Dead but not yet removable.** Row versions VACUUM found dead but cannot remove because an older transaction might still see them; the sign of a long transaction, a slot or a prepared transaction. *Page: Long transactions and what they block.*
+
+**Deadlock.** A cycle of transactions each waiting for a lock another holds. Postgres detects it after deadlock_timeout and aborts one of them with SQLSTATE 40P01. *Page: Row locks, job queues and deadlocks.*
+
+**Declarative partitioning.** Postgres syntax (PARTITION BY RANGE, LIST or HASH) that defines a table as a set of child tables, each holding a part of the key space, with inserts routed automatically. *Page: Partitioning: what it speeds up and what it only moves.*
+
+**Detach partition.** ALTER TABLE ... DETACH PARTITION: turns a partition into an ordinary table, which can then be dropped or archived without scanning or deleting rows. *Page: Partitioning: what it speeds up and what it only moves.*
+
+**Detoast.** Fetching and decompressing a stored wide value to use its contents; the step that makes a query on a wide column expensive. *Page: TOAST: wide values, jsonb and SELECT *.*
+"""
+
+[[sections]]
+heading = "E"
+body = """
+**Embedding.** A list of numbers (a vector) produced by a model so that similar inputs map to nearby points; stored here in a `vector(n)` column. *Page: pgvector: nearest neighbours, HNSW and IVFFlat.*
+
+**enable_* settings.** Switches that mark a plan type (a seq scan, a nested loop) as disabled so the planner avoids it unless nothing else exists; for experiments in a session, never for production code. *Page: When the planner is wrong.*
+
+**enable_seqscan.** A planner setting that discourages Seq Scans for a session; for diagnosis only. *Page: Equality, primary keys and checking index use.*
+
+**Equality before range.** In a multi-column index, columns compared with = go first and the one range column last, so the range is a contiguous slice. *Page: Ranges, LIKE and combining indexes.*
+
+**Estimated vs actual rows.** The planner's guess against the real count, per node; a large gap is the first thing to look for. *Page: Reading EXPLAIN.*
+
+**excluded.** The pseudo-table inside ON CONFLICT DO UPDATE that holds the row that was proposed for insertion, so the update can use the new values. *Page: Upserts: ON CONFLICT and MERGE.*
+
+**Exclusion constraint.** A constraint declared with operators (EXCLUDE USING gist (room WITH =, during WITH &&)) saying no two rows may satisfy all of them at once; a generalization of UNIQUE. *Page: GiST: ranges, nearest neighbours and no double bookings.*
+
+**Expression index.** An index on the result of an expression, such as lower(email), computed when rows are written. *Page: Functions, case-insensitive search and bind parameters.*
+
+**Extended statistics.** CREATE STATISTICS: dependencies, distinct counts, most common combinations and expressions for several columns together. *Page: Statistics: what the planner knows.*
+"""
+
+[[sections]]
+heading = "F"
+body = """
+**Fanout.** How many downlinks an internal page holds; sets how slowly the tree grows deeper. *Page: Anatomy of an index.*
+
+**fastupdate.** A GIN storage parameter (on by default) that buffers new entries in a pending list and merges them into the index in bulk, making inserts cheaper and some reads slower. *Page: GIN indexes for arrays and jsonb.*
+
+**Fillfactor.** The percentage of each table or index page that inserts fill; the free rest is room for updated versions, and HOT updates depend on it. *Page: Anatomy of an index; VACUUM, autovacuum and HOT updates; What an index costs every write.*
+
+**Filter.** A condition checked on rows after they were fetched from the table. *Page: Access and filter conditions.*
+
+**FILTER clause.** A condition attached to an aggregate, such as count(*) FILTER (WHERE status = 'paid'), that restricts which rows that one aggregate sees. *Page: Aggregates: count, DISTINCT, FILTER, ROLLUP.*
+
+**Frame.** The rows around the current row that a window function sees, such as ROWS BETWEEN 6 PRECEDING AND CURRENT ROW. *Page: Window functions.*
+
+**Full-page image.** A whole 8 kB page copied into the WAL the first time it is changed after a checkpoint, to guard against torn page writes. *Page: The write-ahead log, commits and checkpoints.*
+"""
+
+[[sections]]
+heading = "G"
+body = """
+**Gather.** The plan node that starts parallel workers and collects their rows; Gather Merge keeps their sort order. *Page: Parallel query.*
+
+**Generic exclusion search.** ClickHouse's granule filter for a later sorting-key column. *Page: Multi-column indexes and column order.*
+
+**Generic plan.** A plan made without the parameter values, reused for every execution of a prepared statement. *Page: Functions, case-insensitive search and bind parameters; Partial indexes and NULL; When the planner is wrong.*
+
+**GIN.** Generalized Inverted Index: an index that maps each key extracted from a value (an array element, a jsonb key or value, a word) to the list of rows containing it. *Page: GIN indexes for arrays and jsonb.*
+
+**GiST.** Generalized Search Tree: an index whose nodes hold bounding regions, so it supports overlap, containment and distance searches that a b-tree cannot. *Page: GiST: ranges, nearest neighbours and no double bookings.*
+
+**Grain.** The level of detail one row of an aggregate represents (a day and a status here); finer grains can answer coarser questions but not the other way around. *Page: Materialized views: precompute, then manage the staleness.*
+
+**GroupAggregate.** Aggregation over input sorted by the group key, closing each group when the key changes; the alternative to HashAggregate. *Page: ORDER BY and GROUP BY from an index.*
+"""
+
+[[sections]]
+heading = "H"
+body = """
+**Half-open range.** Includes the start and excludes the end (>= a AND < b); consecutive ranges never share a row. *Page: Ranges, LIKE and combining indexes.*
+
+**Hash join.** A join that builds an in-memory hash table from one side and probes it with the other; needs an equality condition and work_mem. *Page: Joins: nested loop, hash and merge.*
+
+**Heap.** Postgres's table storage: rows in no particular order. *Page: Anatomy of an index.*
+
+**Heap fetch.** A table-page visit made during an index-only scan because the visibility map did not mark the page all-visible; EXPLAIN (ANALYZE) reports the count as Heap Fetches. *Page: The visibility map: when index-only scans lie.*
+
+**High key.** An upper bound for the keys on a leaf page, stored as its first entry. *Page: Anatomy of an index.*
+
+**Histogram.** Bounds that split the column's remaining values into buckets of equal row count (100 by default), used to estimate ranges. *Page: Statistics: what the planner knows.*
+
+**HNSW.** Hierarchical Navigable Small World: a multilayer graph of near neighbours searched greedily from the top layer down. Tuned with m, ef_construction and hnsw.ef_search. *Page: pgvector: nearest neighbours, HNSW and IVFFlat.*
+
+**HOT update.** Heap-only tuple update: the new row version stays on the same page and no index entries are added, which needs no indexed column to change and free space on the page. *Page: VACUUM, autovacuum and HOT updates; What an index costs every write.*
+
+**hot_standby_feedback.** A standby setting that tells the primary the oldest row version the standby's queries need, so the primary does not remove it; it prevents cancellations and can bloat the primary. *Page: Read replicas: lag, stale reads and query conflicts.*
+"""
+
+[[sections]]
+heading = "I"
+body = """
+**Idle in transaction.** The pg_stat_activity state of a session that has started a transaction and is waiting for the next command, holding its locks and any xid or snapshot. *Page: Long transactions and what they block; Monitoring: finding the slow query in a running system.*
+
+**idle_in_transaction_session_timeout.** A setting that terminates a session after it has been idle inside an open transaction for that long. *Page: Long transactions and what they block.*
+
+**idx_scan.** The number of times an index was scanned since statistics were last reset, from pg_stat_user_indexes; zero over a long, representative period marks an unused index. *Page: Equality, primary keys and checking index use; What an index costs every write.*
+
+**INCLUDE.** Index clause for payload columns stored in the leaf entries but not in the key: not searchable or sorted, not part of uniqueness. *Page: Covering indexes and index-only scans.*
+
+**Incremental sort.** A sort that uses an input already ordered on the first sort columns and sorts only within groups of equal values; can stop early with LIMIT. *Page: ORDER BY and GROUP BY from an index.*
+
+**Independence assumption.** The planner multiplies the selectivities of separate conditions as if the columns were unrelated. *Page: Statistics: what the planner knows.*
+
+**Index Cond.** The conditions a scan uses to navigate the index, as opposed to a Filter checked afterwards. *Page: Access and filter conditions; Equality, primary keys and checking index use.*
+
+**Index Scan Backward.** An index read from right to left, which serves ORDER BY ... DESC. *Page: Multi-column indexes and column order; ORDER BY and GROUP BY from an index.*
+
+**Index Searches.** How many times an index scan descended from the root (shown by Postgres 18). *Page: Access and filter conditions; Equality, primary keys and checking index use.*
+
+**Index-only scan.** A scan that answers the query from the index entries alone, without visiting the table, when every needed column is in the index and the pages are all-visible. *Page: Covering indexes and index-only scans; Multi-column indexes and column order.*
+
+**IS DISTINCT FROM.** A comparison that treats NULL as an ordinary value, so NULL IS DISTINCT FROM 1 is true and NULL IS DISTINCT FROM NULL is false; the safe way to test for a change. *Page: Upserts: ON CONFLICT and MERGE.*
+
+**IS NULL.** The test for an absent value; = NULL is never true. Indexable in Postgres B-trees. *Page: Partial indexes and NULL.*
+
+**Iterative index scan.** A pgvector 0.8.0 option that keeps scanning an approximate index until enough rows pass the query's filter, instead of stopping at the first ef_search or probes candidates. *Page: pgvector: nearest neighbours, HNSW and IVFFlat.*
+
+**IVFFlat.** Inverted file with flat storage: vectors grouped into k-means lists at build time, with only the probes nearest lists scanned at query time. Tuned with lists and ivfflat.probes. *Page: pgvector: nearest neighbours, HNSW and IVFFlat.*
+"""
+
+[[sections]]
+heading = "J"
+body = """
+**JIT.** Compiling a query's expressions to machine code with LLVM when its cost passes jit_above_cost. *Page: Parallel query.*
+
+**jsonb_path_ops.** A GIN operator class for jsonb that indexes a hash of each path and value together: smaller and faster for @>, but without key-exists operators. *Page: GIN indexes for arrays and jsonb.*
+"""
+
+[[sections]]
+heading = "K"
+body = """
+**Keyset pagination.** Paging by the last row's sort key (WHERE key > last ORDER BY key LIMIT n) instead of counting rows to skip; also called seek. *Page: Pagination: OFFSET against keyset.*
+"""
+
+[[sections]]
+heading = "L"
+body = """
+**LATERAL.** A join to a subquery that may refer to columns of the tables before it, so it runs once for each of their rows. *Page: The N+1 query problem.*
+
+**Leading prefix.** The first column, or first few, of a multi-column index; only these narrow a scan. *Page: Multi-column indexes and column order.*
+
+**Leaf page.** The bottom level of a B-tree, holding every key with its row's TID, in order. *Page: Anatomy of an index.*
+
+**lock_timeout.** A setting that makes a statement give up with an error after waiting that long for a lock, instead of waiting indefinitely. *Page: Row locks, job queues and deadlocks.*
+
+**Loops.** How many times a node ran; its rows and times are averages per run, so multiply by loops for totals. *Page: Reading EXPLAIN.*
+
+**Lossy bitmap.** A bitmap that keeps only page numbers for some matches because it outgrew work_mem; those pages are rechecked row by row. *Page: Access and filter conditions.*
+"""
+
+[[sections]]
+heading = "M"
+body = """
+**Materialized view.** A view whose query result is stored as a table and only updated by REFRESH MATERIALIZED VIEW. *Page: Materialized views: precompute, then manage the staleness.*
+
+**MERGE.** A statement (Postgres 15 and later) that joins a source to a target and runs UPDATE, DELETE or INSERT per matched or unmatched row, with conditions. *Page: Upserts: ON CONFLICT and MERGE.*
+
+**Merge join.** A join that walks two inputs sorted on the join key together; cheap when the order comes from indexes. *Page: Joins: nested loop, hash and merge.*
+
+**Most common values.** The frequent values of a column and their frequencies, kept in pg_stats. *Page: Equality, primary keys and checking index use.*
+
+**Most common values (MCV).** The list of a column's most frequent values with their frequencies; a value in it is estimated as frequency times row count. *Page: Statistics: what the planner knows.*
+
+**Multi-column index.** An index on several columns, sorted by the first, then by the next within ties. *Page: Multi-column indexes and column order.*
+
+**MVCC.** Multiversion concurrency control: updates and deletes create and stamp row versions instead of changing rows in place, so readers use a snapshot and never block on writers. *Page: MVCC: row versions, snapshots and bloat.*
+"""
+
+[[sections]]
+heading = "N"
+body = """
+**N+1 queries.** One query for a list followed by one query per item; cheap statements whose count, not their plan, is the cost. *Page: The N+1 query problem.*
+
+**Nearest-neighbour index scan.** An ordered index scan that returns rows by increasing distance from a given value, supported by GiST for the <-> operator, so ORDER BY ... LIMIT k does not need to score every row. *Page: Trigrams: LIKE '%x%', typos and nearest names.*
+
+**Nested loop.** A join that runs the inner side once for each row of the outer side; efficient with a small outer side and an index on the inner. *Page: Joins: nested loop, hash and merge.*
+
+**Nondeterministic collation.** A collation that can call different strings equal, such as one ignoring case. *Page: Functions, case-insensitive search and bind parameters.*
+
+**NULLS NOT DISTINCT.** A unique constraint option (Postgres 15) that treats NULLs as equal, so only one NULL is allowed. *Page: Partial indexes and NULL.*
+"""
+
+[[sections]]
+heading = "O"
+body = """
+**ON CONFLICT.** An INSERT clause naming a unique index or constraint and an action, DO NOTHING or DO UPDATE, to take atomically when the insert would violate it. *Page: Upserts: ON CONFLICT and MERGE.*
+
+**Operator family.** B-tree operator classes for compatible types, with cross-type operators such as int = bigint. *Page: Functions, case-insensitive search and bind parameters.*
+
+**Optimisation fence.** A boundary the planner will not push conditions across; a MATERIALIZED CTE is one. *Page: When the planner is wrong.*
+
+**Optional filter.** (col = $1 OR $1 IS NULL): one statement for 'filter if given'; correct for every input, indexed for none once the plan is generic. *Page: Conditions that hide a column.*
+"""
+
+[[sections]]
+heading = "P"
+body = """
+**Page.** The unit Postgres reads and writes: 8 KB, holding rows or index entries. *Page: Anatomy of an index.*
+
+**PARALLEL SAFE.** A function declaration saying it can run in a worker; without it a function forbids parallelism for the query that calls it. *Page: Parallel query.*
+
+**Partial and Finalize aggregate.** Each process aggregates the rows it saw (Partial); the leader combines those results (Finalize). *Page: Parallel query.*
+
+**Partial index.** An index with a WHERE clause that stores entries only for the rows satisfying it. *Page: Partial indexes and NULL.*
+
+**Partition pruning.** The planner skipping the partitions whose bounds show they cannot contain rows matching the query's condition on the partition key. *Page: Partitioning: what it speeds up and what it only moves.*
+
+**pg_stat_statements.** An extension that aggregates statistics (calls, time, buffers) per normalised statement across all executions. *Page: Monitoring: finding the slow query in a running system.*
+
+**pg_stats.** The catalog view of per-column statistics built by ANALYZE: null fraction, n_distinct, most common values, histogram, correlation. *Page: Statistics: what the planner knows.*
+
+**pgbench.** The benchmark tool shipped with Postgres: -S runs a select-only script, the default runs a read-write TPC-B-like one, -c sets the number of clients and -C reconnects for every transaction. *Page: Connections and pooling: how many is too many.*
+
+**Pipeline mode.** Sending several statements without waiting for each reply, so their round trips overlap. Supported by libpq and by drivers such as psycopg 3. *Page: Batching writes: multi-row INSERT, UNNEST and COPY.*
+
+**Plan assertion.** A test that runs EXPLAIN on a query and fails if the plan contains an unwanted node such as a Seq Scan or a Sort. *Page: sqlx from Rust: binds, statement cache, pool size and plan assertions.*
+
+**Plan node.** One operation in the plan tree (a scan, a join, a sort); it receives rows from its children and gives rows to its parent. *Page: Reading EXPLAIN.*
+
+**Posting list.** The sorted, compressed list of row pointers stored in a GIN index for one key. *Page: Anatomy of an index; GIN indexes for arrays and jsonb.*
+
+**Predicate implication.** The planner's proof that a query's WHERE guarantees the index's WHERE; without it a partial index is not used. *Page: Partial indexes and NULL.*
+
+**Prepared statement.** A statement the server has parsed and named, so later executions send only the name and the values; sqlx keeps these per connection in an LRU cache. *Page: sqlx from Rust: binds, statement cache, pool size and plan assertions.*
+
+**Primary key.** A unique, NOT NULL key, enforced by the index named <table>_pkey. *Page: Equality, primary keys and checking index use.*
+"""
+
+[[sections]]
+heading = "R"
+body = """
+**Range rewrite.** Replacing a function of the column (date_trunc, EXTRACT, ::date) by a pair of bounds on the bare column. *Page: Conditions that hide a column.*
+
+**Range scan.** One descent to the first matching entry, then a walk along the leaf pages until the first entry that no longer matches. *Page: Ranges, LIKE and combining indexes.*
+
+**Range type.** A value that is an interval, such as tstzrange; it supports && (overlaps), @> (contains) and the half-open [start, end) convention. *Page: GiST: ranges, nearest neighbours and no double bookings.*
+
+**Recall.** The share of the true nearest neighbours that an approximate search returns; 1.0 is exact search. Measured against the exact result for a sample of queries. *Page: pgvector: nearest neighbours, HNSW and IVFFlat.*
+
+**Recheck Cond.** The index condition repeated on the rows of a bitmap heap scan's pages. *Page: Access and filter conditions.*
+
+**Redundant index.** An index whose columns are a leading prefix of another index on the table. *Page: Multi-column indexes and column order.*
+
+**REFRESH MATERIALIZED VIEW CONCURRENTLY.** A refresh that leaves the old contents readable while the new ones are built, then applies the differences; requires a unique index on the view. *Page: Materialized views: precompute, then manage the staleness.*
+
+**reltuples.** The planner's stored estimate of a table's row count in pg_class, refreshed by VACUUM and ANALYZE. *Page: Aggregates: count, DISTINCT, FILTER, ROLLUP.*
+
+**Replication lag.** How far a replica's replayed position is behind the primary's, measured in bytes of WAL or in time (pg_stat_replication.replay_lag). *Page: Read replicas: lag, stale reads and query conflicts.*
+
+**ROLLUP.** A GROUP BY extension that also produces the subtotals for each prefix of the grouping columns and a grand total, in one pass. *Page: Aggregates: count, DISTINCT, FILTER, ROLLUP.*
+
+**Round trip.** One message from the client to the server and its reply. Each separate statement costs at least one, which is why many small statements are slow on a networked database. *Page: Batching writes: multi-row INSERT, UNNEST and COPY; The N+1 query problem.*
+
+**Row-value comparison.** Comparing tuples, (a, b) > (x, y), meaning a later position in the order a, b; usable as a single index condition. *Page: Pagination: OFFSET against keyset.*
+
+**rowid.** SQLite's hidden 64-bit row key; the table is a b-tree ordered by it, and an INTEGER PRIMARY KEY column is an alias for it. *Page: SQLite: the same indexing rules in an embedded engine.*
+
+**Rows Removed by Filter.** How many rows a node fetched and then rejected by its Filter, per loop; the waste meter. *Page: Access and filter conditions.*
+
+**Rule of thumb.** A simple guideline that holds under some conditions; check it against a plan before relying on it. *Page: Myths: five rules of thumb, checked against real plans.*
+
+**Run Condition.** A filter on row_number(), rank() or a growing count applied inside the WindowAgg, which stops emitting rows for a partition once it fails. *Page: Window functions.*
+"""
+
+[[sections]]
+heading = "S"
+body = """
+**Sargable.** A condition an index can serve: the bare indexed column or expression, compared with an operator of its class. *Page: Conditions that hide a column; Functions, case-insensitive search and bind parameters.*
+
+**Saturation.** The point where adding load no longer raises throughput because a resource (here the CPU cores) is fully used; beyond it latency rises instead. *Page: Connections and pooling: how many is too many.*
+
+**Selectivity.** The share of rows a condition matches; the planner estimates it from statistics. *Page: Equality, primary keys and checking index use.*
+
+**Semi-join.** A join that keeps an outer row if at least one inner row matches, stopping at the first; what IN and EXISTS become. *Page: Subqueries: IN, EXISTS and NOT IN.*
+
+**Setup.** A named entry in content/sql/setups.toml (an index to create, a table to build or a session setting) that a plan block lists, so a page always states what existed when the plan was captured. *Page: The example schema.*
+
+**similarity.** The pg_trgm measure, from 0 to 1, of the share of trigrams two strings have in common; the % operator tests it against pg_trgm.similarity_threshold. *Page: Trigrams: LIKE '%x%', typos and nearest names.*
+
+**SKIP LOCKED.** A locking-clause option that omits rows already locked by other transactions instead of waiting for them, used so parallel workers each take a different row from a queue. *Page: Row locks, job queues and deadlocks.*
+
+**Skip scan.** Postgres 18: an index used without a condition on its leading column, one search per value. *Page: Multi-column indexes and column order.*
+
+**Skip support.** A type's way to compute the next value, which lets a skip scan step directly. *Page: Multi-column indexes and column order.*
+
+**Slice.** The small, steadily queried subset of a table (pending, unassigned, live) that a partial index stores. *Page: Partial indexes and NULL.*
+
+**Staleness.** How far behind the live data a stored result is; a materialized view is as old as its last refresh. *Page: Materialized views: precompute, then manage the staleness.*
+
+**STORAGE (plain, main, extended, external).** The per-column TOAST policy: whether a value may be compressed and whether it may be moved out of the row. *Page: TOAST: wide values, jsonb and SELECT *.*
+
+**Streaming replication.** A standby server receives the primary's write-ahead log as it is written and replays it, staying a copy a short distance behind. *Page: Read replicas: lag, stale reads and query conflicts.*
+
+**SubPlan.** A subquery the planner could not turn into a join, run once per outer row (or hashed once, for NOT IN and ANY). *Page: Subqueries: IN, EXISTS and NOT IN.*
+
+**synchronous.** A SQLite pragma controlling how often it waits for data to reach disk; FULL is the default, NORMAL waits less and may lose recent commits on power failure in WAL mode. *Page: SQLite: the same indexing rules in an embedded engine.*
+
+**synchronous_commit.** The setting that decides whether COMMIT waits for its WAL to be flushed to disk; off trades the last few hundred milliseconds of commits for speed, without risking corruption. *Page: The write-ahead log, commits and checkpoints.*
+"""
+
+[[sections]]
+heading = "T"
+body = """
+**Text search configuration.** The language rules (parser, stop words, stemmer) used to build a tsvector or tsquery, such as english or simple; the index, column and queries must use the same one. *Page: Full text search: tsvector, GIN and ranking.*
+
+**text_pattern_ops.** An operator class that sorts text byte by byte, so LIKE 'abc%' can use the index in any collation. *Page: Ranges, LIKE and combining indexes; Trigrams: LIKE '%x%', typos and nearest names.*
+
+**TID / ctid.** A row's physical address: page number and slot. *Page: Anatomy of an index.*
+
+**TIMING OFF.** An EXPLAIN option that skips the per-row clock reads, removing most of ANALYZE's overhead. *Page: Reading EXPLAIN.*
+
+**TOAST.** The mechanism that compresses and moves values larger than about 2 kB to a hidden side table, chunked, so a row fits in a page; the row keeps a pointer. *Page: TOAST: wide values, jsonb and SELECT *.*
+
+**Top-N heapsort.** The sort Postgres uses with LIMIT: it keeps only the N best rows so far in a small heap instead of sorting everything. *Page: ORDER BY and GROUP BY from an index.*
+
+**Transaction pooling.** A pooler mode where a client holds a server connection only for the duration of a transaction, so a few connections serve many clients but session state does not persist. *Page: Connections and pooling: how many is too many.*
+
+**Trigram.** A sequence of three consecutive characters of a word (with the word padded by two spaces in front and one behind); pg_trgm represents a string as the set of its trigrams. *Page: Trigrams: LIKE '%x%', typos and nearest names.*
+
+**ts_rank.** A function that scores how well a tsvector matches a tsquery by word frequency and proximity; it is computed per matching row, so ranking cannot be answered from an index. *Page: Full text search: tsvector, GIN and ranking.*
+
+**tsquery.** A search expression of normalised words combined with &, |, ! and <-> (followed by), matched against a tsvector with @@. *Page: Full text search: tsvector, GIN and ranking.*
+
+**tsvector.** A document reduced to a sorted list of normalised words (lexemes) with their positions, the stored form full text search matches against. *Page: Full text search: tsvector, GIN and ranking.*
+"""
+
+[[sections]]
+heading = "U"
+body = """
+**Unique index.** A B-tree that rejects a second entry with the same key; constraints are built on it. *Page: Equality, primary keys and checking index use.*
+
+**unnest.** A function that turns arrays into rows; used with one array per column to insert, update or merge many rows with a fixed number of parameters. *Page: Batching writes: multi-row INSERT, UNNEST and COPY.*
+
+**UNNEST batching.** Binding one array per column and expanding them to rows with UNNEST, so any number of rows is inserted by one statement with a fixed number of parameters. *Page: sqlx from Rust: binds, statement cache, pool size and plan assertions.*
+
+**UUIDv7.** A UUID that starts with a timestamp, so new keys sort after older ones. *Page: Equality, primary keys and checking index use.*
+"""
+
+[[sections]]
+heading = "V"
+body = """
+**VACUUM.** The maintenance operation that removes dead row versions and their index entries, makes the space reusable, sets visibility map bits and freezes old rows, without blocking reads or writes. *Page: VACUUM, autovacuum and HOT updates.*
+
+**Visibility map.** A per-table bitmap with a bit per page that is set by VACUUM when every row on the page is visible to all transactions, and cleared by writes; index-only scans use it to skip the table. *Page: The visibility map: when index-only scans lie.*
+
+**Volatility.** Whether a function is immutable, stable or volatile; only immutable ones can be indexed. *Page: Functions, case-insensitive search and bind parameters.*
+"""
+
+[[sections]]
+heading = "W"
+body = """
+**Wait event.** What a backend is waiting for (a lock, I/O, the client), shown in pg_stat_activity as wait_event_type and wait_event. *Page: Monitoring: finding the slow query in a running system.*
+
+**WAL.** The write-ahead log: an append-only record of every change, flushed at commit before the data pages are written, and replayed after a crash. *Page: The write-ahead log, commits and checkpoints.*
+
+**WAL mode.** SQLite's write-ahead-log journal mode, where commits append to a log file and readers do not block the writer. *Page: SQLite: the same indexing rules in an embedded engine.*
+
+**WindowAgg.** The plan node that computes window functions over rows already sorted by partition and window order. *Page: Window functions.*
+
+**work_mem.** The memory a single sort, hash or aggregate may use before spilling to temporary files (4 MB by default). *Page: Reading EXPLAIN.*
+
+**Write amplification.** The extra bytes of log and disk work a write causes beyond the row itself, here from one entry in every index for each new row version. *Page: What an index costs every write.*
+"""
+
+[[checks]]
+prompt = "What is the difference between a buffer count and a time in a plan, and which do you compare between machines?"
+answer = "A buffer count is the number of 8 kB pages the query touched, which is the same on any run with the same data and plan; a time depends on the machine and the cache. Compare buffer counts."
+[[checks]]
+prompt = "What does an Index Only Scan need that an Index Scan does not?"
+answer = "An index that contains every column the query reads, and a visibility map that says most pages are all-visible, so it can skip the table."
+[[checks]]
+prompt = "Which two words in a plan tell you that the planner's row estimate was wrong?"
+answer = "The estimated rows= and the actual rows= on the same node; a large gap between them is the first thing to look at."
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
