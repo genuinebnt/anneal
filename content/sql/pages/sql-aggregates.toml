@@ -32,7 +32,7 @@ SELECT count(*) FROM orders;
 SELECT count(*) FROM orders;
 ```
 
-Three workers plus the leader: 75 ms, a `Gather` over four `Partial Aggregate`s. The second lever is the idea from module 7: count from an index, which is smaller than the table. The primary key is 43 MB against 117 MB for the table, and the planner will not choose it, so force it to see:
+Three workers plus the leader: 75 ms, a `Gather` over four `Partial Aggregate`s. The second lever is the idea from module 3: count from an index, which is smaller than the table. The primary key is 43 MB against 117 MB for the table, and the planner will not choose it, so force it to see:
 
 ```plan id=m19-count-index setup=no-seqscan,no-parallel
 SELECT count(*) FROM orders;

@@ -1,0 +1,133 @@
+{
+ "id": "m20-missing",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT customer_id, sum(total_cents), max(status) FROM orders WHERE customer_id BETWEEN 1 AND 500 GROUP BY customer_id;",
+ "setup": [
+  {
+   "id": "orders-customer-created-cover",
+   "sql": "CREATE INDEX orders_customer_created_cover ON orders (customer_id, created_at) INCLUDE (id, total_cents); VACUUM orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Hashed",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 16951.44,
+   "Total Cost": 17127.31,
+   "Plan Rows": 17587,
+   "Plan Width": 44,
+   "Actual Startup Time": 16.201,
+   "Actual Total Time": 16.295,
+   "Actual Rows": 500.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Group Key": [
+    "customer_id"
+   ],
+   "Planned Partitions": 0,
+   "HashAgg Batches": 1,
+   "Peak Memory Usage": 577,
+   "Disk Usage": 0,
+   "Shared Hit Blocks": 11113,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 750.72,
+     "Total Cost": 16788.79,
+     "Plan Rows": 21687,
+     "Plan Width": 14,
+     "Actual Startup Time": 3.511,
+     "Actual Total Time": 12.287,
+     "Actual Rows": 19834.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "((customer_id >= 1) AND (customer_id <= 500))",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 10991,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 11113,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "orders_customer_created_cover",
+       "Startup Cost": 0.0,
+       "Total Cost": 745.3,
+       "Plan Rows": 21687,
+       "Plan Width": 0,
+       "Actual Startup Time": 1.973,
+       "Actual Total Time": 1.973,
+       "Actual Rows": 19834.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "((customer_id >= 1) AND (customer_id <= 500))",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 122,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.104,
+  "Triggers": [],
+  "Execution Time": 16.53
+ },
+ "text": "HashAggregate  (cost=16951.44..17127.31 rows=17587 width=44) (actual time=15.926..16.026 rows=500.00 loops=1)\n  Group Key: customer_id\n  Batches: 1  Memory Usage: 577kB\n  Buffers: shared hit=11113\n  ->  Bitmap Heap Scan on orders  (cost=750.72..16788.79 rows=21687 width=14) (actual time=2.907..12.232 rows=19834.00 loops=1)\n        Recheck Cond: ((customer_id >= 1) AND (customer_id <= 500))\n        Heap Blocks: exact=10991\n        Buffers: shared hit=11113\n        ->  Bitmap Index Scan on orders_customer_created_cover  (cost=0.00..745.30 rows=21687 width=0) (actual time=1.410..1.410 rows=19834.00 loops=1)\n              Index Cond: ((customer_id >= 1) AND (customer_id <= 500))\n              Index Searches: 1\n              Buffers: shared hit=122\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.085 ms\nExecution Time: 16.084 ms"
+}

@@ -36,7 +36,7 @@ SELECT id, customer_id, created_at,
 FROM orders WHERE customer_id <= 200;
 ```
 
-The scan is now a bitmap index scan (6,133 heap blocks, 6,166 buffers instead of 14,960, about 13 ms), but there is **still a `Sort`**. The index could deliver the rows in the right order, but each row would then need a random heap fetch for `id` and `total_cents`; the planner decided a bitmap scan followed by a sort of 7,919 rows was cheaper. This is module 7's covering idea again: an index that holds every column the query touches turns the heap fetches into nothing.
+The scan is now a bitmap index scan (6,133 heap blocks, 6,166 buffers instead of 14,960, about 13 ms), but there is **still a `Sort`**. The index could deliver the rows in the right order, but each row would then need a random heap fetch for `id` and `total_cents`; the planner decided a bitmap scan followed by a sort of 7,919 rows was cheaper. This is module 3's covering idea again: an index that holds every column the query touches turns the heap fetches into nothing.
 
 ```plan id=m18-running-cover setup=orders-customer-created-cover,no-parallel
 SELECT id, customer_id, created_at,
