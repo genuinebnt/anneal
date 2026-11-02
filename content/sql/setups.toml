@@ -373,3 +373,19 @@ undo = "DROP TABLE ev_f;"
 id = "pa-part"
 sql = "CREATE TABLE ev_p (id bigint, ts timestamptz NOT NULL, device int, val int) PARTITION BY RANGE (ts); DO $$ DECLARE m date; BEGIN FOR k IN 0..23 LOOP m := date '2024-01-01' + (k || ' months')::interval; EXECUTE format('CREATE TABLE ev_p_%s PARTITION OF ev_p FOR VALUES FROM (%L) TO (%L)', to_char(m, 'YYYY_MM'), m, (m + interval '1 month')::date); END LOOP; END $$; INSERT INTO ev_p SELECT * FROM ev_f ORDER BY ts; CREATE INDEX ev_p_ts ON ev_p (ts); CREATE INDEX ev_p_device ON ev_p (device); VACUUM ANALYZE ev_p;"
 undo = "DROP TABLE ev_p;"
+
+# module 38 (materialized views): a private copy of the orders so refreshes and inserts never touch the example table
+[[setup]]
+id = "mv-src"
+sql = "CREATE TABLE ord_c AS SELECT * FROM orders; ALTER TABLE ord_c ADD PRIMARY KEY (id); ALTER TABLE ord_c SET (autovacuum_enabled = false); VACUUM ANALYZE ord_c;"
+undo = "DROP TABLE ord_c;"
+
+[[setup]]
+id = "mv-view"
+sql = "CREATE MATERIALIZED VIEW mv_daily AS SELECT date_trunc('day', created_at) AS day, status, count(*) AS orders, sum(total_cents) AS revenue_cents FROM ord_c GROUP BY 1, 2; CREATE UNIQUE INDEX mv_daily_pk ON mv_daily (day, status); ANALYZE mv_daily;"
+undo = "DROP MATERIALIZED VIEW mv_daily;"
+
+[[setup]]
+id = "mv-idx"
+sql = "CREATE INDEX ord_c_created ON ord_c (created_at); ANALYZE ord_c;"
+undo = "DROP INDEX ord_c_created;"

@@ -1,0 +1,110 @@
+title = "Materialized views: precompute, then manage the staleness"
+group = "sql-scale"
+order = 38
+minutes = 12
+lede = "A dashboard that sums two million orders by month does the same two seconds of work on every page load. A materialized view stores the result of that query as a table, so the page reads a few thousand rows instead. What you buy is speed; what you pay is that the stored answer is as old as the last refresh, and that refreshing it has its own cost and its own locking. This page measures all four: the speed-up, the staleness, the refresh time, and which refresh blocks readers."
+say = "On 2,000,000 orders, monthly revenue by status read 15,017 buffers and took 1,823 ms; the same answer from a materialized view of daily totals (2,400 rows, 368 kB against the 160 MB table with its index) read 32 buffers and took 0.95 ms. Where an index on the date already made the query narrow, the gain was smaller in kind: a one-week query read 11,911 buffers and 38 ms live against 17 buffers and 0.07 ms from the view. After 16 orders were changed, the view was 1,600 cents behind until refreshed. A plain REFRESH made a reader that arrived 300 ms in wait 281 to 404 ms for it to finish; REFRESH CONCURRENTLY let the same reader through in 2 ms. Both refreshes took between 0.6 and 1.2 s, because they recompute the whole query whatever changed."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a private copy `ord_c` of the 2,000,000-row `orders` table (so nothing here can touch the example data), and `mv_daily`, a materialized view: orders and revenue per day and status, 2,400 rows (`CREATE MATERIALIZED VIEW ... AS SELECT date_trunc('day', created_at), status, count(*), sum(total_cents) ... GROUP BY 1, 2`). Creating it took 896 ms. Postgres 18.6; `max_parallel_workers_per_gather = 0`.",
+  "**What it is:** a table that holds the stored result of a query. Reading it is an ordinary table read, and it can have indexes. It does not change when the underlying table changes, until `REFRESH MATERIALIZED VIEW`. (A normal view stores nothing and runs its query every time.)",
+  "**Speed, the whole history:** monthly revenue by status. Live from `ord_c`: a sequential scan and aggregate, **15,017 buffers, 1,823 ms**. From `mv_daily` (summing 2,400 daily rows): **32 buffers, 0.95 ms**. The view with its unique index is 368 kB; `ord_c` with its primary key is 160 MB.",
+  "**Speed, a narrow query:** the last week by day. With an index on `created_at`, live: **11,911 buffers, 38 ms** (the plan is a bitmap heap scan: the 13,000 or so recent orders are spread over many pages). From the view: **17 buffers, 0.07 ms**. The view still wins, but nothing like the 1,800 ms case; the value of a materialized view rises with the amount of data a query has to aggregate.",
+  "**Staleness:** `UPDATE ord_c` of 16 orders from the last days (+100 cents each). Live sum for the period: 131,378,472; the view: **131,376,872**, 1,600 behind. After `REFRESH MATERIALIZED VIEW` they matched. The view never says it is stale; the application must know how old a result it can accept.",
+  "**Refresh time:** plain refresh **971 and 1,108 ms** on two runs, `CONCURRENTLY` 1,153, 932 and 645 ms (and a further six runs timed inside the locking test between 582 and 965 ms). They are about equal and do not depend on how many rows changed: the cost is running the whole defining query again over 2,000,000 rows. WAL: 301 kB for a plain refresh; 45 kB for a concurrent one after 16 changed orders (it applies only the differences).",
+  "**Locking:** a plain `REFRESH` takes a lock that blocks even `SELECT`s from the view. A reader that started 300 ms into a refresh waited **281, 404 and 349 ms** (until the refresh ended); with `REFRESH MATERIALIZED VIEW CONCURRENTLY` the same read took **2 ms** each time, against 1.3 ms with no refresh running. Concurrent refresh needs a unique index on the view (here `(day, status)`), and takes more work per refresh in the general case; Postgres keeps the old contents readable while it builds the new ones and then applies the differences.",
+  "**Not measured here:** incremental refresh (Postgres has no built-in one; extensions and triggers exist and were not tried), views much larger than 2,400 rows, and a refresh scheduled under write load from the application.",
+]
+
+[[sections]]
+heading = "The same answer, stored"
+body = """
+The dashboard question is 'revenue per month and status over everything we have'. Run live on the 2,000,000-row copy:
+
+```plan id=m38-live-month setup=mv-src,no-parallel
+SELECT date_trunc('month', created_at) AS month, status, count(*), sum(total_cents) FROM ord_c GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+It reads the whole table, 15,017 buffers, and takes 1.8 seconds. No index helps: the query needs every row. The materialized view holds the answer at a finer grain (per day and status, 2,400 rows) and the query re-aggregates that:
+
+```plan id=m38-mv-month setup=mv-src,mv-view,no-parallel
+SELECT date_trunc('month', day) AS month, status, sum(orders), sum(revenue_cents) FROM mv_daily GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+32 buffers, 0.95 ms. Choosing the grain matters: daily rows can answer daily, weekly and monthly questions, a view of monthly totals could answer only monthly ones. The view is 368 kB; its source table with the primary key is 160 MB. Creating it cost one run of the original query (896 ms).
+
+A fair comparison also needs the case where the live query is already narrow. With an index on `created_at`, the last week by day:
+
+```plan id=m38-live-week setup=mv-src,mv-idx,no-parallel
+SELECT date_trunc('day', created_at) AS day, sum(total_cents) FROM ord_c WHERE created_at >= '2026-08-17' GROUP BY 1 ORDER BY 1;
+```
+
+```plan id=m38-mv-week setup=mv-src,mv-view,no-parallel
+SELECT day, sum(revenue_cents) FROM mv_daily WHERE day >= '2026-08-17' GROUP BY 1 ORDER BY 1;
+```
+
+11,911 buffers and 38 ms live, 17 buffers and 0.07 ms from the view. That is still a large ratio, but 38 ms may well be acceptable without a view at all, and a view you do not need is a refresh job and a staleness rule you do not need either.
+"""
+
+[[sections]]
+heading = "The price: the answer is old"
+body = """
+After 16 of the recent orders were changed (+100 cents each) the live total for the period was 131,378,472 and the view's was 131,376,872. It stays that way until someone runs `REFRESH MATERIALIZED VIEW mv_daily`, after which both were 131,378,472. Nothing marks a view as out of date, so the questions to settle before building one are how old an answer may be (a minute, an hour, a day), who runs the refresh and when, and what the page should say about the data's age. A common design is to show the time of the last refresh next to the figure.
+
+Refreshing costs about as much as creating: 971 and 1,108 ms for a plain refresh and 645 to 1,153 ms for a concurrent one, because both run the whole query again over all 2,000,000 rows, even when 16 rows changed. At a one-second refresh and one refresh a minute that is cheap; a view of a 2,000,000,000-row table would take a thousand times longer (an extrapolation, not a measurement), and then the refresh rate sets how fresh the answer can be.
+"""
+
+[[sections]]
+heading = "Refreshing without blocking readers"
+body = """
+A plain `REFRESH MATERIALIZED VIEW` replaces the contents under a lock that stops all reads. In the test a reader arrived 300 ms into a refresh and waited for the rest of it: 349, 404 and 281 ms in three runs (against 1.3 ms with no refresh running). For a view that refreshes in a second this is a hiccup; for a view that takes minutes it is an outage of the page.
+
+`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily` builds the new contents on the side and applies the differences while readers keep seeing the old ones: the same reader took 2 ms each time. It needs a unique index on the view (`CREATE UNIQUE INDEX mv_daily_pk ON mv_daily (day, status)`), according to the manual, and wrote 45 kB of WAL after 16 changed orders against 301 kB for the plain refresh. It was not slower in these runs, though in general it does extra work to compare old and new.
+"""
+
+[[checks]]
+prompt = "A product page shows 'orders this month' and loads in 1.8 s because it aggregates 2 million rows on each request. You create a materialized view of daily totals. What else must you decide before shipping it?"
+answer = "How stale the number may be and who refreshes it: the view does not update by itself, and after 16 changed orders the test view was 1,600 cents behind. Also the refresh method: a plain REFRESH blocked readers for the rest of its run (281 to 404 ms), CONCURRENTLY did not (2 ms) but needs a unique index. Show the last refresh time on the page."
+[[checks]]
+prompt = "Your materialized view refreshes in 1 second today. Which change to the data makes that refresh slower, and which does not?"
+answer = "Growth of the source data makes it slower, because a refresh reruns the whole defining query. The number of rows that changed since the last refresh does not matter: 16 changed rows cost about the same as the full run (645 to 1,153 ms for CONCURRENTLY in the test)."
+[[checks]]
+prompt = "When is a materialized view not worth adding?"
+answer = "When the live query is already narrow and fast (the one-week query with an index took 38 ms), or when users need the exact current figure. Each view adds a refresh job, a staleness rule and a lock to manage, and the speed-up is largest when the query must aggregate a huge number of rows (15,017 buffers against 32 in the test)."
+
+[[terms]]
+term = "Materialized view"
+means = "A view whose query result is stored as a table and only updated by REFRESH MATERIALIZED VIEW."
+section = "The same answer, stored"
+
+[[terms]]
+term = "Staleness"
+means = "How far behind the live data a stored result is; a materialized view is as old as its last refresh."
+section = "The price: the answer is old"
+
+[[terms]]
+term = "REFRESH MATERIALIZED VIEW CONCURRENTLY"
+means = "A refresh that leaves the old contents readable while the new ones are built, then applies the differences; requires a unique index on the view."
+section = "Refreshing without blocking readers"
+
+[[terms]]
+term = "Grain"
+means = "The level of detail one row of an aggregate represents (a day and a status here); finer grains can answer coarser questions but not the other way around."
+section = "The same answer, stored"
+
+[[sources]]
+title = "PostgreSQL: materialized views"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/rules-materializedviews.html"
+
+[[sources]]
+title = "PostgreSQL: REFRESH MATERIALIZED VIEW"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE MATERIALIZED VIEW"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-creatematerializedview.html"

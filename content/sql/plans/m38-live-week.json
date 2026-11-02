@@ -1,0 +1,166 @@
+{
+ "id": "m38-live-week",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT date_trunc('day', created_at) AS day, sum(total_cents) FROM ord_c WHERE created_at >= '2026-08-17' GROUP BY 1 ORDER BY 1;",
+ "setup": [
+  {
+   "id": "mv-src",
+   "sql": "CREATE TABLE ord_c AS SELECT * FROM orders; ALTER TABLE ord_c ADD PRIMARY KEY (id); ALTER TABLE ord_c SET (autovacuum_enabled = false); VACUUM ANALYZE ord_c;"
+  },
+  {
+   "id": "mv-idx",
+   "sql": "CREATE INDEX ord_c_created ON ord_c (created_at); ANALYZE ord_c;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Sorted",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 18142.42,
+   "Total Cost": 18600.14,
+   "Plan Rows": 22886,
+   "Plan Width": 16,
+   "Actual Startup Time": 33.447,
+   "Actual Total Time": 37.703,
+   "Actual Rows": 7.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Group Key": [
+    "(date_trunc('day'::text, created_at))"
+   ],
+   "Shared Hit Blocks": 11911,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Sort",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 18142.42,
+     "Total Cost": 18199.64,
+     "Plan Rows": 22886,
+     "Plan Width": 12,
+     "Actual Startup Time": 32.551,
+     "Actual Total Time": 34.872,
+     "Actual Rows": 23232.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Sort Key": [
+      "(date_trunc('day'::text, created_at))"
+     ],
+     "Sort Method": "quicksort",
+     "Sort Space Used": 1495,
+     "Sort Space Type": "Memory",
+     "Shared Hit Blocks": 11911,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Heap Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Relation Name": "ord_c",
+       "Alias": "ord_c",
+       "Startup Cost": 429.79,
+       "Total Cost": 16485.23,
+       "Plan Rows": 22886,
+       "Plan Width": 12,
+       "Actual Startup Time": 4.763,
+       "Actual Total Time": 27.305,
+       "Actual Rows": 23232.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Recheck Cond": "(created_at >= '2026-08-17 00:00:00+00'::timestamp with time zone)",
+       "Rows Removed by Index Recheck": 0,
+       "Exact Heap Blocks": 11845,
+       "Lossy Heap Blocks": 0,
+       "Shared Hit Blocks": 11911,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0,
+       "Plans": [
+        {
+         "Node Type": "Bitmap Index Scan",
+         "Parent Relationship": "Outer",
+         "Parallel Aware": false,
+         "Async Capable": false,
+         "Index Name": "ord_c_created",
+         "Startup Cost": 0.0,
+         "Total Cost": 424.07,
+         "Plan Rows": 22886,
+         "Plan Width": 0,
+         "Actual Startup Time": 2.651,
+         "Actual Total Time": 2.652,
+         "Actual Rows": 23232.0,
+         "Actual Loops": 1,
+         "Disabled": false,
+         "Index Cond": "(created_at >= '2026-08-17 00:00:00+00'::timestamp with time zone)",
+         "Index Searches": 1,
+         "Shared Hit Blocks": 66,
+         "Shared Read Blocks": 0,
+         "Shared Dirtied Blocks": 0,
+         "Shared Written Blocks": 0,
+         "Local Hit Blocks": 0,
+         "Local Read Blocks": 0,
+         "Local Dirtied Blocks": 0,
+         "Local Written Blocks": 0,
+         "Temp Read Blocks": 0,
+         "Temp Written Blocks": 0
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 4,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.142,
+  "Triggers": [],
+  "Execution Time": 37.929
+ },
+ "text": "GroupAggregate  (cost=18142.42..18600.14 rows=22886 width=16) (actual time=32.939..37.227 rows=7.00 loops=1)\n  Group Key: (date_trunc('day'::text, created_at))\n  Buffers: shared hit=11911\n  ->  Sort  (cost=18142.42..18199.64 rows=22886 width=12) (actual time=32.058..34.346 rows=23232.00 loops=1)\n        Sort Key: (date_trunc('day'::text, created_at))\n        Sort Method: quicksort  Memory: 1495kB\n        Buffers: shared hit=11911\n        ->  Bitmap Heap Scan on ord_c  (cost=429.79..16485.23 rows=22886 width=12) (actual time=4.962..27.086 rows=23232.00 loops=1)\n              Recheck Cond: (created_at >= '2026-08-17 00:00:00+00'::timestamp with time zone)\n              Heap Blocks: exact=11845\n              Buffers: shared hit=11911\n              ->  Bitmap Index Scan on ord_c_created  (cost=0.00..424.07 rows=22886 width=0) (actual time=2.812..2.812 rows=23232.00 loops=1)\n                    Index Cond: (created_at >= '2026-08-17 00:00:00+00'::timestamp with time zone)\n                    Index Searches: 1\n                    Buffers: shared hit=66\nPlanning:\n  Buffers: shared hit=4\nPlanning Time: 0.146 ms\nExecution Time: 37.477 ms"
+}
