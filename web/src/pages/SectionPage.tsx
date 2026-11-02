@@ -100,17 +100,7 @@ function useStored<T extends string>(key: string, initial: T): [T, (v: T) => voi
 }
 
 const TIER_LABEL: Record<Tier, string> = TIER;
-
-/** Five segments for how far through a track you are, as the mockup draws them. */
-function Segs({ row }: { row: Row }) {
-  const live = row.live;
-  const filled = live && live.total ? Math.round((live.solved / live.total) * 5) : 0;
-  return (
-    <div className="s-segs" title={live ? `${live.solved} of ${live.total} solved` : undefined}>
-      {row.state === "planned" ? null : Array.from({ length: 5 }, (_, k) => <i key={k} className={k < filled ? "s-f" : ""} style={{ "--k": k } as CSSProperties} />)}
-    </div>
-  );
-}
+const BANDS_ORDER: Band[] = ["easy", "medium", "hard"];
 
 function Tag({ row }: { row: Row }) {
   if (row.state === "cur") return <span className="s-tag s-now">NOW ON</span>;
@@ -146,6 +136,53 @@ function Foot({ row }: { row: Row }) {
   );
 }
 
+const BAND_NAME: Record<Band, string> = { easy: "easy", medium: "medium", hard: "hard" };
+
+/** One bar per stage, as wide as the stage is long and filled as far as you have solved, so the climb easy to hard reads at a glance. */
+function Stages({ live }: { live: TrackSummary }) {
+  const stages = live.stages.filter((s) => s.total > 0);
+  const mix = BANDS_ORDER.map((b) => [b, stages.filter((s) => s.band === b).reduce((n, s) => n + s.total, 0)] as const).filter(([, n]) => n > 0);
+  return (
+    <div className="s-stg">
+      <div className="s-sbars">
+        {stages.map((st) => (
+          <div key={st.slug} className="s-sb" style={{ flexGrow: st.total }} title={`${st.name} · ${BAND_NAME[st.band]} · ${st.solved} of ${st.total} solved`}>
+            <span className="s-sbt">
+              <i style={{ width: `${(st.solved / st.total) * 100}%`, background: BAND_COLOR[st.band] }} />
+            </span>
+            <small>
+              {st.name}
+              <b>
+                {st.solved}/{st.total}
+              </b>
+            </small>
+          </div>
+        ))}
+      </div>
+      <div className="s-mix">
+        {mix.map(([b, n]) => (
+          <span key={b} style={{ color: BAND_COLOR[b] }}>
+            {n} {BAND_NAME[b]}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Topics({ code }: { code: string }) {
+  const chips = (BLURB[code] ?? "").split(" \u00b7 ").map((t) => t.trim()).filter(Boolean).slice(0, 4);
+  // some blurbs are a sentence, not a list of ideas: no chips for those
+  if (chips.length < 2) return null;
+  return (
+    <div className="s-chips">
+      {chips.map((c) => (
+        <code key={c}>{c}</code>
+      ))}
+    </div>
+  );
+}
+
 function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean; blank: boolean }) {
   const live = row.live;
   const total = live?.total ?? row.planned;
@@ -162,10 +199,12 @@ function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean
       </div>
       <h4>{live?.name ?? row.name}</h4>
       <p dangerouslySetInnerHTML={{ __html: blank ? "" : marked.parseInline(live?.summary || BLURB[row.code] || "", { async: false }) }} />
+      <Topics code={row.code} />
       <div className="s-meta s-x">
-        <b>{total}</b> problems · {hours(minutesTotal(row))} · easy → hard{live && row.state !== "planned" && live.total > 0 ? <> · <b>{Math.round((live.solved / live.total) * 100)}%</b> solved</> : null}
+        <b>{total}</b> problems · {row.state === "done" ? hours(minutesTotal(row)) : `${hours(minutesLeft(row))} left`}
+        {live && row.state !== "planned" && live.total > 0 ? <> · <b>{Math.round((live.solved / live.total) * 100)}%</b> solved</> : <> · easy → hard</>}
       </div>
-      <Segs row={row} />
+      {live && row.state !== "planned" ? <Stages live={live} /> : null}
       <div className="s-foot">
         <Foot row={row} />
       </div>
@@ -182,41 +221,51 @@ function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean
   );
 }
 
-/** The recommended order as one rail: a node per track, coloured by where you are, each a link to its page. */
-function Roadmap({ rows }: { rows: Row[] }) {
+/** Where you are, grouped by area: a chip per track in the recommended order, coloured by state, each a link to its page. */
+function Roadmap({ rows, sections }: { rows: Row[]; sections: readonly Section[] }) {
   const done = rows.filter((r) => r.state === "done").length;
   const written = rows.filter((r) => r.state !== "planned").length;
   const pct = written ? Math.round((done / written) * 100) : 0;
   return (
-    <section className="s-card s-road s-rv" style={rise(5).style} aria-label="Roadmap">
-      <h5>
-        ROADMAP · RECOMMENDED ORDER
-        <b>{done} of {written} written tracks done · {pct}%</b>
-      </h5>
-      <ol>
-        {rows.map((r) => {
-          const live = r.live;
-          const p = live && live.total ? Math.round((live.solved / live.total) * 100) : 0;
-          const inner = (
-            <>
-              <i className={`s-dot s-d-${r.state}`} style={{ "--p": `${p}%` } as CSSProperties} />
-              <span className="s-rc">{r.code}</span>
-              <small>{r.state === "planned" ? "planned" : `${live?.solved ?? 0}/${live?.total ?? 0}`}</small>
-            </>
-          );
+    <section className="s-road s-rv" style={rise(5).style} aria-label="Roadmap">
+      <div className="s-flab">ROADMAP · {done} OF {written} WRITTEN TRACKS DONE · {pct}%</div>
+      <div className="s-rgroups">
+        {(sections.length > 1 ? sections : [null]).map((sec) => {
+          const rs = rows.filter((r) => !sec || sectionOf(r.code) === sec);
+          if (!rs.length) return null;
           return (
-            <li key={r.code} title={`${live?.name ?? r.name}${live && r.state !== "planned" ? ` · ${p}% solved` : " · not written yet"}`}>
-              {live && r.state !== "planned" ? (
-                <Link to="/t/$track" params={{ track: live.slug }}>
-                  {inner}
-                </Link>
-              ) : (
-                <span className="s-nolink">{inner}</span>
-              )}
-            </li>
+            <div key={sec ?? "all"} className="s-rg">
+              {sec && <span className="s-rn">{SECTION_NAMES[sec]}</span>}
+              <ol>
+                {rs.map((r) => {
+                  const live = r.live;
+                  const p = live && live.total ? Math.round((live.solved / live.total) * 100) : 0;
+                  const inner = (
+                    <>
+                      <i className={`s-dot s-d-${r.state}`} style={{ "--p": `${p}%` } as CSSProperties} />
+                      <span className="s-rc">{r.code}</span>
+                    </>
+                  );
+                  const tip = `${live?.name ?? r.name}${live && r.state !== "planned" ? ` · ${live.solved}/${live.total} solved` : " · not written yet"}`;
+                  return (
+                    <li key={r.code}>
+                      {live && r.state !== "planned" ? (
+                        <Link to="/t/$track" params={{ track: live.slug }} title={tip}>
+                          {inner}
+                        </Link>
+                      ) : (
+                        <span className="s-nolink" title={tip}>
+                          {inner}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
           );
         })}
-      </ol>
+      </div>
     </section>
   );
 }
@@ -505,7 +554,7 @@ export function SectionPage({ area }: { area: NavArea }) {
     <>
       {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
       {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
-      {!loading && rows.length > 0 && <Roadmap rows={rows} />}
+      {!loading && rows.length > 0 && <Roadmap rows={rows} sections={sections} />}
       <div className="s-tools">
         <label className="s-search">
           <span>⌕</span>
