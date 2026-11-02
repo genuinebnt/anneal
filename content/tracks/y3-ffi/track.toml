@@ -1,0 +1,21 @@
+code = "Y3"
+name = "FFI: C and Rust together"
+section = "Y"
+tier = "sde3"
+order = 3
+summary = "Crossing the C boundary safely: C strings and ownership, repr(C) layout, callbacks and panics, and a C-style API over a Rust object."
+
+[[stages]]
+slug = "use"
+name = "Use"
+band = "easy"
+
+[[stages]]
+slug = "understand"
+name = "Understand"
+band = "medium"
+
+[[stages]]
+slug = "build"
+name = "Build"
+band = "hard"

@@ -1,0 +1,32 @@
+slug = "cstring-boundary"
+title = "C strings across the boundary: who owns what"
+mode = "write"
+level = "easy"
+stage = "use"
+order = 1
+status = "ready"
+tags = ["FFI", "CString", "CStr", "NUL terminator", "into_raw / from_raw", "ownership", "extern \"C\""]
+teaches = [
+  "A C string is a pointer to bytes ending in NUL. Rust's `&str` has a length and may contain NULs, so `CString::new` can fail, and `CStr` is the borrowed view of someone else's string.",
+  "`CString::into_raw` gives ownership to C; it must come back through `CString::from_raw`, never `free`: memory goes back to the allocator that made it.",
+  "`strlen` counts bytes, not characters, and stops at the first NUL: the length of `\"h\\u{e9}llo\"` is 6.",
+]
+follow_up = "1) Write `fn with_c_str<R>(s: &str, f: impl FnOnce(*const c_char) -> R) -> Result<R, NulError>` and explain why a closure API is safer than returning the pointer. 2) Call `getenv` from libc and return `Option<String>`: who owns the result? 3) Write a function taking `*const *const c_char` (an `argv`-style array ending in null) and returning a `Vec<String>`. 4) What changes for Windows wide strings (`*const u16`)? 5) Fuzz `from_c` with random byte buffers that always end in NUL."
+related = ["Y2", "S2", "Y3"]
+
+[[hints]]
+kind = "approach"
+text = "`CString::new(s)` allocates the NUL-terminated copy and fails on an interior NUL. Its `.as_ptr()` is what C sees; the `CString` must outlive the call. For borrowed strings the other way, `CStr::from_ptr(p)` wraps the pointer without copying, and `to_string_lossy` makes an owned `String`."
+
+[[hints]]
+kind = "rust"
+text = "`into_raw` leaks the allocation on purpose and returns `*mut c_char`; `CString::from_raw` is its only correct partner. `CStr::from_bytes_until_nul(buf)` finds the terminator in a byte slice and returns an error if there is none."
+
+[[hints]]
+kind = "edge"
+text = "Never call C's `free` on a pointer from `CString::into_raw`: Rust may use a different allocator than C's `malloc`. Never keep `as_ptr()` of a temporary `CString` (`CString::new(s).unwrap().as_ptr()` dangles the moment the statement ends)."
+
+[solution]
+explanation = "The `CString`/`CStr` pair is the whole FFI story for text: owned vs borrowed, like `String`/`&str`. Every `bindgen`-generated wrapper and every `pyo3`/`napi` string conversion is built on these. The classic bug (the dangling `as_ptr()` of a temporary) compiles cleanly and works until the allocator reuses the memory."
+time = "O(n) for strlen and copies"
+space = "O(n)"

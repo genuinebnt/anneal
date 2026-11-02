@@ -1,0 +1,32 @@
+slug = "repr-c-header"
+title = "A #[repr(C)] header: layout, bytes and aliasing"
+mode = "write"
+level = "medium"
+stage = "use"
+order = 2
+status = "ready"
+tags = ["FFI", "repr(C)", "layout", "padding", "alignment", "offset_of", "read_unaligned", "zero-copy"]
+teaches = [
+  "`#[repr(C)]` fixes field order and padding to the C rules: `{u8, u32, u16}` is 12 bytes with align 4, not the 7 you get by adding sizes. Plain Rust structs may be reordered; only `repr(C)` is a stable ABI.",
+  "Padding bytes are not part of the value: building the byte image from a zeroed buffer (not by transmuting the struct) avoids leaking uninitialised memory.",
+  "Reading a struct from a byte slice is two different operations: `read_unaligned` copies from any address; a `&Header` pointing into the slice is only legal when the address is aligned.",
+]
+follow_up = "1) Add `#[repr(C, packed)]` and see why taking `&h.len` is an error (an unaligned reference). 2) Add a `Header2` with a `u64` field and compute its layout by hand before asking the compiler. 3) Write `view_slice(b: &[u8]) -> Option<&[Header]>` for an array of headers and decide what to do with trailing bytes. 4) Make the byte order explicit (big-endian, as on the wire) with `u32::from_be_bytes` and explain why `repr(C)` alone is not a wire format. 5) Add a `#[repr(C)] enum` field and show why reading arbitrary bytes into it is unsound."
+related = ["F2", "Y2", "Y3"]
+
+[[hints]]
+kind = "approach"
+text = "The layout rules: each field sits at the next multiple of its own alignment, and the struct's size is rounded up to a multiple of its largest field alignment. `offset_of!(Header, len)` and `size_of` give you the compiler's answer, so you never hard-code a number."
+
+[[hints]]
+kind = "rust"
+text = "`to_bytes`: start from `[0u8; 12]` and copy each field's `to_ne_bytes()` at its `offset_of!`. `from_bytes`: `std::ptr::read_unaligned(b.as_ptr() as *const Header)`. `view`: check `(b.as_ptr() as usize) % align_of::<Header>() == 0` before `&*(ptr as *const Header)`."
+
+[[hints]]
+kind = "edge"
+text = "`&*(ptr as *const Header)` on a misaligned address is **undefined behaviour** even on hardware that tolerates unaligned loads: the compiler may assume alignment and miscompile. For enums, `bool` or references inside the struct you would also need to validate the bit pattern; here every pattern is valid."
+
+[solution]
+explanation = "This is the core of zero-copy parsing (`zerocopy`, `bytemuck`) and of every C ABI binding. `repr(C)` is what makes a struct a stable interface; the padding rule is why serialising a struct with `transmute` can leak secrets (uninitialised padding), the classic information-disclosure bug in C network code."
+time = "O(1)"
+space = "O(1)"
