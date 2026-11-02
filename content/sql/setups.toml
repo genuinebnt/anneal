@@ -182,3 +182,8 @@ undo = "DROP FUNCTION plus1(int);"
 id = "plus1-safe"
 sql = "CREATE FUNCTION plus1(x int) RETURNS int LANGUAGE sql IMMUTABLE PARALLEL SAFE AS 'SELECT x + 1';"
 undo = "DROP FUNCTION plus1(int);"
+
+# module 13: joins
+[[setup]]
+id = "no-hash-nestloop"
+session = "SET enable_hashjoin = off; SET enable_nestloop = off;"
