@@ -187,3 +187,8 @@ undo = "DROP FUNCTION plus1(int);"
 [[setup]]
 id = "no-hash-nestloop"
 session = "SET enable_hashjoin = off; SET enable_nestloop = off;"
+
+# module 15: sorting and grouping
+[[setup]]
+id = "no-hashagg"
+session = "SET enable_hashagg = off;"

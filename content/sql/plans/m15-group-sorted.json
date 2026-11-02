@@ -1,0 +1,104 @@
+{
+ "id": "m15-group-sorted",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT customer_id, count(*) FROM orders GROUP BY customer_id;",
+ "setup": [
+  {
+   "id": "orders-customer-created-cover",
+   "sql": "CREATE INDEX orders_customer_created_cover ON orders (customer_id, created_at) INCLUDE (id, total_cents); VACUUM orders;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  },
+  {
+   "id": "no-hashagg",
+   "sql": "SET enable_hashagg = off;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Sorted",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 0.43,
+   "Total Cost": 88934.8,
+   "Plan Rows": 49437,
+   "Plan Width": 12,
+   "Actual Startup Time": 0.052,
+   "Actual Total Time": 452.562,
+   "Actual Rows": 50000.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Group Key": [
+    "customer_id"
+   ],
+   "Shared Hit Blocks": 11940,
+   "Shared Read Blocks": 112,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Only Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "orders_customer_created_cover",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 78440.43,
+     "Plan Rows": 2000000,
+     "Plan Width": 4,
+     "Actual Startup Time": 0.041,
+     "Actual Total Time": 263.997,
+     "Actual Rows": 2000000.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Heap Fetches": 0,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 11940,
+     "Shared Read Blocks": 112,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0",
+   "enable_hashagg": "off"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.103,
+  "Triggers": [],
+  "Execution Time": 455.498
+ },
+ "text": "GroupAggregate  (cost=0.43..88934.80 rows=49437 width=12) (actual time=0.026..377.829 rows=50000.00 loops=1)\n  Group Key: customer_id\n  Buffers: shared hit=12052\n  ->  Index Only Scan using orders_customer_created_cover on orders  (cost=0.43..78440.43 rows=2000000 width=4) (actual time=0.015..219.006 rows=2000000.00 loops=1)\n        Heap Fetches: 0\n        Index Searches: 1\n        Buffers: shared hit=12052\nPlanning Time: 0.099 ms\nExecution Time: 380.318 ms"
+}

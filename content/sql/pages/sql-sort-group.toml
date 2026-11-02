@@ -1,0 +1,200 @@
+title = "ORDER BY and GROUP BY from an index"
+group = "sql-shapes"
+order = 15
+minutes = 18
+lede = "A sort is the most expensive thing a simple query does, and an index is sorted already. When the order an index keeps matches the order a query asks for, Postgres reads the rows in that order and stops after the first few, so a 'latest 20' query touches 20 rows instead of 2,000,000. This page measures that, then what happens when the order is only partly right (incremental sort), when it is reversed or mixed, where NULLs go, and how GROUP BY uses the same trick."
+say = "An index that matches the query's ORDER BY lets Postgres skip the sort and, with LIMIT, read only the first rows; ASC or DESC alone never matters (an index reads backward), but a mix of directions, or NULLS FIRST against an index's default, does. Without LIMIT an index does not make a full sort cheap, and a partly matching index gives an incremental sort."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Top-N from an index**: `ORDER BY created_at DESC LIMIT 20` read all 2,000,000 rows and kept a 20-row heap in **500 to 600 ms**; with an index on `created_at` it read 20 index entries in **0.2 ms**. The `Sort` node vanished.",
+  "The index helps because of `LIMIT`, not because it is an index. Without a limit the same ordering of all 2,000,000 rows took about 1.3 s with a sort and about 1.6 s following the index (medians of 5 runs) (random table visits), and the planner chose the index.",
+  "Direction alone costs nothing: an index on `(created_at)` serves `ASC` and `DESC` (the node is `Index Scan Backward`). **Mixed directions** (`customer_id ASC, created_at DESC`) and a different `NULLS` position need a sort or an index built in that order.",
+  "**Incremental sort** (Postgres 13+): when the index delivers the first sort column in order, Postgres sorts only within each group of equal values and, with `LIMIT`, stops early: `ORDER BY customer_id, total_cents LIMIT 50` took 0.1 ms.",
+  "**GROUP BY** can also use order: a `GroupAggregate` over an index-only scan finishes each group as it goes and returns the first groups at once (`LIMIT 10`: 0.1 ms) while the `HashAggregate` that the planner prefers for all groups takes 520 to 660 ms.",
+]
+
+[[sections]]
+heading = "A sort versus an index"
+body = """
+The query behind every 'latest' list in an application:
+
+```plan id=m15-sort-top setup=no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at DESC LIMIT 20;
+```
+
+Without an index on `created_at` the only way to find the 20 newest rows is to look at every row: a Seq Scan of 2,000,000 rows feeds a **Sort** with `Sort Method: top-N heapsort  Memory: 26kB`. Postgres is smart about the `LIMIT`: it keeps only a 20-row heap instead of sorting everything, so the memory is tiny. The time is not: 500 to 600 ms, all of it spent reading the table.
+
+With an index on `created_at`:
+
+```plan id=m15-index-top setup=orders-created-day,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at DESC LIMIT 20;
+```
+
+The `Sort` is gone. An **Index Scan Backward** walks the index from its high end (a B-tree leaf level is a doubly linked list, module 1), the rows come out already in order and the `Limit` stops the scan after 20 rows. 0.2 ms: the work no longer depends on the table size. This is the plan to look for in every list ordered by a date or a counter, and the reason that a query that 'worked fine for a year' goes bad when the table has grown: a sort of N rows grows with N, a `LIMIT` read from an index does not.
+
+> [!NOTE]
+> `ASC` and `DESC` on a single column are the same index. A B-tree can be read in either direction, so `CREATE INDEX ... (created_at)` serves both `ORDER BY created_at` and `ORDER BY created_at DESC`. Direction matters only when columns are mixed, below.
+"""
+
+[[sections]]
+heading = "Without a LIMIT, the index is not a shortcut"
+body = """
+The same ordering of the whole table, first with no index to use:
+
+```plan id=m15-full-sort setup=no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at DESC;
+```
+
+An **external merge** sort: 2,000,000 rows (51 MB) do not fit in `work_mem`, so the sort spills to a temporary file (module 8); about 1.3 s. And with the index available:
+
+```plan id=m15-full-index setup=orders-created-day,no-parallel
+SELECT id, created_at FROM orders ORDER BY created_at DESC;
+```
+
+The planner chose the index, which avoids the sort, and it was not faster: about 1.6 s (median of 5 runs, against 1.3 s for the sort). The index delivers the rows in order, but the *table* is not in that order (the example loads orders in random date order, module 10's correlation of -0.01), so reading the rows in index order visits table pages in random order, again and again. An index gives the order for free; it does not make reading all of the rows cheap. The takeaway is about the LIMIT: an ordered read pays when it stops early. If you need all the rows in order, you are paying for the sort or for the random reads, and a covering index (module 20) is what removes the table from it.
+"""
+
+[[sections]]
+heading = "Multi-column order, mixed directions and incremental sort"
+body = """
+Take the module 3 index, `(customer_id, created_at)`. It delivers rows ordered by customer, and within a customer by date. A query for the orders of customers 1000 to 1100, ordered by customer and then newest first:
+
+```plan id=m15-mixed setup=orders-customer-created,no-parallel
+SELECT id FROM orders WHERE customer_id BETWEEN 1000 AND 1100
+ORDER BY customer_id, created_at DESC LIMIT 50;
+```
+
+The index has `created_at` ascending and the query wants it descending *within* each customer, so the index order is not the requested order. Reading it backward would reverse `customer_id` too. Postgres 13 and later has a middle path, **Incremental Sort**: `Presorted Key: customer_id` says the input already arrives in `customer_id` order; Postgres sorts each group of equal customers by `created_at DESC` as a small independent sort (`Full-sort Groups: 2`), and with the `LIMIT` it stops after the first groups that fill 50 rows. 0.2 ms, with no index built for this ordering. A sort over only the 87 rows it needed, instead of all the matching rows.
+
+The same node serves a query whose second sort column is not in the index at all:
+
+```plan id=m15-incremental setup=orders-customer-created,no-parallel
+SELECT id FROM orders ORDER BY customer_id, total_cents LIMIT 50;
+```
+
+The first column comes from the index, `total_cents` is sorted in small groups, 54 rows read, 0.1 ms. Without an index starting on `customer_id` this is the 500 ms top-N sort again.
+
+To make a mixed order a pure index read, build the index in that order: `CREATE INDEX ON orders (customer_id ASC, created_at DESC)`. Do it when the query is hot and the incremental sort's groups are large (many orders per customer); for a handful of rows per group the incremental sort is already close to free.
+"""
+
+[[sections]]
+heading = "NULLS FIRST and NULLS LAST"
+body = """
+In a B-tree, NULLs sort as larger than every value: last in an ascending index and first in a descending one. A query that asks for the opposite placement does not match the index's order. With the `tickets` table of module 6 (every 50th ticket unassigned):
+
+```plan id=m15-nulls-default setup=tickets,tickets-assignee,no-parallel
+SELECT id FROM tickets ORDER BY assignee_id LIMIT 10;
+```
+
+`ORDER BY assignee_id` is `ASC NULLS LAST` by default and matches: an index scan, 10 rows. Ask for the NULLs first:
+
+```plan id=m15-nulls-first setup=tickets,tickets-assignee,no-parallel
+SELECT id FROM tickets ORDER BY assignee_id NULLS FIRST LIMIT 10;
+```
+
+The index cannot serve this order, so Postgres reads the whole table and sorts (a top-N heapsort over 500,000 rows, about 130 ms against 0.03). The fix is an index declared with the order the query uses, `CREATE INDEX ON tickets (assignee_id NULLS FIRST)`. If the application's order is 'unassigned first' that is a better match than sorting at every request. MySQL treats NULL as the smallest value (first in ascending order) and has no `NULLS FIRST` syntax; SQLite also sorts NULLs first and supports `NULLS FIRST/LAST` since 3.30. From their documentation; not run here.
+"""
+
+[[sections]]
+heading = "GROUP BY and order"
+body = """
+Grouping needs rows with equal keys together, and there are two ways to get them. The planner's usual choice for all the groups of a large table is a **HashAggregate**: one pass, a hash table of groups.
+
+```plan id=m15-group-hash setup=no-parallel
+SELECT customer_id, count(*) FROM orders GROUP BY customer_id;
+```
+
+520 to 660 ms (runs vary on this machine) for 2,000,000 rows into 50,000 groups. The other way is to read the rows already sorted by the group key and close each group as the key changes, a **GroupAggregate**. With a covering index (module 20) that holds `customer_id` in order, it needs no table access:
+
+```plan id=m15-group-sorted setup=orders-customer-created-cover,no-parallel,no-hashagg
+SELECT customer_id, count(*) FROM orders GROUP BY customer_id;
+```
+
+An Index Only Scan with `Heap Fetches: 0` feeds the `GroupAggregate`; 380 to 455 ms here, a little faster than the hash for the whole table, and the planner does not choose it by default because it costs it slightly higher (we switched hash aggregation off to see it). The reason to care is a query that wants only the first groups:
+
+```plan id=m15-group-limit setup=orders-customer-created-cover,no-parallel
+SELECT customer_id, count(*) FROM orders GROUP BY customer_id ORDER BY customer_id LIMIT 10;
+```
+
+The `GroupAggregate` produces its first group as soon as the key changes, and the `Limit` stops everything after 10 groups: 353 index entries read, 0.1 ms. A `HashAggregate` cannot do this, because it has to see every row before any group is final. The rule is the one for sorts: order from an index pays when the query stops early, and for a whole-table aggregate the hash is right.
+"""
+
+[[sections]]
+heading = "In real code"
+body = """
+Keyset-style lists and 'latest N' queries should name the index they rely on in a comment, so the next person to change the ordering does not silently bring the sort back. A test that checks the plan has no Sort node (module 41 has the helper) catches it:
+
+```sql title=latest_orders.sql
+-- needs: CREATE INDEX orders_customer_created ON orders (customer_id, created_at)
+-- the plan must be an Index Scan Backward with no Sort node
+SELECT id, total_cents, created_at FROM orders
+WHERE customer_id = $1
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+And when the sort is unavoidable (an `ORDER BY` on an expression, a search by relevance), keep the result small before the sort: filter first, select only the columns you need, and give the session enough `work_mem` that the sort stays in memory (module 8).
+"""
+
+[[checks]]
+prompt = "An 'activity feed' query, ORDER BY created_at DESC LIMIT 20, takes 500 ms on a 2-million-row table and 5 s on 20 million. What does the plan contain, and what is the fix?"
+answer = "A Seq Scan feeding a Sort (top-N heapsort): every row is read to find the newest 20, so the time grows with the table. Create an index on created_at; the plan becomes an Index Scan Backward with a Limit and no Sort, reading 20 entries whatever the table size (0.2 ms here). DESC does not need a special index because a B-tree reads either way."
+
+[[checks]]
+prompt = "With an index on created_at, SELECT ... ORDER BY created_at DESC (no LIMIT) was not faster than a plain sort here. Why?"
+answer = "The index gives the rows in order without a sort, but the table is not in created_at order, so following the index visits the table's pages at random, repeatedly, for all 2,000,000 rows (about 1.6 s against 1.3 s for the sort). An index pays when the query stops early with LIMIT, or when it covers the query so the table is not read at all."
+
+[[checks]]
+prompt = "ORDER BY customer_id, created_at DESC LIMIT 50 with an index on (customer_id, created_at) shows Incremental Sort and Presorted Key: customer_id. What does that tell you and do you need a new index?"
+answer = "The index delivers customer_id in order but created_at in the opposite direction to the query, so Postgres sorts created_at DESC within each customer's rows and stops once it has 50 rows. With few orders per customer it is already cheap and you need no new index; with huge groups, build (customer_id, created_at DESC) so no sort is needed at all."
+
+[[checks]]
+prompt = "Why can GROUP BY customer_id ORDER BY customer_id LIMIT 10 return in 0.1 ms through a GroupAggregate when the full aggregation takes 520 ms?"
+answer = "A GroupAggregate over an index in customer_id order finishes each group when the key changes, so the first 10 groups are ready after reading a few hundred entries, and the Limit stops there. A HashAggregate must read every row before any group is complete, so it cannot stop early."
+
+[[terms]]
+term = "Top-N heapsort"
+means = "The sort Postgres uses with LIMIT: it keeps only the N best rows so far in a small heap instead of sorting everything."
+section = "A sort versus an index"
+
+[[terms]]
+term = "Index Scan Backward"
+means = "Reading a B-tree from its high end, giving descending order from an ascending index."
+section = "A sort versus an index"
+
+[[terms]]
+term = "Incremental sort"
+means = "A sort that uses an input already ordered on the first sort columns and sorts only within groups of equal values; can stop early with LIMIT."
+section = "Multi-column order, mixed directions and incremental sort"
+
+[[terms]]
+term = "GroupAggregate"
+means = "Aggregation over input sorted by the group key, closing each group when the key changes; the alternative to HashAggregate."
+section = "GROUP BY and order"
+
+[[sources]]
+title = "PostgreSQL: indexes and ORDER BY"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-ordering.html"
+
+[[sources]]
+title = "PostgreSQL 13 release notes: incremental sorting"
+kind = "docs"
+url = "https://www.postgresql.org/docs/13/release-13.html"
+
+[[sources]]
+title = "PostgreSQL: using EXPLAIN (sort and aggregate nodes)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/using-explain.html"
+
+[[sources]]
+title = "Use The Index, Luke: indexing ORDER BY"
+kind = "guide"
+url = "https://use-the-index-luke.com/sql/sorting-grouping"
+
+[[sources]]
+title = "SQLite: ORDER BY with NULLS FIRST and LAST"
+kind = "docs"
+url = "https://www.sqlite.org/lang_select.html#orderby"
