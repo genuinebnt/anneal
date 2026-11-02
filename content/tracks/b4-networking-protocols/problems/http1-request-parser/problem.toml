@@ -1,0 +1,32 @@
+slug = "http1-request-parser"
+title = "A strict, incremental HTTP/1.1 request parser"
+mode = "write"
+level = "hard"
+stage = "build-it"
+order = 3
+status = "ready"
+tags = ["HTTP/1.1", "parser", "Content-Length", "chunked", "request smuggling", "limits", "incremental", "pipelining"]
+teaches = [
+  "How a request is framed on the wire: request line, headers, blank line, then a body delimited by `Content-Length` or `chunked`.",
+  "Why strictness is a security feature: a space before the colon, two `Content-Length`s, or both framing headers are how request smuggling works.",
+  "Limits that fire early (head size, header count, body size from the announced length), so a slow or hostile peer cannot make the server buffer without bound.",
+]
+follow_up = "1) Make the parser resumable (a state enum: `RequestLine`, `Headers`, `BodyFixed(n)`, `BodyChunked(...)`) so each byte is examined once. 2) Add `Expect: 100-continue`, absolute-form targets and `Host` validation for HTTP/1.1 (a missing `Host` is an error). 3) Write the response side: status line, `Content-Length`, `Connection: close` / keep-alive rules for 1.0 vs 1.1. 4) Fuzz it with `cargo fuzz` or a property test comparing against `httparse` on random bytes: what do you find? 5) Plug it into the length-prefixed decoder pattern: write a `tokio_util::codec::Decoder` impl and a toy server using the C5 executor."
+related = ["B5", "S9", "F7"]
+
+[[hints]]
+kind = "approach"
+text = "Find `\\r\\n\\r\\n`; no terminator means incomplete (but already an error if the buffer exceeds `max_head`). Split the head into lines: request line, then headers. Decide the body framing from the headers (reject both / conflicting), then see whether the whole body is in the buffer; only when it is, drain exactly the request's bytes."
+
+[[hints]]
+kind = "rust"
+text = "`str::split(\"\\r\\n\")` for lines, `split_once(':')` for a header, `bytes().all(is_token_char)` to validate names (a space or tab before the colon fails it, which is exactly the point). For lengths use `all(|b| b.is_ascii_digit())` *and then* `parse::<usize>()`: `parse` alone accepts a leading `+`. A helper `parse_chunked(buf) -> Result<Option<(body, used)>>` keeps the state machine out of the main function."
+
+[[hints]]
+kind = "edge"
+text = "Return `Ok(None)` without consuming anything while a request is incomplete, so the next `feed` re-parses from the start (O(n²) worst case: a follow-up). Apply `max_body` from the announced `Content-Length` or chunk size, before the data is here. A request with no `Content-Length` and no chunking has an empty body."
+
+[solution]
+explanation = "This is what `httparse` + `hyper` do (hyper is pickier still, and rejects every case here). Request smuggling is the attack where a front proxy and a back end disagree about where a request ends; it needs exactly one of: whitespace-before-colon, duplicate `Content-Length`, or `Content-Length` plus `Transfer-Encoding`. Parsers that are strict, bounded and incremental are the single biggest defence for an internet-facing Rust service."
+time = "O(n) per call (re-parse), O(n) total with a resumable state machine"
+space = "O(max_head + max_body)"
