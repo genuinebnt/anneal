@@ -10,7 +10,7 @@ import { Level, ModeTag, StatusIcon, pad2, pctColor, progressLabel } from "../co
 import { Opt } from "../components/filterBits";
 import { Page3, Panel, ReadingPath, RingTile, Tile, type PathStep } from "../components/layout";
 import { MockRoot } from "../components/mock";
-import { FollowUps, Fold, Teaches } from "../components/trackBits";
+import { FollowUps, Fold, PhaseBar, PhaseTag, Teaches, TestResults } from "../components/trackBits";
 import { BLURB, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
 import { TRACK_SLUGS } from "../trackSlugs";
 
@@ -315,6 +315,7 @@ export function TrackPage({ slug }: { slug: string }) {
       <section className="s-card">
         <h5>THE PATH</h5>
         <p className="rt-lead" dangerouslySetInnerHTML={{ __html: marked.parseInline(t.summary || BLURB[t.code] || "", { async: false }) as string }} />
+        <PhaseBar stages={t.stages} />
         <ReadingPath steps={steps} />
       </section>
       {t.stages.map((s, si) => {
@@ -325,6 +326,7 @@ export function TrackPage({ slug }: { slug: string }) {
             <div className="rt-sh">
               <span className="rt-sn">{pad2(si + 1)}</span>
               <h3>{s.name}</h3>
+              <PhaseTag stage={s} />
               <Level level={s.band} />
               <small>{s.solved}/{s.total} solved</small>
               <button className="s-ghost" onClick={() => toProblems(s.slug)}>list ›</button>
@@ -353,6 +355,7 @@ export function TrackPage({ slug }: { slug: string }) {
                       <FollowUps text={d.follow_up} label={d.mode === "fix" ? "ASKED AS" : "INTERVIEW FOLLOW-UP"} compact />
                     </Fold>
                   )}
+                  {d && d.runs.length > 0 && <TestResults run={d.runs[d.runs.length - 1]!} />}
                   {d && d.related.length > 0 && (
                     <div className="rt-rel">
                       related:{" "}
