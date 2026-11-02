@@ -1,0 +1,169 @@
+title = "Full text search: tsvector, GIN and ranking"
+group = "sql-special"
+order = 33
+minutes = 15
+lede = "LIKE can find a substring, but it reads every row to do it and knows nothing about words. Postgres has a second kind of text search that does: it reduces each document to a sorted list of normalised words (a tsvector), reduces the query the same way, and answers 'which documents contain these words' from a GIN index. This page measures it on 200,000 documents against LIKE and against the same search done without a stored column, then shows the cost of ranking and what the GiST alternative gives up."
+say = "On 200,000 documents (a table of 28,696 pages) a search for a word in 200 of them read the whole table with ILIKE (28,696 buffers, 774 ms) and with to_tsvector computed per row (the same buffers, 8,031 ms); against a stored tsvector with a GIN index it read 203 buffers in 0.12 ms, and 'postgres & index' (50 rows) 61 buffers. A word in 10,050 documents read 10,026 buffers (8 ms), and ranking the top 10 of them read the same 10,026 (17 ms) because every match must be scored before any can be ranked. GiST was larger (51 MB against 37), took 2.5 times as long to build and read 1,455 buffers for the rare word against 203."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** a throwaway table `ft_t` of 200,000 documents (371 bytes of text each, 60 words from a skewed vocabulary of 3,000 invented words, so a few words are in most documents) with a stored generated column `tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', body)) STORED`. The word `postgres` is in 200 documents, `index` in 10,050 and both in 50. The `simple` configuration does no stemming, so the words are the words. Postgres 18.6; `max_parallel_workers_per_gather = 0`.",
+  "**What a tsvector is:** the document lowercased, split into tokens, stop words and (with a language configuration) suffixes removed, sorted, with positions: `to_tsvector('english', 'The running dogs ran quickly to the Indexes')` gives `'dog':3 'index':8 'quick':5 'ran':4 'run':2`; with `'simple'` it keeps `'dogs':3 'indexes':8 'running':2 'the':1,7 ...`. A `tsquery` is built the same way: `to_tsquery('english', 'running & !dog')` is `'run' & !'dog'`. `@@` tests whether a tsvector matches a tsquery.",
+  "**Without an index:** `body ILIKE '%postgres%'`: **28,696 buffers, 774 ms** for 200 rows. `to_tsvector('simple', body) @@ to_tsquery('simple', 'postgres')` computed per row: the same 28,696 buffers and **8,031 ms**, ten times slower than `ILIKE`, because parsing 200,000 documents is the cost. Never put `to_tsvector` in a query without an index on the same expression.",
+  "**Stored tsvector and GIN:** the same search, 200 rows: **203 buffers (3 in the index, 200 table pages), 0.12 ms**. `postgres & index` (50 rows): **61 buffers, 0.13 ms**, the posting lists intersected in the index (module 32). A word in 10,050 documents (5%): **10,026 buffers, 8.1 ms**, because 10,050 matches are spread over nearly as many pages.",
+  "**Ranking:** `ORDER BY ts_rank(tsv, q) DESC LIMIT 10` over the 10,050 documents containing `index` read **10,026 buffers, 17 ms**: the index cannot order by rank, so every match is fetched and scored and only then are the top 10 kept. A common word makes ranking cost proportional to the number of matches, not to the 10 requested. `ts_rank` rewards frequency: `index` three times scored 0.083 against 0.061 for once.",
+  "**GIN against GiST:** `CREATE INDEX ... USING gist (tsv)` stores a signature per document and is lossy (rows are rechecked in the table). Index **51 MB against 37 MB** for GIN; build **5.1 s against 1.9 s**; the rare word read **1,455 buffers (1,255 in the index) against 203**; the 5% word **16,143 buffers (6,124 in the index) against 10,026**. The manual says GIN is slower to update than GiST, which I did not measure here; for a read-heavy search column GIN is the default choice.",
+  "**Cost of the stored column:** the `tsv` value averaged **723 bytes against 371 for the text**; the table is 224 MB, about three times the 80 MB of text alone. An index directly on the expression `GIN (to_tsvector('simple', body))` is the same 37 MB and saves the column but must be queried with exactly that expression and recomputes the vector when the planner rechecks rows.",
+]
+
+[[sections]]
+heading = "Documents as sorted words"
+body = """
+`LIKE '%word%'` compares characters: it finds `index` in `indexes`, `reindex` and `Postgres index`, cannot tell them apart, and (module 34) needs a different index to avoid reading every row. Full text search works on **words**. A `tsvector` is the document broken into tokens, lowercased, with common words (stop words) dropped and, in a language configuration, suffixes stemmed, then sorted with their positions:
+
+```sql
+SELECT to_tsvector('english', 'The running dogs ran quickly to the Indexes');
+-- 'dog':3 'index':8 'quick':5 'ran':4 'run':2
+SELECT to_tsvector('simple',  'The running dogs ran quickly to the Indexes');
+-- 'dogs':3 'indexes':8 'quickly':5 'ran':4 'running':2 'the':1,7 'to':6
+```
+
+`english` dropped `the` and `to`, reduced `running` to `run`, `dogs` to `dog` and `Indexes` to `index` (and left `ran`: a stemmer works on suffixes, not on irregular verbs). `simple` only lowercases and splits. The query goes through the same pipeline, so `dogs`, `dog` and `Dog` all match:
+
+```sql
+SELECT to_tsquery('english', 'running & !dog');              -- 'run' & !'dog'
+SELECT plainto_tsquery('english', 'fast dogs');              -- 'fast' & 'dog'
+SELECT websearch_to_tsquery('english', '"full text" search -slow');
+-- 'full' <-> 'text' & 'search' & !'slow'
+```
+
+`to_tsquery` takes operators (`&`, `|`, `!`, `<->` for 'followed by') and raises an error on bad syntax; `plainto_tsquery` ANDs the words; `websearch_to_tsquery` reads a search-box string (quotes make a phrase, a minus excludes) and never errors, which makes it the right one for user input. A phrase works because positions are kept: `'the quick brown fox' @@ phraseto_tsquery('quick brown')` is true and for `'brown quick'` false.
+
+The test data uses the `simple` configuration so the invented words stay as they are. For real text choose the language configuration for your data, and use the same one in the index, the column and every query: a mismatch returns different words, not an error.
+"""
+
+[[sections]]
+heading = "Without an index, and what not to do"
+body = """
+The table is `ft_t`: 200,000 rows and 28,696 pages (224 MB, of which the text is 80 MB and the stored vectors the rest). Searching for `postgres`, which is in 200 documents:
+
+```plan id=m33-ilike setup=ft-t,no-parallel
+SELECT count(*) FROM ft_t WHERE body ILIKE '%postgres%';
+```
+
+A sequential scan: 28,696 buffers, 774 ms. (The scan reads the stored vectors' pages too, since they share the heap; that is part of the cost of keeping `tsv` in the table.) The full-text operator written with the conversion in the query:
+
+```plan id=m33-onthefly setup=ft-t,no-parallel
+SELECT count(*) FROM ft_t WHERE to_tsvector('simple', body) @@ to_tsquery('simple', 'postgres');
+```
+
+The same scan, but **8,031 ms**: for each of 200,000 rows, the parser tokenises 371 bytes and builds a vector, ten times the cost of the character comparison. This is the form in many tutorials, and it is slower than `LIKE` unless an index on exactly `to_tsvector('simple', body)` exists. Either store the vector in a column (a `GENERATED ... STORED` column keeps it in step with the text) or create the index on the expression and write the query with the same expression.
+"""
+
+[[sections]]
+heading = "Stored tsvector and a GIN index"
+body = """
+With `CREATE INDEX ft_gin ON ft_t USING gin (tsv)` (37 MB, 1.9 to 2.0 s to build in two runs) the same question:
+
+```plan id=m33-gin-rare setup=ft-t,ft-gin,no-parallel
+SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'postgres');
+```
+
+203 buffers, 0.12 ms: 3 in the index to read the posting list of `postgres`, 200 table pages for the 200 documents. This is the machinery of module 32 with words as keys. A second word narrows it inside the index:
+
+```plan id=m33-gin-and setup=ft-t,ft-gin,no-parallel
+SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'postgres & index');
+```
+
+50 documents contain both, 61 buffers. A word that is in 5% of the documents is a different matter:
+
+```plan id=m33-gin-five setup=ft-t,ft-gin,no-parallel
+SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'index');
+```
+
+10,050 rows over 10,026 buffers, 8 ms: the index is fast, the table access is not, and the plan reads as many pages as there are matches. With natural language the most common words are stop words, which a language configuration removes; in this synthetic data a few words are in most documents, and a query for only those would be a scan.
+
+Two costs of the column. Storage: the vector averaged 723 bytes against 371 for the text, so the table is about three times the size of the text alone. Writes: a changed `body` regenerates `tsv` and, as in module 32, updates the GIN index (fastupdate and its pending list). The alternative that avoids the column is an expression index, `GIN (to_tsvector('simple', body))`: 37 MB as well, 6.0 s to build, and queries must repeat the expression exactly.
+"""
+
+[[sections]]
+heading = "Ranking costs the number of matches"
+body = """
+A search box wants the best matches first. `ts_rank` scores a document by how often and how closely the query words occur (`index index index tuning` scores 0.083 for `index`, `index tuning` 0.061):
+
+```plan id=m33-rank setup=ft-t,ft-gin,no-parallel
+SELECT id, ts_rank(tsv, q) AS rank
+FROM ft_t, to_tsquery('simple', 'index') q
+WHERE tsv @@ q
+ORDER BY rank DESC
+LIMIT 10;
+```
+
+The index finds 10,050 matches, the bitmap scan fetches all of them (10,026 buffers), `ts_rank` scores each, and a top-N sort keeps ten: 17 ms. No index can answer 'the ten best-ranked', because the rank is computed from the document. The cost scales with the matches, not with the `LIMIT`. For a rare word that is nothing; for a word in a tenth of a large corpus it is the slow query of the application. The usual remedies are to require more words (a narrower query), to rank only a pre-filtered set (a recent-first filter, a category), to cache the common queries, or to move to a dedicated search engine when ranking quality (BM25, which `ts_rank` is not) matters. `ts_headline` builds the highlighted snippet from the full text of each row it is given, so apply it only to the ten rows of the final page, never to every match.
+"""
+
+[[sections]]
+heading = "GIN or GiST"
+body = """
+A `tsvector` can also be indexed with GiST, which stores a fixed-size bit signature per document:
+
+```plan id=m33-gist-rare setup=ft-t,ft-gist,no-parallel
+SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'postgres');
+```
+
+1,455 buffers, of which 1,255 are in the index, against 203 for GIN: a GiST scan walks many signatures, and since signatures collide it returns false matches that the table recheck throws away. The frequent word:
+
+```plan id=m33-gist-five setup=ft-t,ft-gist,no-parallel
+SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'index');
+```
+
+16,143 buffers (6,124 in the index) against GIN's 10,026. GiST was also bigger (51 MB against 37 MB) and took 5.1 s to build against 1.9 s. What it gives in return, according to the manual, is cheaper updates (I did not measure them here). The manual's guidance is GIN as the preferred type for text search, and GiST only when updates are so frequent that GIN's maintenance dominates (or for the `pg_trgm` and range cases of the next two modules, where GiST has its own place).
+"""
+
+[[checks]]
+prompt = "A query WHERE to_tsvector('english', title || ' ' || body) @@ plainto_tsquery('english', $1) is slow although a GIN index exists on the tsv column. Why, and what are the two ways to fix it?"
+answer = "The index is on tsv (a stored vector) but the query computes a different expression per row, so the index cannot be used and the parser runs for every row (the test took 8 seconds for 200,000 documents). Fix 1: query the stored column, tsv @@ plainto_tsquery(...), and keep tsv generated from the same expression and configuration. Fix 2: create the GIN index on the exact expression used in the query, and write the query with that expression."
+
+[[checks]]
+prompt = "Search results ordered by ts_rank with LIMIT 10 take 2 seconds when the user searches a very common word, but 5 ms for a rare one. Explain, and name two ways to cut the cost."
+answer = "The GIN index finds all matches but cannot order by rank, so every matching document is fetched and scored before the top 10 are kept; cost grows with the number of matches (10,026 buffers for 10,050 matches in the test), not with the LIMIT. Narrow the match set (more required words, a filter such as category or date, a minimum length), cache popular queries, rank only a pre-filtered subset, or use a search engine with ranked retrieval if this is a core feature."
+
+[[checks]]
+prompt = "Why use websearch_to_tsquery rather than to_tsquery for a search box?"
+answer = "to_tsquery requires valid tsquery syntax and raises an error on stray operators or punctuation that users type; websearch_to_tsquery accepts the free text, treats quoted text as a phrase, a minus as NOT and 'or' as OR, and never raises a syntax error. plainto_tsquery also never errors but only ANDs the words."
+
+[[terms]]
+term = "tsvector"
+means = "A document reduced to a sorted list of normalised words (lexemes) with their positions, the stored form full text search matches against."
+section = "Documents as sorted words"
+
+[[terms]]
+term = "tsquery"
+means = "A search expression of normalised words combined with &, |, ! and <-> (followed by), matched against a tsvector with @@."
+section = "Documents as sorted words"
+
+[[terms]]
+term = "Text search configuration"
+means = "The language rules (parser, stop words, stemmer) used to build a tsvector or tsquery, such as english or simple; the index, column and queries must use the same one."
+section = "Documents as sorted words"
+
+[[terms]]
+term = "ts_rank"
+means = "A function that scores how well a tsvector matches a tsquery by word frequency and proximity; it is computed per matching row, so ranking cannot be answered from an index."
+section = "Ranking costs the number of matches"
+
+[[sources]]
+title = "PostgreSQL: full text search"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/textsearch.html"
+
+[[sources]]
+title = "PostgreSQL: GIN and GiST index types for text search"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/textsearch-indexes.html"
+
+[[sources]]
+title = "PostgreSQL: ranking search results"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/textsearch-controls.html"

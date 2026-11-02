@@ -1,0 +1,161 @@
+{
+ "id": "m33-rank",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT id, ts_rank(tsv, q) AS rank FROM ft_t, to_tsquery('simple', 'index') q WHERE tsv @@ q ORDER BY rank DESC LIMIT 10;",
+ "setup": [
+  {
+   "id": "ft-t",
+   "sql": "SELECT setseed(0.42); CREATE TABLE ft_t AS SELECT i AS id, (SELECT string_agg(translate(substr(md5(w::text), 1, 3 + (w % 6)), '0123456789', 'ghijklmnop'), ' ') FROM (SELECT (floor(3000 * power(random(), 4)))::int AS w FROM generate_series(1, 60) g WHERE i > 0) q) || CASE WHEN i % 1000 = 0 THEN ' postgres' ELSE '' END || CASE WHEN i % 20 = 3 THEN ' index' ELSE '' END || CASE WHEN i % 4000 = 0 THEN ' postgres index' ELSE '' END AS body FROM generate_series(1, 200000) i; ALTER TABLE ft_t ADD PRIMARY KEY (id); ALTER TABLE ft_t ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', body)) STORED; ALTER TABLE ft_t SET (autovacuum_enabled = false); VACUUM ANALYZE ft_t;"
+  },
+  {
+   "id": "ft-gin",
+   "sql": "CREATE INDEX ft_gin ON ft_t USING gin (tsv); ANALYZE ft_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Limit",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 20783.51,
+   "Total Cost": 20783.53,
+   "Plan Rows": 10,
+   "Plan Width": 8,
+   "Actual Startup Time": 23.254,
+   "Actual Total Time": 23.258,
+   "Actual Rows": 10.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 9947,
+   "Shared Read Blocks": 79,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 79,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Sort",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 20783.51,
+     "Total Cost": 20808.93,
+     "Plan Rows": 10167,
+     "Plan Width": 8,
+     "Actual Startup Time": 23.252,
+     "Actual Total Time": 23.254,
+     "Actual Rows": 10.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Sort Key": [
+      "(ts_rank(ft_t.tsv, '''index'''::tsquery)) DESC"
+     ],
+     "Sort Method": "top-N heapsort",
+     "Sort Space Used": 25,
+     "Sort Space Type": "Memory",
+     "Shared Hit Blocks": 9947,
+     "Shared Read Blocks": 79,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 79,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Heap Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Relation Name": "ft_t",
+       "Alias": "ft_t",
+       "Startup Cost": 78.56,
+       "Total Cost": 20563.8,
+       "Plan Rows": 10167,
+       "Plan Width": 8,
+       "Actual Startup Time": 4.602,
+       "Actual Total Time": 21.219,
+       "Actual Rows": 10050.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Recheck Cond": "(tsv @@ '''index'''::tsquery)",
+       "Rows Removed by Index Recheck": 0,
+       "Exact Heap Blocks": 10019,
+       "Lossy Heap Blocks": 0,
+       "Shared Hit Blocks": 9947,
+       "Shared Read Blocks": 79,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 79,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0,
+       "Plans": [
+        {
+         "Node Type": "Bitmap Index Scan",
+         "Parent Relationship": "Outer",
+         "Parallel Aware": false,
+         "Async Capable": false,
+         "Index Name": "ft_gin",
+         "Startup Cost": 0.0,
+         "Total Cost": 76.02,
+         "Plan Rows": 10167,
+         "Plan Width": 0,
+         "Actual Startup Time": 2.595,
+         "Actual Total Time": 2.596,
+         "Actual Rows": 10050.0,
+         "Actual Loops": 1,
+         "Disabled": false,
+         "Index Cond": "(tsv @@ '''index'''::tsquery)",
+         "Index Searches": 1,
+         "Shared Hit Blocks": 7,
+         "Shared Read Blocks": 0,
+         "Shared Dirtied Blocks": 0,
+         "Shared Written Blocks": 0,
+         "Local Hit Blocks": 0,
+         "Local Read Blocks": 0,
+         "Local Dirtied Blocks": 0,
+         "Local Written Blocks": 0,
+         "Temp Read Blocks": 0,
+         "Temp Written Blocks": 0
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 1,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.185,
+  "Triggers": [],
+  "Execution Time": 23.385
+ },
+ "text": "Limit  (cost=20783.51..20783.53 rows=10 width=8) (actual time=17.105..17.108 rows=10.00 loops=1)\n  Buffers: shared hit=10026\n  ->  Sort  (cost=20783.51..20808.93 rows=10167 width=8) (actual time=17.103..17.105 rows=10.00 loops=1)\n        Sort Key: (ts_rank(ft_t.tsv, '''index'''::tsquery)) DESC\n        Sort Method: top-N heapsort  Memory: 25kB\n        Buffers: shared hit=10026\n        ->  Bitmap Heap Scan on ft_t  (cost=78.56..20563.80 rows=10167 width=8) (actual time=4.300..15.803 rows=10050.00 loops=1)\n              Recheck Cond: (tsv @@ '''index'''::tsquery)\n              Heap Blocks: exact=10019\n              Buffers: shared hit=10026\n              ->  Bitmap Index Scan on ft_gin  (cost=0.00..76.02 rows=10167 width=0) (actual time=2.269..2.269 rows=10050.00 loops=1)\n                    Index Cond: (tsv @@ '''index'''::tsquery)\n                    Index Searches: 1\n                    Buffers: shared hit=7\nPlanning:\n  Buffers: shared hit=1\nPlanning Time: 0.142 ms\nExecution Time: 17.233 ms"
+}
