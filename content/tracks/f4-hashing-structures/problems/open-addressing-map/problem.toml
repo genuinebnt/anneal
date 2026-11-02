@@ -1,0 +1,32 @@
+slug = "open-addressing-map"
+title = "An open-addressing hash map with tombstones"
+mode = "write"
+level = "hard"
+stage = "tables"
+order = 4
+status = "ready"
+tags = ["hash map", "open addressing", "linear probing", "tombstones", "load factor", "BuildHasher", "hashbrown"]
+teaches = [
+  "How the fastest hash tables work: one flat array and linear probing, which is cache-friendly because the next candidate is the next slot.",
+  "Why deletion needs a tombstone: emptying the slot would cut the probe chain of every key that collided past it.",
+  "A load factor that counts tombstones, and a rehash that either grows or merely cleans, so churn does not slowly poison lookups.",
+]
+follow_up = "1) Add a control-byte array (one byte per slot: empty / deleted / top 7 hash bits) and compare 8 at a time with the F5 SWAR `zero_bytes` trick: how many key comparisons does a miss need now? 2) Implement Robin Hood insertion (steal from richer entries) and backward-shift deletion, which removes the need for tombstones. 3) Add `entry` API and `retain`. 4) Why does `RandomState` matter for a public service (HashDoS), and what does the `AllCollide` test show about the worst case? 5) Compare memory and speed with `std::collections::HashMap` using the F1 benchmarking tools."
+related = ["F4", "F5", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "`slots: Vec<Slot<K, V>>` with `Empty`, `Tombstone`, `Full(k, v)`. `find`: start at `hash & mask`, loop: `Empty` means absent, `Full` with an equal key means found, anything else keep going with `(i + 1) & mask`. `remove` swaps the slot for a `Tombstone`. `insert` walks the same chain remembering the first tombstone."
+
+[[hints]]
+kind = "rust"
+text = "`BuildHasher::hash_one(&key)` hashes in one call. `std::mem::replace(&mut slot, new)` takes a value out of a slot you only borrow. Match `&mut self.slots[i]` with an arm guard `Slot::Full(k, v) if *k == key` to replace a value in place. The default type parameter `S = RandomState` lets `OaMap::new()` work while tests inject a hasher."
+
+[[hints]]
+kind = "edge"
+text = "Count tombstones in the load factor, or a table of tombstones has no `Empty` slot and a miss loops forever. On rebuild only reinsert `Full` slots. Rebuild at the *same* size when the table is mostly tombstones, or insert/remove churn doubles the table forever."
+
+[solution]
+explanation = "`hashbrown` (the std `HashMap`) is a refinement of this: it stores 7 bits of each hash in a control-byte array and compares 16 of them at once with SIMD (the F5 SWAR trick), which is why misses are cheap. The ideas here, flat storage, probing, tombstones and load factor, are exactly what its `RawTable` does, and Robin Hood hashing, quadratic probing and cuckoo hashing are the alternatives to know."
+time = "O(1) expected, O(n) worst case under adversarial hashing"
+space = "O(capacity)"

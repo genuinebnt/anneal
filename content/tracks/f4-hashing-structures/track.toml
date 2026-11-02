@@ -1,0 +1,16 @@
+code = "F4"
+name = "Hashing & purpose-built structures"
+section = "F"
+tier = "sde3"
+order = 4
+summary = "Hashing as an engineering tool: a Bloom filter, a count-min sketch, a consistent-hash ring and an open-addressing hash map."
+
+[[stages]]
+slug = "sketches-and-rings"
+name = "Sketches and rings"
+band = "medium"
+
+[[stages]]
+slug = "tables"
+name = "Build a table"
+band = "hard"

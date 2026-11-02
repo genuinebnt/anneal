@@ -1,0 +1,32 @@
+slug = "bloom-filter"
+title = "A Bloom filter sized from a target false-positive rate"
+mode = "write"
+level = "medium"
+stage = "sketches-and-rings"
+order = 1
+status = "ready"
+tags = ["Bloom filter", "probabilistic", "double hashing", "bit array", "false positives", "LSM", "union"]
+teaches = [
+  "A set that answers 'definitely not' or 'probably yes' in about 10 bits per item at 1% error: why LSM trees and caches put one in front of every disk read.",
+  "Sizing from first principles: `m = -n ln p / (ln 2)^2` bits and `k = (m / n) ln 2` hashes, and checking the result against measured error.",
+  "Double hashing: k probe positions from two hashes, `h1 + i * h2`, instead of k independent hash computations.",
+]
+follow_up = "1) Prove no false negatives and derive the optimal `k` yourself (minimise `(1 - e^(-kn/m))^k`). 2) Build a counting Bloom filter with 4-bit counters to support `remove`: what breaks on counter overflow? 3) Make it a blocked Bloom filter (all k bits inside one 512-bit cache line) and measure the speed-up with the F1 benchmarking track. 4) Compare with a cuckoo filter or xor filter: space at 1% error? 5) Where would you put a Bloom filter in the kvlite LSM project, and what happens to read amplification without it?"
+related = ["F4", "F5", "S4"]
+
+[[hints]]
+kind = "approach"
+text = "A `Vec<u64>` of `m` bits. Hash the item once, derive `h1` and an odd `h2`, and probe bit `(h1 + i * h2) % m` for `i in 0..k`. `insert` sets them all, `contains` requires all of them."
+
+[[hints]]
+kind = "rust"
+text = "`std::hash::DefaultHasher::new()` is deterministic. Take `T: Hash + ?Sized` so `&str` works; `\"a\".hash(&mut hasher)` and `String::from(\"a\").hash(&mut hasher)` produce the same value. Get a second hash by running the first through a mixer (splitmix64) and OR-ing 1."
+
+[[hints]]
+kind = "edge"
+text = "Use `wrapping_add` / `wrapping_mul` for the probe arithmetic: `i * h2` overflows `u64`. Round `m` up with `ceil` and `k` with `round`, then clamp both to at least 1."
+
+[solution]
+explanation = "RocksDB/LevelDB keep a Bloom filter per SSTable so a lookup for an absent key skips the disk read; Cassandra, Bigtable, Chrome's old Safe Browsing list and Bitcoin SPV filters all use one. 10 bits per key and 7 hashes give about 1% false positives, whatever the key size. The trade-offs to know: no deletes (use a counting or cuckoo filter), and the filter must be sized for the final item count or the error rises."
+time = "O(k) per operation"
+space = "O(m) bits"
