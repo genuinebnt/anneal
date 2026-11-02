@@ -1,0 +1,127 @@
+title = "TOAST: wide values, jsonb and SELECT *"
+group = "sql-internals"
+order = 25
+minutes = 14
+lede = "A Postgres row has to fit in an 8 kB page, so values larger than about 2 kB are compressed, or moved to a side table, before the row is stored. That keeps the main table small and fast to scan, and it makes the cost of a wide column invisible until a query touches it. This page measures a text column and a jsonb document and shows which queries pay for the side table."
+say = "Values over about 2 kB are compressed (pglz) and, if still too big, stored in the table's TOAST table in roughly 2 kB chunks, leaving a pointer in the row. Summing a narrow column of 20,000 such rows read 525 buffers; length() of the 6,400-byte text read 60,525 and took about 420 ms; octet_length() of the same column read 525 (the size sits in the pointer). A compressible 8 kB text stored as 137 bytes stayed in the row but cost 360 ms of decompression. Pulling one key out of an 8.7 kB jsonb read 80,128 buffers (about 170 ms) against 128 for a count. UPDATE of a narrow column left the 156 MB TOAST table untouched."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "The **TOAST** rules: when a row exceeds about 2 kB, Postgres first compresses its large columns (`pglz` by default; `lz4` if the server was built with it, not this one) and then, if the row is still too big, moves them to a hidden **TOAST table** in chunks of about 2 kB, leaving an 18-byte pointer in the row. Large values are never an error; they are an indirection.",
+  "20,000 rows with a 6,400-byte text that does not compress (hex digests): the main table is **4.2 MB (525 pages)**, the TOAST table **156 MB**. `SELECT sum(kind)` on the narrow column read **525 buffers**, 2.4 ms. The table's size on a scan does not include its wide values.",
+  "`sum(length(body))` has to fetch each value: **60,525 buffers**, about **420 ms**, 115 times the buffers and about 170 times the time. `sum(octet_length(body))` read **525 buffers** (3 ms): for an uncompressed out-of-line value the byte length is in the pointer, so the TOAST table is never touched. What looks like the same question costs 100 times as much when it needs the contents.",
+  "A compressible 8,104-byte text stored in **137 bytes** stayed inline in the row (below the 2 kB threshold): `sum(length(body))` read **525 buffers** but took about **360 ms**, because each value is decompressed to be measured. Compression moves the cost from I/O to CPU, it does not remove it.",
+  "A 200-key `jsonb` document (8.7 kB, TOASTed): `sum((payload->>'n')::int)` read **80,128 buffers** (55,008 hits and 25,120 reads on a cold run), about **170 to 200 ms**, against **128 buffers** and 2 ms for `count(*)`. Extracting one key detoasts the whole document first.",
+  "Updating a narrow column of those rows (`SET kind = kind + 1`) doubled the main table (4.3 to 8.6 MB, module 23) and left the TOAST table at exactly the same size: unchanged out-of-line values are not copied by an update of other columns. Updating the wide column itself writes a new copy of it.",
+]
+
+[[sections]]
+heading = "How a wide value is stored"
+body = """
+A table page is 8 kB and a row cannot span pages, so Postgres applies a size rule whenever a row would exceed about 2 kB (a quarter of the page, `toast_tuple_target`). For each wide column, in turn:
+
+1. **Compress** it (strategy `extended`, the default for `text`, `bytea`, `jsonb` and other variable-length types). The default method is `pglz`; `lz4`, faster, needs a server built with it, and the one used here was not.
+2. If the row is still over the limit, **move** the compressed value to the table's TOAST table (`pg_toast.pg_toast_<oid>`), cut into chunks of about 2 kB, and leave a short pointer in the row.
+3. Values that compress under the limit stay in the row, compressed.
+
+The four storage settings per column are `plain` (no TOAST), `main` (compress, move only as a last resort), `extended` (compress, then move) and `external` (move without compressing, useful for data that does not compress such as already-compressed images, or when you want cheap substring access). `ALTER TABLE ... ALTER COLUMN ... SET STORAGE` changes it.
+
+Two things follow. The main table stays **narrow**: a scan, an index build or a vacuum reads the 525 pages of the 20,000 rows, not the 20,000 wide values. And a wide column is read **only when a query references its contents** — the next sections measure what that costs.
+"""
+
+[[sections]]
+heading = "What a query pays for"
+body = """
+The test table: 20,000 rows with a small `kind`, a `title`, `body_inc` (6,400 bytes of hex digests, which `pglz` cannot shrink, so it is stored out of line) and `body_cmp` (8,104 bytes of repeated text, which compresses to 137 bytes and stays in the row). The heap is 4.2 MB, the TOAST table 156 MB. First the narrow column:
+
+```plan id=m25-narrow setup=toast-t,no-parallel
+SELECT sum(kind) FROM toast_t;
+```
+
+525 buffers, 2.4 ms. Now the size in bytes of the wide column:
+
+```plan id=m25-octet setup=toast-t,no-parallel
+SELECT sum(octet_length(body_inc)) FROM toast_t;
+```
+
+Also 525 buffers: `octet_length` of an uncompressed out-of-line value is stored in the pointer, and the TOAST table is not opened. The number of **characters** is a different question:
+
+```plan id=m25-length setup=toast-t,no-parallel
+SELECT sum(length(body_inc)) FROM toast_t;
+```
+
+`length()` must read the value to count characters: **60,525 buffers**, 418 ms in this run (the first reads came from disk, `read=20523`). The 156 MB TOAST table is read through its index chunk by chunk, four chunks per row and an index lookup for each. The plan does not mention the TOAST table at all: the cost is in the `Seq Scan`'s buffers, and the node that looks like a cheap table scan is not.
+
+Compression changes where the cost goes:
+
+```plan id=m25-compressed setup=toast-t,no-parallel
+SELECT sum(length(body_cmp)) FROM toast_t;
+```
+
+525 buffers, because the 137-byte compressed values are in the row; but 429 ms in the plan (about 360 ms steady), because 20,000 values of 8,104 bytes must each be decompressed to be measured. The page count is no longer the cost; CPU is. Both shapes are the same bug from a distance: a query that needs a wide column's contents pays for every row it touches.
+"""
+
+[[sections]]
+heading = "jsonb and SELECT *"
+body = """
+A `jsonb` document is one value, so a large one is one TOASTed value. Pulling a single key out of an 8.7 kB document per row (200 keys of 32-character hashes, so it is stored out of line):
+
+```plan id=m25-jsonb setup=toast-j,no-parallel
+SELECT sum((payload->>'n')::int) FROM toast_j;
+```
+
+**80,128 buffers** (55,008 hits and 25,120 reads), 150 to 200 ms, to read one small integer from each of 20,000 rows. Postgres has to fetch and decompress the whole document to extract a key. The same table counted:
+
+```plan id=m25-jsonb-count setup=toast-j,no-parallel
+SELECT count(*) FROM toast_j;
+```
+
+128 buffers, 2 ms. Three habits follow:
+
+- **Name the columns.** `SELECT *` fetches and detoasts every wide column of every row you return, including the ones the application ignores. For 20 rows it is invisible; for a report over 20,000 it is the difference above.
+- **Pull hot keys out of large documents.** If a query reads `payload->>'n'` constantly, make it a real column (a generated column, or an index on the expression, or a GIN index on the document, module 32) so the document is not opened per row.
+- **Know what updates copy.** Updating `kind` on these rows left the TOAST table at 163,840,000 bytes: the out-of-line values stayed where they were and the new row versions point at the same chunks. Updating the wide column itself writes a new copy of it, which is why frequently rewritten large `jsonb` columns bloat their TOAST table (module 24 applies to it too).
+"""
+
+[[checks]]
+prompt = "A table scan over 20,000 rows reads 525 pages when you select the id and 60,000 when you add length(body). Where did the extra reads come from, and how could you avoid them?"
+answer = "body is a wide value stored in the table's TOAST table, which a scan of the main table does not touch; length() must detoast each value (here 4 chunks and an index lookup per row), and the extra reads are those lookups. Avoid reading the content: use octet_length() where the byte size is enough (it is in the pointer for uncompressed values), store the length or other derived value in a separate narrow column, or select only the rows that need it."
+
+[[checks]]
+prompt = "An 8 kB text column compresses to 137 bytes and a query over it takes 360 ms with only 525 buffers. Where is the time going?"
+answer = "In decompression. The compressed value stays in the row (under the 2 kB threshold) so there is no extra I/O, but each of the 20,000 values must be decompressed to be measured. Compression trades I/O for CPU: avoid touching the column's contents in hot queries, or use a faster compression method such as lz4 if the server supports it."
+
+[[checks]]
+prompt = "A report reads one key from a large jsonb column on 20,000 rows and is slow, with few rows returned. What are your options?"
+answer = "Extracting a key detoasts the whole document per row. Move the key into its own column (a generated column or a column maintained by the application), or build an expression index on (payload->>'key') so the query reads the index instead of the documents. Selecting only the needed columns also keeps the other documents from being fetched."
+
+[[terms]]
+term = "TOAST"
+means = "The mechanism that compresses and moves values larger than about 2 kB to a hidden side table, chunked, so a row fits in a page; the row keeps a pointer."
+section = "How a wide value is stored"
+
+[[terms]]
+term = "Detoast"
+means = "Fetching and decompressing a stored wide value to use its contents; the step that makes a query on a wide column expensive."
+section = "What a query pays for"
+
+[[terms]]
+term = "STORAGE (plain, main, extended, external)"
+means = "The per-column TOAST policy: whether a value may be compressed and whether it may be moved out of the row."
+section = "How a wide value is stored"
+
+[[sources]]
+title = "PostgreSQL: TOAST"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/storage-toast.html"
+
+[[sources]]
+title = "PostgreSQL: ALTER TABLE (SET STORAGE, SET COMPRESSION)"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/sql-altertable.html"
+
+[[sources]]
+title = "PostgreSQL: jsonb type"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/datatype-json.html"
