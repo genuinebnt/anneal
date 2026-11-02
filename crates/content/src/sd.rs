@@ -15,7 +15,7 @@ use crate::catalog::Issue;
 /// The groups concept pages are filed under, in the order the Learn tab shows them.
 pub const SD_GROUPS: &[&str] = &["fundamentals", "core", "pattern", "technology", "advanced", "distributed", "lld", "rust"];
 /// The parts of the SQL performance course, in course order; a SQL page's `group` is one of these.
-pub const SQL_GROUPS: &[&str] = &["sql-indexes", "sql-plans", "sql-shapes", "sql-covering", "sql-internals", "sql-writes", "sql-special", "sql-scale", "sql-rust", "sql-engines"];
+pub const SQL_GROUPS: &[&str] = &["sql-indexes", "sql-plans", "sql-shapes", "sql-covering", "sql-internals", "sql-writes", "sql-special", "sql-scale", "sql-rust", "sql-engines", "sql-reference"];
 /// The levels a rubric point can be expected at.
 pub const SD_LEVELS: &[&str] = &["mid", "senior", "staff"];
 /// The kinds of practice problem.

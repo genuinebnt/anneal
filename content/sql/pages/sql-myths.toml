@@ -1,0 +1,149 @@
+title = "Myths: five rules of thumb, checked against real plans"
+group = "sql-reference"
+order = 1
+minutes = 12
+lede = "Database advice travels as one-line rules. Some are right for a reason, some were right once, and some never were. This page takes five common ones and runs each on the test database (2,000,000 orders, Postgres 18.6) to see what the plan and the buffer counts say. For each the verdict is stated narrowly: what is true, and under what condition."
+say = "Most rules of thumb are true under a condition. Put the most selective column first: for equality-only queries the order made no difference in buffers (29 and 29); it decides which other queries the index can serve. SELECT * is only costly when it prevents an index-only scan (46 buffers against 4). count(*), count(1) and count(id) have the same plan. A forced index on a column where 61% of rows match read more buffers than the scan (15,991 against 14,960). Indexes do get bigger under churn (22.5 to 55.2 MB) but lookups did not get slower, and REINDEX shrank it to 20.5 MB."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Myth 1, 'the most selective column goes first in a composite index':** `WHERE status = 'paid' AND customer_id = 4242` (27 rows). Index `(status, customer_id)` (the least selective column first): **29 buffers**. Index `(customer_id, status)`: **29 buffers**. Equal. For equality on every column of the index the order does not change the work. It decides which other queries the index can serve: with `(customer_id, status)`, `WHERE status = 'pending' AND created_at >= '2026-08-01'` (no customer_id) had to read the index with no useful start and took **17,388 buffers, 73.8 ms**, more than a sequential scan of the table (14,960). The rule that holds is: put the columns your queries always filter on first, and equality before range (module 3).",
+  "**Myth 2, 'SELECT * is slow':** `WHERE customer_id = 4242` (44 rows) with a plain index on `customer_id`: `SELECT *` **46 buffers**, `SELECT id, total_cents, created_at` **46 buffers**. No difference: the rows are fetched from the table either way. With the covering index `(customer_id, created_at) INCLUDE (id, total_cents)`, the three-column query became an Index Only Scan, **4 buffers**, while `SELECT *` stayed at **46**. So `SELECT *` costs when it blocks an index-only scan (module 20), when columns are wide or out of line (module 25), and in network and memory use; the plain buffer count of a heap fetch does not change.",
+  "**Myth 3, 'count(1) is faster than count(*)':** the three forms `count(*)`, `count(1)`, `count(id)` on the 2,000,000-row table: all **Seq Scan, 14,960 buffers**; 232, 228 and 212 ms in single runs, differences of the size of the run-to-run noise. The planner treats `count(*)` and `count(1)` identically; `count(id)` also counts only non-null values, which is a difference in meaning, not cost, when the column cannot be null.",
+  "**Myth 4, 'an index is always faster than a scan':** `SELECT count(*), sum(total_cents) FROM orders WHERE status = 'paid'` matches 61% of the rows. With an index on `status` the planner still chose a Seq Scan (**14,960 buffers, 226 ms**). Forcing the index (`enable_seqscan = off`) gave a Bitmap Heap Scan with **15,991 buffers, 205 ms**: more buffers, and a time within the noise of a single run. The index is not wrong, just no help when most of the table matches (module 2).",
+  "**Myth 5, 'indexes degenerate and need regular rebuilding':** a throwaway table of 1,000,000 rows with an index on a column `k`. Five rounds of updating a random half of the rows (changing `k`, so no HOT updates), then `VACUUM`: the index grew from **22.5 MB to 55.2 MB** (the heap from 52.4 to 113.6 MB). A range query over 100 keys read **107 buffers before and 102 after**: lookups did not get slower. `REINDEX INDEX` shrank the index to **20.5 MB** and the query still read 102 buffers. So an index can bloat (cost: disk, cache, backups) without becoming slower to search, and there is no need for a rebuild schedule unless the size matters (single run; the heap stays 113.6 MB until rewritten).",
+  "**What the five have in common:** each is a statement about cost that you can check in a plan. If a rule matters to a decision, run the query before and after, look at buffers (they do not vary between runs), and say what you measured.",
+]
+
+[[sections]]
+heading = "Myth: put the most selective column first"
+body = """
+The claim is that in `CREATE INDEX ON orders (a, b)`, the column that eliminates the most rows should be `a`. The test query is `WHERE status = 'paid' AND customer_id = 4242`. `status` has four values and 61% of rows are `paid`; `customer_id` has 50,000 values. First the index with the unselective column first:
+
+```plan id=my-sel-a setup=orders-status-customer,no-parallel
+SELECT id, total_cents FROM orders WHERE status = 'paid' AND customer_id = 4242;
+```
+
+And the selective one first:
+
+```plan id=my-sel-b setup=orders-customer-status,no-parallel
+SELECT id, total_cents FROM orders WHERE status = 'paid' AND customer_id = 4242;
+```
+
+Both read 29 buffers and return the same 27 rows. When every column of the index is tested for equality, Postgres seeks to the exact spot in either order. What the order changes is which other queries the index can use. The second index starts with `customer_id`; a query without a customer, `WHERE status = 'pending' AND created_at >= '2026-08-01'`, cannot seek in it:
+
+```plan id=my-sel-c setup=orders-customer-status,no-parallel
+SELECT count(*) FROM orders WHERE status = 'pending' AND created_at >= '2026-08-01';
+```
+
+It read 17,388 buffers, more than a sequential scan of the whole table. The practical rule: choose the order from the queries (which columns they always filter on, equality columns before range columns, then sort columns), not from per-column selectivity.
+"""
+
+[[sections]]
+heading = "Myth: SELECT * is slow"
+body = """
+With only an index on `customer_id`, the planner fetches each row from the table, whichever columns you ask for:
+
+```plan id=my-star-a setup=orders-customer,no-parallel
+SELECT * FROM orders WHERE customer_id = 4242;
+```
+
+```plan id=my-star-b setup=orders-customer,no-parallel
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+46 buffers for both. Now the index `(customer_id, created_at) INCLUDE (id, total_cents)`, which holds everything the narrow query needs:
+
+```plan id=my-star-d setup=orders-customer-created-cover,no-parallel
+SELECT id, total_cents, created_at FROM orders WHERE customer_id = 4242;
+```
+
+An Index Only Scan, 4 buffers. The `SELECT *` on the same index cannot use it, because `status` is not in the index:
+
+```plan id=my-star-c setup=orders-customer-created-cover,no-parallel
+SELECT * FROM orders WHERE customer_id = 4242;
+```
+
+So `SELECT *` costs most where it removes the chance of an index-only scan, and it has other costs that a buffer count of the heap fetch does not show: wider rows to send, to hold in memory and to deserialise, and queries that break when a column is added. 'Name the columns you use' is a good habit; 'SELECT * halves the speed' is not a measurement.
+"""
+
+[[sections]]
+heading = "Myth: count(1) beats count(*)"
+body = """
+```plan id=my-count-star setup=no-parallel
+SELECT count(*) FROM orders;
+```
+
+```plan id=my-count-one setup=no-parallel
+SELECT count(1) FROM orders;
+```
+
+```plan id=my-count-id setup=no-parallel
+SELECT count(id) FROM orders;
+```
+
+The same plan, a Seq Scan of 14,960 buffers, and times (232, 228 and 212 ms) that differ by the noise of single runs. `count(id)` differs in meaning, not speed: it skips NULLs, so only use it when you want that. Counting a big table is slow in Postgres because it reads the table (or an index), not because of the spelling.
+"""
+
+[[sections]]
+heading = "Myth: an index is always faster than a scan"
+body = """
+`status = 'paid'` matches 61% of 2,000,000 rows. With an index on `status` available:
+
+```plan id=my-idx-default setup=orders-status,no-parallel
+SELECT count(*), sum(total_cents) FROM orders WHERE status = 'paid';
+```
+
+The planner chose the sequential scan: reading all pages in order is cheaper than jumping to a million rows. Forcing the index with `enable_seqscan = off` for the experiment:
+
+```plan id=my-idx-forced setup=orders-status,no-seqscan,no-parallel
+SELECT count(*), sum(total_cents) FROM orders WHERE status = 'paid';
+```
+
+15,991 buffers against 14,960, and a time that, in these single runs, was in the same range (205 ms against 226). The index did not help. It was also not a disaster, since a bitmap scan reads the table pages in order; the cost of keeping that index (module 27) is the part that is certain.
+"""
+
+[[sections]]
+heading = "Myth: indexes degenerate and need rebuilding"
+body = """
+Test on a throwaway table: 1,000,000 rows, an index on `k`, autovacuum off so the test controls it. Measured: the index size, the heap size, and the buffers of a range query over 100 keys.
+
+| state | index | heap | range query buffers |
+|---|---|---|---|
+| fresh | 22.5 MB | 52.4 MB | 107 |
+| after five rounds of updating a random half of the rows, then VACUUM | 55.2 MB | 113.6 MB | 102 |
+| after REINDEX | 20.5 MB | 113.6 MB | 102 |
+
+The index grew 2.5 times, because each update of the indexed column added new entries and vacuum could only reuse the space, not give it back. That matters for disk and for cache. The lookup did not get slower: a b-tree stays balanced, so the buffers of a lookup stayed at about 100. `REINDEX` returned the size to 20.5 MB. So the honest statement is: an index can bloat; it does not get slower by itself; rebuild one when its size is the problem (module 24 and the index-size checks of module 27), not on a calendar. This was a single run on one workload.
+"""
+
+[[checks]]
+prompt = "A colleague says 'put the column with the most distinct values first, always'. Give a case where that order is wrong."
+answer = "A query that filters only on the other column cannot seek in the index (it read 17,388 buffers on (customer_id, status) for a status-only filter, more than the table scan), and for range plus equality queries the equality column should come first. In the test, an equality-only query read 29 buffers in either order."
+[[checks]]
+prompt = "When does replacing SELECT * with a column list actually make a query faster?"
+answer = "When the column list lets the planner use an index-only scan (46 buffers fell to 4 with a covering index) or removes wide or out-of-line columns from the result. With a plain index and heap fetches, SELECT * and a short column list read the same 46 buffers."
+[[checks]]
+prompt = "The index on orders.status is not used for status = 'paid'. Is that a bug?"
+answer = "No: 61% of the rows match, and a scan of 14,960 buffers is cheaper than an index lookup of a million rows; forcing the index read 15,991 buffers and was not faster. The planner is working from its statistics (module 10); the index would help for rare statuses."
+
+[[terms]]
+term = "Rule of thumb"
+means = "A simple guideline that holds under some conditions; check it against a plan before relying on it."
+section = "Myth: put the most selective column first"
+
+[[sources]]
+title = "PostgreSQL: multicolumn indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+
+[[sources]]
+title = "PostgreSQL: index-only scans and covering indexes"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+
+[[sources]]
+title = "PostgreSQL: routine reindexing"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-reindex.html"

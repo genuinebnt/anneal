@@ -1,0 +1,131 @@
+{
+ "id": "my-idx-forced",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*), sum(total_cents) FROM orders WHERE status = 'paid';",
+ "setup": [
+  {
+   "id": "orders-status",
+   "sql": "CREATE INDEX orders_status ON orders (status);"
+  },
+  {
+   "id": "no-seqscan",
+   "sql": "SET enable_seqscan = off;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 49619.88,
+   "Total Cost": 49619.89,
+   "Plan Rows": 1,
+   "Plan Width": 16,
+   "Actual Startup Time": 205.456,
+   "Actual Total Time": 205.458,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 15991,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 13488.38,
+     "Total Cost": 43570.88,
+     "Plan Rows": 1209800,
+     "Plan Width": 4,
+     "Actual Startup Time": 22.924,
+     "Actual Total Time": 127.942,
+     "Actual Rows": 1221501.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(status = 'paid'::text)",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 14960,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 15991,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "orders_status",
+       "Startup Cost": 0.0,
+       "Total Cost": 13185.93,
+       "Plan Rows": 1209800,
+       "Plan Width": 0,
+       "Actual Startup Time": 20.548,
+       "Actual Total Time": 20.548,
+       "Actual Rows": 1221501.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(status = 'paid'::text)",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 1031,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "enable_seqscan": "off",
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.089,
+  "Triggers": [],
+  "Execution Time": 205.485
+ },
+ "text": "Aggregate  (cost=49619.88..49619.89 rows=1 width=16) (actual time=212.001..212.003 rows=1.00 loops=1)\n  Buffers: shared hit=15991\n  ->  Bitmap Heap Scan on orders  (cost=13488.38..43570.88 rows=1209800 width=4) (actual time=22.242..131.694 rows=1221501.00 loops=1)\n        Recheck Cond: (status = 'paid'::text)\n        Heap Blocks: exact=14960\n        Buffers: shared hit=15991\n        ->  Bitmap Index Scan on orders_status  (cost=0.00..13185.93 rows=1209800 width=0) (actual time=19.905..19.906 rows=1221501.00 loops=1)\n              Index Cond: (status = 'paid'::text)\n              Index Searches: 1\n              Buffers: shared hit=1031\nPlanning Time: 0.088 ms\nExecution Time: 212.035 ms"
+}

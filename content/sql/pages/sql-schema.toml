@@ -1,0 +1,57 @@
+title = "The example schema"
+group = "sql-reference"
+order = 2
+minutes = 5
+lede = "Most pages in this course run on the same small shop: customers, products, orders and order items, generated with a fixed random seed so every plan can be captured again. This page lists the tables, their sizes and the data's shape, as they are in the database the plans were captured from (Postgres 18.6)."
+say = "The test database is a small shop: 50,000 customers, 10,000 products, 2,000,000 orders and 6,000,000 order lines, with only the primary keys as indexes. Every other index in the course is created by a page's own setup, so a page always says which indexes its plans ran with."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Tables and sizes** (from `pg_class` and `pg_relation_size` on the capture database): `customers` 50,000 rows, 4,120 kB (5,272 kB with its index); `products` 10,000 rows, 672 kB (952 kB); `orders` 2,000,000 rows, 117 MB (160 MB with its primary key); `order_items` 6,000,000 rows (1 to 5 lines per order; `pg_class` estimates 5,999,981), 299 MB (480 MB). Only the four primary keys exist as indexes.",
+  "**Orders:** `id bigint` identity primary key, `customer_id int` (50,000 distinct values, about 40 orders each), `status text` skewed on purpose, `total_cents int` between 0 and 20,000, `created_at timestamptz` spread uniformly over 600 days from 2025-01-01. Statuses are drawn from a list in which `paid` appears six times in ten, so 61% of the rows are `paid`, 22% `shipped`, 11% `refunded`, 6% `pending`.",
+  "**Customers and products:** customers have an email (`user<id>@example.com`), a name, a country (US is the most common at 13,772 of 50,000, then IN 11,066, BR 5,689, GB 5,617, FR 5,593; DE and JP the rest) and a signup date; products have a `SKU-nnnnnn` sku, a name, one of eight categories (music, outdoor, games, tools, kitchen, garden around 1,400 to 1,460 each, toys 750, books 722) and a price.",
+  "**How it is made:** `tools/sqlperf/schema.sql` seeds the random generator (`setseed(0.42)`), inserts the rows and runs `VACUUM ANALYZE`; `psql -v scale=N` multiplies the orders and items. The data is deterministic in structure but the exact values depend on the server's random generator; use the buffer counts on a page, which do not move between runs on the same data, as the evidence.",
+  "**Other tables:** some modules create their own throwaway tables from the setups in `content/sql/setups.toml` (for example one million titles for trigrams, bookings for GiST, events for partitioning) and drop them afterwards. The `orders` table in the shared database is never altered by a plan.",
+]
+
+[[sections]]
+heading = "The four tables"
+body = """
+```
+customers    (id PK, email, name, country char(2), created_at)             50,000 rows
+products     (id PK, sku, name, category, price_cents)                     10,000 rows
+orders       (id PK identity, customer_id, status, total_cents, created_at) 2,000,000 rows
+order_items  (order_id, line, product_id, quantity, price_cents; PK order_id+line)  ~6,000,000 rows
+```
+
+`orders.customer_id` references `customers`, `order_items.order_id` references `orders` and `order_items.product_id` references `products`. The foreign keys are declared, but, as module 13 shows, Postgres does not create an index for a foreign key; the course's plans add the ones they need.
+
+The shape is chosen to give the planner something to find: a skewed `status` (61% `paid`, so an index on it does not help for `paid` and does for `pending`), about 40 orders per customer (a customer lookup returns a few dozen rows), a time column spread over 600 days (so ranges of days select a known fraction), and a sku and email that are unique per row.
+"""
+
+[[sections]]
+heading = "Reproducing it"
+body = """
+`tools/sqlperf/capture.py` loads `tools/sqlperf/schema.sql` into a throwaway database and writes `content/sql/plans/<id>.json` for every plan block on the pages. Each plan block names the setups (extra indexes, session settings) it ran with, and `capture.py --check` re-runs them and fails if a plan's shape changed. Timings differ between machines and runs; the node types, the indexes used and the buffer counts of a plan should not.
+"""
+
+[[checks]]
+prompt = "A page says 'orders has no index on customer_id'. How can you check that on the capture database, and what do you expect to see?"
+answer = "List the indexes on orders (\\d orders, or pg_indexes): only the primary key orders_pkey exists, because every other index in the course is created by a plan's setup and removed afterwards."
+[[checks]]
+prompt = "Why is status skewed in the example data?"
+answer = "So the course can show selectivity: 61% of orders are paid (an index on status does not help for that value), and about 6% are pending (where it does)."
+[[checks]]
+prompt = "Which number on a page should you trust when your timings differ from the page's?"
+answer = "The buffer counts and the plan shape, which do not change between runs or machines on the same data; the times depend on the hardware and the cache."
+
+[[terms]]
+term = "Setup"
+means = "A named entry in content/sql/setups.toml (an index to create, a table to build or a session setting) that a plan block lists, so a page always states what existed when the plan was captured."
+section = "Reproducing it"
+
+[[sources]]
+title = "PostgreSQL: setseed and random functions"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/functions-math.html#FUNCTIONS-MATH-RANDOM-TABLE"
