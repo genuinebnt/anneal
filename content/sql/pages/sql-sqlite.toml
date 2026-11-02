@@ -1,0 +1,121 @@
+title = "SQLite: the same indexing rules in an embedded engine"
+group = "sql-engines"
+order = 44
+minutes = 12
+lede = "SQLite is a database in a library: no server, no network, one file. The indexing lessons of this course hold there with different words: a scan, a search using an index, a covering index. What differs is where the time goes: a lookup is a function call, not a round trip, and a commit is a file sync, which makes the way you commit the biggest performance decision. This page repeats the key measurements of the early modules on SQLite 3.53.1 (the version in this environment's Python) and shows its EXPLAIN QUERY PLAN."
+say = "On a table of 1,000,000 orders (42.6 MB file) the customer's 20 latest orders took 56.0 ms as a scan with a temporary sort, 0.028 ms with an index on customer_id and 0.022 ms with an index on (customer_id, created_at), which also removed the sort from the plan. A 100-customer aggregate took 3.69 ms through a plain index and 0.32 ms through a covering index. The three indexes took the file from 42.6 MB to 100.2 MB. For writes, 2,000 inserts each committed on its own took 1,847 ms in the default journal mode, 467 ms in WAL mode, and 38 ms in WAL with synchronous=NORMAL; 50,000 inserts in one transaction took 46 to 77 ms in all three."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**The setup:** Python 3.12 `sqlite3` module, SQLite **3.53.1**, a file on local disk, one connection, no server. A table `orders(id INTEGER PRIMARY KEY, customer_id, status, total_cents, created_at TEXT)` with **1,000,000** generated rows (not the Postgres test data; the same shape: 50,000 customers, 4 statuses), 42.6 MB. Timings are medians of 5 runs for reads and 3 for writes, measured around the call in Python. Nothing here is a comparison of speed with Postgres: no network is involved, and the data is a different copy.",
+  "**Tables are b-trees on the rowid:** an `INTEGER PRIMARY KEY` is the rowid, so `WHERE id = ?` is `SEARCH orders USING INTEGER PRIMARY KEY (rowid=?)` (0.009 ms). Any other index stores the indexed columns plus the rowid; a query using it must go back to the table by rowid for other columns, unless the index covers the query.",
+  "**EXPLAIN QUERY PLAN vocabulary:** `SCAN orders` reads the whole table; `SEARCH orders USING INDEX name (customer_id=?)` seeks in an index; `SEARCH ... USING COVERING INDEX` never touches the table; `USE TEMP B-TREE FOR ORDER BY` is a sort. It gives no row counts, buffers or timings, unlike Postgres's EXPLAIN ANALYZE: you time the statement yourself.",
+  "**Index or scan:** the customer's 20 latest orders (`WHERE customer_id = ? ORDER BY created_at DESC LIMIT 20`, 20 rows from about 20 per customer). No index: `SCAN orders` + `USE TEMP B-TREE FOR ORDER BY`, **56.035 ms**. Index on `customer_id`: `SEARCH ... USING INDEX o_cust (customer_id=?)` + the temp b-tree, **0.028 ms**. Index on `(customer_id, created_at)`: `SEARCH ... USING INDEX o_cust_created (customer_id=?)` alone, **0.022 ms**, the sort gone because the index delivers the rows in order. The same lesson as modules 3 and 4, in the same words.",
+  "**Covering index:** `SELECT customer_id, sum(total_cents) ... WHERE customer_id BETWEEN 1000 AND 1100 GROUP BY customer_id`: through `o_cust` (needs the table for `total_cents`) **3.692 ms**; after `CREATE INDEX o_cover ON orders(customer_id, total_cents)`, the plan says `USING COVERING INDEX` and it took **0.319 ms**, 11.6 times faster. The price is space: sizes from `dbstat` after the three indexes were built: orders 42.6 MB, `o_cust` 11.4, `o_cust_created` 31.5, `o_cover` 14.7; the file grew from 42.6 to **100.2 MB**.",
+  "**Commits are the write cost:** each commit waits for the file to reach disk. 2,000 inserts, each its own transaction, default rollback journal, `synchronous=FULL` (the default): **1,847 ms**; 50,000 inserts in one `BEGIN`/`COMMIT`: **61 ms**. So batching made each row several hundred times cheaper (0.9 ms per autocommit insert against 0.0012 ms in the batch). Every statement outside a transaction is its own transaction: wrap loops in one (Postgres had the same shape in module 28).",
+  "**Journal mode and synchronous:** `PRAGMA journal_mode=WAL` (write-ahead log) cut the 2,000 autocommit inserts to **467 ms**; with `PRAGMA synchronous=NORMAL` as well, **38 ms**. The batched 50,000-row insert hardly changed (79 and 46 ms). The trade, from the SQLite documentation: with WAL and `synchronous=NORMAL` a power loss can lose the most recent commits (the database stays consistent). Data safety, not speed, is what you give up; decide it on purpose.",
+  "**Not measured here:** concurrent writers (SQLite allows one writer at a time; readers do not block it in WAL mode, per its documentation), `WITHOUT ROWID` tables, the query planner's `ANALYZE` statistics beyond running it once, and any other engine. MySQL, ClickHouse and DuckDB were not available in this environment, so no cross-engine comparison is made.",
+]
+
+[[sections]]
+heading = "Tables, indexes and the plan"
+body = """
+A SQLite table is a b-tree keyed by a 64-bit rowid. When you declare `id INTEGER PRIMARY KEY`, the column is the rowid, so a lookup by id is one tree descent:
+
+```
+EXPLAIN QUERY PLAN SELECT * FROM orders WHERE id = ?
+SEARCH orders USING INTEGER PRIMARY KEY (rowid=?)        -- 0.009 ms
+```
+
+A secondary index is another b-tree whose entries are the indexed columns followed by the rowid. A query that uses it finds the rowids in the index and then looks each one up in the table. Postgres does the same with a heap pointer (modules 1 and 5). The planner words are different, and the output is shorter: no estimates, no counts.
+
+The test table has 1,000,000 orders and 50,000 customers. The customer's 20 latest orders, with three index choices:
+
+| indexes | plan | time |
+|---|---|---|
+| none | `SCAN orders`, `USE TEMP B-TREE FOR ORDER BY` | 56.035 ms |
+| `(customer_id)` | `SEARCH ... USING INDEX o_cust (customer_id=?)`, `USE TEMP B-TREE FOR ORDER BY` | 0.028 ms |
+| `(customer_id, created_at)` | `SEARCH ... USING INDEX o_cust_created (customer_id=?)` | 0.022 ms |
+
+A read of 1,000,000 rows becomes a seek; the sort disappears when the index order matches the `ORDER BY`. This is the arrangement behind the multicolumn module, unchanged. There is no cost estimate and no buffer count in SQLite, so you measure in time, repeating the call, and use the plan only to confirm which index is used.
+"""
+
+[[sections]]
+heading = "Covering indexes and what they weigh"
+body = """
+The query `SELECT customer_id, sum(total_cents) FROM orders WHERE customer_id BETWEEN 1000 AND 1100 GROUP BY customer_id` needs `total_cents`, which the `customer_id` index does not hold:
+
+```
+SEARCH orders USING INDEX o_cust (customer_id>? AND customer_id<?)            -- 3.692 ms
+```
+
+With an index on `(customer_id, total_cents)`, SQLite says so in the plan and skips the table:
+
+```
+SEARCH orders USING COVERING INDEX o_cover (customer_id>? AND customer_id<?)  -- 0.319 ms
+```
+
+11.6 times faster for this query. Every index also takes space and is updated on every write: after the three indexes, the file was 100.2 MB against 42.6 MB without them (`o_cust` 11.4 MB, `o_cust_created` 31.5 MB, `o_cover` 14.7 MB). The index on `(customer_id, created_at)` makes `o_cust` redundant for lookups; I left both in to measure the plans, and in a real schema you would drop `o_cust`.
+"""
+
+[[sections]]
+heading = "Where SQLite's time goes: the commit"
+body = """
+In an embedded database the query is a function call, so the cost moves to durability. A commit must make the change survive a crash, which means the file system must confirm the data is on disk. Outside an explicit transaction, every statement is committed alone:
+
+| journal / synchronous | 2,000 inserts, one commit each | 50,000 inserts, one commit |
+|---|---|---|
+| rollback journal, FULL (default) | 1,847 ms | 61 ms |
+| WAL, FULL | 467 ms | 77 ms |
+| WAL, NORMAL | 38 ms | 46 ms |
+
+(Medians of three runs.) Batching 50,000 rows in one transaction costs about what the 2,000 single commits cost in WAL mode with NORMAL, and several hundred times less per row than the default autocommit loop. WAL mode commits by appending to a log, which is cheaper than the default journal's file juggling; `synchronous=NORMAL` skips the sync at each commit, and per the SQLite documentation that means a power failure may lose recent commits while leaving the database file consistent. Whether that is acceptable depends on the data: a cache or a local analysis, usually; money, no.
+
+The practical rules from the measurement: put loops of writes in one transaction; turn on WAL mode for anything with readers and a writer; choose `synchronous` knowing what you lose.
+"""
+
+[[checks]]
+prompt = "A script inserts 100,000 rows into SQLite with a loop of execute() calls and takes minutes. Postgres took seconds for something similar. What do you change?"
+answer = "Wrap the loop in one transaction (BEGIN ... COMMIT, or executemany inside one): outside it, every statement is committed alone and waits for a sync. In the test, 2,000 autocommit inserts took 1,847 ms and 50,000 inserts in one transaction took 61 ms. WAL mode helps the remaining commits, and synchronous=NORMAL more, at the price of possibly losing the latest commits on power failure."
+[[checks]]
+prompt = "EXPLAIN QUERY PLAN for your query says SCAN orders and USE TEMP B-TREE FOR ORDER BY. What index do you add and what does the plan say afterwards?"
+answer = "An index on the filter column followed by the sort column, for example (customer_id, created_at). The plan becomes SEARCH orders USING INDEX ... (customer_id=?) and the temp b-tree line disappears because the index returns rows in order; in the test it went from 56.035 ms to 0.022 ms."
+[[checks]]
+prompt = "What does SQLite's EXPLAIN QUERY PLAN not tell you that you rely on in Postgres, and how do you compensate?"
+answer = "It gives no row counts, no estimated or actual cost, and no buffer counts. You time the statement yourself, repeated and with medians, and check the plan wording (SCAN, SEARCH, COVERING INDEX, TEMP B-TREE) only to see which index was chosen."
+
+[[terms]]
+term = "rowid"
+means = "SQLite's hidden 64-bit row key; the table is a b-tree ordered by it, and an INTEGER PRIMARY KEY column is an alias for it."
+section = "Tables, indexes and the plan"
+
+[[terms]]
+term = "Covering index (SQLite)"
+means = "An index that contains every column the query needs, so the plan says USING COVERING INDEX and the table is not read."
+section = "Covering indexes and what they weigh"
+
+[[terms]]
+term = "WAL mode"
+means = "SQLite's write-ahead-log journal mode, where commits append to a log file and readers do not block the writer."
+section = "Where SQLite's time goes: the commit"
+
+[[terms]]
+term = "synchronous"
+means = "A SQLite pragma controlling how often it waits for data to reach disk; FULL is the default, NORMAL waits less and may lose recent commits on power failure in WAL mode."
+section = "Where SQLite's time goes: the commit"
+
+[[sources]]
+title = "SQLite: EXPLAIN QUERY PLAN"
+kind = "docs"
+url = "https://www.sqlite.org/eqp.html"
+
+[[sources]]
+title = "SQLite: query planning and indexes"
+kind = "docs"
+url = "https://www.sqlite.org/queryplanner.html"
+
+[[sources]]
+title = "SQLite: write-ahead logging"
+kind = "docs"
+url = "https://www.sqlite.org/wal.html"
