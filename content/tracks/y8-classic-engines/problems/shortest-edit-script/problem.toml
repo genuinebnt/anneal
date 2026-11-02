@@ -1,0 +1,32 @@
+slug = "shortest-edit-script"
+title = "diff: the shortest edit script between two files"
+mode = "write"
+level = "medium"
+stage = "build-it"
+order = 1
+status = "ready"
+tags = ["diff", "LCS", "dynamic programming", "edit script", "git diff", "Myers", "backtracking a table"]
+teaches = [
+  "`diff` is the longest-common-subsequence problem in disguise: lines in the LCS are kept, everything else is a delete or an insert, so a shorter script means a longer LCS.",
+  "Fill the table from the *end* (`lcs[i][j]` for the suffixes) and the script can be read off front to back with no reversing.",
+  "Checking an answer is part of the job: replay the script, and compare its size against an independent computation of the optimum.",
+]
+follow_up = "1) Strip the common prefix and suffix first and run the DP only on the middle: how much faster is the 'few edits in a big file' case? 2) Implement Myers' O(ND) greedy algorithm (the `V` array of furthest-reaching points per diagonal) and test it against this one. 3) Group the ops into hunks with three lines of context and print a unified diff (`@@ -a,b +c,d @@`). 4) Add a three-way merge: given a common base and two edited versions, merge the non-overlapping edits and report conflicts. 5) Patience diff: anchor on lines that occur exactly once in both files. Why are its scripts nicer to read for code?"
+related = ["P2", "S2", "Y7"]
+
+[[hints]]
+kind = "approach"
+text = "Build `lcs[i][j]` for the suffixes `a[i..]` and `b[j..]`: if the first lines are equal, `1 + lcs[i+1][j+1]`, otherwise the better of skipping one line from either side. Then walk from `(0, 0)`: equal lines are kept; on a mismatch, go to the neighbour with the larger LCS (delete if `lcs[i+1][j] >= lcs[i][j+1]`, else insert). Flush what remains of either side."
+
+[[hints]]
+kind = "rust"
+text = "`vec![vec![0u32; m + 1]; n + 1]` with a zero border row and column means no special cases at the ends. Iterate `(0..n).rev()` and `(0..m).rev()` to fill it. The `>=` in the walk is the 'delete first' rule."
+
+[[hints]]
+kind = "edge"
+text = "Taking a match whenever `a[i] == b[j]` is safe: some optimal solution always matches the two heads. The test suite checks the *size* of your script against an independent LCS, not one particular script, so any shortest script that follows the delete-first tie rule passes."
+
+[solution]
+explanation = "`git diff`, `diff -u` and every code-review UI do this. The DP here is O(nm) time and space; Myers' 1986 algorithm is O(ND) where D is the number of edits, which is why diffing two near-identical 100 000-line files takes milliseconds: git's default is Myers with heuristics, and `--patience` / `--histogram` pick *readable* scripts rather than minimal ones."
+time = "O(a.len() x b.len())"
+space = "O(a.len() x b.len())"
