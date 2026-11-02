@@ -1,0 +1,32 @@
+slug = "atomic-stats"
+title = "Lock-free statistics counters"
+mode = "write"
+level = "medium"
+stage = "understand-it"
+order = 1
+status = "ready"
+tags = ["AtomicU64", "fetch_update", "fetch_min", "Relaxed"]
+teaches = [
+  "Independent counters need `Relaxed`: the ordering only matters when one atomic publishes another's data.",
+  "`fetch_add`, `fetch_min`, `fetch_max` are single hardware read-modify-writes; `load` then `store` is a race.",
+  "A compare-exchange loop (`fetch_update`) builds any other update, such as a saturating add.",
+]
+follow_up = "1) Why would a snapshot taken during writes be inconsistent, and what would you change to make `count`, `sum`, `min` and `max` agree (seqlock, or a mutex)? 2) With 64 threads hammering one `Stats`, what limits throughput (cache-line bouncing), and how does sharding per thread plus merging fix it? 3) Why is `fetch_update` allowed to fail spuriously, and what does that mean for the closure? 4) How would you add a mean without division by zero?"
+related = ["C1", "F6"]
+
+[[hints]]
+kind = "approach"
+text = "Every field is updated by one atomic operation, so `Ordering::Relaxed` is enough: no field publishes data for another."
+
+[[hints]]
+kind = "rust"
+text = "`AtomicU64::fetch_update(set, fetch, |old| Some(new))` is the compare-exchange loop: use it where no single `fetch_*` method does the job."
+
+[[hints]]
+kind = "edge"
+text = "An empty `min` must not look like a real value: start it at `u64::MAX`, and decide emptiness from `count`."
+
+[solution]
+explanation = "Four independent counters, each updated by one atomic read-modify-write. `Relaxed` still guarantees each counter's own total order and no lost updates; it only promises nothing about how different counters line up with each other, which is why `snapshot` can see a count that is one ahead of the sum. The saturating add is the pattern behind every custom atomic update: load, compute, compare-exchange, retry on conflict."
+time = "O(1) per record"
+space = "O(1)"
