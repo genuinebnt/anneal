@@ -1,0 +1,130 @@
+{
+ "id": "m33-gin-and",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM ft_t WHERE tsv @@ to_tsquery('simple', 'postgres & index');",
+ "setup": [
+  {
+   "id": "ft-t",
+   "sql": "SELECT setseed(0.42); CREATE TABLE ft_t AS SELECT i AS id, (SELECT string_agg(translate(substr(md5(w::text), 1, 3 + (w % 6)), '0123456789', 'ghijklmnop'), ' ') FROM (SELECT (floor(3000 * power(random(), 4)))::int AS w FROM generate_series(1, 60) g WHERE i > 0) q) || CASE WHEN i % 1000 = 0 THEN ' postgres' ELSE '' END || CASE WHEN i % 20 = 3 THEN ' index' ELSE '' END || CASE WHEN i % 4000 = 0 THEN ' postgres index' ELSE '' END AS body FROM generate_series(1, 200000) i; ALTER TABLE ft_t ADD PRIMARY KEY (id); ALTER TABLE ft_t ADD COLUMN tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', body)) STORED; ALTER TABLE ft_t SET (autovacuum_enabled = false); VACUUM ANALYZE ft_t;"
+  },
+  {
+   "id": "ft-gin",
+   "sql": "CREATE INDEX ft_gin ON ft_t USING gin (tsv); ANALYZE ft_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 228.63,
+   "Total Cost": 228.64,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.126,
+   "Actual Total Time": 0.127,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 61,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "ft_t",
+     "Alias": "ft_t",
+     "Startup Cost": 34.14,
+     "Total Cost": 228.5,
+     "Plan Rows": 50,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.098,
+     "Actual Total Time": 0.121,
+     "Actual Rows": 50.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(tsv @@ '''postgres'' & ''index'''::tsquery)",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 50,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 61,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "ft_gin",
+       "Startup Cost": 0.0,
+       "Total Cost": 34.13,
+       "Plan Rows": 50,
+       "Plan Width": 0,
+       "Actual Startup Time": 0.09,
+       "Actual Total Time": 0.09,
+       "Actual Rows": 50.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(tsv @@ '''postgres'' & ''index'''::tsquery)",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 11,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 1,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.1,
+  "Triggers": [],
+  "Execution Time": 0.141
+ },
+ "text": "Aggregate  (cost=228.63..228.64 rows=1 width=8) (actual time=0.120..0.120 rows=1.00 loops=1)\n  Buffers: shared hit=61\n  ->  Bitmap Heap Scan on ft_t  (cost=34.14..228.50 rows=50 width=0) (actual time=0.093..0.115 rows=50.00 loops=1)\n        Recheck Cond: (tsv @@ '''postgres'' & ''index'''::tsquery)\n        Heap Blocks: exact=50\n        Buffers: shared hit=61\n        ->  Bitmap Index Scan on ft_gin  (cost=0.00..34.13 rows=50 width=0) (actual time=0.086..0.086 rows=50.00 loops=1)\n              Index Cond: (tsv @@ '''postgres'' & ''index'''::tsquery)\n              Index Searches: 1\n              Buffers: shared hit=11\nPlanning:\n  Buffers: shared hit=1\nPlanning Time: 0.067 ms\nExecution Time: 0.130 ms"
+}
