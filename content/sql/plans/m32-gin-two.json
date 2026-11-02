@@ -1,0 +1,130 @@
+{
+ "id": "m32-gin-two",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM gin_t WHERE tags @> '{t3,rare}';",
+ "setup": [
+  {
+   "id": "gin-t",
+   "sql": "CREATE TABLE gin_t AS SELECT i AS id, array_remove(array['t' || (i % 7), 't' || (10 + i % 101), 't' || (200 + i % 997), CASE WHEN i % 10000 = 0 THEN 'rare' END, CASE WHEN i % 2 = 0 THEN 'common' END], NULL) AS tags, jsonb_build_object('plan', (array['free','pro','team','enterprise'])[1 + i % 4], 'region', (array['eu','us','apac','latam','mea'])[1 + i % 5], 'n', i % 1000, 'beta', i % 49 = 0) AS doc FROM generate_series(1, 500000) i; ALTER TABLE gin_t ADD PRIMARY KEY (id); ALTER TABLE gin_t SET (autovacuum_enabled = false); VACUUM ANALYZE gin_t;"
+  },
+  {
+   "id": "gin-tags-idx",
+   "sql": "CREATE INDEX gin_tags ON gin_t USING gin (tags); ANALYZE gin_t;"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 133.31,
+   "Total Cost": 133.32,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 0.984,
+   "Actual Total Time": 0.986,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 34,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Bitmap Heap Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "gin_t",
+     "Alias": "gin_t",
+     "Startup Cost": 21.64,
+     "Total Cost": 133.24,
+     "Plan Rows": 29,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.974,
+     "Actual Total Time": 0.981,
+     "Actual Rows": 7.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Recheck Cond": "(tags @> '{t3,rare}'::text[])",
+     "Rows Removed by Index Recheck": 0,
+     "Exact Heap Blocks": 7,
+     "Lossy Heap Blocks": 0,
+     "Shared Hit Blocks": 34,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0,
+     "Plans": [
+      {
+       "Node Type": "Bitmap Index Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Index Name": "gin_tags",
+       "Startup Cost": 0.0,
+       "Total Cost": 21.64,
+       "Plan Rows": 29,
+       "Plan Width": 0,
+       "Actual Startup Time": 0.962,
+       "Actual Total Time": 0.962,
+       "Actual Rows": 7.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Index Cond": "(tags @> '{t3,rare}'::text[])",
+       "Index Searches": 1,
+       "Shared Hit Blocks": 27,
+       "Shared Read Blocks": 0,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 1,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.072,
+  "Triggers": [],
+  "Execution Time": 1.002
+ },
+ "text": "Aggregate  (cost=133.31..133.32 rows=1 width=8) (actual time=0.313..0.314 rows=1.00 loops=1)\n  Buffers: shared hit=34\n  ->  Bitmap Heap Scan on gin_t  (cost=21.64..133.24 rows=29 width=0) (actual time=0.305..0.310 rows=7.00 loops=1)\n        Recheck Cond: (tags @> '{t3,rare}'::text[])\n        Heap Blocks: exact=7\n        Buffers: shared hit=34\n        ->  Bitmap Index Scan on gin_tags  (cost=0.00..21.64 rows=29 width=0) (actual time=0.299..0.299 rows=7.00 loops=1)\n              Index Cond: (tags @> '{t3,rare}'::text[])\n              Index Searches: 1\n              Buffers: shared hit=27\nPlanning:\n  Buffers: shared hit=1\nPlanning Time: 0.069 ms\nExecution Time: 0.327 ms"
+}
