@@ -1,0 +1,11 @@
+code = "Y9"
+name = "Capstone builds: parts of real systems"
+section = "Y"
+tier = "sde3"
+order = 9
+summary = "Build the hard core of real programs: a shell's command-line parser, an operational-transformation text editor, and a crash-safe key-value log."
+
+[[stages]]
+slug = "build"
+name = "Build it"
+band = "hard"

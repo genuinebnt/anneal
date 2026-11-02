@@ -1,0 +1,32 @@
+slug = "shell-line-parser"
+title = "Parse a shell command line: quotes, expansion, pipes, redirects"
+mode = "write"
+level = "medium"
+stage = "build"
+order = 1
+status = "ready"
+tags = ["shell", "tokenizer", "quoting", "variable expansion", "pipelines", "redirection", "state machine", "error handling"]
+teaches = [
+  "Shell syntax is a small state machine over characters: unquoted, inside `'...'` (everything literal), inside `\"...\"` (expansion and a few escapes) and after a backslash. Adjacent pieces glue into one word.",
+  "Tokenising and parsing are separate steps: first words and operators (`|`, `<`, `>`, `>>`), then group the tokens into commands. Errors belong to the step that can see them.",
+  "A word can be empty (`\"\"`) yet still a word, while an unquoted empty expansion is not: tracking 'is a word in progress' separately from its text is the key detail.",
+]
+follow_up = "1) Add `;`, `&&` and `||` between pipelines and return a small AST. 2) Add word splitting for unquoted expansions (`IFS` whitespace) and see which of your tests change. 3) Add glob expansion (`*`, `?`) against a provided file list, applied only to unquoted words. 4) Add `$?` and `$$` as special variables. 5) Build the executor: `std::process::Command` with `Stdio::piped` between stages and a file for each redirect, and check a few pipelines against `sh -c`."
+related = ["S2", "Y8", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Two passes. `tokenize` walks the characters with a `cur: Option<String>` for the word in progress: `None` means 'between words', `Some(\"\")` means 'a word has started but is empty' (that is what `\"\"` produces). Operators flush the current word and emit a token. `parse` then folds tokens into commands, remembering a pending redirect so the next word becomes its target."
+
+[[hints]]
+kind = "rust"
+text = "Collect `chars` into a `Vec<char>` and index with `chars.get(i)` so running off the end is a `None`, not a panic. A little `expand(chars, &mut i, env, out)` function that advances `i` and appends the value keeps the quote handling readable. A `macro_rules! flush` (or a closure) avoids repeating the 'push the word if any' code."
+
+[[hints]]
+kind = "edge"
+text = "Check the order of errors: an unterminated quote is found while tokenising, so it beats any grammar error. A redirect followed directly by `|` or another redirect is `MissingRedirectTarget`, and a stage with only redirects is `EmptyCommand`. `$HOME_x` is the variable `HOME_x`, not `$HOME` followed by `_x`."
+
+[solution]
+explanation = "This is the lexer-and-parser of `sh`, restricted to the parts that are pure syntax; real shells add word splitting, globbing, command substitution and `&&`/`;`/`&`, each of which can be layered on this structure. The quoting rules are where shell-injection bugs live: knowing that expansion happens after parsing (and that quoted expansions stay one word) is the whole reason `\"$var\"` is the safe form."
+time = "O(line length)"
+space = "O(line length)"
