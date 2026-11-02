@@ -1,0 +1,11 @@
+code = "Y10"
+name = "Search engine core"
+section = "Y"
+tier = "sde3"
+order = 10
+summary = "The two halves of code and text search: a trigram index that narrows substring queries without reading documents, and BM25 ranking over an inverted index."
+
+[[stages]]
+slug = "search"
+name = "Search"
+band = "medium"
