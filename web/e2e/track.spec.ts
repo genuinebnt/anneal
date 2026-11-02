@@ -71,3 +71,11 @@ test("keys are ignored while typing in the filter box", async ({ page }) => {
     await page.getByLabel("Filter problems").press("j");
     await expect(page.locator(`${rows}.kb`)).toHaveCount(0);
 });
+
+test("the Learn tab shows the phases and a brief with follow-up questions for each written problem", async ({ page }) => {
+    await page.goto("/t/c3-atomics-lock-free");
+    await expect(page.locator(".rt-phases")).toBeVisible();
+    await expect(page.locator(".rt-brief").first()).toBeVisible();
+    await page.locator(".rt-fold > button", { hasText: "Follow-up questions" }).first().click();
+    await expect(page.locator(".rt-fu li").first()).toBeVisible();
+});
