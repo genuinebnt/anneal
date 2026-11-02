@@ -20,6 +20,7 @@ export const SD_GROUPS: { id: string; name: string; blurb: string; color: string
     { id: "sql-plans", name: "SQL performance: reading plans", blurb: "EXPLAIN, access and filter conditions, statistics, the planner's mistakes", color: "var(--fn)" },
     { id: "sql-shapes", name: "SQL performance: query shapes", blurb: "joins, sorting, pagination, subqueries and aggregates", color: "var(--fn)" },
     { id: "sql-covering", name: "SQL performance: covering and clustering", blurb: "index-only scans, the visibility map, physical order", color: "var(--fn)" },
+    { id: "sql-internals", name: "SQL performance: Postgres internals", blurb: "row versions, vacuum, TOAST and the write-ahead log", color: "var(--fn)" },
 ];
 
 export const groupOf = (id: string) => SD_GROUPS.find((g) => g.id === id) ?? SD_GROUPS[0]!;

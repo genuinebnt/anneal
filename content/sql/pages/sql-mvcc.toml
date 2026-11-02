@@ -1,0 +1,112 @@
+title = "MVCC: row versions, snapshots and bloat"
+group = "sql-internals"
+order = 23
+minutes = 16
+lede = "Postgres never updates a row in place. An UPDATE writes a new version and leaves the old one for transactions that can still see it, and a DELETE only marks the row. That is why readers do not block writers, and it is also why a table that is updated a lot grows, why indexes grow with it, and why VACUUM exists. This page shows the versions directly and measures what they cost."
+say = "Every UPDATE inserts a new row version (a new ctid, a new xmin) and sets xmax on the old one; readers pick the version their snapshot can see, so nothing blocks. The dead versions stay until VACUUM: two updates of every row in a 500,000-row table took it from 22 MB to 63 MB (index 11 MB to 25 MB, 8,108 pages to scan instead of 2,752). VACUUM makes the space reusable but does not shrink the file; VACUUM FULL does, under an exclusive lock. Module 24 covers keeping up with it."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "Each row version has hidden columns: **xmin** (the transaction that created it), **xmax** (the one that deleted or replaced it, 0 if none) and **ctid** (its physical address, page and slot). After `UPDATE mv_demo SET v = 11 WHERE id = 1` the row moved from `(0,1)` to `(0,3)` and xmin changed from 6957 to 6958; a second update moved it to `(0,4)`. The old versions are still in the page.",
+  "A reader never waits for a writer. While session A had an uncommitted update, session B still saw the **old** version of the row, now with `xmax = 6965` (A's transaction id). After A rolled back, B saw the same row version, the `xmax` still there but ignored because that transaction aborted.",
+  "A 500,000-row table of 22 MB (2,752 pages; primary key index 11 MB) updated twice, without a vacuum, was **63 MB** (8,108 pages; index **25 MB**): 1,000,000 dead versions. `SELECT count(*)` had to walk all 8,108 pages (cached run: about 48 ms fresh against 60 ms bloated, because the cost here is CPU; the page count is what a cold cache turns into reads).",
+  "`VACUUM` marks the dead versions' space reusable but does **not** shrink the file: 8,108 pages after the vacuum, and a further update of every row stayed at 63 MB because it reused the space. `VACUUM FULL` rewrote the table to 21 MB (2,703 pages) but holds an `ACCESS EXCLUSIVE` lock for the whole rewrite.",
+]
+
+[[sections]]
+heading = "Every update is a new row"
+body = """
+A two-row table, `(id, v)`, and its hidden columns after each step (the transaction ids are from this run):
+
+| Step | Row 1 as `(ctid, xmin, xmax, v)` | Row 2 |
+|---|---|---|
+| after `INSERT` of 2 rows | `(0,1)`, 6957, 0, 10 | `(0,2)`, 6957, 0, 20 |
+| after `UPDATE ... SET v = 11 WHERE id = 1` | `(0,3)`, 6958, 0, 11 | `(0,2)` unchanged |
+| after a second update to 12 | `(0,4)`, 6959, 0, 12 | `(0,2)` unchanged |
+| after `VACUUM`, then an update to 13 | `(0,3)`, 6960, 0, 13 | `(0,2)` unchanged |
+
+The row did not change in place: it moved to a new slot each time, with the updating transaction's id as its new `xmin`. The old versions stayed in slots `(0,1)`, `(0,3)` and so on, with their `xmax` set to the transaction that replaced them. After the `VACUUM` the slot `(0,3)` that held a dead version was **reused** for the next update. `ctid` is a physical address, which is also what every index entry stores: an update that creates a new version at a new `ctid` normally needs a new entry in every index on the table.
+
+`DELETE` sets `xmax` on the existing version and writes nothing else; the row is gone to later snapshots, but the bytes stay until vacuum. `INSERT` writes a version whose `xmin` is the inserting transaction. That is the whole mechanism: three kinds of statement, all of which only append versions and stamp transaction ids.
+"""
+
+[[sections]]
+heading = "What a reader sees"
+body = """
+Every transaction reads from a **snapshot**: the set of transactions that had committed when it (or, at read committed, each statement) started. A version is visible if its `xmin` is in the snapshot and its `xmax` is not (not set, aborted, or committed after the snapshot). With two sessions on the same table:
+
+- Session A: `BEGIN; UPDATE mv_demo SET v = 99 WHERE id = 1;` (transaction 6965). A sees `(0,3)`, xmin 6965, v = 99: its own new version.
+- Session B, at the same moment: `(0,1)`, xmin 6964, **xmax 6965**, v = 10. B sees the old version, because 6965 has not committed. B was not blocked.
+- A rolls back. B sees the same `(0,1)` row with `xmax` still 6965: the stamp is still on the version, but a transaction that aborted never counts, so the version stays visible. The aborted version at `(0,3)` is dead.
+
+So a reader and a writer never block each other, and an aborted transaction needs no undo work: its versions are simply never visible and are vacuumed later. The cost is paid elsewhere, in space and in vacuum, and in a few rules for writers: two transactions updating the same row still queue behind each other (module 30), and a long-running transaction holds an old snapshot that stops vacuum from removing versions it might still need (module 31).
+"""
+
+[[sections]]
+heading = "What dead versions cost"
+body = """
+A 500,000-row copy of the orders table with a primary key, autovacuum turned off for it so the numbers stay put:
+
+```plan id=m23-fresh setup=mv-table,no-parallel
+SELECT count(*) FROM mv_t;
+```
+
+2,752 pages. Now update every row twice, with no vacuum in between (1,000,000 dead versions; 500,000 live):
+
+```plan id=m23-bloated setup=mv-table,mv-bloat,no-parallel
+SELECT count(*) FROM mv_t;
+```
+
+**8,108 pages**, three times as many, to count the same 500,000 rows; the table is 63 MB and the primary key index went from 11 MB to 25 MB (an update that creates a new version normally writes a new index entry as well; module 24 covers the exception, HOT updates). The run time barely moved (about 60 ms against 48 ms, cached; counting is CPU-bound here), which is why bloat goes unnoticed until the table is bigger than memory: the pages are what a cold cache has to read. Notice the planner's estimate: `rows=1473110`, three times the truth, because it extrapolates from the table size and the last statistics. After a plain `VACUUM`:
+
+```plan id=m23-vacuumed setup=mv-table,mv-bloat,mv-vacuum,no-parallel
+SELECT count(*) FROM mv_t;
+```
+
+Still 8,108 pages, because `VACUUM` does not give pages back to the operating system, except empty ones at the end of the file. What it does is mark the dead versions' space as free for new rows: another update of every row stayed at 63 MB. The space is reusable, not returned. To shrink:
+
+```plan id=m23-full setup=mv-table,mv-bloat,mv-vacuum-full,no-parallel
+SELECT count(*) FROM mv_t;
+```
+
+`VACUUM FULL` rewrote the table into 2,703 pages (21 MB), but it takes an `ACCESS EXCLUSIVE` lock for the duration, blocking reads and writes, and needs room for the new copy. On a live table people use `pg_repack` or accept the bloat and keep it from growing. The point of module 24 is to make plain `VACUUM` keep up, so that a table settles at a stable size.
+"""
+
+[[checks]]
+prompt = "A table with 500,000 rows is 22 MB. After a nightly job updates every row it is 63 MB and stays at 63 MB after VACUUM. Is VACUUM broken?"
+answer = "No. The updates left dead row versions, and VACUUM marks their space reusable but only returns empty pages at the end of the file to the operating system. The file keeps its size, the freed space is reused by later updates, and the table should stay near 63 MB instead of growing. VACUUM FULL or pg_repack would shrink it, at the cost of a lock or an online rewrite."
+
+[[checks]]
+prompt = "Session A has an uncommitted UPDATE of row 1. What does session B see when it reads the row, and does it wait?"
+answer = "B sees the previous committed version (with xmax set to A's transaction id) and does not wait, because readers use a snapshot and A's version is invisible until A commits. If A rolls back, B keeps seeing that version and the aborted version is just dead space for VACUUM."
+
+[[terms]]
+term = "MVCC"
+means = "Multiversion concurrency control: updates and deletes create and stamp row versions instead of changing rows in place, so readers use a snapshot and never block on writers."
+section = "Every update is a new row"
+
+[[terms]]
+term = "ctid"
+means = "A row version's physical address, as (page, slot); it changes when an update writes a new version."
+section = "Every update is a new row"
+
+[[terms]]
+term = "Bloat"
+means = "Space taken by dead row versions and the extra index entries they leave, which grows a table and its indexes beyond what the live rows need."
+section = "What dead versions cost"
+
+[[sources]]
+title = "PostgreSQL: concurrency control and MVCC"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/mvcc-intro.html"
+
+[[sources]]
+title = "PostgreSQL: heap-only tuples (README.HOT)"
+kind = "docs"
+url = "https://github.com/postgres/postgres/blob/master/src/backend/access/heap/README.HOT"
+
+[[sources]]
+title = "PostgreSQL: routine vacuuming"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/routine-vacuuming.html"
