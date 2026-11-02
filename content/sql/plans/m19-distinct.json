@@ -1,0 +1,121 @@
+{
+ "id": "m19-distinct",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(DISTINCT customer_id) FROM orders;",
+ "setup": [
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 308966.69,
+   "Total Cost": 308966.7,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 754.909,
+   "Actual Total Time": 754.911,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 13826,
+   "Shared Read Blocks": 1134,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 2941,
+   "Temp Written Blocks": 2952,
+   "Plans": [
+    {
+     "Node Type": "Sort",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Startup Cost": 298966.69,
+     "Total Cost": 303966.69,
+     "Plan Rows": 2000000,
+     "Plan Width": 4,
+     "Actual Startup Time": 471.543,
+     "Actual Total Time": 639.822,
+     "Actual Rows": 2000000.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Sort Key": [
+      "customer_id"
+     ],
+     "Sort Method": "external merge",
+     "Sort Space Used": 23528,
+     "Sort Space Type": "Disk",
+     "Shared Hit Blocks": 13826,
+     "Shared Read Blocks": 1134,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 2941,
+     "Temp Written Blocks": 2952,
+     "Plans": [
+      {
+       "Node Type": "Seq Scan",
+       "Parent Relationship": "Outer",
+       "Parallel Aware": false,
+       "Async Capable": false,
+       "Relation Name": "orders",
+       "Alias": "orders",
+       "Startup Cost": 0.0,
+       "Total Cost": 34960.0,
+       "Plan Rows": 2000000,
+       "Plan Width": 4,
+       "Actual Startup Time": 0.011,
+       "Actual Total Time": 134.931,
+       "Actual Rows": 2000000.0,
+       "Actual Loops": 1,
+       "Disabled": false,
+       "Shared Hit Blocks": 13826,
+       "Shared Read Blocks": 1134,
+       "Shared Dirtied Blocks": 0,
+       "Shared Written Blocks": 0,
+       "Local Hit Blocks": 0,
+       "Local Read Blocks": 0,
+       "Local Dirtied Blocks": 0,
+       "Local Written Blocks": 0,
+       "Temp Read Blocks": 0,
+       "Temp Written Blocks": 0
+      }
+     ]
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.067,
+  "Triggers": [],
+  "Execution Time": 757.133
+ },
+ "text": "Aggregate  (cost=308966.69..308966.70 rows=1 width=8) (actual time=835.104..835.106 rows=1.00 loops=1)\n  Buffers: shared hit=13920 read=1040, temp read=2941 written=2952\n  ->  Sort  (cost=298966.69..303966.69 rows=2000000 width=4) (actual time=535.575..714.300 rows=2000000.00 loops=1)\n        Sort Key: customer_id\n        Sort Method: external merge  Disk: 23528kB\n        Buffers: shared hit=13920 read=1040, temp read=2941 written=2952\n        ->  Seq Scan on orders  (cost=0.00..34960.00 rows=2000000 width=4) (actual time=0.009..152.577 rows=2000000.00 loops=1)\n              Buffers: shared hit=13920 read=1040\nPlanning Time: 0.079 ms\nExecution Time: 837.199 ms"
+}

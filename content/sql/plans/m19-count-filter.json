@@ -1,0 +1,98 @@
+{
+ "id": "m19-count-filter",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FROM orders WHERE status = 'refunded';",
+ "setup": [
+  {
+   "id": "orders-status",
+   "sql": "CREATE INDEX orders_status ON orders (status);"
+  },
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 5381.77,
+   "Total Cost": 5381.78,
+   "Plan Rows": 1,
+   "Plan Width": 8,
+   "Actual Startup Time": 31.081,
+   "Actual Total Time": 31.082,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 195,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Index Only Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Scan Direction": "Forward",
+     "Index Name": "orders_status",
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.43,
+     "Total Cost": 4807.1,
+     "Plan Rows": 229867,
+     "Plan Width": 0,
+     "Actual Startup Time": 0.013,
+     "Actual Total Time": 17.583,
+     "Actual Rows": 222462.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Index Cond": "(status = 'refunded'::text)",
+     "Rows Removed by Index Recheck": 0,
+     "Heap Fetches": 0,
+     "Index Searches": 1,
+     "Shared Hit Blocks": 195,
+     "Shared Read Blocks": 0,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.061,
+  "Triggers": [],
+  "Execution Time": 31.138
+ },
+ "text": "Aggregate  (cost=5381.77..5381.78 rows=1 width=8) (actual time=35.936..35.937 rows=1.00 loops=1)\n  Buffers: shared hit=195\n  ->  Index Only Scan using orders_status on orders  (cost=0.43..4807.10 rows=229867 width=0) (actual time=0.017..20.677 rows=222462.00 loops=1)\n        Index Cond: (status = 'refunded'::text)\n        Heap Fetches: 0\n        Index Searches: 1\n        Buffers: shared hit=195\nPlanning Time: 0.070 ms\nExecution Time: 35.961 ms"
+}

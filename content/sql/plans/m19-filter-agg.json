@@ -1,0 +1,88 @@
+{
+ "id": "m19-filter-agg",
+ "engine": "postgres",
+ "version": "18.6",
+ "query": "SELECT count(*) FILTER (WHERE status = 'paid') AS paid,\n       count(*) FILTER (WHERE status = 'refunded') AS refunded,\n       count(*) AS total\nFROM orders;",
+ "setup": [
+  {
+   "id": "no-parallel",
+   "sql": "SET max_parallel_workers_per_gather = 0;"
+  }
+ ],
+ "json": {
+  "Plan": {
+   "Node Type": "Aggregate",
+   "Strategy": "Plain",
+   "Partial Mode": "Simple",
+   "Parallel Aware": false,
+   "Async Capable": false,
+   "Startup Cost": 59960.0,
+   "Total Cost": 59960.01,
+   "Plan Rows": 1,
+   "Plan Width": 24,
+   "Actual Startup Time": 312.771,
+   "Actual Total Time": 312.773,
+   "Actual Rows": 1.0,
+   "Actual Loops": 1,
+   "Disabled": false,
+   "Shared Hit Blocks": 14390,
+   "Shared Read Blocks": 570,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0,
+   "Plans": [
+    {
+     "Node Type": "Seq Scan",
+     "Parent Relationship": "Outer",
+     "Parallel Aware": false,
+     "Async Capable": false,
+     "Relation Name": "orders",
+     "Alias": "orders",
+     "Startup Cost": 0.0,
+     "Total Cost": 34960.0,
+     "Plan Rows": 2000000,
+     "Plan Width": 6,
+     "Actual Startup Time": 0.007,
+     "Actual Total Time": 116.684,
+     "Actual Rows": 2000000.0,
+     "Actual Loops": 1,
+     "Disabled": false,
+     "Shared Hit Blocks": 14390,
+     "Shared Read Blocks": 570,
+     "Shared Dirtied Blocks": 0,
+     "Shared Written Blocks": 0,
+     "Local Hit Blocks": 0,
+     "Local Read Blocks": 0,
+     "Local Dirtied Blocks": 0,
+     "Local Written Blocks": 0,
+     "Temp Read Blocks": 0,
+     "Temp Written Blocks": 0
+    }
+   ]
+  },
+  "Settings": {
+   "max_parallel_workers_per_gather": "0"
+  },
+  "Planning": {
+   "Shared Hit Blocks": 0,
+   "Shared Read Blocks": 0,
+   "Shared Dirtied Blocks": 0,
+   "Shared Written Blocks": 0,
+   "Local Hit Blocks": 0,
+   "Local Read Blocks": 0,
+   "Local Dirtied Blocks": 0,
+   "Local Written Blocks": 0,
+   "Temp Read Blocks": 0,
+   "Temp Written Blocks": 0
+  },
+  "Planning Time": 0.06,
+  "Triggers": [],
+  "Execution Time": 312.8
+ },
+ "text": "Aggregate  (cost=59960.00..59960.01 rows=1 width=24) (actual time=278.162..278.163 rows=1.00 loops=1)\n  Buffers: shared hit=14484 read=476\n  ->  Seq Scan on orders  (cost=0.00..34960.00 rows=2000000 width=6) (actual time=0.008..101.508 rows=2000000.00 loops=1)\n        Buffers: shared hit=14484 read=476\nPlanning Time: 0.105 ms\nExecution Time: 278.191 ms"
+}
