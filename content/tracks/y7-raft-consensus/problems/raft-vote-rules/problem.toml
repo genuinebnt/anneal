@@ -1,0 +1,32 @@
+slug = "raft-vote-rules"
+title = "Raft's RequestVote: who may become leader"
+mode = "write"
+level = "medium"
+stage = "rules"
+order = 1
+status = "ready"
+tags = ["Raft", "consensus", "leader election", "terms", "RequestVote", "election restriction", "distributed systems"]
+teaches = [
+  "A Raft **term** is a logical clock: any message with a newer term makes the receiver adopt it (and forget its vote); an older term is ignored.",
+  "Each server votes at most once per term, and the vote must survive a retry: the same candidate asking again gets the same answer.",
+  "The **election restriction** (the candidate's log must be at least as up to date: later last term first, then longer) is what guarantees a new leader already holds every committed entry.",
+]
+follow_up = "1) Add the *pre-vote* phase (a candidate first asks 'would you vote for me?' without bumping terms) and show how it stops a partitioned node from disrupting a healthy cluster when it rejoins. 2) Write the candidate side: count votes, step down on a newer term, restart on timeout with a randomised election timeout. 3) Explain with a concrete five-node scenario why 'longest log wins' alone (ignoring terms) can elect a leader that lacks a committed entry. 4) Add `voted_for` persistence behind a trait and test a crash between the vote and the reply. 5) Move on to log replication in the next problem."
+related = ["Y7", "C2", "B4"]
+
+[[hints]]
+kind = "approach"
+text = "Do the term bookkeeping first (reject older, adopt newer and clear the vote), then decide on the vote with two independent conditions: 'have I not voted for someone else' and 'is the candidate's log at least as up to date'. Only a grant records `voted_for`."
+
+[[hints]]
+kind = "rust"
+text = "`self.log.last().map_or(0, |e| e.term)` is the last term (0 for an empty log) and `self.log.len() as u64` is the last index. `self.voted_for.map_or(true, |v| v == req.candidate)` reads as 'free, or already ours'. The up-to-date test is a tuple comparison in disguise: `(req.last_log_term, req.last_log_index) >= (my_last_term, my_last_index)`."
+
+[[hints]]
+kind = "edge"
+text = "A request with a newer term clears the vote even when you then deny it (the candidate's log may be stale). Compare terms *before* lengths: a long log full of old-term entries must lose to a short log whose last entry is newer."
+
+[solution]
+explanation = "This is `RequestVote` from the Raft paper, word for word; etcd/raft and TiKV's raft-rs implement it as exactly this kind of pure `Step` function so that it can be tested deterministically. The two persisted fields (`term`, `voted_for`) must hit disk before the reply is sent, or a restart could vote twice in one term and elect two leaders."
+time = "O(1)"
+space = "O(1)"

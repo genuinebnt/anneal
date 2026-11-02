@@ -1,0 +1,11 @@
+code = "Y7"
+name = "Raft consensus rules"
+section = "Y"
+tier = "sde3"
+order = 7
+summary = "The decisions at the core of Raft as pure functions: who may win an election, how a follower merges a log, and when a leader may commit."
+
+[[stages]]
+slug = "rules"
+name = "The rules"
+band = "hard"
