@@ -1,0 +1,237 @@
+title = "pgvector: nearest neighbours, HNSW and IVFFlat"
+group = "sql-special"
+order = 36
+minutes = 12
+lede = "A vector index answers 'which stored points are nearest to this one?' by giving up exactness: it can miss a true neighbour, and you tune how often against how fast. This page explains the vector type, the three distance operators, how HNSW and IVFFlat work and what each knob trades. It is a concepts page: pgvector was not built in the environment that wrote it, so nothing here was measured."
+say = "Exact search over a vector column is correct and reads every row; HNSW and IVFFlat read a fraction and can return a different top 5. The knobs are hnsw.ef_search and ivfflat.probes at query time, m, ef_construction and lists at build time. The numbers (recall, ms, MB) are not on this page because they were not measured here: run the recall script at the end on your own data."
+
+related = ["indexes", "postgres"]
+
+summary = [
+  "**Not measured:** every other module in this course quotes plans captured on Postgres 18.6. This one does not. The build of pgvector against a local Postgres 18 was refused by the environment's sandbox, so there are no plans, timings, recall figures or index sizes on this page. Everything below is from the pgvector README (version 0.8.7 in the repository checked out for this page) and the Postgres manual, and is marked as such.",
+  "**The type:** `vector(n)` stores `n` single-precision floats; the README gives `4 * dimensions + 8` bytes per vector and a limit of 16,000 dimensions, but an index on `vector` only goes to 2,000 dimensions (`halfvec` 4,000, `bit` 64,000). A 1,536-dimension embedding is 6,152 bytes, which is arithmetic from that formula, not a measurement.",
+  "**The operators:** `<->` Euclidean (L2) distance, `<#>` the *negative* inner product (so that ascending order works), `<=>` cosine distance, `<+>` taxicab (L1). An index is built for one operator class (`vector_l2_ops`, `vector_ip_ops`, `vector_cosine_ops`, `vector_l1_ops`), and only a query that orders by that operator can use it.",
+  "**Exact is the default:** with no index the query is a sort of every row's distance (a top-N heapsort over a sequential scan), perfect recall, cost proportional to the table. An approximate index trades some recall for speed, and unlike other indexes it **changes the results** of the query.",
+  "**HNSW** is a multilayer graph: better speed-recall trade-off, slower to build, more memory, no training step (it can be created on an empty table). Knobs: `m` (16), `ef_construction` (64), and `hnsw.ef_search` (40). **IVFFlat** clusters vectors into `lists` and scans the `probes` nearest lists: faster to build, smaller, lower recall for the same speed; it must be built after the data is loaded.",
+  "**Filters** are applied after the index scan, so `WHERE category = 5 ORDER BY embedding <-> $1 LIMIT 10` can return fewer than 10 rows (the README's example: a condition matching 10% of rows with `ef_search = 40` leaves about 4). Iterative index scans (0.8.0) scan further until enough rows pass.",
+  "**To measure it yourself:** the last section gives a script that takes exact search as ground truth and reports recall at each `ef_search` and `probes` value. It was not run for this page.",
+]
+
+[[sections]]
+heading = "What a vector column is for"
+body = """
+An embedding model turns a piece of text, an image or a product into a list of numbers, say 1,536 of them, so that things that mean similar things end up close together. 'Find similar items' then becomes 'find the stored vectors closest to this one', a **nearest-neighbour** query. pgvector adds a `vector` type and distance operators to Postgres so the embeddings can live next to the rest of the row.
+
+> [!NOTE]
+> Nothing on this page was measured. The earlier modules each ran their queries on a Postgres 18.6 built for the course. For this module the build of pgvector was blocked by the sandbox that wrote it, so the page keeps to what the pgvector README and the Postgres manual state, and says which is which. Treat every claim about speed as 'what the maintainers say', not 'what this course saw'.
+
+```sql title=items.sql
+CREATE EXTENSION vector;
+CREATE TABLE items (id bigserial PRIMARY KEY, embedding vector(3));
+INSERT INTO items (embedding) VALUES ('[1,2,3]'), ('[4,5,6]');
+SELECT id FROM items ORDER BY embedding <-> '[3,1,2]' LIMIT 5;
+```
+
+**Size.** The README gives each vector as `4 * dimensions + 8` bytes (single-precision floats), so a 1,536-dimension vector is 4 x 1,536 + 8 = 6,152 bytes. That is more than a quarter of an 8 kB page, which has two consequences worth checking on your own data: few rows per heap page, so an exact scan reads many pages per thousand rows; and the value is above the point at which Postgres stores wide values out of line (module 25 measured how TOAST works). The README notes that the planner does not count out-of-line storage in its cost estimates, and shows `ALTER TABLE items ALTER COLUMN embedding SET STORAGE PLAIN` to keep vectors inline. It also suggests `halfvec` (half the bytes per element) for a smaller working set. How much either helps was not measured here.
+
+**The operators.** Four distances, each with an index operator class:
+
+| Operator | Distance | Operator class |
+|---|---|---|
+| `<->` | Euclidean (L2) | `vector_l2_ops` |
+| `<#>` | **negative** inner product | `vector_ip_ops` |
+| `<=>` | cosine distance | `vector_cosine_ops` |
+| `<+>` | taxicab (L1) | `vector_l1_ops` |
+
+`<#>` returns the inner product multiplied by -1 because an index scan returns rows in ascending order, and the largest inner product should come first. For a similarity, multiply it by -1 again; for cosine similarity use `1 - (a <=> b)`. If the vectors are normalized to length 1, the README says to use the inner product for best performance, since it is the cheapest of the three to compute. Whether that difference is visible next to the cost of reading the rows was not measured here.
+"""
+
+[[sections]]
+heading = "Exact search, and why you add an index"
+body = """
+With no index the query `ORDER BY embedding <-> $1 LIMIT 5` has one plan: read every row, compute its distance, keep the best five. The README states this gives **perfect recall**: you always get the true five nearest. The cost grows with the row count and the dimension count, because every distance touches every element. The README's advice for speeding up exact search is parallelism (`max_parallel_workers_per_gather`), not an index.
+
+An approximate index changes the question to 'return five rows that are probably the nearest'. The README is blunt about the consequence: 'Unlike typical indexes, you will see different results for queries after adding an approximate index.' That has two practical effects that no earlier module in this course had to deal with:
+
+:::deeper What recall means | 1 min
+For one query, **recall@k** is the share of the true k nearest neighbours that the index returned. If the exact top 10 is {a, b, c, d, e, f, g, h, i, j} and the index returns {a, b, c, d, e, f, g, h, i, x}, recall@10 is 9/10 = 0.9. Averaged over many queries it is the number every vector-index benchmark quotes next to queries per second. The ground truth is the exact search above.
+:::
+
+1. **A test needs an oracle.** A unit test that says 'the index returns the same rows as the sequential scan' passes for a b-tree and may legitimately fail here. You measure recall against the exact result instead.
+2. **The plan is not the whole story.** In every earlier module a plan with fewer buffers meant the same answer faster. Here a plan can be fast because it looked at too little. `EXPLAIN (ANALYZE, BUFFERS)` (the README recommends it) tells you the cost, not the recall.
+
+**When the planner will use the index at all.** From the README's troubleshooting section: the query needs an `ORDER BY` **and** a `LIMIT`, and the `ORDER BY` must be the distance operator itself, ascending, not an expression of it:
+
+```sql title=index_or_not.sql
+-- can use the index
+ORDER BY embedding <=> '[3,1,2]' LIMIT 5;
+-- cannot: the ORDER BY is an expression, not the operator
+ORDER BY 1 - (embedding <=> '[3,1,2]') DESC LIMIT 5;
+```
+
+This is module 4's rule again (a function on the column or the ordering expression hides the index), applied to ordering. A small table may still be scanned, as for any index.
+"""
+
+[[sections]]
+heading = "HNSW: a layered graph"
+body = """
+HNSW (Hierarchical Navigable Small World, Malkov and Yashunin) builds a graph in which every vector is a node linked to a few near neighbours, in several layers. The top layers hold few nodes with long links; the bottom layer holds every node with short links. A search enters at the top, greedily hops to whichever linked node is nearest the query, drops a layer when it cannot improve, and at the bottom layer explores a list of the best candidates found so far. It never looks at most of the table: that is where the speed comes from, and also where a miss comes from, because a true neighbour that the greedy walk never reaches is not returned.
+
+```sql title=hnsw.sql
+CREATE INDEX ON items USING hnsw (embedding vector_l2_ops) WITH (m = 16, ef_construction = 64);
+SET hnsw.ef_search = 100;
+```
+
+| Knob | When | Default | Raising it |
+|---|---|---|---|
+| `m` | build | 16 | more links per node per layer |
+| `ef_construction` | build | 64 | better graph (better recall) at the cost of build time and insert speed |
+| `hnsw.ef_search` | query | 40 | better recall at the cost of speed; **also the most rows the scan can return** |
+
+That last point matters: the scan returns at most `ef_search` candidates, so `LIMIT 100` with the default 40 can return 40 rows. The README lists this under 'Why are there less results for a query after adding an HNSW index?'.
+
+**Properties the README states:** better speed-recall trade-off than IVFFlat, **slower builds and more memory**, no training step, so the index can be created on an empty table and grows as rows are inserted. Builds are much faster when the graph fits in `maintenance_work_mem` (Postgres prints a NOTICE when it no longer fits) and can use parallel workers (`max_parallel_maintenance_workers`, 2 by default). Creating the index after loading is faster, and in production `CREATE INDEX CONCURRENTLY` avoids blocking writes. Vacuum on an HNSW index 'can take a while'; the README suggests `REINDEX INDEX CONCURRENTLY` first. Dimension limits: `vector` 2,000, `halfvec` 4,000, `bit` 64,000, `sparsevec` 1,000 non-zero elements. `NULL` vectors are not indexed.
+
+**What is not here:** the build times, index sizes and recall numbers for any `m` or `ef_construction`. They depend on the data (an embedding model's vectors are far from uniform random) and on the machine, which is why this module will not quote the README's or anyone else's numbers as if they were this course's.
+"""
+
+[[sections]]
+heading = "IVFFlat: clusters and probes"
+body = """
+IVFFlat (inverted file with flat storage) takes a different route. At build time it runs **k-means** over the data to pick `lists` centroids, and assigns every vector to its nearest centroid. At query time it finds the `probes` centroids nearest the query and scans only the vectors in those lists, exactly, with no compression (the 'flat'). A true neighbour is missed when it sits in a list the query did not probe, typically near a cluster boundary.
+
+```sql title=ivfflat.sql
+CREATE INDEX ON items USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);
+SET ivfflat.probes = 10;
+```
+
+| Knob | When | Default | Raising it |
+|---|---|---|---|
+| `lists` | build | none (you choose) | smaller lists, so each probe is cheaper, but a neighbour is likelier to sit in another list: lower recall at the same `probes` |
+| `ivfflat.probes` | query | 1 | better recall, slower; equal to `lists` it is exact search, and the planner then will not use the index |
+
+The README's three conditions for good recall: **build the index after the table has data** (the centroids come from the rows present: an index built on too little data has poor centroids, which the README gives as the usual reason for missing results); choose `lists` of about `rows / 1000` up to 1M rows and `sqrt(rows)` above that; and query with `probes` of about `sqrt(lists)` as a starting point. Those are the maintainers' starting points, not tuned values.
+
+**Against HNSW (README):** faster to build and smaller, but a worse speed-recall trade-off. The structural difference is the one to remember: HNSW learns nothing from the data distribution when you insert, while IVFFlat's centroids are fixed at build time, so if the data drifts, the lists get uneven and recall falls until you rebuild. That second sentence is reasoning from how k-means works, not something measured here.
+
+**Parallel build:** `max_parallel_maintenance_workers` applies to both. Build progress is visible in `pg_stat_progress_create_index`; IVFFlat shows the phases `performing k-means`, `assigning tuples` and `loading tuples`, HNSW only `loading tuples`.
+"""
+
+[[sections]]
+heading = "Filters, and why a filtered query can return too few rows"
+body = """
+Most real queries are not 'nearest of everything' but 'nearest within this tenant, category or date range'. This is where an approximate index surprises people. From the README: **with an approximate index the filter is applied after the index scan.** With a condition matching 10% of rows and the default `hnsw.ef_search` of 40, the scan retrieves 40 candidates and about 4 of them pass the filter. The query returns about 4 rows, not the 10 you asked for.
+
+The README's options, in the order it gives them:
+
+1. **A b-tree on the filter column**, so the planner can choose an exact search over the few matching rows. Good when the condition matches a low percentage of rows (this is module 2's selectivity argument, now deciding between an index and a scan).
+2. **Iterative index scans** (0.8.0): `SET hnsw.iterative_scan = strict_order` (or `relaxed_order`; for IVFFlat `ivfflat.iterative_scan = relaxed_order`) keeps scanning the index until enough rows pass, bounded by `hnsw.max_scan_tuples` (20,000) or `ivfflat.max_probes`. Strict keeps the exact distance order; relaxed returns slightly out-of-order results with better recall.
+3. **A partial index** for a few distinct values: `CREATE INDEX ON items USING hnsw (embedding vector_l2_ops) WHERE (category_id = 123)` (module 6).
+4. **Partitioning** for many values (module 37), one index per partition.
+
+None of these were measured here. Which one wins depends on the filter's selectivity and the data's distribution.
+"""
+
+[[sections]]
+heading = "Other engines"
+body = """
+The other engines were not checked for this module: a vector extension for MySQL, SQLite or ClickHouse was not installed or measured, and this page does not state facts about them. For a dedicated vector database against pgvector the decision is mostly operational (one more system to run, replicate and back up against one table in the Postgres you already have; the README notes pgvector uses the WAL, so replication and point-in-time recovery work) and was not measured either.
+"""
+
+[[sections]]
+heading = "Measuring recall yourself"
+body = """
+Because the index changes the answer, speed is only meaningful next to recall. The method needs no extension beyond pgvector: take exact search as ground truth, run the approximate query, and compare. **This script was not run for this page** (pgvector could not be built here); it uses only SQL the README and the Postgres manual document, and should be checked against your own data before you rely on it.
+
+```sql title=recall.sql
+-- 1. Ground truth: the exact top 10 for 200 sampled query vectors, with indexes off.
+CREATE TABLE q AS SELECT id AS qid, embedding AS qv FROM items ORDER BY random() LIMIT 200;
+
+BEGIN;
+SET LOCAL enable_indexscan = off;
+SET LOCAL enable_bitmapscan = off;
+CREATE TEMP TABLE truth AS
+SELECT q.qid, x.id
+FROM q CROSS JOIN LATERAL (
+    SELECT i.id FROM items i WHERE i.id <> q.qid ORDER BY i.embedding <-> q.qv LIMIT 10
+) x;
+COMMIT;
+
+-- 2. The same queries through the index, at one setting.
+BEGIN;
+SET LOCAL hnsw.ef_search = 100;      -- or: SET LOCAL ivfflat.probes = 10;
+CREATE TEMP TABLE found AS
+SELECT q.qid, x.id
+FROM q CROSS JOIN LATERAL (
+    SELECT i.id FROM items i WHERE i.id <> q.qid ORDER BY i.embedding <-> q.qv LIMIT 10
+) x;
+COMMIT;
+
+-- 3. recall@10 = hits / (200 * 10)
+SELECT round(count(f.id)::numeric / (SELECT count(*) FROM truth), 4) AS recall_at_10
+FROM truth t LEFT JOIN found f USING (qid, id);
+```
+
+Repeat step 2 for a ladder of values (`ef_search` 10, 20, 40, 80, 160, 320; `probes` 1, 2, 5, 10, 20) and time each with `EXPLAIN (ANALYZE, BUFFERS)` or the client's own clock, then plot recall against milliseconds per query. That curve, for your data, is the only honest comparison of HNSW and IVFFlat. Three cautions the course's earlier measurements would add: use the real embeddings (random vectors in a high dimension are almost all equally far apart, which makes the problem unrepresentative), run each setting warm and more than once, and note whether the index fits in memory (the README says it need not, but expects better performance if it does).
+"""
+
+[[checks]]
+prompt = "You add an HNSW index to `items` and a test that asserts 'the query returns exactly the same ten ids as before the index' starts failing. Is the index broken? What do you assert instead?"
+answer = "Not necessarily: an approximate index can return a different set (the README says results change after adding one). Assert a recall threshold against exact search: take the exact top 10 as ground truth for a sample of query vectors, run the same queries through the index, and require recall@10 above the value your product needs (for example 0.95), at the `hnsw.ef_search` you run in production. Nothing measured here says what a good threshold is for your data."
+
+[[checks]]
+prompt = "`ORDER BY 1 - (embedding <=> $1) DESC LIMIT 10` does a sequential scan although there is an HNSW index with `vector_cosine_ops`. Why, and what is the fix?"
+answer = "The index can only serve an `ORDER BY` that is the distance operator itself, ascending. The expression `1 - (a <=> b) DESC` hides it (module 4's rule, applied to ordering). Order by `embedding <=> $1` ascending with the LIMIT, and compute the similarity in the select list if you need it."
+
+[[checks]]
+prompt = "`WHERE tenant_id = 7 ORDER BY embedding <-> $1 LIMIT 10` returns 3 rows through an HNSW index, though the tenant has thousands of rows. What happened and what are two ways out?"
+answer = "The index scan retrieved about `hnsw.ef_search` (40 by default) candidates from the whole table, and the tenant filter was applied afterwards, so only the candidates that happened to belong to tenant 7 survived. Ways out: enable iterative scans (`SET hnsw.iterative_scan = strict_order`), add a b-tree on `tenant_id` so the planner can do an exact search when the tenant is small, build a partial index per tenant for a few big tenants, or partition by tenant. Which is cheapest depends on the tenant sizes; none was measured on this page."
+
+[[checks]]
+prompt = "You build an IVFFlat index with `lists = 1000` on a table that has 2,000 rows because you plan to load the rest tonight. Queries return few or odd results. Why?"
+answer = "IVFFlat's centroids come from the rows present at build time. With 2,000 rows and 1,000 lists most lists hold about two vectors or none, and the centroids are poor; the README gives 'created with too little data for the number of lists' as the cause of missing results and says to drop the index until the table has more data. Load first, then build with about rows/1000 lists (up to 1M rows), and set `ivfflat.probes` for the recall you need. HNSW does not have this problem because it has no training step."
+
+[[terms]]
+term = "Embedding"
+means = "A list of numbers (a vector) produced by a model so that similar inputs map to nearby points; stored here in a `vector(n)` column."
+section = "What a vector column is for"
+
+[[terms]]
+term = "Recall"
+means = "The share of the true nearest neighbours that an approximate search returns; 1.0 is exact search. Measured against the exact result for a sample of queries."
+section = "Exact search, and why you add an index"
+
+[[terms]]
+term = "HNSW"
+means = "Hierarchical Navigable Small World: a multilayer graph of near neighbours searched greedily from the top layer down. Tuned with m, ef_construction and hnsw.ef_search."
+section = "HNSW: a layered graph"
+
+[[terms]]
+term = "IVFFlat"
+means = "Inverted file with flat storage: vectors grouped into k-means lists at build time, with only the probes nearest lists scanned at query time. Tuned with lists and ivfflat.probes."
+section = "IVFFlat: clusters and probes"
+
+[[terms]]
+term = "Iterative index scan"
+means = "A pgvector 0.8.0 option that keeps scanning an approximate index until enough rows pass the query's filter, instead of stopping at the first ef_search or probes candidates."
+section = "Filters, and why a filtered query can return too few rows"
+
+[[sources]]
+title = "pgvector README (open source, PostgreSQL licence)"
+kind = "docs"
+url = "https://github.com/pgvector/pgvector"
+
+[[sources]]
+title = "Malkov and Yashunin: Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs"
+kind = "paper"
+url = "https://arxiv.org/abs/1603.09320"
+
+[[sources]]
+title = "PostgreSQL: TOAST"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/storage-toast.html"
+
+[[sources]]
+title = "PostgreSQL: CREATE INDEX progress reporting"
+kind = "docs"
+url = "https://www.postgresql.org/docs/current/progress-reporting.html#CREATE-INDEX-PROGRESS-REPORTING"
