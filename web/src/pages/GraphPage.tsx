@@ -287,7 +287,7 @@ function Workpage({ o }: { o: DsaOverview }) {
                 <button className="ui-btn" onClick={() => engine.current?.exportPng()}>Export</button>
             </div>
             <div className="gr-wrap">
-                <canvas ref={canvas} aria-label="The DSA graph" />
+                <div className="rsd-gcv"><canvas ref={canvas} aria-label="The DSA graph" /></div>
                 <div className="gr-legend">
                     {colourBy === "state" && (
                         <>
@@ -367,7 +367,7 @@ function Workpage({ o }: { o: DsaOverview }) {
         </>
     );
 
-    return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Graph"]} title="Graph" sub="Everything anneal knows, and how it connects. Start where the graph points." tiles={tiles} left={left} center={center} right={right} label="Graph modes" />;
+    return <Page3 className="rsd rsd-graph" crumb={[<Link to="/dsa">DSA</Link>, "Graph"]} title="Graph" sub="Everything anneal knows, and how it connects. Start where the graph points." tiles={tiles} left={left} center={center} right={right} label="Graph modes" />;
 }
 
 interface View {

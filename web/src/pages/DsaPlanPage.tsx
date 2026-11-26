@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { Header } from "../components/Header";
 import { HowFound, Page3, Tile, PageLoading, LoadFailed } from "../components/layout";
 import { PlanSwitcher } from "../components/PlanSwitcher";
+import { TodayBand } from "../components/TodayBand";
 import { DateField, Segmented, Select, Stepper } from "../components/ui";
 import { WEEKDAYS, goalRemaining, newOn, niceDate, pacePreview } from "../dsa";
 
@@ -191,5 +192,5 @@ function Editor({ o }: { o: DsaOverview }) {
     </>
   );
 
-  return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} sub="Your routine: which days bring new problems, how many, and the pace that follows." tiles={tiles} left={<PlanSwitcher link />} center={center} right={right} label="Plans" />;
+  return <Page3 className="rsd rsd-daily rsd-plan" band={<TodayBand />} crumb={[<Link to="/dsa">DSA</Link>, "Plan"]} title={TITLE} sub="Your routine: which days bring new problems, how many, and the pace that follows." tiles={tiles} left={<PlanSwitcher link />} center={center} right={right} label="Plans" />;
 }

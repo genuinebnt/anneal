@@ -83,6 +83,7 @@ import "./styles/rust.css";
 // after the page styles it finishes
 import "./styles/restyle.css";
 import "./styles/sd-reading.css";
+import "./styles/restyle-dsa.css";
 
 const rootRoute = createRootRoute({
   component: () => (

@@ -326,9 +326,10 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
         </>
     );
 
-    const left = (
-        <>
-            <Panel title="Presets">
+    const band = (
+        <section className="rsd-start" aria-label="Pick a preset and start">
+            <div>
+                <p className="rsd-kick2">1 · Pick a preset</p>
                 <div className="mi-presets" role="group" aria-label="Presets">
                     {PRESETS.map((p) => (
                         <button key={p.key} className={`mi-pc${preset === p.key ? " on" : ""}`} aria-pressed={preset === p.key} onClick={() => { setC(p.apply(c)); setPreset(p.key); }}>
@@ -348,17 +349,17 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                         </span>
                     ))}
                 </div>
-            </Panel>
-            <Panel title="Drawing from" aside={<span className="mk-cnt">{pool.length} can be drawn</span>}>
-                <div className="mi-sum">
-                    {filters.map((f) => (
-                        <span key={f.key} className={`mi-fc${f.exc ? " exc" : ""}`}>
-                            {f.exc ? "not " : ""}{f.label}
-                            <button aria-label={`Remove ${f.label}`} onClick={f.remove}>✕</button>
-                        </span>
-                    ))}
-                </div>
-            </Panel>
+            </div>
+            <div className="rsd-s2">
+                <p className="rsd-kick2">2 · Start</p>
+                <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Draw and start the clock →</button>
+                <p className="rsd-sum">The round below: {need} problem{need === 1 ? "" : "s"} · {c.format === "total" ? `${c.total} min` : c.format === "per" ? "a clock each" : "no limit"}.</p>
+            </div>
+        </section>
+    );
+
+    const foot = (
+        <div className="rsd-rounds">
             <Panel title="Your rounds" aside={<span className="mk-cnt">{data.rounds.length} taken</span>}>
                 {data.rounds.length === 0 ? (
                     <p>No rounds yet. Your rounds show here with a trend: time used, solved, and a Repeat for each.</p>
@@ -389,6 +390,21 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
                         </div>
                     </>
                 )}
+            </Panel>
+        </div>
+    );
+
+    const left = (
+        <>
+            <Panel title="Drawing from" aside={<span className="mk-cnt">{pool.length} can be drawn</span>}>
+                <div className="mi-sum">
+                    {filters.map((f) => (
+                        <span key={f.key} className={`mi-fc${f.exc ? " exc" : ""}`}>
+                            {f.exc ? "not " : ""}{f.label}
+                            <button aria-label={`Remove ${f.label}`} onClick={f.remove}>✕</button>
+                        </span>
+                    ))}
+                </div>
             </Panel>
         </>
     );
@@ -565,7 +581,6 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
     const right = (
         <>
             <aside className="mi-ticket">
-                <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Draw and start the clock →</button>
                 <div className="top">
                     <div className="big"><b>{need}</b><span>{need === 1 ? "problem" : "problems"} · {c.format === "total" ? `${c.total} min` : c.format === "per" ? "per problem" : "no limit"}</span></div>
                     <div className="bands">
@@ -632,7 +647,7 @@ function Setup({ data, initial, onStart, error }: { data: MockData; initial: Moc
 
     return (
         <div className="mi-wrap m-setup mk-3">
-            <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Mock interview"]} title={<>Build your <span style={{ color: "var(--acc)" }}>interview.</span></>} sub="Pick the pool, the problems and the clock, then draw a round." tiles={tiles} left={left} center={center} right={right} label="Presets and rounds" />
+            <Page3 className="rsd mk-rsd-page" foot={foot} band={<>{band}<h2 className="rsd-h3">3 · Change the round <span>pool, topics, companies, clock and each slot</span></h2></>} crumb={[<Link to="/dsa">DSA</Link>, "Mock interview"]} title={<>Build your <span style={{ color: "var(--acc)" }}>interview.</span></>} sub="Pick the pool, the problems and the clock, then draw a round." tiles={tiles} left={left} center={center} right={right} label="What the round draws from" />
             <div className="m-dock">
                 <span><b>{pool.length}</b> can be drawn · {need} problem{need === 1 ? "" : "s"}</span>
                 <button className="mi-go" disabled={!!problem} onClick={() => onStart(c)}>Start →</button>

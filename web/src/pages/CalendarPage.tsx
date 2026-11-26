@@ -7,6 +7,7 @@ import { api, type StreakDay, type Streaks, type DayKind, type PlanDay, type Pla
 import { Header } from "../components/Header";
 import { DayStrip, GLYPH_OF, MarkChoices, STREAK_LEGEND, fmt as fmtN, niceDay, offered, useStreaks } from "../components/Streaks";
 import { Page3, Panel, Tile, PageLoading, LoadFailed } from "../components/layout";
+import { TodayBand } from "../components/TodayBand";
 
 /* ---------- dates ---------- */
 const DAY = 86400000;
@@ -355,7 +356,7 @@ export function CalendarPage() {
         <>
             <Header area="dsa" />
             <div className="c-wrap c-3" style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Calendar"]} title="Plan" sub="Your days, reviews and streak. Click a day to see it, change it or repair it." tiles={tiles} left={left} center={center} right={right} label="Calendar" />
+                <Page3 className="rsd rsd-daily rsd-calendar" band={<TodayBand />} crumb={[<Link to="/dsa">DSA</Link>, "Calendar"]} title="Plan" sub="Your days, reviews and streak. Click a day to see it, change it or repair it." tiles={tiles} left={left} center={center} right={right} label="Calendar" />
             </div>
         </>
     );

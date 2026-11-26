@@ -4,9 +4,15 @@ import { expect, test } from "@playwright/test";
 // The page's other timers (polling) are real; only timers created after the clock is installed are fake, which is the timer's own.
 test.beforeEach(async ({ page }) => {
     await page.goto("/d/two-sum");
-    await expect(page.locator(".ft")).toBeVisible();
+    await openTimer(page);
     await page.clock.install();
 });
+
+/** On the problem page the timer is folded to one row: open it. */
+async function openTimer(page: import("@playwright/test").Page) {
+    await page.getByRole("button", { name: "Open the timer" }).click();
+    await expect(page.locator(".ft")).toBeVisible();
+}
 
 /** Jumps the fake clock, then lets the page settle: with the clock frozen, the retrying checks below could not see the new state. */
 async function jump(page: import("@playwright/test").Page, t: string) {
@@ -60,7 +66,7 @@ test("the lengths you choose and the mode are remembered after a reload", async 
     await expect(time(page)).toHaveText("10:00");
     await page.locator(".ft .ft-modes").getByRole("button", { name: "TIMER" }).click();
     await page.reload();
-    await expect(page.locator(".ft")).toBeVisible();
+    await openTimer(page);
     await expect(page.locator(".ft .ft-modes button.ft-on")).toHaveText("TIMER");
     await page.locator(".ft .ft-modes").getByRole("button", { name: "POMODORO" }).click();
     await expect(time(page)).toHaveText("10:00");
@@ -71,7 +77,7 @@ test.describe("with short sessions", () => {
     test.beforeEach(async ({ page }) => {
         await page.addInitScript(() => localStorage.setItem("anneal:focus.cfg", JSON.stringify({ mode: "pom", focus: 5, brk: 3, timer: 5 })));
         await page.goto("/d/two-sum");
-        await expect(page.locator(".ft")).toBeVisible();
+        await openTimer(page);
         await page.clock.install();
     });
 

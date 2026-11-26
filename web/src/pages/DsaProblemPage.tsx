@@ -11,6 +11,7 @@ import { ConfirmButton } from "../components/ui";
 import { useEditorSettings } from "../settings";
 import { Editor } from "../workspace/Editor";
 import { FocusTimer } from "../components/FocusTimer";
+import { mmss, useFocus } from "../focusStore";
 import { NotFound } from "../components/ErrorScreen";
 import { AskPanel } from "../components/AskPanel";
 import { getPref, setPref } from "../prefs";
@@ -152,6 +153,22 @@ function MySolutions({ p, template }: { p: DsaProblem; template: string }) {
             )}
             {!solutions.length && editing === null && !list.isLoading && <p className="rempty">Save the solution you submitted, with notes.</p>}
         </section>
+    );
+}
+
+/** The focus timer folded to one row. The card stays mounted while folded, so the countdown's suggestion and the tab title keep working. */
+function FoldedTimer({ suggest }: { suggest: number }) {
+    const { s } = useFocus();
+    const [open, setOpen] = useState(false);
+    return (
+        <>
+            <div className="rsd-ftrow">
+                <span>Focus</span>
+                <b>{mmss(s.secs)}</b>
+                <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Close the timer" : "Open the timer"}</button>
+            </div>
+            <div className="rsd-ftbox" hidden={!open}><FocusTimer suggest={suggest} /></div>
+        </>
     );
 }
 
@@ -318,7 +335,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
     );
     const tiles = (
         <>
-            <Tile em="Difficulty" strong={DIFF[p.difficulty][0]} small={`~${MINUTES[p.difficulty]} min`} color={DIFF[p.difficulty][1]} />
+            <div className="ly-tl rsd-time"><em>Suggested time</em><strong>~{MINUTES[p.difficulty]} min</strong></div>
             <Tile em="Lists" strong={lists.length} small={lists.length ? `${lists[0]}${lists.length > 1 ? ` → ${lists[lists.length - 1]}` : ""}` : "outside the lists"} />
             <Tile em="Your tries" strong={history.length} small={(standing[0] ?? "").toLowerCase()} />
         </>
@@ -354,11 +371,13 @@ export function DsaProblemPage({ slug }: { slug: string }) {
                                 {statement.data.hints.map((h, i) =>
                                     i < hintsShown ? (
                                         <div key={i} className="d-hint open">
+                                            <i className="rsd-step" aria-hidden="true">{i + 1}</i>
                                             <b>Hint {i + 1}</b>
                                             <div className="d-statement" dangerouslySetInnerHTML={{ __html: h }} />
                                         </div>
                                     ) : (
                                         <button key={i} className="d-hint" disabled={i > hintsShown} onClick={() => setHintsShown(i + 1)}>
+                                            <i className="rsd-step" aria-hidden="true">{i + 1}</i>
                                             <b>Hint {i + 1}</b>
                                             <span>{i === hintsShown ? "click to reveal" : "reveal the one before first"}</span>
                                         </button>
@@ -540,7 +559,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
 
                     {s.last_grade && previews !== null && <RecallCurve id={p.id} version={s.reps} />}
 
-                    <FocusTimer suggest={MINUTES[p.difficulty]} />
+                    <FoldedTimer suggest={MINUTES[p.difficulty]} />
 
                     {p.companies.length > 0 && (
                         <div className="pp-card">
@@ -555,7 +574,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         <>
             <Header area="dsa" />
             <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <Page3 className={`pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} tiles={tiles} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
+                <Page3 className={`rsd pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} tiles={tiles} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
             </div>
             {toast}
         </>

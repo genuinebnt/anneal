@@ -35,6 +35,7 @@ test("after a log the toast names the next problem and links to it", async ({ pa
 
 test("the countdown starts at the problem's estimate, and the timer stays stopped", async ({ page }) => {
     await page.goto("/d/contains-duplicate");
+    await page.getByRole("button", { name: "Open the timer" }).click();
     await page.locator(".ft .ft-modes").getByRole("button", { name: "TIMER" }).click();
     // easy problems are estimated at 12 minutes, offered as 10
     await expect(page.locator(".ft .ft-ring b")).toHaveText("10:00");

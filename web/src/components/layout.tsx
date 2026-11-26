@@ -4,7 +4,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError } from "../api";
 
-export function Page3({ crumb, title, sub, tiles, left, center, right, label, className = "" }: { crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: ReactNode; left?: ReactNode; center: ReactNode; right?: ReactNode; label?: string; className?: string }) {
+export function Page3({ crumb, title, sub, tiles, left, center, right, label, className = "", band, foot }: { crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: ReactNode; left?: ReactNode; center: ReactNode; right?: ReactNode; label?: string; className?: string; band?: ReactNode; foot?: ReactNode }) {
     const [open, setOpen] = useState(false);
     const path = useRouterState({ select: (s) => s.location.pathname });
     useEffect(() => {
@@ -46,12 +46,14 @@ export function Page3({ crumb, title, sub, tiles, left, center, right, label, cl
                 </div>
                 {tiles && <div className="ly-tiles">{tiles}</div>}
             </div>
+            {band}
             <div className={`ly-lay${cls}${open ? " open" : ""}`}>
                 {left && <aside className="ly-lp" onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}>{left}</aside>}
                 <div className="ly-cp">{center}</div>
                 {right && <aside className="ly-rp">{right}</aside>}
                 {left && <div className="ly-scrim" onClick={() => setOpen(false)} />}
             </div>
+            {foot}
         </main>
     );
 }

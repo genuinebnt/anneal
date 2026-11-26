@@ -37,6 +37,7 @@ export function PracticePage({ code }: { code: string }) {
   );
   return (
     <PatternShell code={code} tab="practice" left={left || undefined}>
+        <div className="rsd-practice">
           {practice.isError && <p className="notice bad">Couldn't load the practice list: {(practice.error as Error).message}</p>}
           {practice.isSuccess && techniques.length === 0 && (
             <div className="d-note">No practice list for {pattern?.name ?? "this pattern"} yet.</div>
@@ -44,6 +45,7 @@ export function PracticePage({ code }: { code: string }) {
           {techniques.map((t) => (
             <Technique key={t.id} t={t} today={today} hideSolved={hidden === "done"} diff={diff} log={log} />
           ))}
+        </div>
       {toast}
     </PatternShell>
   );
@@ -58,6 +60,7 @@ function Technique({ t, today, hideSolved, diff, log }: { t: PracticeTechnique; 
         <span className="d-tcount">
           {t.solved} / {t.problems.length}
         </span>
+        <span className="rsd-showing">{rows.length} problem{rows.length === 1 ? "" : "s"}</span>
       </div>
       <div className="d-tfrom">
         learn it from{" "}

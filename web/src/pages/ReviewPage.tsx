@@ -369,8 +369,8 @@ function Session({ queue }: { queue: ReviewQueue }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [step, item, grade, move, last, undo]);
 
-  if (queue.items.length === 0 && results.length === 0 && pending.length === 0) return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" sub="Nothing is due. Review ahead below, or go on to today's problem." center={<Empty queue={queue} ahead={queue.ahead} onPick={pick} />} />;
-  if (!item) return <Page3 crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" sub="Today's reviews are done." center={<Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} onUndo={last ? () => undo.mutate(last.id) : undefined} />} />;
+  if (queue.items.length === 0 && results.length === 0 && pending.length === 0) return <Page3 className="rsd rsd-review" crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" sub="Nothing is due. Review ahead below, or go on to today's problem." center={<Empty queue={queue} ahead={queue.ahead} onPick={pick} />} />;
+  if (!item) return <Page3 className="rsd rsd-review" crumb={[<Link to="/dsa">DSA</Link>, "Review"]} title="Review" sub="Today's reviews are done." center={<Finished queue={queue} results={results} seconds={Math.round((now - sessionStart.current) / 1000)} onUndo={last ? () => undo.mutate(last.id) : undefined} />} />;
 
   const waitingAll = queue.ahead.filter((i) => !pending.includes(i.problem.id) && !results.some((r) => r.id === i.problem.id));
   const timed = results.filter((r) => r.seconds > 0);
@@ -547,6 +547,7 @@ function Session({ queue }: { queue: ReviewQueue }) {
 
   return (
     <Page3
+      className="rsd rsd-review"
       crumb={[<Link to="/dsa">DSA</Link>, "Review"]}
       title="Review"
       sub={`${queue.due} due${overdue ? `, ${overdue} overdue` : ""}. Pick any of them; ${sort === "forgotten" ? "the most forgotten is first" : sort === "overdue" ? "the longest overdue is first" : "they are grouped by pattern"}.`}
@@ -671,7 +672,7 @@ function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem
   const next = queue.next_review;
   return (
     <div className="rv-wide rv-stage rv-empty">
-      <div className="rv-card">
+      <div className="rv-card rsd-lead">
         <span className="rv-lab">{queue.capacity === 0 ? "A REST DAY" : "NOTHING DUE"}</span>
         <h2 className="rv-title">{queue.capacity === 0 ? "No reviews today." : "You're caught up."}</h2>
         <p className="rv-note" style={{ fontSize: 14, color: "var(--mut)" }}>
@@ -685,6 +686,13 @@ function Empty({ queue, ahead, onPick }: { queue: ReviewQueue; ahead: ReviewItem
           {queue.solve_day && queue.next_new ? " Today is a solve day, so your next new problem is ready." : ""}
         </p>
         <Next queue={queue} />
+        {queue.solve_day && queue.next_new && (
+          <ol className="rsd-order" aria-label="The order of a day">
+            <li className="done"><b>1</b><div><strong>Reviews</strong><span>nothing due</span></div></li>
+            <li className="now"><b>2</b><div><strong>New problem</strong><span>the button above</span></div></li>
+            <li><b>3</b><div><strong>Log it</strong><span>it comes back here later</span></div></li>
+          </ol>
+        )}
       </div>
       <div className="rv-card">
         <Coming today={queue.today} items={ahead} next={queue} />

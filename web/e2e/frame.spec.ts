@@ -14,6 +14,7 @@ test("the header shows the date and time, has no Continue, and its Settings gear
 test("the header's focus timer is the same timer as the problem page's card, and keeps running between pages", async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 });
     await page.goto("/d/two-sum");
+    await page.getByRole("button", { name: "Open the timer" }).click();
     const card = page.getByRole("button", { name: /^(Start|Resume)$/ });
     await card.click();
     await expect(page.locator(".hd-timer")).toHaveClass(/hd-trun/);
