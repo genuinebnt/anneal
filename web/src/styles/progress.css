@@ -95,3 +95,4 @@
 .pr-nav button{display:flex;align-items:center;gap:10px}
 .pr-nav button svg{width:15px;height:15px;flex:none;opacity:.8}
 .pr-nav button{justify-content:flex-start;text-align:left}.pr-nav button em{margin-left:auto}
+.pr-nav em{font-size:11px}

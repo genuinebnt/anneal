@@ -53,8 +53,9 @@ a.rt-row:hover{border-color:var(--line);background:var(--raise)}
 .rt-nx:hover{color:var(--ca)}
 .rt-near{display:block;text-decoration:none}
 @media (max-width:700px){
-    .rt-row{grid-template-columns:24px minmax(0,1fr) auto !important;gap:6px 10px}
-    .rt-row>:nth-child(2),.rt-row>:nth-child(4),.rt-row>:nth-child(6){display:none}
+    .rt-row{grid-template-columns:24px minmax(0,1fr) auto auto !important;grid-template-areas:"icon title title level" "num mode status status";gap:6px 10px}
+    .rt-row>.sicon:first-child{grid-area:icon}.rt-row>.num{grid-area:num}.rt-row>.rt-t{grid-area:title}.rt-row>.lvl{grid-area:level;justify-self:end}
+    .rt-row>:nth-child(4){grid-area:mode;justify-self:start}.rt-row>.best{grid-area:status;justify-self:end}
 }
 .rt-list,.fbar~.rt-list{min-width:0}
 .fbar .sortsel{display:block}

@@ -6,10 +6,7 @@
 .ly-page{padding:18px max(20px,env(safe-area-inset-right,0px)) 96px max(20px,env(safe-area-inset-left,0px))}
 .ly-head{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:16px}
 .ly-ttl{display:grid;gap:6px;min-width:0}
-.ly-crumb{font:600 11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--acc);display:flex;gap:8px;flex-wrap:wrap}
-.ly-crumb a{color:inherit}.ly-crumb a:hover{text-decoration:underline;text-underline-offset:3px}
-.ly-crumb i{font-style:normal;color:var(--dim)}
-.ly-h1{margin:0;font-size:30px;line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
+.ly-h1{margin:0;font-size:var(--t-page);line-height:1.12;letter-spacing:-.03em;text-wrap:balance}
 .ly-sub{margin:0;color:var(--mut);max-width:70ch;font-size:14px}
 .ly-tiles{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
 
@@ -104,7 +101,6 @@ a.ly-ps:hover{background:color-mix(in oklab,var(--acc) 5%,transparent)}
 }
 @media (max-width:900px){
     .ly-page{padding:14px max(16px,env(safe-area-inset-right,0px)) 120px max(16px,env(safe-area-inset-left,0px))}
-    .ly-h1{font-size:25px}
     .ly-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
     .ly-tl{min-width:0;padding:10px 12px}
     .ly-tl.ring{grid-column:1/-1}
@@ -148,3 +144,14 @@ html[data-motion="reduce"] .ly-loading .ly-sk i,html[data-motion="reduce"] .ly-s
 .ly-page .ly-lp>*:nth-child(n+4),.ly-page .ly-cp>*:nth-child(n+4),.ly-page .ly-rp>*:nth-child(n+4){animation-delay:200ms}
 @media (prefers-reduced-motion:reduce){.ly-page .ly-tiles>*,.ly-page .ly-lp>*,.ly-page .ly-cp>*,.ly-page .ly-rp>*{animation:none}}
 html[data-motion="reduce"] .ly-page .ly-tiles>*,html[data-motion="reduce"] .ly-page .ly-lp>*,html[data-motion="reduce"] .ly-page .ly-cp>*,html[data-motion="reduce"] .ly-page .ly-rp>*{animation:none}
+
+/* the stat tiles (the one rule for every page): beside the title while they fit, one even row from 901 to 1100, two columns
+   below that, where a last tile left alone takes the whole row */
+@media (min-width:1101px){.ly-head>.ly-ttl{flex:1 1 360px}}
+@media (min-width:901px) and (max-width:1100px){.ly-page .ly-tiles,.ly-tiles,.rs-home .cb-intro .ly-tiles{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);width:100%;max-width:none;margin-left:0}.ly-tiles>.ly-tl,.rs-home .cb-intro .ly-tiles>.ly-tl{min-width:0}}
+@media (max-width:900px){.ly-tiles,.rs-home .cb-intro .ly-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;max-width:none}.ly-tiles>.ly-tl,.rs-home .cb-intro .ly-tiles>.ly-tl{min-width:0}
+  .ly-tiles>:last-child:nth-child(odd){grid-column:1/-1}.ly-tiles>.ly-tl.ring~:last-child:nth-child(odd){grid-column:auto}.ly-tiles>.ly-tl.ring~:last-child:nth-child(even){grid-column:1/-1}}
+/* P6: an odd number of facts: the last one spans both columns, and the row above keeps its rule */
+.ly-dl div:nth-last-child(2):nth-child(even){border-bottom:1px solid var(--line2)}
+.ly-dl div:last-child:nth-child(odd){grid-column:1/-1;border-right:0}
+.ly-bigring.sm b{font-size:11px}

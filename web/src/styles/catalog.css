@@ -199,3 +199,7 @@ a.tcard:hover,.tcard:not(.planned):hover{transform:translateY(-3px);box-shadow:0
 .ps-fbar{grid-column:1/-1;height:4px;border-radius:3px;background:var(--line2);overflow:hidden}.ps-fbar i{display:block;height:100%;background:var(--acc);border-radius:3px}
 .ps-fseg{display:grid!important;grid-auto-flow:column;grid-auto-columns:1fr;width:100%}
 .ps-fchips{display:flex;gap:6px;flex-wrap:wrap}
+.ps-next>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ps-next{max-width:min(340px,100%)}
+@media (max-width:900px){.ps-next{flex:1 1 100%;max-width:100%}}
+.seg button{white-space:nowrap}

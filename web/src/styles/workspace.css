@@ -150,3 +150,11 @@
 .lens small{flex-wrap:wrap;row-gap:6px}
 .lens small>span:first-child{white-space:nowrap}
 .lens small>span+span{flex:1 1 260px;min-width:0}
+.rx-ws .subbar .wpager>a,.rx-ws .subbar .wpager>.wp-off{display:grid;place-items:center;min-width:24px;min-height:24px}
+@media (max-width:900px){
+    .rx-ws .ws>.pane.r{overflow:clip}
+    .rx-ws .pane.r .acts{position:sticky;bottom:var(--dock-h,0px);z-index:6;background:var(--panel)}
+    /* C18: the previous and next arrows are big enough to press */
+    .rx-ws .subbar .wpager{gap:0!important}
+    .rx-ws .subbar .wpager>a,.rx-ws .subbar .wpager>.wp-off{display:grid;place-items:center;min-width:44px;min-height:44px;font-size:20px}
+}

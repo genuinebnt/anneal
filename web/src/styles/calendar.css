@@ -239,3 +239,7 @@
 .c-tl .tnow em,.c-tl .ttgt em{top:auto;bottom:-20px;left:0;transform:translateX(-50%)}
 .c-3 .c-quick button{display:flex;align-items:center;justify-content:center;padding:0 12px;text-align:center;border:0;background:var(--inset)}
 .c-3 .c-quick button:hover:not(:disabled){background:color-mix(in oklab,var(--acc) 12%,var(--inset))}
+.c-day .tg>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.c-tl .tllate,.c-tl .tldone>span{font-size:11px}
+/* two by two on a phone, then the streak: the tile left alone before it takes the row */
+@media (max-width:900px){.ly-tiles>:nth-child(odd):nth-last-child(2):has(+.c-stk){grid-column:1/-1}}

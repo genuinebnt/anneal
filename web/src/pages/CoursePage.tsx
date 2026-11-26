@@ -205,7 +205,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
         <>
             <Header area="courses" />
             <MockRoot>
-                <div className="k-wrap rs-courses">
+                <main className="k-wrap rs-courses">
                     <section className="k-hero">
                         <div>
                             <div className="k-eye k-rv" style={{ "--i": 0 } as CSSProperties}>
@@ -487,7 +487,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                             </aside>
                         </div>
                     )}
-                </div>
+                </main>
             </MockRoot>
         </>
     );

@@ -13,6 +13,7 @@ import { MockRoot } from "../components/mock";
 import { FollowUps, Fold, PhaseBar, PhaseTag, Teaches, TestResults } from "../components/trackBits";
 import { BLURB, NAV_SECTIONS, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
 import "../styles/cookbook.css";
+import { SegmentBar, type Segment } from "../components/SegmentBar";
 
 const TIER = { core: "CORE", light: "LIGHT", sde3: "SDE-3" } as const;
 const MINUTES: Record<Band, number> = { easy: 12, medium: 25, hard: 45 };
@@ -41,6 +42,7 @@ function Hl({ text, find }: { text: string; find: string }) {
 }
 
 const statusKey = (p: ProblemSummary) => (p.status === "draft" ? "draft" : p.progress === "assisted" ? "solved" : p.progress);
+const segmentOf = (p: ProblemSummary["progress"]): Segment => (p === "solved" || p === "assisted" ? "done" : p === "started" ? "part" : "");
 const STATUS_NAME: Record<string, string> = { not_started: "not started", started: "in progress", solved: "solved", draft: "not written" };
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
@@ -511,7 +513,7 @@ export function TrackPage({ slug }: { slug: string }) {
       <div className="ps-acts">
         {nextUp && (
           <Link className="ps-next" to="/p/$id" params={{ id: nextUp.id }} title={`Next unsolved problem in ${t.name}`}>
-            <em>{nextUp.progress === "started" ? "Resume" : "Next"}</em> {nextUp.title}
+            <em>{nextUp.progress === "started" ? "Resume" : "Next"}</em><span>{nextUp.title}</span>
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" /></svg>
           </Link>
         )}
@@ -693,9 +695,7 @@ export function TrackPage({ slug }: { slug: string }) {
                 <div className="sr-foot">
                   <div>
                     <div className="sr-phase"><span>{t.stages.length} stages</span><span>{t.solved} of {t.total} solved</span></div>
-                    <span className="bk-segs" role="img" aria-label={`${t.solved} of ${t.total} solved`}>
-                      {t.problems.map((p) => <b key={p.id} className={p.progress} />)}
-                    </span>
+                    <SegmentBar className="bk-segs" label={`${t.solved} of ${t.total} solved`} segments={t.problems.map((p) => segmentOf(p.progress))} />
                   </div>
                   <div className="sr-acts">
                     {nextUp && <Link className="cb-btn" to="/p/$id" params={{ id: nextUp.id }}>{t.solved || nextUp.progress === "started" ? "Continue" : "Start problem 1"}</Link>}
@@ -745,9 +745,7 @@ export function TrackPage({ slug }: { slug: string }) {
             <>
               {t.summary && <span dangerouslySetInnerHTML={{ __html: marked.parseInline(t.summary, { async: false }) as string }} />}
               {/* one segment a problem: the colour is its real state */}
-              <span className="bk-segs" role="img" aria-label={`${t.solved} of ${t.total} solved`}>
-                {t.problems.map((p) => <b key={p.id} className={p.progress} />)}
-              </span>
+              <SegmentBar className="bk-segs" label={`${t.solved} of ${t.total} solved`} segments={t.problems.map((p) => segmentOf(p.progress))} />
             </>
           }
           tiles={tiles}

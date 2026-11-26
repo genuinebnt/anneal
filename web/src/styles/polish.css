@@ -70,8 +70,9 @@
 .sb-bar u{display:block;height:100%;background:var(--grn)}
 .sb-spark{width:28px;height:10px;fill:var(--acc);opacity:.85}
 @keyframes sb-run{to{transform:translateX(-12.5%)}}
-@media (prefers-reduced-motion:reduce){.sb-track{animation:none}.sb-run:not(:first-child){display:none}}
-html.has-sb body{padding-bottom:30px}
+@media (prefers-reduced-motion:reduce){.sb-track{animation:none;width:100%}.sb-run:not(:first-child){display:none}.sb-run{flex:1 1 auto;flex-wrap:wrap;row-gap:4px}.sb{height:auto;min-height:30px;padding:6px 0}}
+html[data-motion="reduce"] .sb-track{animation:none;width:100%}html[data-motion="reduce"] .sb-run:not(:first-child){display:none}html[data-motion="reduce"] .sb-run{flex:1 1 auto;flex-wrap:wrap;row-gap:4px}html[data-motion="reduce"] .sb{height:auto;min-height:30px;padding:6px 0}
+html.has-sb body{padding-bottom:var(--sb-h,30px)}
 @media (max-width:900px){.sb{display:none}html.has-sb body{padding-bottom:0}}
 
 /* course map: one row per project, a label that does not wrap, nodes that fill as stages pass */
@@ -108,3 +109,8 @@ html.has-sb body{padding-bottom:30px}
 .pl .d-ins{padding-left:28px;margin:0 0 4px}
 .pp-ins{margin:12px 0 0;display:flex;gap:10px;align-items:baseline;font-size:14px;line-height:1.5;color:var(--fg);max-width:78ch}
 .pp-ins b{flex:none;font:700 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+/* C10: a view's mark, word and count stay on one line; on a phone the three share the row */
+.s-root .s-seg button{white-space:nowrap}
+@media (max-width:480px){.s-root .s-tools .s-seg{width:100%}.s-root .s-tools .s-seg button{flex:1 1 auto;justify-content:center;padding:0 4px;gap:3px;font-size:11px}.s-root .s-tools .s-seg .vn{margin-left:2px}}
+/* the narrowest phones (320 to 360): the bottom bar's six labels and the view switch's three give up a little type */
+@media (max-width:360px){.hd-dock{padding-inline:2px}.hd-dock a{padding-inline:0;font-size:9.5px;letter-spacing:-.02em}.s-root .s-tools .s-seg button{font-size:10px;padding:0 2px;letter-spacing:-.03em}}

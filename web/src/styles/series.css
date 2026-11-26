@@ -1,16 +1,13 @@
 /* A series (docs/SERIES.md): its page, the entry on the Rust home, and what the workspace adds for a problem in one
    (the Connections block and the completion view). Taken from docs/mockups/series.html; every class is sx- prefixed. */
-.sx-page{padding:26px clamp(16px,4vw,56px) 96px}
-.sx-back{font:600 12.5px var(--mono);color:var(--dim)}
-.sx-back a{display:inline-flex;align-items:center;min-height:32px;color:var(--vio)}
+.sx-page{padding:18px var(--gutter) 96px}
+.sx-back{--crumb:var(--vio)}
 .sx-hero{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:40px;align-items:end;margin-top:14px}
-.sx-hero h1{margin:0;font-size:clamp(34px,4.4vw,56px);line-height:1.1;letter-spacing:-.02em;text-wrap:balance}
+.sx-hero h1{margin:0;font-size:var(--t-page);line-height:1.1;letter-spacing:-.02em;text-wrap:balance}
 .sx-hero p{max-width:66ch;margin:16px 0 0;color:var(--mut);font-size:17px;line-height:1.6}
 .sx-progress{display:grid;gap:10px;padding:18px;border:1px solid var(--line2);border-radius:16px;background:var(--panel)}
 .sx-progress span{color:var(--dim);font-size:13px}
-.sx-segs{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:5px}
-.sx-segs i{height:6px;border-radius:3px;background:var(--raise)}
-.sx-segs i.on{background:var(--grn)}
+.sx-segs{gap:3px}
 .sx-next{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:space-between;margin-top:28px;padding:22px 26px;border:1px solid color-mix(in oklab,var(--vio) 55%,var(--line));border-radius:18px;background:color-mix(in oklab,var(--vio) 11%,var(--panel))}
 .sx-next>div{min-width:0}
 .sx-next h2{margin:0;font-size:21px}
@@ -50,15 +47,14 @@
 .sx-open{margin:14px 2px 0;color:var(--dim);font-size:13px}
 .sx-box{padding:20px;border:1px solid var(--line2);border-radius:16px;background:var(--panel);margin-bottom:14px}
 .sx-small{margin:0 0 10px;font-size:13px;color:var(--dim);line-height:1.5}
-.sx-need{width:100%;border-collapse:collapse;font-size:13.5px}
-.sx-need th{text-align:left;font-size:12px;color:var(--dim);padding:0 0 6px}
-.sx-need td{padding:9px 0;border-top:1px solid var(--line2);vertical-align:top;color:var(--mut);line-height:1.45}
-.sx-need td:last-child,.sx-need th:last-child{text-align:right;padding-left:12px;width:132px}
-.sx-need td:last-child{color:var(--fg)}
-.sx-need td{padding:4px 0}
-.sx-need td:last-child{padding-top:11px}
-.sx-need summary{cursor:pointer;color:var(--fg);padding:7px 0;line-height:18px}
-.sx-need ul{margin:4px 0 6px;padding:0 0 0 16px;display:grid;gap:8px}
+.sx-need{list-style:none;margin:0;padding:0;font-size:13.5px}
+.sx-need>li{border-top:1px solid var(--line2)}
+.sx-need summary{display:grid;grid-template-columns:12px minmax(0,1fr) minmax(0,max-content);gap:4px 8px;align-items:baseline;min-height:36px;padding:8px 0;cursor:pointer;color:var(--fg);line-height:20px;list-style:none}
+.sx-need summary::-webkit-details-marker{display:none}
+.sx-need summary::before{content:"▸";color:var(--mut)}
+.sx-need details[open]>summary::before{content:"▾"}
+.sx-need summary>small{max-width:18ch;text-align:right;font-size:12.5px;color:var(--mut)}
+.sx-need ul{margin:2px 0 10px;padding:0 0 0 36px;display:grid;gap:8px;color:var(--mut);line-height:1.45}
 .sx-need li small{display:block;font-size:12px;color:var(--dim)}
 .sx-map{list-style:none;margin:0;padding:0}
 .sx-map li{display:grid;gap:5px;padding:14px 0;border-top:1px solid var(--line2)}
@@ -101,16 +97,15 @@
 .sx-entry-p span{color:var(--mut);font-size:13px}
 
 /* the workspace: breadcrumb, Connections, completion view. The look of the screen itself is in workspace.css. */
-.subbar .crumb.sx-crumb{font:500 13px var(--sans);letter-spacing:0;color:var(--mut)}
-.sx-crumb a{display:inline-block;line-height:32px}
-.sx-crumb a:hover{color:var(--fg)}
-.sx-crumb a.sx-name{font-weight:700;color:var(--fg)}
+.sx-crumb a.sx-name{color:var(--fg)}
 .sx-also{list-style:none;margin:-10px 0 0;padding:0;display:grid;justify-items:start;font-size:12.5px;line-height:1.5;color:var(--mut)}
 .sx-also a{display:inline-block;padding:6px 0;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
 .sx-also a:hover{color:var(--fg);text-decoration-color:currentColor}
 .sx-also b{font-weight:700;color:var(--fg)}
 .sx-also span{white-space:nowrap}
-@media (max-width:900px){.sx-also a{padding:13px 0}}
+/* on a phone the link is padded to a full-size target, and the padding reaches into the gaps around the list instead of
+   widening them */
+@media (max-width:900px){.sx-also a{position:relative;padding:13px 0}.sx-also li:first-child a{margin-top:-9px}.sx-also li:last-child a{margin-bottom:-11px}}
 .sx-about{display:grid;justify-items:start;gap:8px;font-size:12.5px;color:var(--dim)}
 .sx-about p{margin:0}
 .sx-about p a{display:inline-block;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}

@@ -98,3 +98,25 @@ html[data-motion="reduce"] .hd-accp{animation:none}
 .hd-tring{min-width:26px;min-height:26px}
 .hd-timer>b{line-height:1;padding:0 2px}
 .hd-timer.hd-tlive .hd-treset{opacity:1}
+/* the second row grows when its tabs and counters do not fit side by side: the counters go to their own line */
+.hdr .hd-t2{height:auto;min-height:44px;flex-wrap:wrap}
+.hdr .hd-t2>.hd-tabs{height:44px;flex:0 1 auto;max-width:100%}
+.hdr .hd-t2>.hd-chips{margin:0 0 0 auto}
+.hdr .hd-t2:has(>.hd-chips:not(:empty)){row-gap:0;padding-bottom:0}
+.hdr .hd-t2>.hd-chips:not(:empty):last-child{margin-block:7px}
+.hdr .hd-t2>.hd-chips:empty{display:none}
+.hdr .hd-t2>.hd-crumb{padding-left:12px}
+/* a page that is not built yet: readable, and says so */
+.hd-tabs .hd-later{color:var(--dim);gap:6px}
+.hd-tabs .hd-later::after{content:"soon";padding:1px 6px;border:1px solid var(--line);border-radius:999px;font:600 11px var(--mono)}
+/* C18: a bigger place to press than the swatch itself */
+.hd-sw{position:relative}.hd-sw::after{content:"";position:absolute;inset:-4px;border-radius:50%}
+/* C19: the bottom bar draws the header's area icons */
+.hd-dock .hd-aicon{width:20px;height:20px;flex:none;color:var(--c)}
+.hd-dock a{text-align:center}
+.hd-dock a.on .hd-aicon{color:currentColor}
+/* the bar sits at the foot of each link, so the bars line up whether the label takes one line or two */
+.hd-dock .hd-dbar{display:block;width:30px;max-width:100%;height:3px;margin-top:auto;border-radius:2px;background:var(--track);overflow:hidden}
+.hd-dock .hd-dbar>span{display:block;height:100%;background:var(--c)}
+.hd-dock a.on .hd-dbar{background:color-mix(in oklab,var(--bg) 35%,transparent)}
+.hd-dock a.on .hd-dbar>span{background:var(--bg)}

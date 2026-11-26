@@ -481,7 +481,7 @@ function Cell({ d, p, out, today, st, selected, onPick, onDown, onOver }: { st?:
         <button className={cls.filter(Boolean).join(" ")} style={topic ? ({ "--th": hue(topic) } as CSSProperties) : undefined} onClick={(e) => onPick(d.date, e)} onMouseDown={(e) => e.button === 0 && !e.shiftKey && onDown(d.date)} onMouseOver={() => onOver(d.date)}>
             <div className="n"><span>{Number(d.date.slice(8))}</span><span className="k">{d.edited && <i className="pin" title="Your change">✎</i>} {d.date === today ? "TODAY" : kind}</span>{st?.state === "perfect" && <span className="c-pf" title="Perfect: the whole plan done"><StarIcon /></span>}{st?.state === "frozen" && <span className="c-pf fz" title="Repaired with a freeze"><SnowIcon /></span>}</div>
             {title && <div className="t">{title}</div>}
-            {tag && <div className="tg"><i />{tag}</div>}
+            {tag && <div className="tg" title={tag}><i /><span>{tag}</span></div>}
             {d.flags?.length ? <div className="flag">⚑ {d.flags[0]} due</div> : null}
             {sub && <div className="rv">{sub}</div>}
         </button>

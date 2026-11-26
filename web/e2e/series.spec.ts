@@ -257,7 +257,7 @@ test("a shared problem opened without a series offers a switch that stays on the
     await page.locator(".edit-host:not([hidden]) .cm-content").click();
     const code = await page.locator(".edit-host:not([hidden]) .cm-content").innerText();
     const swap = page.getByRole("list", { name: "Other series with this problem" }).getByRole("link");
-    await expect(swap).toHaveText(`Switch to ${other.series.title} (part ${other.number} there)`);
+    await expect(swap).toHaveText(`Switch series: ${other.series.title} (part ${other.number} there)`);
     await swap.focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/p/${PART}\\?series=${other.series.id}$`));
@@ -285,6 +285,29 @@ test("a series in the address that is unknown or lacks the problem is passed ove
     await page.goto("/p/l1-fix-use-after-move?series=web-server");
     await expect(page.locator(".pane.l .ptitle")).toBeVisible();
     await expect(page.locator(".sx-crumb")).toHaveCount(0);
+});
+
+test("on a phone the switch sits close to its neighbours without losing its size or covering them", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/p/y5-catch-the-broken-queue");
+    const link = page.locator(".sx-also a");
+    await expect(link).toBeVisible();
+    const m = await link.evaluate((a) => {
+        const r = a.getBoundingClientRect();
+        const text = document.createRange();
+        text.selectNodeContents(a);
+        const t = text.getBoundingClientRect();
+        const meta = document.querySelector(".pane.l .sx-meta")!.getBoundingClientRect();
+        const after = document.querySelector(".sx-also")!.nextElementSibling!.getBoundingClientRect();
+        // the whole padded box answers a press
+        const hits = [r.top + 2, r.bottom - 2].every((y) => a.contains(document.elementFromPoint(r.left + 20, y)));
+        return { tap: r.height, above: t.top - meta.bottom, below: after.top - t.bottom, hits, textClear: t.top >= meta.bottom && t.bottom <= after.top };
+    });
+    expect(m.tap).toBeGreaterThanOrEqual(44);
+    expect(m.above).toBeLessThanOrEqual(14);
+    expect(m.below).toBeLessThanOrEqual(24);
+    expect(m.hits).toBe(true);
+    expect(m.textClear).toBe(true);
 });
 
 test("on a phone the switch is a full-size target and nothing is wider than the screen", async ({ page }) => {

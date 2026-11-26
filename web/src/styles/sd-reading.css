@@ -3,9 +3,8 @@
 .sdr-dup{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 
 /* ---- the frame ---- */
-.sdr .ly-crumb{font-size:12px;letter-spacing:.14em}
 .sdr .ly-head{align-items:flex-end;padding-top:18px;margin-bottom:22px}
-.sdr .ly-h1{font-size:clamp(32px,4.2vw,54px);line-height:1.06;letter-spacing:-.04em;font-weight:700;text-wrap:balance}
+.sdr .ly-h1{font-size:var(--t-page);line-height:1.06;letter-spacing:-.04em;font-weight:700;text-wrap:balance}
 .sdr .ly-sub{font-size:16px;line-height:1.6;max-width:72ch}
 .sdr .ly-tl{border-radius:14px;padding:14px 18px;min-width:130px}
 .sdr .ly-tl strong{font-size:26px}
@@ -117,8 +116,6 @@
 .sdr-compare .sd-rub>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:12px 16px;border:1px solid var(--line2);border-radius:12px;background:none}
 
 @media (max-width:700px){
-    .sdr .ly-crumb,.sdr .ly-crumb>span,.sdr .ly-crumb span span{display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px;line-height:1.8}
-    .sdr .ly-h1{font-size:32px}
     .sdr .ly-tl{min-width:0}
     .sdr-learn .rd-art,.sdr-brief .ly-cp>.sd-art,.sdr-drill .ly-cp>.sd-art,.sdr-compare .ly-cp>.sd-art,.sdr-compare .sd-cmp,.sdr-learn .sd-checks{padding:20px 16px}
     .sdr-learn .rd-art .sd-lede{font-size:17px}

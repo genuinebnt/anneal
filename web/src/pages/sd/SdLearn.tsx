@@ -6,6 +6,7 @@ import { SdMd } from "../../components/SdMd";
 import { SD_GROUPS, SdFrame } from "./SdHome";
 import { ConceptReader } from "./SdRead";
 import { Inline, plain } from "../../components/InlineMd";
+import { SegmentBar } from "../../components/SegmentBar";
 
 /** Every concept page, by group. */
 export function SdLearn() {
@@ -23,9 +24,7 @@ export function SdLearn() {
                         {g.name}
                         <em>{g.items.length || "soon"}</em>
                         {g.items.length > 0 && (
-                            <span className="bk-segs" aria-hidden="true">
-                                {g.items.map((c) => <b key={c.id} className={c.checks && c.checked >= c.checks ? "solved" : c.checked ? "started" : ""} />)}
-                            </span>
+                            <SegmentBar className="bk-segs" decorative segments={g.items.map((c) => (c.checks && c.checked >= c.checks ? "done" : c.checked ? "part" : ""))} />
                         )}
                     </a>
                 ))}

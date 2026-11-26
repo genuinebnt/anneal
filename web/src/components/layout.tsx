@@ -3,8 +3,9 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { ApiError } from "../api";
+import { Crumbs } from "./Crumbs";
 
-export function Page3({ crumb, title, sub, tiles, left, center, right, label, className = "", band, foot }: { crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: ReactNode; left?: ReactNode; center: ReactNode; right?: ReactNode; label?: string; className?: string; band?: ReactNode; foot?: ReactNode }) {
+export function Page3({ crumb, title, sub, tiles, left, center, right, label, className = "", crumbClass, band, foot }: { crumbClass?: string; crumb: ReactNode[]; title: ReactNode; sub?: ReactNode; tiles?: ReactNode; left?: ReactNode; center: ReactNode; right?: ReactNode; label?: string; className?: string; band?: ReactNode; foot?: ReactNode }) {
     const [open, setOpen] = useState(false);
     const path = useRouterState({ select: (s) => s.location.pathname });
     useEffect(() => {
@@ -33,14 +34,7 @@ export function Page3({ crumb, title, sub, tiles, left, center, right, label, cl
             )}
             <div className="ly-head">
                 <div className="ly-ttl">
-                    <div className="ly-crumb">
-                        {crumb.map((c, i) => (
-                            <span key={i} style={{ display: "contents" }}>
-                                {i > 0 && <i>/</i>}
-                                <span>{c}</span>
-                            </span>
-                        ))}
-                    </div>
+                    <Crumbs items={crumb} className={crumbClass} />
                     <h1 className="ly-h1">{title}</h1>
                     {sub && <p className="ly-sub">{sub}</p>}
                 </div>

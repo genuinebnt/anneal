@@ -1,5 +1,5 @@
 import { FollowUps } from "../components/trackBits";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Skeleton } from "../components/Skeleton";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
 import "../styles/workspace.css";
 import { Inline } from "../components/InlineMd";
+import { Crumbs } from "../components/Crumbs";
 
 type LeftTab = "problem" | "hints" | "solution" | "related";
 
@@ -69,6 +70,7 @@ const CONSOLE_MIN = 120;
 /** Interview-realistic budgets from CURRICULUM.md, in minutes. */
 const BUDGET = { write: { easy: 10, medium: 25, hard: 40 }, fix: { easy: 5, medium: 10, hard: 15 }, stage: { easy: 60, medium: 60, hard: 90 } } as const;
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const md = (s: string) => marked.parse(s, { async: false });
 const mmss = (s: number) => `${pad2(Math.floor(s / 60))}:${pad2(s % 60)}`;
 const pyTestNames = (src: string) => [...src.matchAll(/^def test_(\w+)/gm)].map((m) => m[1]!);
@@ -436,6 +438,7 @@ function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
         />
       )}
       <main className="rx-ws">
+        <h1 className="vh">{p.title}</h1>
         {p.attempt.resolve && (
           <div className="resolve-bar">
             <b>{p.attempt.solved ? "RE-SOLVED" : "RE-SOLVE"}</b>
@@ -450,28 +453,14 @@ function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
         )}
         <div className="subbar">
           {place ? (
-            <nav className="crumb sx-crumb" aria-label="Breadcrumb">
-              <Link to="/rust">Rust</Link>
-              <span>/</span>
-              <Link className="sx-name" to="/rust/series/$id" params={{ id: place.series.id }}>{place.series.title}</Link>
-              <span>/</span>
-              <span>{placeName(place)}</span>
-            </nav>
+            <Crumbs className="crumb sx-crumb" items={[<Link to="/rust">Rust</Link>, <Link className="sx-name" to="/rust/series/$id" params={{ id: place.series.id }}>{place.series.title}</Link>, <span>{placeName(place)}</span>]} />
           ) : (
             <>
-              <div className="crumb">
-                <Link to={`/${area}`} style={{ color: modeColor(p.mode) }}>
-                  {SECTION_NAMES[p.track.section].toUpperCase()}
-                </Link>
-                <span>/</span>
-                <Link to="/t/$track" params={{ track: p.track.slug }}>
-                  {p.track.code} {p.track.name.toUpperCase()}
-                </Link>
-                <span>/</span>
-                <span>
-                  <span style={{ color: LEVEL_COLOR[p.stage.band] }}>{BAND_LABEL[p.stage.band]}</span> · {p.stage.name.toUpperCase()}
-                </span>
-              </div>
+              <Crumbs className="crumb" items={[
+                <Link to={`/${area}`}>{SECTION_NAMES[p.track.section]}</Link>,
+                <Link to="/t/$track" params={{ track: p.track.slug }}>{p.track.code} {p.track.name}</Link>,
+                <span><span style={{ color: LEVEL_COLOR[p.stage.band] }}>{BAND_LABEL[p.stage.band]}</span> · {p.stage.name}</span>,
+              ]} />
               <div className="vr" />
               <span className="wtitle">{p.title}</span>
               <div className="subpills">
@@ -490,13 +479,13 @@ function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
             </>
           )}
           <div className="sbr">
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="wpager" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               {pager?.prev ? (
                 <Link to="/p/$id" params={{ id: pager.prev }} search={keepSeries} style={{ color: "var(--dim)" }} aria-label="Previous problem">
                   ‹
                 </Link>
               ) : (
-                <span style={{ color: "var(--line)" }}>‹</span>
+                <span className="wp-off" aria-hidden="true" style={{ color: "var(--line)" }}>‹</span>
               )}
               <span>
                 {pager ? `${pager.at} / ${pager.of}` : "– / –"}
@@ -506,7 +495,7 @@ function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
                   ›
                 </Link>
               ) : (
-                <span style={{ color: "var(--line)" }}>›</span>
+                <span className="wp-off" aria-hidden="true" style={{ color: "var(--line)" }}>›</span>
               )}
             </div>
             <div className={`clock${overBudget ? " over" : ""}`} title={place?.minutes ? `This part is estimated at ${budget} minutes; nobody has been timed` : `Interview budget for a ${p.level} ${p.mode === "fix" ? "fix-this" : "problem"}: ${budget} minutes`}>
@@ -1034,7 +1023,7 @@ function Loaded({ p, from }: { p: ProblemDetail; from: string | undefined }) {
                 )}
                 <TestsPanel python={py} run={shown} cases={cases} hiddenCases={hiddenCases} busy={run.isPending || submit.isPending} open={open} setOpen={setOpen} runNo={shownIdx + 1} onRun={doRun} canRun={p.status === "ready"} />
               </div>
-              <FocusTimer />
+              <FocusTimer fold />
               <div className="acts">
                 <button className="go" onClick={doSubmit} disabled={busy || p.status !== "ready"} title="Run all tests and record the result (⇧⌘↵)">
                   {submit.isPending && <span className="spin" aria-hidden="true" />}
@@ -1190,7 +1179,7 @@ function CaseCard({
       <button className="tcase-h" onClick={() => setOpen(expanded ? "" : id)} aria-expanded={expanded}>
         <CaseIcon t={t} waiting={busy} />
         <span className="nm">
-          {c.name}
+          {c.name.split(/(?<=_)/).map((part, i) => <Fragment key={i}>{i > 0 && <wbr />}{part}</Fragment>)}
         </span>
         <span className="tval">
           {!t
@@ -1327,7 +1316,7 @@ function TestsPanel({
               {run.tests.filter((t) => t.outcome === "passed").length}/{run.tests.length}
             </b>
           </span>
-          {!python && <span>clippy {run.diagnostics.filter((d) => d.level === "warning").length} warnings</span>}
+          {!python && <span>clippy {plural(run.diagnostics.filter((d) => d.level === "warning").length, "warning")}</span>}
         </div>
       )}
       {run?.violations.length ? (

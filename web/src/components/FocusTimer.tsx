@@ -15,11 +15,17 @@ const MODES: [Mode, string][] = [
 
 /** `suggest`: the minutes the problem is estimated to take. In Timer mode the countdown starts there unless the owner chose a length.
  *  The timer itself is shared with the header (`focusStore`), so it keeps running while you move between pages. */
-export function FocusTimer({ suggest }: { suggest?: number }) {
+export function FocusTimer({ suggest, fold = false }: { suggest?: number; fold?: boolean }) {
     const suggested = suggest ? Math.max(5, Math.round(suggest / 5) * 5) : undefined;
     const { cfg, s, spent } = useFocus();
     const [settings, setSettings] = useState(false);
     const baseTitle = useRef<string | null>(null);
+    // with `fold` the card is one line (the time, Start and Open) until it is opened or the timer runs
+    const [opened, setOpened] = useState(false);
+    useEffect(() => {
+        if (s.running) setOpened(true);
+    }, [s.running]);
+    const folded = fold && !opened && !s.running;
     const chosen = () => getPref<Partial<Cfg>>("focus.cfg", {}).timer !== undefined;
 
     // The problem's estimate is the countdown length unless the owner chose one; a running timer is left alone.
@@ -80,7 +86,7 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
     const worked = Math.floor(spent / 60);
 
     return (
-        <div className={`ft${tone}`} aria-label="Focus timer">
+        <div className={`ft${tone}${folded ? " ft-fold" : ""}`} role="group" aria-label="Focus timer">
             <h6 className="ft-h">
                 <span>FOCUS</span>
                 <span className="ft-modes" role="group" aria-label="Timer mode">
@@ -91,6 +97,11 @@ export function FocusTimer({ suggest }: { suggest?: number }) {
                     ))}
                 </span>
             </h6>
+            {fold && (
+                <button type="button" className="ft-unfold" aria-expanded={!folded} aria-label={folded ? "Open the focus timer" : "Fold the focus timer"} title={folded ? "Open the focus timer" : s.running ? "The timer stays open while it runs" : "Fold the focus timer"} disabled={s.running} onClick={() => setOpened(folded)}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={folded ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} /></svg>
+                </button>
+            )}
             <div className="ft-body">
                 <div className={`ft-ring${s.running ? " ft-run" : ""}`} style={{ "--p": p } as React.CSSProperties} role="timer" aria-label={`${label} ${mmss(s.secs)}`}>
                     <span>

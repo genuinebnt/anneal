@@ -14,6 +14,7 @@ import { CodeViewer } from "./CodeViewer";
 import { Connections, InShort, SpoilerGate, lessonFences } from "./Lesson";
 import { Shelf, anchorOf, isCodeKind, kindLabel, scrollToId, subjectPath, tint, topicsOf, useCookbook } from "./shared";
 import { Inline, plain } from "../../components/InlineMd";
+import { Crumbs } from "../../components/Crumbs";
 
 /** Sections shown open on a draft page with many: the answer comes first. */
 const OPEN_FIRST = 2;
@@ -376,12 +377,7 @@ export function CookbookRead({ id }: { id: string }) {
             <main style={tint(page?.subject ?? "data")} className={`page cb-read${page?.kind === "lesson" ? " cb-lesson" : ""}${panels.left ? "" : " no-left"}${panels.right ? "" : " no-right"}${panels.wrap ? " wrap" : ""}${panels.big ? " big" : ""}${drawer ? " drawer" : ""}`}>
                 <div className="cb-bar">
                     <button type="button" className="cb-drawer" onClick={() => setDrawer(true)} aria-expanded={drawer}>Pages</button>
-                    <nav className="cb-crumb" aria-label="Where this page is">
-                        <Link to="/cookbook">Cookbook</Link>
-                        <i>/</i>
-                        {subject ? <Link to={subjectPath(subject.id)}>{subject.title}</Link> : <span>{page?.subject === "samples" ? "Draft samples" : ""}</span>}
-                        {page && <><i>/</i><span>{page.chapter}</span></>}
-                    </nav>
+                    <Crumbs className="cb-crumb" items={[<Link to="/cookbook">Cookbook</Link>, subject ? <Link to={subjectPath(subject.id)}>{subject.title}</Link> : <span>{page?.subject === "samples" ? "Draft samples" : ""}</span>, ...(page ? [<span>{page.chapter}</span>] : [])]} />
                     <span className="cb-sp" />
                     <button type="button" className="cb-toggle" aria-pressed={panels.wrap} onClick={() => toggle("wrap")}>Wrap code</button>
                     <button type="button" className="cb-toggle" aria-pressed={panels.big} onClick={() => toggle("big")}>Larger text</button>

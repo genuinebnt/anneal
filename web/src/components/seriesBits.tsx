@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import type { SeriesDone, SeriesLink, SeriesPlace } from "../api";
 import "../styles/series.css";
 import { Inline } from "./InlineMd";
+import { SegmentBar } from "./SegmentBar";
 
 /** `Part 2 of 21` or `Capstone step 3 of 10`. */
 export const placeName = (s: SeriesPlace) => `${s.kind === "part" ? "Part" : "Capstone step"} ${s.number} of ${s.total}`;
@@ -15,11 +16,7 @@ export const lowerFirst = (s: string) => (/^[A-Z](?![A-Z])/.test(s) ? s[0]!.toLo
 export const shortDay = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 
 export function Segments({ on, label }: { on: boolean[]; label: string }) {
-  return (
-    <div className="sx-segs" role="img" aria-label={`${on.filter(Boolean).length} of ${on.length} ${label} done`}>
-      {on.map((x, i) => <i key={i} className={x ? "on" : undefined} />)}
-    </div>
-  );
+  return <SegmentBar className="sx-segs" label={`${on.filter(Boolean).length} of ${on.length} ${label} done`} segments={on.map((x) => (x ? "done" : ""))} />;
 }
 
 const named = (l: SeriesLink) => (l.number === null ? l.title : `${l.number}. ${l.title}`);
@@ -80,7 +77,7 @@ export function SeriesSwitch({ place, id }: { place: SeriesPlace; id: string }) 
       {place.others.map((o) => (
         <li key={o.id}>
           <Link to="/p/$id" params={{ id }} search={{ series: o.id }} replace resetScroll={false}>
-            Switch to <b>{o.title}</b> <span>({o.kind === "part" ? "part" : "capstone step"} {o.number} there)</span>
+            Switch series: <b>{o.title}</b> <span>({o.kind === "part" ? "part" : "capstone step"} {o.number} there)</span>
           </Link>
         </li>
       ))}

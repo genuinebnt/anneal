@@ -108,16 +108,6 @@ const areaFromPath = (path: string): AreaId | null => {
     return null;
 };
 
-/** A small ring: how far along an area is. */
-function Ring({ p, color }: { p: number; color: string }) {
-    return (
-        <svg className="hd-ring" viewBox="0 0 20 20" style={{ "--c": color, "--p": Math.max(0, Math.min(1, p)) } as React.CSSProperties} aria-hidden="true">
-            <circle className="bg" cx="10" cy="10" r="8" />
-            <circle className="fg" cx="10" cy="10" r="8" />
-        </svg>
-    );
-}
-
 export function Header({ area, compact = false, stats = true }: { area?: AreaId; compact?: boolean; stats?: boolean }) {
     const path = useRouterState({ select: (s) => s.location.pathname });
     const [theme, setTheme] = useState<Theme>(storedTheme);
@@ -329,9 +319,10 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
             {stats && !compact && current !== "cb" && <StatsBar area={current} />}
             <nav className="hd-dock" ref={dock} aria-label="Areas">
                 {AREAS.map((a) => (
-                    <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined}>
-                        <Ring p={ratio(counts[a.id])} color={a.color} />
+                    <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined} title={areaTitle(a.label, counts[a.id])}>
+                        <AreaIcon id={a.id} />
                         {a.label}
+                        <DockBar {...counts[a.id]} />
                     </Link>
                 ))}
                 <Link to="/progress" className={path.startsWith("/progress") ? "on" : ""} style={{ "--c": "var(--acc)" } as React.CSSProperties}>
@@ -344,8 +335,6 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
     );
 }
 
-const ratio = (c: { done: number | undefined; total: number }) => (c.total > 0 && c.done !== undefined ? c.done / c.total : 0);
-
 function TrophyIcon() {
     return (
         <svg className="hd-tro" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -353,6 +342,20 @@ function TrophyIcon() {
         </svg>
     );
 }
+
+/** How far along an area is, under its name in the bottom bar. Any progress at all shows a sliver; an area with no
+ *  total to reach, like the Cookbook, has no bar. */
+function DockBar({ done, total }: { done: number | undefined; total: number }) {
+    if (done === undefined || total <= 0) return null;
+    return (
+        <span className="hd-dbar" aria-hidden="true">
+            <span style={{ width: done > 0 ? `max(3px, ${Math.min(100, (done / total) * 100)}%)` : 0 }} />
+        </span>
+    );
+}
+
+/** `DSA · 2 of 143`; an area with no total to reach, like the Cookbook, only says how much it holds. */
+const areaTitle = (label: string, c: { done: number | undefined; total: number }) => `${label} · ${c.done?.toLocaleString() ?? "–"}${c.total > 0 ? ` of ${c.total}` : " pages"}`;
 
 /** The three areas as one control, and Progress (about all three) after a divider: a solid thumb slides to the current one. */
 function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; counts: Record<AreaId, { done: number | undefined; total: number }>; progress: boolean }) {
@@ -374,7 +377,7 @@ function AreaSwitcher({ current, counts, progress }: { current: AreaId | null; c
         <nav className="hd-areas" ref={box} aria-label="Areas">
             {thumb && <span className="hd-thumb" style={{ transform: `translateX(${thumb.x}px)`, width: thumb.w, "--tc": color } as React.CSSProperties} />}
             {AREAS.map((a) => (
-                <Link key={a.id} to={a.to} className={a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={a.id === current ? "page" : undefined} aria-label={a.label} title={`${a.label} · ${counts[a.id].done ?? "–"} of ${counts[a.id].total || "–"}`}>
+                <Link key={a.id} to={a.to} className={a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={a.id === current ? "page" : undefined} aria-label={a.label} title={areaTitle(a.label, counts[a.id])}>
                     <AreaIcon id={a.id} />
                 </Link>
             ))}

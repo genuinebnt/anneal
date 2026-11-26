@@ -25,7 +25,7 @@
 .k-root .k-copy.k-ok{color:var(--grn);border-color:var(--grn);background:var(--grn-bg)}
 @media (prefers-reduced-motion:reduce){.k-root .k-cta:hover,.k-root .k-cta:hover::after{animation:none;transform:none}}
 .k-root .k-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:32px;align-items:end;padding:54px 0 30px;border-bottom:1px solid var(--line2)}
-:where(.k-root h1){margin:10px 0 14px;font-size:clamp(32px,5vw,56px);line-height:1.04;letter-spacing:-.035em;font-weight:700}
+:where(.k-root h1){margin:10px 0 14px;font-size:var(--t-home);line-height:1.04;letter-spacing:-.035em;font-weight:700}
 :where(.k-root h1 em){font-style:normal;background:linear-gradient(100deg,var(--grn),oklch(0.82 0.11 210) 55%,var(--grn));background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:k-sheen 7s linear infinite}
 @keyframes k-sheen{to{background-position:-220% 0}}
 @media (prefers-reduced-motion:reduce){:where(.k-root h1 em){animation:none}}
@@ -142,7 +142,7 @@
 .k-root .k-read2{container-type:inline-size;width:100%;max-width:1040px;margin:0 auto;padding:48px 56px 100px;box-sizing:border-box;min-width:0}
 .k-root .k-read2 .k-prose p,.k-root .k-read2 .k-snr p{line-height:1.75;font-size:15.5px}
 .k-root .k-read2 .k-sh{margin:44px 0 16px}
-.k-root h2.k-ttl{margin:8px 0 12px;font-size:clamp(28px,4vw,46px);line-height:1.05;letter-spacing:-.03em}
+.k-root .k-ttl{margin:8px 0 12px;font-size:var(--t-page);line-height:1.05;letter-spacing:-.03em}
 .k-root .k-cli{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font:500 12px var(--mono);color:var(--dim);margin-bottom:16px}
 .k-root .k-cli code{background:var(--raise);padding:4px 10px;border-radius:4px;color:var(--fg)}
 .k-root .k-learn{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:22px}
@@ -835,7 +835,7 @@
 .k-root .k-tree .k-tfoot{flex:none;padding-block:6px;gap:6px}}
 .k-root .k-drawer-x{display:none;width:34px;height:34px;place-items:center;border-radius:9px;color:var(--dim);font-size:18px;margin-left:auto}
 .k-root .k-drawer-x:hover{background:var(--raise);color:var(--fg)}
-@media (max-width:640px){.k-root h2.k-ttl{font-size:30px}
+@media (max-width:640px){.k-root .k-ttl{font-size:var(--t-page)}
 .k-root .k-tabs{overflow-x:auto;gap:20px}
 .k-root .k-tabs button{flex:none}
 .k-root .k-snr p,.k-root .k-prose p{font-size:15px}
@@ -847,3 +847,5 @@
 .k-root .k-strip #simpass,.k-root .k-strip #logb{display:none}
 .k-root .k-co{padding:12px 14px 12px 10px}
 .k-root .k-cch{grid-template-columns:36px minmax(0,1fr)}}
+.k-root [data-jump="task"]{min-height:24px}
+@media (max-width:900px){.k-root [data-jump="task"]{display:inline-flex;align-items:center;min-height:36px}}

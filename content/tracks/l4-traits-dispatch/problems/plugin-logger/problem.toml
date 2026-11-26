@@ -1,5 +1,5 @@
 slug = "plugin-logger"
-title = "Plugin logger with trait objects (W6)"
+title = "Plugin logger with trait objects"
 mode = "write"
 level = "medium"
 stage = "static-vs-dynamic"

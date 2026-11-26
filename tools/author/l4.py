@@ -1689,7 +1689,7 @@ fn lines(r: &Rec) -> Vec<String> {
 """
 
 P.append(write(
-    "plugin-logger", "Plugin logger with trait objects (W6)", "medium", "static-vs-dynamic", ["dyn Trait", "decorator", "Send + Sync", "forwarding impls"],
+    "plugin-logger", "Plugin logger with trait objects", "medium", "static-vs-dynamic", ["dyn Trait", "decorator", "Send + Sync", "forwarding impls"],
     """
         Build composable loggers over `Box<dyn Logger + Send + Sync>`:
 
@@ -2918,7 +2918,7 @@ fn panics<R>(f: impl FnOnce() -> R) -> bool {
 """
 
 P.append(write(
-    "matrix-operators", "Matrix<T> with operator overloading (W47)", "medium", "operator-traits", ["Index", "IndexMut", "Add", "Mul", "generic bounds"],
+    "matrix-operators", "Matrix<T> with operator overloading", "medium", "operator-traits", ["Index", "IndexMut", "Add", "Mul", "generic bounds"],
     """
         Implement a generic `Matrix<T>` stored in one `Vec<T>`, row by row. The bounds on each `impl` are already
         chosen; notice which operations need which.

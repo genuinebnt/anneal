@@ -27,7 +27,7 @@ optional side paths) sets none. The series list and the Rust home lead to series
    have. What they all share never counts, so a Submit on a shared problem can't change the answer;
 3. the first in the stable order: `rank` (lowest first; unranked last), then id. `web-server` has `rank = 1`.
 
-The answer lists the problem's `others`, and the problem pane offers "Switch to ..." for each under "Part n of m". It
+The answer lists the problem's `others`, and the problem pane offers "Switch series: <title> (part n there)" for each under "Part n of m". It
 changes `?series=` in place (no new history entry); the code, clock and tabs stay.
 
 ## The file: `content/series/<id>.toml`

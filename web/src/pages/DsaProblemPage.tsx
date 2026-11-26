@@ -307,15 +307,11 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         : ["Not started", p.list_tag ? "Solve it on LeetCode, then log how it went. The next review is scheduled for you." : "Solve it on LeetCode, then log how it went. It is tracked, but not part of your goal, the reviews or the calendar."];
     const lists = p.lists.filter((l) => l !== "practice" || p.lists.length === 1).map((l) => LIST_NAME[l]);
 
-    const crumb = (
-        <span className="pp-crumbs">
-            <Link to="/dsa">DSA</Link>
-            <i>/</i>
-            {pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{ideaShown ? pattern.name.toUpperCase() : "PATTERN"}</Link> : <span>?</span>}
-            <i>/</i>
-            <span>#{p.number}</span>
-        </span>
-    );
+    const crumb = [
+        <Link to="/dsa">DSA</Link>,
+        pattern ? <Link to="/dsa/patterns/$code" params={{ code: pattern.code }}>{ideaShown ? pattern.name.toUpperCase() : "PATTERN"}</Link> : <span>?</span>,
+        <span>#{p.number}</span>,
+    ];
     const title = (
         <span className="pp-titlerow">
             <Mark p={p} today={today} />
@@ -574,7 +570,7 @@ export function DsaProblemPage({ slug }: { slug: string }) {
         <>
             <Header area="dsa" />
             <div style={{ "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-                <Page3 className={`rsd pp${reading ? " reading" : ""}`} crumb={[crumb]} title={title} sub={sub} tiles={tiles} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
+                <Page3 className={`rsd pp${reading ? " reading" : ""}`} crumb={crumb} crumbClass="pp-crumbs" title={title} sub={sub} tiles={tiles} left={reading ? undefined : left} center={center} right={reading ? undefined : right} label={`#${p.number}`} />
             </div>
             {toast}
         </>

@@ -5,6 +5,9 @@ import { WEEKDAYS, newOn, parseDay } from "../dsa";
 
 /** What to do today, in order: the reviews, then the new problem, then logging it. Shown above the Plan and the Calendar. It reads
  *  the same overview and activity as the header's "today" chip. */
+/** Past the goal, "7 of 1" reads as nonsense: it says what was done, then the goal. */
+const solvedToday = (done: number, target: number) => (done > target ? `${done} solved today (goal ${target})` : `${done} of ${target} solved today`);
+
 export function TodayBand() {
     const o = useQuery({ queryKey: ["dsa"], queryFn: api.dsa }).data;
     const activity = useQuery({ queryKey: ["activity", "header"], queryFn: () => api.activity(["D"]) }).data;
@@ -34,7 +37,7 @@ export function TodayBand() {
                 ) : (
                     <>
                         <h2>{target > 0 && done >= target ? "Today's new problems are done." : "Nothing is due now."}</h2>
-                        <p>{target > 0 && done >= target ? `${done} of ${target} solved today, and no review is waiting.` : "No new problem is planned today, and no review is waiting."}</p>
+                        <p>{target > 0 && done >= target ? `${solvedToday(done, target)}, and no review is waiting.` : "No new problem is planned today, and no review is waiting."}</p>
                     </>
                 )}
             </div>

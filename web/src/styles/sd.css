@@ -332,3 +332,4 @@
 @media (prefers-reduced-motion:reduce){.rd-sheet{animation:none}}
 .sd-code-fail{font:600 10.5px var(--mono);letter-spacing:.06em;color:var(--bad);border:1px solid color-mix(in oklab,var(--bad) 45%,transparent);border-radius:999px;padding:2px 8px;white-space:nowrap}
 .sd-call-rust{--c:var(--num)}.sd-call-testing{--c:var(--mac)}.sd-call-production{--c:var(--fn)}.sd-call-performance{--c:var(--warn)}.sd-call-why{--c:var(--vio)}.sd-call-idea{--c:var(--grn)}
+@media (max-width:900px){.rd-fab,.rd-unfocus{bottom:calc(var(--dock-h,66px) + 12px)}}

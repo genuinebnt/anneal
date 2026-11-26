@@ -1,5 +1,5 @@
 slug = "matrix-operators"
-title = "Matrix<T> with operator overloading (W47)"
+title = "Matrix<T> with operator overloading"
 mode = "write"
 level = "medium"
 stage = "operator-traits"

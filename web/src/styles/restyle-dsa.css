@@ -2,16 +2,15 @@
    review and calendar views of restyle-courses-plan.html. Every rule is under .rsd, so no other screen changes. */
 
 /* the shared title row: a bigger title with a gradient, roomier tiles and panels */
-.rsd .ly-crumb{font-size:12px;letter-spacing:.14em}
 .rsd .ly-head{align-items:flex-end;padding-top:18px;margin-bottom:22px}
-.rsd .ly-h1{font-size:clamp(32px,4.2vw,54px);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.rsd .ly-h1{font-size:var(--t-page);line-height:1.06;letter-spacing:-.04em;font-weight:700}
 .rsd .ly-h1>span:not(.pp-titlerow),.rsd .rsd-grad{font-style:normal;padding-bottom:.06em;background:linear-gradient(90deg,var(--acc),var(--vio),var(--fn),var(--grn),var(--acc)) 0 0/300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent!important;-webkit-text-fill-color:transparent}
 .rsd .ly-sub{font-size:16px;line-height:1.6;max-width:72ch}
 .rsd .ly-tl{border-radius:14px;padding:14px 18px;min-width:130px}
 .rsd .ly-tl strong{font-size:26px}
 .rsd .ly-pn{border-radius:16px}
 .rsd .ly-lay{gap:16px}
-@media (max-width:700px){.rsd .ly-h1{font-size:32px}.rsd .ly-tl{min-width:0}}
+@media (max-width:700px){.rsd .ly-tl{min-width:0}}
 
 /* Plan and Calendar: today, what to do next and in what order */
 .rsd-today{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:center;margin:0 0 14px;padding:18px 24px;border-radius:20px;border:1px solid color-mix(in oklab,var(--acc) 40%,var(--line2));background:radial-gradient(120% 120% at 100% 0%,color-mix(in oklab,var(--acc) 18%,transparent),transparent 62%),var(--panel)}
@@ -133,4 +132,3 @@
 @media (max-width:900px){.rsd-practice .d-th{position:static}}
 @media (max-width:700px){.rsd-practice .d-prow{grid-template-columns:24px minmax(0,1fr)}.rsd-practice .d-prow .d-pside{grid-column:2;justify-self:start;margin-top:6px}}
 /* the crumb wraps as one line on a phone */
-@media (max-width:700px){.rsd .ly-crumb,.rsd .ly-crumb>span,.rsd .ly-crumb span span{display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px;line-height:1.8}}

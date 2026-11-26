@@ -4,11 +4,9 @@
 .pp-pad{padding:48px 24px;max-width:1240px;margin:0 auto}
 .pp-band{padding:30px 40px 0;border-bottom:1px solid var(--line2);background:radial-gradient(700px 220px at 8% -40%,var(--acc-bg),transparent 70%),var(--bg)}
 .pp-in{max-width:1240px;margin:0 auto}
-.pp-crumbs{display:flex;gap:10px;flex-wrap:wrap;font:500 11px var(--mono);letter-spacing:.16em;color:var(--dim)}
-.pp-crumbs a{color:var(--acc)}
 .pp-titlerow{display:flex;align-items:center;gap:16px;margin-top:14px}
 .pp-titlerow .d-st{flex:none;width:44px;height:44px;margin:0;font-size:16px}
-.pp-titlerow h1{margin:0;font-size:clamp(28px,3.4vw,44px);line-height:1.05;font-weight:800;letter-spacing:-.03em;text-wrap:balance}
+.pp-titlerow h1{margin:0;font-size:var(--t-page);line-height:1.05;font-weight:800;letter-spacing:-.03em;text-wrap:balance}
 .pp-badges{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
 .pp-b{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 11px;border-radius:999px;border:1px solid var(--line);font:600 11px var(--mono);color:var(--mut);background:var(--panel)}
 .pp-b i{width:7px;height:7px;border-radius:50%;background:currentColor}
@@ -142,8 +140,6 @@
 
 /* The problem page in the 2026 redesign (three panels): the same idea, free instead and previous / next on the left; the statement and
    the lessons in the centre; logging, notes, recall, the timer and companies on the right. Reading mode drops both side panels. */
-.ly-page.pp .pp-crumbs{display:inline-flex;gap:8px;color:var(--acc);font:inherit;letter-spacing:inherit}
-.ly-page.pp .pp-crumbs i{font-style:normal;color:var(--dim)}
 .ly-page.pp .pp-titlerow{margin:0;gap:14px}
 .ly-page.pp .pp-titlerow .d-st{width:36px;height:36px}
 .pp-sub{display:grid;gap:10px;margin-top:4px}

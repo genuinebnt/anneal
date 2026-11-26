@@ -469,9 +469,9 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                             / {DIFFICULTY_LABEL[p.stage.difficulty]} / #{p.stage.id}
                             {p.state !== "todo" && <> / {p.state === "assisted" ? "PASSED · ASSISTED" : "PASSED"}</>}
                         </div>
-                        <h2 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
+                        <h1 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
                             <Inline text={p.stage.title} />
-                        </h2>
+                        </h1>
                         <HowTo boxed={boxed} taskTitle={taskEntry?.title} testsTitle={testsEntry?.title} onTask={() => jumpTo(boxed ? '[data-anchor="task"]' : `#${taskEntry?.id}`)} onTests={() => jumpTo(`#${testsEntry?.id}`)} cmd={cmd} />
                         {p.stage.learn.length > 0 && (
                             <div className="k-learn k-rv" style={{ "--i": 3 } as React.CSSProperties}>

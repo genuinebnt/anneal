@@ -9,6 +9,14 @@ the date below. Do not let it drift: a wrong line here costs the next agent more
 
 Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
 
+## UI review, round two (local, not released; 2026-11-27)
+
+Layout fixes from the UI review: stat tiles, titles and one gutter, one breadcrumb (`Crumbs`), one segmented progress
+bar (`SegmentBar`), the header's second row, reduced motion, phone targets, the folding focus timer, and the series
+readiness list. The phone bar shows the area icons with a thin progress bar under each. `e2e/layout.spec.ts` holds the
+rules. Also: the series switch reads "Switch series: …", and two problem titles lost their `(W…)` tags.
+Left: merging the other pill, tab, button, next-up card and stat-tile families; the course and header breadcrumbs.
+
 ## Series: a problem in two series (local, not committed; 2026-11-27)
 
 The series being read is now in the address (`?series=`), so shared problems no longer send a reader to another series

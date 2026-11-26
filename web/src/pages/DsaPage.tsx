@@ -354,7 +354,7 @@ function TodayStrip({ o, doneToday }: { o: DsaOverview; doneToday: number }) {
     {
       key: "new",
       label: "New problem",
-      detail: target === 0 ? (p.solve_day ? "none planned" : "a practice day") : problemDone ? `${doneToday} of ${target} done` : next ? next.title : "nothing left",
+      detail: target === 0 ? (p.solve_day ? "none planned" : "a practice day") : problemDone ? (doneToday > target ? `${doneToday} done (goal ${target})` : `${doneToday} of ${target} done`) : next ? next.title : "nothing left",
       state: target === 0 ? "off" : problemDone ? "done" : reviewsDone ? "now" : "wait",
       to: next && target > 0 && !problemDone ? { to: "/d/$slug", params: { slug: next.slug } } : undefined,
     },

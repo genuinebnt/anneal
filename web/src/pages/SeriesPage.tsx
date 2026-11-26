@@ -8,8 +8,12 @@ import { Skeleton } from "../components/Skeleton";
 import { Segments, lowerFirst, shortDay } from "../components/seriesBits";
 import "../styles/series.css";
 import { Inline } from "../components/InlineMd";
+import { Crumbs } from "../components/Crumbs";
 
 const STATE: Record<SeriesItem["state"], string> = { solved: "Solved", assisted: "With help", next: "Next", started: "Started", open: "", to_write: "To write" };
+
+/** "Part 3", "Parts 1 to 3": the server sends the numbers as words, and one number has no space in it. */
+const counted = (word: string, numbers: string) => `${word}${/^\d+$/.test(numbers) ? "" : "s"} ${numbers}`;
 
 const done = (s: SeriesItem["state"]) => s === "solved" || s === "assisted";
 
@@ -134,30 +138,24 @@ function Body({ s }: { s: SeriesView }) {
             <section className="sx-box">
               <h2>Ready for the capstone?</h2>
               <p className="sx-small">What the project needs, and which parts teach it. Open a line for the details, which may name techniques.</p>
-              <table className="sx-need">
-                <thead><tr><th scope="col">You will need</th><th scope="col">Parts</th></tr></thead>
-                <tbody>
-                  {s.needs.map((n) => (
-                    <tr key={n.need}>
-                      <td>
-                        {/* the single things under a heading name techniques, so they stay closed */}
-                        <details>
-                          <summary>{n.need}</summary>
-                          <ul>
-                            {n.concepts.map((c) => (
-                              <li key={c.concept}>
-                                {c.concept}
-                                <small>{[c.parts && `Parts ${c.parts}`, c.steps && `capstone ${c.steps}`, c.note].filter(Boolean).join(" · ")}</small>
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      </td>
-                      <td>{n.parts || "–"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <ul className="sx-need">
+                {s.needs.map((n) => (
+                  <li key={n.need}>
+                    {/* the single things under a heading name techniques, so they stay closed */}
+                    <details>
+                      <summary><span>{n.need}</span><small>{n.parts ? counted("Part", n.parts) : "–"}</small></summary>
+                      <ul>
+                        {n.concepts.map((c) => (
+                          <li key={c.concept}>
+                            {c.concept}
+                            <small>{[c.parts && counted("Part", c.parts), c.steps && counted("capstone step", c.steps), c.note].filter(Boolean).join(" · ")}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </li>
+                ))}
+              </ul>
             </section>
           )}
           {s.ideas.length > 0 && (
@@ -195,7 +193,7 @@ export function SeriesPage({ id }: { id: string }) {
     <>
       <Header area="rust" />
       <main className="page sx-page">
-        <nav className="sx-back" aria-label="Breadcrumb"><Link to="/rust">Rust</Link> / <Link to="/rust/series">Series</Link></nav>
+        <Crumbs className="sx-back" items={[<Link to="/rust">Rust</Link>, <Link to="/rust/series">Series</Link>, ...(q.data ? [<span aria-current="page">{q.data.title}</span>] : [])]} />
         {q.data ? <Body s={q.data} /> : q.isError ? (
           <p className="notice bad">{q.error instanceof ApiError && q.error.status === 404 ? "There is no series here." : "Couldn't load the series."} <Link to="/rust">Back to Rust</Link></p>
         ) : <Skeleton lines={8} />}
@@ -241,7 +239,7 @@ export function SeriesListPage() {
     <>
       <Header area="rust" />
       <main className="page sx-page">
-        <nav className="sx-back" aria-label="Breadcrumb"><Link to="/rust">Rust</Link> / Series</nav>
+        <Crumbs className="sx-back" items={[<Link to="/rust">Rust</Link>, <span aria-current="page">Series</span>]} />
         <header className="sx-hero">
           <div>
             <h1>Series</h1>

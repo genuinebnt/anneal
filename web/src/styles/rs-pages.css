@@ -3,9 +3,8 @@
    Every rule is scoped to .rs or an .rs-* class that only these pages set. */
 
 /* ---- the shared head and panels ---- */
-.rs .ly-crumb{font-size:12px;letter-spacing:.14em}
 .rs .ly-head{align-items:flex-end;padding-top:18px;margin-bottom:22px}
-.rs .ly-h1{font-size:clamp(32px,4.2vw,54px);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.rs .ly-h1{font-size:var(--t-page);line-height:1.06;letter-spacing:-.04em;font-weight:700}
 .rs .ly-h1>span{background-image:linear-gradient(90deg,var(--acc),var(--vio),var(--fn),var(--grn),var(--acc));background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;padding-bottom:.06em}
 .rs .ly-sub{font-size:16px;line-height:1.6;max-width:72ch}
 .rs .ly-tl{border-radius:14px;padding:14px 18px;min-width:130px}
@@ -41,8 +40,6 @@
 .rs-settings .ly-cp section{padding:24px 28px;border-radius:16px}
 
 @media (max-width:700px){
-    .rs .ly-crumb,.rs .ly-crumb>span,.rs .ly-crumb span span{display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px;line-height:1.8}
-    .rs .ly-h1{font-size:32px}
     .rs .ly-tl{min-width:0}
     .rs-tidy .ly-pn,.rs-tidy .pbox,.rs-settings .ly-cp section{padding:16px 14px}
     .rs-tidy table tbody td:first-child{padding-left:8px}
@@ -121,3 +118,4 @@
 @media (max-width:900px){
     .k-root .rs-how{grid-template-columns:minmax(0,1fr)}
 }
+.k-root .k-wrap.rs-courses{padding-inline:var(--gutter)}
