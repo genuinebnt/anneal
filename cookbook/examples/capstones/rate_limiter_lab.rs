@@ -5,12 +5,16 @@
 //!
 //! WHAT: six algorithms behind one `Limiter` trait (fixed window, sliding log, sliding counter, token bucket,
 //! leaky-bucket meter, GCRA), a per-key `KeyedLimiter` with idle eviction, and a lock-free concurrency limiter
-//! with an AIMD (additive-increase / multiplicative-decrease) adaptive limit.
+//! with an AIMD (additive-increase / multiplicative-decrease) adaptive limit; its in-flight count and limit share one atomic
+//! word, so admission checks the limit that is current at the moment it takes the slot.
 //! WHY: every limiter trades accuracy, burst behaviour and memory differently. Seeing them run on identical
 //! seeded traffic makes the trade-offs concrete instead of folklore.
 //! HOW: time is never read from the OS. Each `check` takes `now_ms`, so a replay is exactly reproducible and the
 //! whole lab runs in milliseconds. The harness measures the metric that matters to a protected backend: the
 //! maximum number of ADMITTED requests in any 1-second sliding window.
+//! CLOCKS: `now_ms` may go backwards. The five limiters that measure elapsed time keep the latest time they have seen and
+//! treat an earlier one as that, so a rollback never refills or resets anything. GCRA compares the earlier time with its
+//! stored schedule, which can only make it stricter, so it matches the token bucket only while time does not go back.
 //!
 //! COMMON USES: API gateway quotas (Stripe-style), login brute-force throttling, per-tenant fairness in multi-tenant
 //! SaaS, outbound politeness toward third-party APIs, tower/governor middleware, database connection or in-flight
@@ -20,7 +24,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
 const LIMIT: u32 = 10; // requests per window / burst size
@@ -28,11 +32,15 @@ const WINDOW_MS: u64 = 1000;
 const INTERVAL_MS: u64 = WINDOW_MS / LIMIT as u64; // steady-state spacing: one request per 100 ms
 
 /// Every algorithm answers one question: may a request arriving at `now_ms` proceed?
-/// Time is an argument (not a global clock) so tests are deterministic. Callers must pass non-decreasing times.
+/// Time is an argument (not a global clock) so tests are deterministic. An earlier time than before must not restore quota.
 trait Limiter {
     fn name(&self) -> &'static str;
     fn check(&mut self, now_ms: u64) -> bool;
-    /// Approximate heap + stack bytes of per-key state (what you pay per tenant).
+    /// How long after its last check this limiter behaves exactly like a new one: the shortest safe idle eviction.
+    fn recovery_ms(&self) -> u64;
+    /// Bytes of the state that changes per key, counted the same way for every algorithm: field sizes without padding,
+    /// plus heap for the log. Settings (limit, window, interval, tolerance) are left out because keys can share them; the
+    /// structs in this lab store them in each instance anyway, so a `size_of` here would be larger.
     fn state_bytes(&self) -> usize;
 }
 
@@ -40,7 +48,7 @@ trait Limiter {
 struct FixedWindow {
     limit: u32,
     window_ms: u64,
-    window_idx: u64,
+    last_ms: u64, // latest time seen; its window is the one `count` belongs to
     count: u32,
 }
 impl FixedWindow {
@@ -48,7 +56,7 @@ impl FixedWindow {
         Self {
             limit,
             window_ms,
-            window_idx: 0,
+            last_ms: 0,
             count: 0,
         }
     }
@@ -58,17 +66,20 @@ impl Limiter for FixedWindow {
         "fixed-window"
     }
     fn check(&mut self, now_ms: u64) -> bool {
-        let idx = now_ms / self.window_ms;
-        if idx != self.window_idx {
-            self.window_idx = idx;
+        let now_ms = now_ms.max(self.last_ms);
+        if now_ms / self.window_ms != self.last_ms / self.window_ms {
             self.count = 0;
         }
+        self.last_ms = now_ms;
         let ok = self.count < self.limit;
         self.count += ok as u32;
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        self.window_ms
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>()
+        size_of_val(&self.last_ms) + size_of_val(&self.count)
     }
 }
 
@@ -91,6 +102,8 @@ impl Limiter for SlidingLog {
     fn name(&self) -> &'static str {
         "sliding-log"
     }
+    // No clamp needed for rollback: a stamp taken at an earlier time sits behind the newer front entry, and only the front
+    // is popped, so it stays at least as long as that newer one (the self-check compares this with a clamped clock).
     fn check(&mut self, now_ms: u64) -> bool {
         // Keep only timestamps inside (now - window, now]; this matches the half-open window the harness measures.
         while self
@@ -106,8 +119,11 @@ impl Limiter for SlidingLog {
         }
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        self.window_ms
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>() + self.log.capacity() * size_of::<u64>()
+        size_of_val(&self.log) + self.log.capacity() * size_of::<u64>()
     }
 }
 
@@ -115,7 +131,7 @@ impl Limiter for SlidingLog {
 struct SlidingCounter {
     limit: f64,
     window_ms: u64,
-    window_idx: u64,
+    last_ms: u64,
     cur: u32,
     prev: u32,
 }
@@ -124,18 +140,19 @@ impl SlidingCounter {
         Self {
             limit: limit as f64,
             window_ms,
-            window_idx: 0,
+            last_ms: 0,
             cur: 0,
             prev: 0,
         }
     }
-    fn roll(&mut self, idx: u64) {
-        match idx - self.window_idx {
+    /// `now_ms` is never before `last_ms`.
+    fn roll(&mut self, now_ms: u64) {
+        match now_ms / self.window_ms - self.last_ms / self.window_ms {
             0 => {}
             1 => (self.prev, self.cur) = (self.cur, 0),
             _ => (self.prev, self.cur) = (0, 0), // a whole idle window passed: nothing is left to weigh
         }
-        self.window_idx = idx;
+        self.last_ms = now_ms;
     }
 }
 impl Limiter for SlidingCounter {
@@ -143,15 +160,19 @@ impl Limiter for SlidingCounter {
         "sliding-counter"
     }
     fn check(&mut self, now_ms: u64) -> bool {
-        self.roll(now_ms / self.window_ms);
+        let now_ms = now_ms.max(self.last_ms);
+        self.roll(now_ms);
         let elapsed = (now_ms % self.window_ms) as f64 / self.window_ms as f64;
         let estimate = self.prev as f64 * (1.0 - elapsed) + self.cur as f64;
         let ok = estimate + 1.0 <= self.limit;
         self.cur += ok as u32;
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        2 * self.window_ms // after only one window the old count is still weighed as `prev`
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>()
+        size_of_val(&self.last_ms) + size_of_val(&self.cur) + size_of_val(&self.prev)
     }
 }
 
@@ -179,7 +200,8 @@ impl Limiter for TokenBucket {
         "token-bucket"
     }
     fn check(&mut self, now_ms: u64) -> bool {
-        self.credit = (self.credit + now_ms.saturating_sub(self.last_ms)).min(self.cap);
+        let now_ms = now_ms.max(self.last_ms); // never move `last_ms` back: that time would be credited twice
+        self.credit = (self.credit + (now_ms - self.last_ms)).min(self.cap);
         self.last_ms = now_ms;
         let ok = self.credit >= self.cost;
         if ok {
@@ -187,8 +209,11 @@ impl Limiter for TokenBucket {
         }
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        self.cap // empty to full
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>()
+        size_of_val(&self.credit) + size_of_val(&self.last_ms)
     }
 }
 
@@ -215,9 +240,8 @@ impl Limiter for LeakyMeter {
         "leaky-meter"
     }
     fn check(&mut self, now_ms: u64) -> bool {
-        self.level = self
-            .level
-            .saturating_sub(now_ms.saturating_sub(self.last_ms));
+        let now_ms = now_ms.max(self.last_ms);
+        self.level = self.level.saturating_sub(now_ms - self.last_ms);
         self.last_ms = now_ms;
         let ok = self.level + self.cost <= self.cap;
         if ok {
@@ -225,22 +249,26 @@ impl Limiter for LeakyMeter {
         }
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        self.cap // full to drained
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>()
+        size_of_val(&self.level) + size_of_val(&self.last_ms)
     }
 }
 
 // ---- 6. GCRA: store ONE number, the theoretical arrival time (TAT) of the next conforming request ----
 struct Gcra {
-    interval: u64,  // T: emission interval
-    tolerance: u64, // tau: how far ahead of schedule a request may arrive = (burst - 1) * T
+    interval: u64, // T: emission interval
+    // tau: how far ahead of schedule a request may arrive = (burst - 1) * T; `None` for burst 0, which admits nothing
+    tolerance: Option<u64>,
     tat: u64,
 }
 impl Gcra {
     fn new(burst: u32, interval_ms: u64) -> Self {
         Self {
             interval: interval_ms,
-            tolerance: (burst as u64 - 1) * interval_ms,
+            tolerance: (burst as u64).checked_sub(1).map(|b| b * interval_ms),
             tat: 0,
         }
     }
@@ -250,14 +278,18 @@ impl Limiter for Gcra {
         "gcra"
     }
     fn check(&mut self, now_ms: u64) -> bool {
-        let ok = self.tat <= now_ms + self.tolerance;
+        let ok = self.tolerance.is_some_and(|tau| self.tat <= now_ms + tau);
         if ok {
             self.tat = self.tat.max(now_ms) + self.interval;
         }
         ok
     }
+    fn recovery_ms(&self) -> u64 {
+        // an admit leaves `tat` at most tau + T ahead of the time it happened
+        self.tolerance.map_or(0, |tau| tau + self.interval)
+    }
     fn state_bytes(&self) -> usize {
-        size_of::<Self>() - size_of::<u64>() * 2 // only `tat` is mutable state; T and tau are shared config
+        size_of_val(&self.tat)
     }
 }
 
@@ -276,6 +308,7 @@ fn lineup() -> Vec<Box<dyn Limiter>> {
 struct KeyedLimiter<L, F: Fn() -> L> {
     make: F,
     idle_ms: u64,
+    clock_ms: u64, // latest time seen from any key; everything below runs on it, so it never goes back
     last_sweep: u64,
     entries: HashMap<u32, (L, u64)>, // limiter + last-seen time
 }
@@ -284,11 +317,14 @@ impl<L: Limiter, F: Fn() -> L> KeyedLimiter<L, F> {
         Self {
             make,
             idle_ms,
+            clock_ms: 0,
             last_sweep: 0,
             entries: HashMap::new(),
         }
     }
     fn check(&mut self, key: u32, now_ms: u64) -> bool {
+        self.clock_ms = self.clock_ms.max(now_ms);
+        let now_ms = self.clock_ms;
         self.sweep_if_due(now_ms);
         let (limiter, seen) = self
             .entries
@@ -297,12 +333,13 @@ impl<L: Limiter, F: Fn() -> L> KeyedLimiter<L, F> {
         *seen = now_ms;
         limiter.check(now_ms)
     }
-    /// Dropping a key forgets its state. That is only safe when `idle_ms` >= the time the limiter needs to fully
-    /// recover (a window / a full bucket refill), because a fresh limiter starts "full" anyway.
+    /// Dropping a key forgets its state, which is safe only once a fresh limiter would behave the same. So a key is kept
+    /// for `idle_ms` or the limiter's `recovery_ms`, whichever is longer: a short `idle_ms` cannot hand quota back.
     fn sweep_if_due(&mut self, now_ms: u64) {
         if now_ms - self.last_sweep >= self.idle_ms {
             let idle = self.idle_ms;
-            self.entries.retain(|_, (_, seen)| now_ms - *seen < idle);
+            self.entries
+                .retain(|_, (l, seen)| now_ms - *seen < idle.max(l.recovery_ms()));
             self.last_sweep = now_ms;
         }
     }
@@ -313,8 +350,9 @@ impl<L: Limiter, F: Fn() -> L> KeyedLimiter<L, F> {
 
 // ---- concurrency limiter: caps requests IN FLIGHT (not per time). RAII permit releases on Drop ----
 struct Shared {
-    in_flight: AtomicUsize,
-    limit: AtomicUsize,
+    /// limit in the high 32 bits, requests in flight in the low 32. Admission compares the two, so they must change as one:
+    /// with two atomics the limit can drop between reading it and taking the slot.
+    state: AtomicU64,
     min: usize,
     max: usize,
 }
@@ -322,55 +360,67 @@ struct Shared {
 struct ConcurrencyLimiter(Arc<Shared>);
 struct Permit(Arc<Shared>);
 
+fn pack(limit: usize, in_flight: usize) -> u64 {
+    (limit as u64) << 32 | in_flight as u64
+}
+fn unpack(state: u64) -> (usize, usize) {
+    ((state >> 32) as usize, (state & u32::MAX as u64) as usize)
+}
+
 impl ConcurrencyLimiter {
     fn new(limit: usize, min: usize, max: usize) -> Self {
-        let (in_flight, limit) = (AtomicUsize::new(0), AtomicUsize::new(limit));
+        assert!(limit.max(max).max(min) <= u32::MAX as usize);
         Self(Arc::new(Shared {
-            in_flight,
-            limit,
+            state: AtomicU64::new(pack(limit, 0)),
             min,
             max,
         }))
     }
     fn try_acquire(&self) -> Option<Permit> {
-        let limit = self.0.limit.load(Ordering::Acquire);
-        // fetch_update is a CAS loop: check-and-increment is one atomic step, so two threads cannot both take the last slot.
+        self.try_acquire_observed(|| {})
+    }
+    /// `after_read` runs between reading the state and trying to change it: the self-check uses it to change the limit at
+    /// exactly that point, without threads or timing.
+    fn try_acquire_observed(&self, mut after_read: impl FnMut()) -> Option<Permit> {
+        // fetch_update is a CAS loop. If anything changed since the read (a slot or the limit), it decides again.
         self.0
-            .in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < limit).then_some(n + 1)
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                after_read();
+                let (limit, n) = unpack(state);
+                (n < limit).then(|| pack(limit, n + 1))
             })
             .ok()?;
         Some(Permit(Arc::clone(&self.0)))
     }
     fn in_flight(&self) -> usize {
-        self.0.in_flight.load(Ordering::Acquire)
+        unpack(self.0.state.load(Ordering::Acquire)).1
     }
     fn limit(&self) -> usize {
-        self.0.limit.load(Ordering::Acquire)
+        unpack(self.0.state.load(Ordering::Acquire)).0
+    }
+    fn update_limit(&self, f: impl Fn(usize) -> usize) {
+        let _ = self
+            .0
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                let (limit, n) = unpack(state);
+                Some(pack(f(limit), n))
+            });
     }
     /// AIMD: probe gently upwards (+1) on success...
     fn on_success(&self) {
-        let _ = self
-            .0
-            .limit
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |l| {
-                Some((l + 1).min(self.0.max))
-            });
+        self.update_limit(|l| (l + 1).min(self.0.max));
     }
     /// ...but back off fast (halve) on overload, as TCP congestion control does.
     fn on_overload(&self) {
-        let _ = self
-            .0
-            .limit
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |l| {
-                Some((l / 2).max(self.0.min))
-            });
+        self.update_limit(|l| (l / 2).max(self.0.min));
     }
 }
 impl Drop for Permit {
     fn drop(&mut self) {
-        self.0.in_flight.fetch_sub(1, Ordering::Release); // runs on every exit path, including panics
+        // the count is the low half and is at least 1 while a permit lives, so this never borrows from the limit
+        self.0.state.fetch_sub(1, Ordering::Release); // runs on every exit path, including panics
     }
 }
 
@@ -581,7 +631,147 @@ fn demo_concurrency() {
     );
 }
 
+// ---- self-checks for the edges: a clock that goes back, burst 0, eviction, a limit change during admission ----
+fn check_clock_rollback() {
+    for mut l in lineup() {
+        let name = l.name();
+        let mut offer = |t| (0..20).filter(|_| l.check(t)).count();
+        let seen = (offer(10_000), offer(500), offer(10_000));
+        assert_eq!(
+            seen,
+            (LIMIT as usize, 0, 0),
+            "{name}: rollback restored quota"
+        );
+    }
+    // Stronger, for all but GCRA: a trace whose clock jumps back gets the same decisions as the same trace on a clock that
+    // only moves forward (each time replaced by the latest so far).
+    let mut rng = XorShift(0xC10C_C10C);
+    for trace in 0..300 {
+        let mut base = 5_000u64;
+        let times: Vec<u64> = (0..300)
+            .map(|_| {
+                base += rng.below(60);
+                if rng.below(8) == 0 {
+                    base.saturating_sub(rng.below(4_000))
+                } else {
+                    base
+                }
+            })
+            .collect();
+        for (mut jumpy, mut steady) in lineup().into_iter().zip(lineup()) {
+            let mut latest = 0;
+            for &t in &times {
+                latest = latest.max(t);
+                let (got, clamped) = (jumpy.check(t), steady.check(latest));
+                // GCRA may be stricter and then the two drift apart: only the quota bound below applies to it
+                if jumpy.name() != "gcra" {
+                    assert_eq!(
+                        got,
+                        clamped,
+                        "{} trace {trace} at {t} (latest {latest})",
+                        jumpy.name()
+                    );
+                }
+            }
+        }
+        // GCRA: never more than the burst plus what the furthest time reached has earned
+        let mut g = Gcra::new(LIMIT, INTERVAL_MS);
+        let admitted = times.iter().filter(|&&t| g.check(t)).count() as u64;
+        let span = times.iter().max().unwrap() - times[0];
+        assert!(
+            admitted <= LIMIT as u64 + span / INTERVAL_MS,
+            "gcra trace {trace}"
+        );
+    }
+    let mut keyed = KeyedLimiter::new(|| TokenBucket::new(LIMIT, INTERVAL_MS), 2000);
+    let mut offer = |key, t| (0..20).filter(|_| keyed.check(key, t)).count();
+    assert_eq!(offer(1, 10_000), LIMIT as usize);
+    assert_eq!((offer(1, 500), offer(2, 500)), (0, LIMIT as usize));
+    assert_eq!((offer(1, 10_000), offer(2, 10_000)), (0, 0));
+}
+
+fn check_burst_zero() {
+    let mut none: [Box<dyn Limiter>; 6] = [
+        Box::new(FixedWindow::new(0, WINDOW_MS)),
+        Box::new(SlidingLog::new(0, WINDOW_MS)),
+        Box::new(SlidingCounter::new(0, WINDOW_MS)),
+        Box::new(TokenBucket::new(0, INTERVAL_MS)),
+        Box::new(LeakyMeter::new(0, INTERVAL_MS)),
+        Box::new(Gcra::new(0, INTERVAL_MS)),
+    ];
+    for l in &mut none {
+        assert!(
+            [0, 1, 5_000, 2].iter().all(|&t| !l.check(t)),
+            "{}",
+            l.name()
+        );
+    }
+}
+
+/// With an eviction time of 1 ms, a keyed limiter must still decide exactly like one that never forgets a key.
+fn check_eviction<L: Limiter>(make: fn() -> L) {
+    let mut rng = XorShift(0xE51C_7ED5);
+    let mut keyed = KeyedLimiter::new(make, 1);
+    let mut kept: HashMap<u32, L> = HashMap::new();
+    let (mut t, mut evicted) = (0u64, false);
+    for step in 0..20_000 {
+        // mostly a burst at one instant, sometimes a gap on either side of each recovery time
+        if rng.below(12) == 0 {
+            t += [1, 99, 999, 1000, 1001, 1999, 2000, 2500][rng.below(8) as usize];
+        }
+        let key = rng.below(3) as u32;
+        let want = kept.entry(key).or_insert_with(make).check(t);
+        let got = keyed.check(key, t);
+        assert_eq!(got, want, "{} step {step} key {key} at {t}", make().name());
+        evicted |= keyed.len() < kept.len();
+    }
+    assert!(evicted, "the check must actually evict");
+}
+
+fn check_state_bytes() {
+    let bytes: HashMap<_, _> = lineup()
+        .iter()
+        .map(|l| (l.name(), l.state_bytes()))
+        .collect();
+    assert_eq!(bytes["fixed-window"], 12); // time + count
+    assert_eq!(bytes["sliding-counter"], 16); // time + two counts
+    assert_eq!(bytes["token-bucket"], 16); // credit + time
+    assert_eq!(bytes["leaky-meter"], 16); // level + time
+    assert_eq!(bytes["gcra"], 8); // one time
+    assert!(bytes["sliding-log"] >= size_of::<VecDeque<u64>>() + LIMIT as usize * 8);
+}
+
+/// The limit drops from 4 to 2 after an admission has read the state and before it takes the slot.
+fn check_limit_change_during_acquire() {
+    let cl = ConcurrencyLimiter::new(4, 1, 4);
+    let held = [cl.try_acquire().unwrap(), cl.try_acquire().unwrap()];
+    let mut lowered = false;
+    let late = cl.try_acquire_observed(|| {
+        if !std::mem::replace(&mut lowered, true) {
+            cl.on_overload();
+        }
+    });
+    assert!(
+        late.is_none(),
+        "admitted against a limit that was already lowered"
+    );
+    assert_eq!((cl.limit(), cl.in_flight()), (2, held.len()));
+    drop(held);
+    assert_eq!((cl.limit(), cl.in_flight()), (2, 0));
+}
+
 fn main() {
+    check_clock_rollback();
+    check_burst_zero();
+    check_eviction(|| FixedWindow::new(LIMIT, WINDOW_MS));
+    check_eviction(|| SlidingLog::new(LIMIT, WINDOW_MS));
+    check_eviction(|| SlidingCounter::new(LIMIT, WINDOW_MS));
+    check_eviction(|| TokenBucket::new(LIMIT, INTERVAL_MS));
+    check_eviction(|| LeakyMeter::new(LIMIT, INTERVAL_MS));
+    check_eviction(|| Gcra::new(LIMIT, INTERVAL_MS));
+    check_state_bytes();
+    check_limit_change_during_acquire();
+
     let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
     let steady_t = steady(&mut rng);
     let bursty_t = bursty(&mut rng);

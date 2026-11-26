@@ -18,7 +18,9 @@ body = """
 [[sections]]
 heading = "What it is"
 body = """
-a small regex dialect: literals, `.`, `*`, `+`, `?`, `|`, `( )`, classes `[a-z_]` / `[^...]`, anchors `^` `$`, escapes (`\\d \\w \\s \\n \\t \\.`).
+a small regex dialect: literals, `.`, `*`, `+`, `?`, `|`, `( )`, classes `[a-z_]` / `[^...]`, anchors `^` `$`, escapes (`\\d \\w \\s \\n \\t`, also inside classes). A backslash before punctuation means that character (`\\.`); before any other ASCII letter or digit (`\\D`, `\\r`) it is an error. `\\d \\w \\s` are ASCII only.
+
+A shorthand cannot be the end of a range (`[a-\\d]`).
 """
 
 [[sections]]
@@ -32,6 +34,7 @@ heading = "How it works"
 body = """
 ```text
 parse    text -> `Ast`  recursive descent, one function per precedence level (alt < concat < repeat < atom); errors carry a char position
+         open groups and syntax-tree height are both capped at 250, so a hostile pattern gets an error instead of overflowing the stack
 ```
 
 compile  `Ast` -> `Nfa` states in a `Vec`, ids are indices; built back-to-front so every fragment is told its `next` state (no patch lists) run      simulate the **set** of live states; epsilon-closure follows `Split`, and `^`/`$` only when the position allows it `find` is **leftmost-longest** (POSIX style): the earliest start that can match, then the longest end from it.

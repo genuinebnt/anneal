@@ -18,7 +18,7 @@ body = """
 [[sections]]
 heading = "What it is"
 body = """
-six algorithms behind one `Limiter` trait (fixed window, sliding log, sliding counter, token bucket, leaky-bucket meter, GCRA), a per-key `KeyedLimiter` with idle eviction, and a lock-free concurrency limiter with an **aimd** (additive-increase / multiplicative-decrease) adaptive limit.
+six algorithms behind one `Limiter` trait (fixed window, sliding log, sliding counter, token bucket, leaky-bucket meter, GCRA), a per-key `KeyedLimiter` with idle eviction, and a lock-free concurrency limiter with an **aimd** (additive-increase / multiplicative-decrease) adaptive limit; its in-flight count and limit share one atomic word, so admission checks the limit that is current at the moment it takes the slot.
 """
 
 [[sections]]
@@ -31,6 +31,8 @@ every limiter trades accuracy, burst behaviour and memory differently. Seeing th
 heading = "How it works"
 body = """
 time is never read from the OS. Each `check` takes `now_ms`, so a replay is exactly reproducible and the whole lab runs in milliseconds. The harness measures the metric that matters to a protected backend: the maximum number of **admitted** requests in any 1-second sliding window.
+
+**Clocks**: `now_ms` may go backwards. The five limiters that measure elapsed time keep the latest time they have seen and treat an earlier one as that, so a rollback never refills or resets anything. GCRA compares the earlier time with its stored schedule, which can only make it stricter, so it matches the token bucket only while time does not go back.
 """
 
 [[sections]]

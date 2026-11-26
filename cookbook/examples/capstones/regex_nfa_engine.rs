@@ -3,11 +3,14 @@
 //! Use in: log/route/input matching without ReDoS, lexers, search tools, learning how grep/RE2/rust-regex work.   Run: cargo run --release --example regex_nfa_engine
 #![allow(dead_code)]
 //!
-//! WHAT: a small regex dialect: literals, `.`, `*`, `+`, `?`, `|`, `( )`, classes `[a-z_]` / `[^...]`, anchors `^` `$`, escapes (`\d \w \s \n \t \.`).
+//! WHAT: a small regex dialect: literals, `.`, `*`, `+`, `?`, `|`, `( )`, classes `[a-z_]` / `[^...]`, anchors `^` `$`, escapes (`\d \w \s \n \t`, also inside classes).
+//!   A backslash before punctuation means that character (`\.`); before any other ASCII letter or digit (`\D`, `\r`) it is an error.
+//!   `\d \w \s` are ASCII only. A shorthand cannot be the end of a range (`[a-\d]`).
 //! WHY: the classic backtracking matcher (Perl, PCRE, Python `re`, JS) is exponential on patterns like `(a*)*b`; that is the ReDoS bug class.
 //!      A Thompson NFA keeps ALL possible positions at once, so matching costs O(text * states) and can never blow up.
 //! HOW (each stage is a plain function):
 //!   parse    text -> `Ast`  recursive descent, one function per precedence level (alt < concat < repeat < atom); errors carry a char position
+//!            open groups and syntax-tree height are both capped at 250, so a hostile pattern gets an error instead of overflowing the stack
 //!   compile  `Ast` -> `Nfa` states in a `Vec`, ids are indices; built back-to-front so every fragment is told its `next` state (no patch lists)
 //!   run      simulate the SET of live states; epsilon-closure follows `Split`, and `^`/`$` only when the position allows it
 //! `find` is LEFTMOST-LONGEST (POSIX style): the earliest start that can match, then the longest end from it. Perl/rust-regex use
@@ -65,23 +68,36 @@ enum ParseError {
     UnclosedClass(usize),
     #[error("nothing to repeat before the quantifier at {0}")]
     NothingToRepeat(usize),
-    #[error("reversed range in class at {0}")]
+    #[error("invalid range in class at {0}")]
     BadRange(usize),
     #[error("dangling backslash at {0}")]
     TrailingEscape(usize),
+    #[error("unknown escape \\{0} at {1}")]
+    UnknownEscape(char, usize),
+    #[error("pattern nests more than {MAX_NESTING} levels at {0}")]
+    TooDeep(usize),
 }
+
+/// Cap on open groups (the parser recurses once per group) and on AST height (`emit`, the oracle and `Drop` recurse once per
+/// level). Both are needed: `((((a))))` is deep for the parser but a flat tree, `a****` is the reverse.
+const MAX_NESTING: usize = 250;
+
+/// A parsed subtree and its height.
+type Parsed = Result<(Ast, usize), ParseError>;
 
 struct Parser {
     cs: Vec<char>,
     pos: usize,
+    open_groups: usize,
 }
 
 fn parse(src: &str) -> Result<Ast, ParseError> {
     let mut p = Parser {
         cs: src.chars().collect(),
         pos: 0,
+        open_groups: 0,
     };
-    let ast = p.alt()?;
+    let (ast, _) = p.alt()?;
     // alt() only stops early at a ')' that no '(' owns.
     if p.pos < p.cs.len() {
         Err(ParseError::UnmatchedClose(p.pos))
@@ -105,37 +121,53 @@ impl Parser {
         hit
     }
 
+    /// Height of a new node over a child of height `child`; checked BEFORE the node is built.
+    fn grow(&self, child: usize) -> Result<usize, ParseError> {
+        if child < MAX_NESTING {
+            Ok(child + 1)
+        } else {
+            Err(ParseError::TooDeep(self.pos.saturating_sub(1)))
+        }
+    }
+
     // alt := cat ('|' cat)*       lowest precedence, so it is the entry point
-    fn alt(&mut self) -> Result<Ast, ParseError> {
-        let mut branches = vec![self.cat()?];
+    fn alt(&mut self) -> Parsed {
+        let (first, mut height) = self.cat()?;
+        let mut branches = vec![first];
         while self.eat('|') {
-            branches.push(self.cat()?);
+            let (branch, h) = self.cat()?;
+            branches.push(branch);
+            height = height.max(h);
         }
         Ok(if branches.len() == 1 {
-            branches.pop().unwrap()
+            (branches.pop().unwrap(), height)
         } else {
-            Ast::Alt(branches)
+            (Ast::Alt(branches), self.grow(height)?)
         })
     }
 
     // cat := repeat*              an empty concatenation is legal: `a|` and `()` match the empty string
-    fn cat(&mut self) -> Result<Ast, ParseError> {
+    fn cat(&mut self) -> Parsed {
         let mut items = Vec::new();
+        let mut height = 1;
         while !matches!(self.peek(), None | Some('|') | Some(')')) {
-            items.push(self.repeat()?);
+            let (item, h) = self.repeat()?;
+            items.push(item);
+            height = height.max(h);
         }
         Ok(match items.len() {
-            0 => Ast::Empty,
-            1 => items.pop().unwrap(),
-            _ => Ast::Cat(items),
+            0 => (Ast::Empty, 1),
+            1 => (items.pop().unwrap(), height),
+            _ => (Ast::Cat(items), self.grow(height)?),
         })
     }
 
     // repeat := atom ('*' | '+' | '?')*
-    fn repeat(&mut self) -> Result<Ast, ParseError> {
-        let mut node = self.atom()?;
+    fn repeat(&mut self) -> Parsed {
+        let (mut node, mut height) = self.atom()?;
         while let Some(q @ ('*' | '+' | '?')) = self.peek() {
             self.pos += 1;
+            height = self.grow(height)?;
             let inner = Box::new(node);
             node = match q {
                 '*' => Ast::Star(inner),
@@ -143,70 +175,104 @@ impl Parser {
                 _ => Ast::Opt(inner),
             };
         }
-        Ok(node)
+        Ok((node, height))
     }
 
-    fn atom(&mut self) -> Result<Ast, ParseError> {
+    fn atom(&mut self) -> Parsed {
         let start = self.pos;
         match self.bump().expect("cat() checked for end of input") {
             '(' => {
-                let inner = self.alt()?;
+                if self.open_groups == MAX_NESTING {
+                    return Err(ParseError::TooDeep(start));
+                }
+                self.open_groups += 1;
+                let inner = self.alt()?; // an error abandons the whole parse, so the count need not be restored on `?`
+                self.open_groups -= 1;
                 if self.eat(')') {
                     Ok(inner)
                 } else {
                     Err(ParseError::UnclosedGroup(start))
                 }
             }
-            '[' => self.class(start),
-            '.' => Ok(Ast::Any),
-            '^' => Ok(Ast::Bol),
-            '$' => Ok(Ast::Eol),
+            '[' => Ok((self.class(start)?, 1)),
+            '.' => Ok((Ast::Any, 1)),
+            '^' => Ok((Ast::Bol, 1)),
+            '$' => Ok((Ast::Eol, 1)),
             '*' | '+' | '?' => Err(ParseError::NothingToRepeat(start)),
             '\\' => {
                 let c = self.bump().ok_or(ParseError::TrailingEscape(start))?;
-                Ok(Ast::Class(escape(c)))
+                Ok((Ast::Class(escape(c, start)?), 1))
             }
-            c => Ok(Ast::Class(Class::literal(c))),
+            c => Ok((Ast::Class(Class::literal(c)), 1)),
         }
     }
 
-    // class := '[' '^'? (char ('-' char)?)* ']'     a '-' before ']' is a literal dash
+    // class := '[' '^'? (item ('-' item)?)* ']'     a '-' before ']' is a literal dash
     fn class(&mut self, start: usize) -> Result<Ast, ParseError> {
         let negated = self.eat('^');
         let mut ranges = Vec::new();
         loop {
             let at = self.pos;
-            let lo = match self.bump() {
-                None => return Err(ParseError::UnclosedClass(start)),
-                Some(']') => break,
-                Some('\\') => self.bump().ok_or(ParseError::TrailingEscape(at))?,
-                Some(c) => c,
-            };
+            if self.eat(']') {
+                break;
+            }
+            let item = self.class_item(start)?;
             let is_range =
                 self.peek() == Some('-') && !matches!(self.cs.get(self.pos + 1), None | Some(']'));
             if is_range {
                 self.pos += 1;
-                let hi = self.bump().expect("range end checked above");
-                if hi < lo {
-                    return Err(ParseError::BadRange(at));
+                let end = self.class_item(start)?;
+                // both ends must be single characters: `\d` is a set, so `[a-\d]` means nothing
+                match (single(&item), single(&end)) {
+                    (Some(lo), Some(hi)) if lo <= hi => ranges.push((lo, hi)),
+                    _ => return Err(ParseError::BadRange(at)),
                 }
-                ranges.push((lo, hi));
             } else {
-                ranges.push((lo, lo));
+                ranges.extend(item);
             }
         }
         Ok(Ast::Class(Class { negated, ranges }))
     }
+
+    /// One member of a class: a character, or an escape (which may stand for several ranges).
+    fn class_item(&mut self, start: usize) -> Result<Vec<(char, char)>, ParseError> {
+        let at = self.pos;
+        match self.bump() {
+            None => Err(ParseError::UnclosedClass(start)),
+            Some('\\') => {
+                let c = self.bump().ok_or(ParseError::TrailingEscape(at))?;
+                Ok(escape(c, at)?.ranges)
+            }
+            Some(c) => Ok(vec![(c, c)]),
+        }
+    }
 }
 
-fn escape(c: char) -> Class {
-    let (negated, ranges) = match c {
-        'd' => (false, vec![('0', '9')]),
-        'w' => (false, vec![('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')]),
-        'n' => (false, vec![('\n', '\n')]),
-        other => return Class::literal(other), // `\.` `\*` `\\` ...: the char itself
+fn single(ranges: &[(char, char)]) -> Option<char> {
+    match ranges {
+        &[(lo, hi)] if lo == hi => Some(lo),
+        _ => None,
+    }
+}
+
+/// What `\c` stands for, inside or outside a class. Never negated, so a class can simply take the ranges.
+fn escape(c: char, at: usize) -> Result<Class, ParseError> {
+    let ranges = match c {
+        'd' => vec![('0', '9')],
+        'w' => vec![('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')],
+        's' => vec![('\t', '\r'), (' ', ' ')], // tab, newline, vertical tab, form feed, carriage return; space
+        'n' => vec![('\n', '\n')],
+        't' => vec![('\t', '\t')],
+        // an unsupported letter must not silently become that letter (`\D` would match "D")
+        other if other.is_ascii_alphanumeric() => {
+            return Err(ParseError::UnknownEscape(other, at));
+        }
+        other => return Ok(Class::literal(other)), // `\.` `\*` `\\` ...: the char itself
     };
-    Class { negated, ranges }
+    Ok(Class {
+        negated: false,
+        ranges,
+    })
 }
 
 // ---------------------------------------------------------------- Thompson NFA
@@ -544,6 +610,40 @@ fn gen_text(rng: &mut Rng) -> Vec<char> {
 
 // ---------------------------------------------------------------- main
 
+/// Hostile nesting must be an error, and everything up to the limit must work. Runs on a 1 MiB stack, half the default for a
+/// spawned thread, so unbounded recursion aborts here.
+fn check_nesting_limit() {
+    let checks = || {
+        let too_deep = |p: String| matches!(Regex::new(&p), Err(ParseError::TooDeep(_)));
+        assert!(too_deep("(".repeat(100_000)), "unclosed groups");
+        assert!(
+            too_deep(format!("{}a{}", "(".repeat(100_000), ")".repeat(100_000))),
+            "closed groups"
+        );
+        assert!(too_deep(format!("a{}", "*".repeat(200_000))), "stacked *");
+        assert!(too_deep("(".repeat(MAX_NESTING + 1)));
+        assert!(too_deep(format!("a{}", "?".repeat(MAX_NESTING))));
+        // groups and quantifiers add up, so a limit on each run of quantifiers alone would not be enough
+        let mixed = (0..MAX_NESTING).fold("a".to_string(), |p, _| format!("({p}**)"));
+        assert!(too_deep(mixed));
+        let groups = format!("{}a{}", "(".repeat(MAX_NESTING), ")".repeat(MAX_NESTING));
+        let stars = format!("a{}", "*".repeat(MAX_NESTING - 1));
+        for p in [groups, stars] {
+            let re = Regex::new(&p).expect("exactly at the limit");
+            assert!(re.is_match("a"));
+            assert_eq!(re.find("a"), Some((0, 1)));
+        }
+        // length is not depth: long flat patterns are fine
+        assert!(Regex::new(&"(a)*".repeat(10_000)).is_ok());
+    };
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(checks)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn main() {
     // 1. Demo: matching and finding.
     let cases = [
@@ -569,18 +669,58 @@ fn main() {
         assert_eq!(got, want, "find {pat:?} in {text:?}");
     }
 
+    // Escapes mean the same inside and outside a class: checked on every ASCII character, negated classes too.
+    type Pred = fn(char) -> bool;
+    let digit: Pred = |c| c.is_ascii_digit();
+    let word: Pred = |c| c.is_ascii_alphanumeric() || c == '_';
+    let space: Pred = |c| " \t\n\r\x0b\x0c".contains(c);
+    let shorthands: [(&str, Pred); 5] = [
+        (r"\d", digit),
+        (r"\w", word),
+        (r"\s", space),
+        (r"\n", |c| c == '\n'),
+        (r"\t", |c| c == '\t'),
+    ];
+    for (esc, want) in shorthands {
+        let bare = Regex::new(&format!("^{esc}$")).unwrap();
+        let inside = Regex::new(&format!("^[{esc}]$")).unwrap();
+        let negated = Regex::new(&format!("^[^{esc}]$")).unwrap();
+        for c in (0u8..128).map(char::from) {
+            let s = c.to_string();
+            assert_eq!(bare.is_match(&s), want(c), "{esc} on {c:?}");
+            assert_eq!(inside.is_match(&s), want(c), "[{esc}] on {c:?}");
+            assert_eq!(negated.is_match(&s), !want(c), "[^{esc}] on {c:?}");
+        }
+    }
+    // an escaped character can end a range: `[+-\]]` is the range '+' to ']'
+    let re = Regex::new(r"^[+-\]]$").unwrap();
+    for c in (0u8..128).map(char::from) {
+        assert_eq!(
+            re.is_match(&c.to_string()),
+            ('+'..=']').contains(&c),
+            "{c:?}"
+        );
+    }
+    assert!(Regex::new(r"^[\d\-x]+$").unwrap().is_match("4-x2"));
+
     // 2. Parse errors carry positions.
     let bad = [
         ("(ab", ParseError::UnclosedGroup(0)),
         ("ab)", ParseError::UnmatchedClose(2)),
         ("a|*", ParseError::NothingToRepeat(2)),
         ("[z-a]", ParseError::BadRange(1)),
+        (r"[a-\d]", ParseError::BadRange(1)),
+        (r"[\d-z]", ParseError::BadRange(1)),
+        (r"a\D", ParseError::UnknownEscape('D', 1)),
+        (r"[\]", ParseError::UnclosedClass(0)),
     ];
     for (pat, want) in bad {
         let err = Regex::new(pat).err().expect("must fail");
         assert_eq!(err, want, "{pat:?}");
         println!("{pat:<8} -> error: {err}");
     }
+
+    check_nesting_limit();
 
     // 3. Differential test: NFA == backtracking oracle (is_match and find).
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);

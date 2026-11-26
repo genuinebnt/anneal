@@ -168,21 +168,22 @@ fn q1_bounded_queue() {
 // ---------------------------------------------------------------------------
 /// ANSWER: state = (tokens, last_refill_time). On each call: refill `elapsed * rate` capped at `burst`, then take `n` if available.
 /// The whole read-refill-take sequence must be ONE critical section (or one CAS loop on a packed word), otherwise two threads both
-/// see "1 token left". Inject the clock (`now_ns` parameter) so tests are deterministic. Integer milli-tokens avoid float drift.
+/// see "1 token left". Inject the clock (`now_ns` parameter) so tests are deterministic. Integer milli-tokens avoid float drift,
+/// but each division leaves a remainder: carry it into the next refill, or frequent callers get less than the configured rate.
 /// Variants: leaky bucket (queue + fixed drain), sliding window log/counter, GCRA (one timestamp per client, see the rate-limit track in the roadmap).
 ///
 /// REALLY TESTING: atomicity of check-then-act and testability (time injection).
 /// WRONG: `if tokens > 0 { tokens -= 1 }` on separate atomics; calling `Instant::now()` inside (untestable).
 /// FOLLOW-UP: per-user limiters? A sharded map of buckets with eviction. Distributed? Redis Lua / GCRA.
 struct TokenBucket {
-    state: Mutex<(u64, u64)>, // (milli-tokens, last refill ns)
+    state: Mutex<(u64, u64, u64)>, // (milli-tokens, last refill ns, remainder in billionths of a milli-token)
     burst_milli: u64,
     rate_milli_per_s: u64,
 }
 impl TokenBucket {
     fn new(burst: u64, rate_per_s: u64) -> Self {
         TokenBucket {
-            state: Mutex::new((burst * 1000, 0)),
+            state: Mutex::new((burst * 1000, 0, 0)),
             burst_milli: burst * 1000,
             rate_milli_per_s: rate_per_s * 1000,
         }
@@ -190,11 +191,14 @@ impl TokenBucket {
     fn try_acquire(&self, now_ns: u64, n: u64) -> bool {
         let mut g = self.state.lock().unwrap();
         let elapsed = now_ns.saturating_sub(g.1);
-        let add = (elapsed as u128 * self.rate_milli_per_s as u128 / 1_000_000_000) as u64;
-        if add > 0 {
-            g.0 = (g.0 + add).min(self.burst_milli);
-            g.1 = now_ns; // only advance when we credited, so sub-token remainders are not lost
+        let earned = elapsed as u128 * self.rate_milli_per_s as u128 + g.2 as u128;
+        let total = g.0 as u128 + earned / 1_000_000_000;
+        if total >= self.burst_milli as u128 {
+            (g.0, g.2) = (self.burst_milli, 0); // a full bucket saves nothing, not even a fraction
+        } else {
+            (g.0, g.2) = (total as u64, (earned % 1_000_000_000) as u64);
         }
+        g.1 = g.1.max(now_ns); // never back: an earlier time must not be credited again
         if g.0 >= n * 1000 {
             g.0 -= n * 1000;
             true
@@ -221,6 +225,23 @@ fn q2_token_bucket() {
         10,
         "refill is capped at the burst"
     );
+    // Polling every 19,999 ns earns 1.9999 milli-tokens a time. After exactly 10 s at 100/s, 1000 tokens are due.
+    let b = TokenBucket::new(1000, 100);
+    assert!(b.try_acquire(0, 1000));
+    let end = 10_000_000_000u64;
+    for t in (19_999..end).step_by(19_999).chain([end]) {
+        assert!(b.try_acquire(t, 0)); // takes nothing: only refills
+    }
+    assert!(
+        b.try_acquire(end, 999) && b.try_acquire(end, 1) && !b.try_acquire(end, 1),
+        "refill remainders were lost"
+    );
+    // time spent full earns nothing, and a clock that goes back earns nothing twice (100/s: one token per 10 ms)
+    let b = TokenBucket::new(1, 100);
+    assert!(b.try_acquire(1_000_000_000, 1));
+    assert!(!b.try_acquire(5_000_000, 1));
+    assert!(!b.try_acquire(1_009_999_999, 1));
+    assert!(b.try_acquire(1_010_000_000, 1));
     // 8 threads at the same instant: exactly `burst` admissions, never more
     let b = Arc::new(TokenBucket::new(25, 10));
     let admitted = Arc::new(AtomicUsize::new(0));
