@@ -627,10 +627,3 @@ pub async fn save_scratch(db: &PgPool, problem_id: &str, code: &str) -> sqlx::Re
     Ok(())
 }
 
-/// Whether any attempt at the problem has been solved; hidden tests open up after that.
-pub async fn ever_solved(db: &PgPool, problem_id: &str) -> sqlx::Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM attempts WHERE problem_id = $1 AND solved_at IS NOT NULL)")
-        .bind(problem_id)
-        .fetch_one(db)
-        .await
-}

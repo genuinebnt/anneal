@@ -178,7 +178,7 @@ export interface ProblemDetail {
   /** The scratch main.rs for Run. */
   scratch: string;
   visible_tests: string;
-  /** The hidden tests' source, once the problem has been solved; null before. */
+  /** The source of the second test file; null when a problem has none. */
   hidden_tests: string | null;
   hints: { total: number; revealed: Hint[]; locked: string[] };
   solution: SolutionView;

@@ -121,7 +121,7 @@ export function TestResults({ run }: { run: RunView }) {
             {run.tests.length > 0 && (
                 <div className="rt-dots" aria-hidden="true">
                     {run.tests.map((t, i) => (
-                        <i key={i} className={`${t.outcome}${t.suite === "hidden" ? " hid" : ""}`} title={`${t.suite} · ${t.name}: ${OUTCOME_NAME[t.outcome]}`} />
+                        <i key={i} className={`${t.outcome}${t.suite === "hidden" ? " hid" : ""}`} title={`${t.name}: ${OUTCOME_NAME[t.outcome]}`} />
                     ))}
                 </div>
             )}

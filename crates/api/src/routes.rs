@@ -215,8 +215,7 @@ async fn detail(s: &AppState, id: &str) -> ApiResult<ProblemDetail> {
     };
     let draft = store::draft(&s.db, id).await?;
     let scratch = store::scratch(&s.db, id).await?;
-    let solved_ever = store::ever_solved(&s.db, id).await?;
-    let mut view = views::problem_detail(t, p, attempt.as_ref(), draft, scratch, runs, solved_ever);
+    let mut view = views::problem_detail(t, p, attempt.as_ref(), draft, scratch, runs);
     view.unlocked_by = crate::practice::unlock_refs(s, p);
     Ok(view)
 }
@@ -302,15 +301,16 @@ pub async fn submit(
     execute(&s, &id, &body.code, true).await.map(Json)
 }
 
-/// Run: visible tests only. Submit: visible and hidden; all passing, with no rule broken, solves the problem.
-async fn execute(s: &AppState, id: &str, code: &str, with_hidden: bool) -> ApiResult<RunOutcome> {
+/// Run and Submit run every test. Only a Submit with all of them passing and no rule broken solves the problem.
+async fn execute(s: &AppState, id: &str, code: &str, submit: bool) -> ApiResult<RunOutcome> {
     let (track, p) = find_open(s, id).await?;
     check_code(code)?;
     if p.meta.status != Status::Ready {
         return Err(ApiError::NotReady(id.to_owned()));
     }
     let visible = p.files.visible_tests.as_deref().unwrap_or_default();
-    let hidden = with_hidden.then(|| p.files.hidden_tests.as_deref().unwrap_or_default());
+    // The content keeps two test files; the reader sees and runs both.
+    let hidden = Some(p.files.hidden_tests.as_deref().unwrap_or_default());
     store::save_draft(&s.db, id, code).await?;
     let result = match p.meta.language {
         anneal_content::Language::Python => s.runner.run_python(&anneal_runner::PySubmission { code, visible_tests: visible, hidden_tests: hidden }).await?,
@@ -337,9 +337,9 @@ async fn execute(s: &AppState, id: &str, code: &str, with_hidden: bool) -> ApiRe
     };
 
     let mut attempt = store::current_attempt(&s.db, id).await?;
-    let kind = if with_hidden { "submit" } else { "run" };
+    let kind = if submit { "submit" } else { "run" };
     let row = store::insert_run(&s.db, attempt.id, id, kind, code, &result, &violations).await?;
-    if with_hidden && result.status == RunStatus::Passed && violations.is_empty() {
+    if submit && result.status == RunStatus::Passed && violations.is_empty() {
         let newly = attempt.solved_at.is_none();
         attempt = store::mark_solved(&s.db, attempt.id).await?;
         // Practice never schedules reviews (decision 23).
@@ -349,9 +349,8 @@ async fn execute(s: &AppState, id: &str, code: &str, with_hidden: bool) -> ApiRe
             store::record_review(&s.db, id, outcome.grade(), attempt.kind == "resolve", &srs).await?;
         }
     }
-    let solved_ever = store::ever_solved(&s.db, id).await?;
     Ok(RunOutcome {
-        run: views::RunView::new(row, solved_ever),
+        run: views::RunView::new(row),
         attempt: Some(&attempt).into(),
         solution: views::solution_view(p, Some(&attempt)),
     })

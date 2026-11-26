@@ -489,3 +489,4 @@ a.tr.kb, .tr.kb { background: var(--sel); box-shadow: inset 3px 0 0 var(--vio); 
 .hd-areas a{justify-content:center;min-width:42px;padding-left:11px;padding-right:11px}
 .hd-areas .hd-aicon{width:18px;height:18px;flex:none;color:var(--c)}
 .hd-areas a.on .hd-aicon{color:currentColor}
+.dcard-why { margin: 0; padding: 8px 12px; font-size: 13px; line-height: 1.55; color: var(--fg); background: var(--warn-bg); }

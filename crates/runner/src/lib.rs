@@ -242,6 +242,7 @@ impl Runner {
             }
             diagnostics = parse::diagnostics(&out.stdout);
             if parse::build_failed(&out.stdout) || diagnostics.iter().any(Diagnostic::is_error) {
+                explain(&mut diagnostics, &out.stderr);
                 return Ok(finish(
                     RunStatus::CompileError,
                     diagnostics,
@@ -272,6 +273,7 @@ impl Runner {
             }
             if parse::build_failed(&out.stdout) {
                 diagnostics.extend(parse::diagnostics(&out.stdout).into_iter().filter(Diagnostic::is_error));
+                explain(&mut diagnostics, &out.stderr);
                 return Ok(finish(RunStatus::CompileError, diagnostics, Vec::new(), start));
             }
         }
@@ -297,6 +299,7 @@ impl Runner {
             diagnostics.extend(build_diags.into_iter().filter(Diagnostic::is_error));
         }
         if parse::build_failed(&out.stdout) {
+            explain(&mut diagnostics, &out.stderr);
             return Ok(finish(
                 RunStatus::CompileError,
                 diagnostics,
@@ -334,6 +337,13 @@ impl Runner {
     }
 }
 
+/// Adds cargo's own account of a failed build when no compiler error says why.
+fn explain(diagnostics: &mut Vec<Diagnostic>, stderr: &str) {
+    if !diagnostics.iter().any(Diagnostic::is_error) {
+        diagnostics.push(parse::build_failure(stderr));
+    }
+}
+
 /// Holds an exclusive lock on `<target>/.anneal-lock` until dropped.
 impl Runner {
     /// Builds the scratch binary and runs it once. Shares `cache_key`'s build cache with [`Runner::run`].
@@ -354,8 +364,9 @@ impl Runner {
         if build.timed_out {
             return Ok(done(ScratchStatus::Timeout, Vec::new(), None));
         }
-        let diagnostics = parse::diagnostics(&build.stdout);
+        let mut diagnostics = parse::diagnostics(&build.stdout);
         if parse::build_failed(&build.stdout) {
+            explain(&mut diagnostics, &build.stderr);
             return Ok(done(ScratchStatus::CompileError, diagnostics, None));
         }
         // Run the built binary itself: `cargo run` would replay cached compiler warnings into stderr.

@@ -262,8 +262,8 @@ function Loaded({ p }: { p: ProblemDetail }) {
     qc.setQueryData<ProblemDetail>(["problem", p.id], (old) => old && { ...old, runs: [...old.runs, out.run], attempt: out.attempt, solution: out.solution });
     qc.invalidateQueries({ queryKey: ["tracks"] });
     qc.invalidateQueries({ queryKey: ["track"] });
-    // Solving unlocks the hidden tests, which only the full problem carries.
-    if (out.run.status === "passed" && !p.hidden_tests) qc.invalidateQueries({ queryKey: ["problem", p.id] });
+    // Solving unlocks things only the full problem carries.
+    if (out.run.status === "passed") qc.invalidateQueries({ queryKey: ["problem", p.id] });
     setSelected(null);
     if (out.run.kind === "submit" && out.run.status === "passed" && !celebrateOff()) {
       setWin({ passed: out.run.passed, total: out.run.total, ms: out.run.duration_ms, hints: out.attempt.hints_revealed, assisted: out.attempt.assisted });
@@ -643,8 +643,8 @@ function Loaded({ p }: { p: ProblemDetail }) {
                   <small>READ-ONLY</small>
                 </button>
                 {p.hidden_tests && (
-                  <button className={`ftab${file === "hidden" ? " on" : ""}`} onClick={() => setFile("hidden")} title="Unlocked by solving">
-                    hidden.{ext}
+                  <button className={`ftab${file === "hidden" ? " on" : ""}`} onClick={() => setFile("hidden")} title="More tests: edge cases and larger inputs">
+                    more.{ext}
                     <small>READ-ONLY</small>
                   </button>
                 )}
@@ -664,7 +664,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                     <kbd>⌘'</kbd>
                   </button>
                 ) : (
-                  <button className="ebtn" onClick={doRun} disabled={busy || p.status !== "ready"} title="Run the visible tests (⌘↵)">
+                  <button className="ebtn" onClick={doRun} disabled={busy || p.status !== "ready"} title="Run all tests (⌘↵)">
                     {run.isPending ? <span className="spin" aria-hidden="true" /> : <RunIcon kind="tests" />}
                     {run.isPending ? "Testing…" : "Run tests"}
                     <kbd>⌘↵</kbd>
@@ -690,11 +690,11 @@ function Loaded({ p }: { p: ProblemDetail }) {
             <div className="gbar">
               <div className="fp">
                 <span style={{ color: "var(--fg)" }}>
-                  {file === "lib" ? (py ? "solution.py" : "src/lib.rs") : file === "main" ? "src/bin/scratch.rs" : file === "solution" ? "reference solution" : file === "hidden" ? `tests/hidden.${ext}` : `tests/visible.${ext}`}
+                  {file === "lib" ? (py ? "solution.py" : "src/lib.rs") : file === "main" ? "src/bin/scratch.rs" : file === "solution" ? "reference solution" : file === "hidden" ? `more tests` : `tests/visible.${ext}`}
                 </span>
                 {py ? <span>Python 3 · standard library</span> : <span>edition 2021</span>}
                 {!py && <span>{p.crates.length ? `crates: ${p.crates.join(" · ")}` : "std only"}</span>}
-                <span>{file === "main" ? "⌘' runs it · tests don't run" : `${names.length} visible tests · ${hiddenCases ? `${hiddenCases.length} hidden, unlocked` : "hidden on Submit"}`}</span>
+                <span>{file === "main" ? "⌘' runs it · tests don't run" : `${names.length + (hiddenCases?.length ?? 0)} tests`}</span>
               </div>
               {lanesOn && file === "lib" && (
                 <div className="lh">
@@ -821,7 +821,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
               {consoleTab === "timeline" && (
                 <div className="tline">
                   <div className="tline-runs">
-                    {runs.length === 0 && <span className="note">No test runs yet. ⌘↵ runs the visible tests.</span>}
+                    {runs.length === 0 && <span className="note">No test runs yet. ⌘↵ runs all the tests.</span>}
                     {[...runs].reverse().map((r) => {
                       const [label, color] = runLabel(r);
                       const on = shown?.id === r.id;
@@ -901,7 +901,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
               </div>
               <FocusTimer />
               <div className="acts">
-                <button className="go" onClick={doSubmit} disabled={busy || p.status !== "ready"} title="Run the visible and hidden tests (⇧⌘↵)">
+                <button className="go" onClick={doSubmit} disabled={busy || p.status !== "ready"} title="Run all tests and record the result (⇧⌘↵)">
                   {submit.isPending && <span className="spin" aria-hidden="true" />}
                   {submit.isPending ? "Submitting…" : "Submit"}
                 </button>
@@ -1055,7 +1055,6 @@ function CaseCard({
       <button className="tcase-h" onClick={() => setOpen(expanded ? "" : id)} aria-expanded={expanded}>
         <CaseIcon t={t} waiting={busy} />
         <span className="nm">
-          {hidden && <span style={{ color: "var(--mut)" }}>hidden · </span>}
           {c.name}
         </span>
         <span className="tval">
@@ -1112,7 +1111,7 @@ function CaseCard({
           )}
           {c.input === undefined && !t && (
             <span className="note" style={{ gridColumn: "1 / -1" }}>
-              This test doesn't use {python ? "check()" : "check!"}; see {hidden ? "hidden" : "tests"}.{python ? "py" : "rs"}.
+              This test doesn't use {python ? "check()" : "check!"}; see {hidden ? "more tests" : "tests"}.{python ? "py" : "rs"}.
             </span>
           )}
         </div>
@@ -1138,7 +1137,7 @@ function TestsPanel({
   onRun: () => void;
   canRun: boolean;
   cases: TestCase[];
-  /** Parsed hidden tests, once the problem has been solved. */
+  /** Parsed cases of the second test file. */
   hiddenCases: TestCase[] | null;
   busy: boolean;
   open: string | null;
@@ -1146,8 +1145,6 @@ function TestsPanel({
   runNo: number;
 }) {
   const byName = new Map(run?.tests.map((t) => [t.suite + t.name, t]) ?? []);
-  const visible = run?.tests.filter((t) => t.suite === "visible") ?? [];
-  const hidden = run?.tests.filter((t) => t.suite === "hidden") ?? [];
   const firstError = run?.diagnostics.find((d) => d.level === "error");
   const [dismissed, setDismissed] = useState<number | null>(null);
   // A shadow under the strip once the list has scrolled beneath it.
@@ -1175,8 +1172,8 @@ function TestsPanel({
       <div className={`tstrip${stuck ? " stuck" : ""}`} ref={stripRef}>
         <div className="tsum">
           <b style={{ color: status[1] }}>{status[0]}</b>
-          <span>{run && !busy ? `${run.kind} #${runNo} · ${(run.duration_ms / 1000).toFixed(1)}s` : `${cases.length} visible · ${hiddenCases ? `${hiddenCases.length} hidden` : "hidden on Submit"}`}</span>
-          <button className="ebtn tstrip-run" onClick={onRun} disabled={busy || !canRun} title="Run the visible tests (⌘↵)">
+          <span>{run && !busy ? `${run.kind} #${runNo} · ${(run.duration_ms / 1000).toFixed(1)}s` : `${cases.length + (hiddenCases?.length ?? 0)} tests`}</span>
+          <button className="ebtn tstrip-run" onClick={onRun} disabled={busy || !canRun} title="Run all tests (⌘↵)">
             {busy ? <span className="spin" aria-hidden="true" /> : null}
             {busy ? "Testing…" : "Run tests"}
           </button>
@@ -1190,19 +1187,11 @@ function TestsPanel({
       {run && !busy && run.tests.length > 0 && (
         <div className="tcounts">
           <span>
-            visible{" "}
-            <b style={{ color: visible.every((t) => t.outcome === "passed") ? "var(--grn)" : "var(--bad)" }}>
-              {visible.filter((t) => t.outcome === "passed").length}/{visible.length}
+            tests{" "}
+            <b style={{ color: run.tests.every((t) => t.outcome === "passed") ? "var(--grn)" : "var(--bad)" }}>
+              {run.tests.filter((t) => t.outcome === "passed").length}/{run.tests.length}
             </b>
           </span>
-          {hidden.length > 0 && (
-            <span>
-              hidden{" "}
-              <b style={{ color: hidden.every((t) => t.outcome === "passed") ? "var(--grn)" : "var(--bad)" }}>
-                {hidden.filter((t) => t.outcome === "passed").length}/{hidden.length}
-              </b>
-            </span>
-          )}
           {!python && <span>clippy {run.diagnostics.filter((d) => d.level === "warning").length} warnings</span>}
         </div>
       )}
@@ -1235,27 +1224,18 @@ function TestsPanel({
         </div>
       )}
       <div className="tcases">
-        {[...cases]
-          .sort((x, y) => Number(failedCase(byName.get("visible" + y.name))) - Number(failedCase(byName.get("visible" + x.name))))
-          .map((c) => (
-          <CaseCard python={python} busy={busy} key={c.name} c={c} id={c.name} t={busy ? undefined : byName.get("visible" + c.name)} run={busy ? null : run} open={open} setOpen={setOpen} />
-        ))}
-        {hiddenCases
-          ? hiddenCases.map((c) => (
-              <CaseCard python={python} busy={busy} key={"h" + c.name} c={c} id={"hidden:" + c.name} hidden t={busy ? undefined : byName.get("hidden" + c.name)} run={busy ? null : run} open={open} setOpen={setOpen} />
-            ))
-          : !busy &&
-            hidden.map((t) => (
-              <div key={t.name} className={`tcase${t.outcome !== "passed" ? " bad" : ""}`}>
-                <div className="tcase-h">
-                  <span className="sqr" style={{ background: t.outcome === "passed" ? "var(--grn)" : "var(--bad)" }} />
-                  <span className="nm" style={{ color: "var(--mut)" }}>
-                    hidden · {t.name}
-                  </span>
-                  <span className="tval">{t.outcome === "passed" ? "passed" : t.outcome === "timed_out" ? "timed out" : "failed · input withheld"}</span>
-                </div>
-              </div>
-            ))}
+        {[
+          ...cases.map((c) => ({ c, suite: "visible" as const })),
+          ...(hiddenCases ?? []).map((c) => ({ c, suite: "hidden" as const })),
+        ]
+          .sort((x, y) => Number(failedCase(byName.get(y.suite + y.c.name))) - Number(failedCase(byName.get(x.suite + x.c.name))))
+          .map(({ c, suite }) => {
+            // the two files can use one name for two tests, so the file is part of a case's identity
+            const id = suite === "hidden" ? "hidden:" + c.name : c.name;
+            return (
+              <CaseCard python={python} busy={busy} key={id} c={c} id={id} hidden={suite === "hidden"} t={busy ? undefined : byName.get(suite + c.name)} run={busy ? null : run} open={open} setOpen={setOpen} />
+            );
+          })}
       </div>
     </div>
   );
@@ -1310,6 +1290,12 @@ function DiagCard({ d, onGoto }: { d: Diagnostic; onGoto: Goto }) {
           </button>
         )}
       </div>
+      {primary?.file === "tests/hidden.rs" && (
+        <p className="dcard-why">
+          This error is where one of the tests uses your code, usually needing a type, a trait or a lifetime your signatures don't allow yet. The
+          message below names what is missing; fix it in src/lib.rs.
+        </p>
+      )}
       {body && (
         <pre className="dcard-b">
           <Ansi text={body} />
@@ -1473,7 +1459,7 @@ function OutputPanel({ run, scratch, scratchBusy }: { run: RunView | null; scrat
         PRINTED BY TESTS
       </div>
       {printed.length === 0 ? (
-        <p className="note">println!, eprintln! and dbg! output from the visible tests shows up here after a test run, grouped by test. Hidden tests' output stays hidden.</p>
+        <p className="note">println!, eprintln! and dbg! output from the tests shows up here after a test run, grouped by test.</p>
       ) : (
         printed.map((t) => (
           <Terminal

@@ -170,7 +170,7 @@ async fn lists_tracks_with_stage_counts(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
-async fn new_problem_has_everything_locked_and_no_hidden_tests(db: PgPool) {
+async fn new_problem_has_everything_locked_but_shows_its_tests(db: PgPool) {
     let app = test_app(db);
     let (status, p) = call(&app, Method::GET, &format!("/api/problems/{NDT}"), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -190,11 +190,11 @@ async fn new_problem_has_everything_locked_and_no_hidden_tests(db: PgPool) {
         json!({ "unlocked": false, "code": null, "notes": null })
     );
     assert_eq!(p["attempt"]["started"], false);
-    assert!(!p.to_string().contains("dense_n100"), "hidden tests leaked");
+    assert!(p["hidden_tests"].as_str().unwrap().contains("dense_n100"));
 }
 
 #[sqlx::test(migrator = "anneal_api::MIGRATOR")]
-async fn run_then_submit_redacts_hidden_tests(db: PgPool) {
+async fn run_and_submit_run_and_show_every_test(db: PgPool) {
     let app = test_app(db);
     let (status, out) = call(
         &app,
@@ -206,7 +206,7 @@ async fn run_then_submit_redacts_hidden_tests(db: PgPool) {
     assert_eq!(status, StatusCode::OK, "{out}");
     assert_eq!(
         (out["run"]["passed"].as_u64(), out["run"]["total"].as_u64()),
-        (Some(4), Some(5))
+        (Some(9), Some(14))
     );
     assert_eq!(out["attempt"]["started"], true);
 
@@ -227,11 +227,7 @@ async fn run_then_submit_redacts_hidden_tests(db: PgPool) {
         .iter()
         .find(|t| t["suite"] == "hidden" && t["outcome"] != "passed")
         .unwrap();
-    assert_eq!(
-        hidden["check"],
-        json!({ "input": "withheld", "expected": "withheld", "got": "wrong answer" })
-    );
-    assert_eq!(hidden["panic"], Value::Null);
+    assert_ne!(hidden["check"]["input"], "withheld", "{hidden}");
     assert_eq!(out["attempt"]["solved"], false);
     assert_eq!(out["solution"]["unlocked"], false);
 
@@ -251,7 +247,7 @@ async fn run_then_submit_redacts_hidden_tests(db: PgPool) {
 async fn passing_submit_solves_and_unlocks_the_solution(db: PgPool) {
     let app = test_app(db);
     let (_, before) = call(&app, Method::GET, &format!("/api/problems/{NDT}"), None).await;
-    assert!(before["hidden_tests"].is_null(), "hidden tests stay hidden until solved");
+    assert!(before["hidden_tests"].as_str().unwrap().contains("fn dense_n100"), "every test is shown from the start");
     let (_, out) = call(
         &app,
         Method::POST,
@@ -285,7 +281,7 @@ async fn passing_submit_solves_and_unlocks_the_solution(db: PgPool) {
     assert_eq!(p["progress"], "solved");
     assert_eq!(t["solved"], 1);
 
-    // Solved: the hidden test file is readable, and runs show hidden tests in full.
+    // Solved: the tests are still readable, and runs show them in full.
     let (_, after) = call(&app, Method::GET, &format!("/api/problems/{NDT}"), None).await;
     assert!(after["hidden_tests"].as_str().unwrap().contains("fn dense_n100"));
     let (_, bad) = call(&app, Method::POST, &format!("/api/problems/{NDT}/submit"), Some(json!({ "code": SENTINEL_BUG }))).await;
@@ -1161,12 +1157,12 @@ async fn python_practice_runs_tests_and_never_schedules_reviews(db: PgPool) {
     assert_eq!(out["run"]["status"], "compile_error");
     assert_eq!((out["run"]["diagnostics"][0]["spans"][0]["file"].as_str(), out["run"]["diagnostics"][0]["spans"][0]["line_start"].as_u64()), (Some("solution.py"), Some(2)));
 
-    // The starter fails its tests; Run shows visible ones and a check mismatch.
+    // The starter fails its tests; Run runs every test and shows a check mismatch.
     let (_, p) = call(&app, Method::GET, &format!("/api/problems/{id}"), None).await;
     let (_, out) = call(&app, Method::POST, &format!("/api/problems/{id}/run"), Some(json!({ "code": p["starter"] }))).await;
-    assert_eq!((out["run"]["status"].as_str(), out["run"]["total"].as_u64()), (Some("failed"), Some(5)));
+    assert_eq!((out["run"]["status"].as_str(), out["run"]["total"].as_u64()), (Some("failed"), Some(13)));
 
-    // The solution solves it on Submit; hidden tests are now revealed, and no review is scheduled.
+    // The solution solves it on Submit, and no review is scheduled.
     let (_, out) = call(&app, Method::POST, &format!("/api/problems/{id}/submit"), Some(json!({ "code": practice_solution() }))).await;
     assert_eq!((out["run"]["status"].as_str(), out["run"]["total"].as_u64(), out["attempt"]["solved"].clone()), (Some("passed"), Some(13), json!(true)));
     let reviews: i64 = sqlx::query_scalar("SELECT count(*) FROM reviews").fetch_one(&db).await.unwrap();

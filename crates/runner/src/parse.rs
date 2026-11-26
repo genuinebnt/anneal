@@ -38,8 +38,11 @@ fn diagnostic(m: &Value) -> Option<Diagnostic> {
         "help" => Level::Help,
         _ => return None,
     };
-    let spans: Vec<Span> = m["spans"].as_array()?.iter().filter_map(span).collect();
-    if spans.is_empty() {
+    let spans: Vec<Span> = m["spans"].as_array()?.iter().filter_map(user_span).collect();
+    // A warning that points nowhere in these files is cargo's bookkeeping. An error is why the run failed, so it is kept
+    // even without a place (a link error, say), or the learner is told "doesn't compile" and nothing else.
+    let summary = m["message"].as_str().is_some_and(|t| t.starts_with("aborting due to"));
+    if spans.is_empty() && (level != Level::Error || summary) {
         return None;
     }
     let notes = m["children"]
@@ -64,6 +67,44 @@ fn diagnostic(m: &Value) -> Option<Diagnostic> {
         spans,
         notes,
     })
+}
+
+/// `s` in a user file: itself, or else where the macro that produced it was called. An error inside `check!` is
+/// reported in the injected prelude, and the line that matters is the test's.
+fn user_span(s: &Value) -> Option<Span> {
+    if let Some(found) = span(s) {
+        return Some(found);
+    }
+    let mut at = &s["expansion"]["span"];
+    while at.is_object() {
+        if let Some(mut found) = span(at) {
+            found.primary = s["is_primary"].as_bool().unwrap_or(false);
+            found.label = s["label"].as_str().map(str::to_owned);
+            return Some(found);
+        }
+        at = &at["expansion"]["span"];
+    }
+    None
+}
+
+/// What to show when cargo failed the build without a compiler error: the end of what it printed.
+pub(crate) fn build_failure(stderr: &str) -> Diagnostic {
+    let killed = ["SIGKILL", "signal: 9", "out of memory", "memory allocation of"].iter().any(|t| stderr.contains(t));
+    let message = if killed {
+        "the compiler was stopped before it finished, usually because it ran out of memory. Your code may be fine: run it again"
+    } else {
+        "the build failed, but the compiler reported no error in your code. What cargo printed is below"
+    };
+    let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(30)..].join("\n");
+    Diagnostic {
+        level: Level::Error,
+        code: None,
+        message: message.to_owned(),
+        rendered: format!("error: {message}\n{tail}"),
+        spans: Vec::new(),
+        notes: Vec::new(),
+    }
 }
 
 fn span(s: &Value) -> Option<Span> {
@@ -246,5 +287,31 @@ mod tests {
         let t = tests(stdout, stderr);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].outcome, Outcome::TimedOut);
+    }
+
+    fn message(level: &str, text: &str, spans: &str) -> String {
+        format!(r#"{{"reason":"compiler-message","message":{{"level":"{level}","message":"{text}","rendered":"{level}: {text}","code":null,"children":[],"spans":{spans}}}}}"#)
+    }
+
+    #[test]
+    fn an_error_without_a_place_is_still_reported() {
+        let out = [message("error", "linking with `cc` failed", "[]"), message("error", "aborting due to 1 previous error", "[]"), message("warning", "1 warning emitted", "[]")].join("\n");
+        let found = diagnostics(&out);
+        assert_eq!(found.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["linking with `cc` failed"]);
+    }
+
+    #[test]
+    fn an_error_inside_a_test_macro_points_at_the_test_that_used_it() {
+        let spans = r#"[{"file_name":"tests/anneal/prelude.rs","line_start":3,"line_end":3,"column_start":1,"column_end":9,"is_primary":true,"label":"`Batch` cannot be compared","expansion":{"span":{"file_name":"tests/hidden.rs","line_start":7,"line_end":7,"column_start":5,"column_end":20,"is_primary":false,"label":null,"expansion":null}}}]"#;
+        let found = diagnostics(&message("error", "binary operation `==` cannot be applied", spans));
+        let at = &found[0].spans[0];
+        assert_eq!((at.file.as_str(), at.line_start, at.primary, at.label.as_deref()), ("tests/hidden.rs", 7, true, Some("`Batch` cannot be compared")));
+    }
+
+    #[test]
+    fn a_killed_compiler_says_so() {
+        let d = build_failure("   Compiling solution\nerror: could not compile `solution`\n  process didn't exit successfully: `rustc` (signal: 9, SIGKILL: kill)\n");
+        assert!(d.message.contains("ran out of memory"), "{}", d.message);
+        assert!(d.rendered.contains("SIGKILL"));
     }
 }

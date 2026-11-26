@@ -1,12 +1,12 @@
 //! JSON shapes the web app reads. Kept separate from the content and DB types so
-//! what reaches the browser is decided in one place (hidden tests, locked solutions).
+//! what reaches the browser is decided in one place (locked solutions).
 
 use std::collections::HashMap;
 
 use anneal_content::model::{Example, Hint, SolutionNotes};
 use anneal_content::{Band, Language, Mode, Problem, Rules, Section, Status, Tier, Track};
 use anneal_rules::Violation;
-use anneal_runner::{Check, Diagnostic, Outcome, RunResult, RunStatus, Suite, TestOutcome};
+use anneal_runner::{Diagnostic, RunResult, RunStatus, TestOutcome};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -255,7 +255,7 @@ pub struct ProblemDetail {
     /// The scratch `main.rs` for Run: saved, or a template.
     pub scratch: String,
     pub visible_tests: String,
-    /// The hidden test file, once the problem has been solved.
+    /// The second test file. Like the first, it is always shown.
     pub hidden_tests: Option<String>,
     pub hints: HintsView,
     pub solution: SolutionView,
@@ -346,8 +346,7 @@ pub struct RunView {
 }
 
 impl RunView {
-    /// Hidden tests are redacted unless `reveal_hidden` (the problem has been solved).
-    pub fn new(row: RunRow, reveal_hidden: bool) -> Self {
+    pub fn new(row: RunRow) -> Self {
         let RunResult {
             status,
             diagnostics,
@@ -366,27 +365,9 @@ impl RunView {
             total,
             duration_ms,
             diagnostics,
-            tests: if reveal_hidden { tests } else { tests.into_iter().map(redact).collect() },
+            tests,
             violations: row.violations.0,
         }
-    }
-}
-
-/// Hidden tests report only pass or fail: no input, expected value, output or panic text.
-fn redact(t: TestOutcome) -> TestOutcome {
-    if t.suite != Suite::Hidden {
-        return t;
-    }
-    let failed = matches!(t.outcome, Outcome::Failed | Outcome::TimedOut);
-    TestOutcome {
-        check: failed.then(|| Check {
-            input: "withheld".into(),
-            expected: "withheld".into(),
-            got: "wrong answer".into(),
-        }),
-        panic: None,
-        stdout: String::new(),
-        ..t
     }
 }
 
@@ -397,7 +378,6 @@ pub fn problem_detail(
     draft: Option<String>,
     scratch: Option<String>,
     runs: Vec<RunRow>,
-    solved_ever: bool,
 ) -> ProblemDetail {
     let idx = track
         .problems
@@ -463,7 +443,7 @@ pub fn problem_detail(
         scratch: if p.meta.language == Language::Python { String::new() } else { scratch.unwrap_or_else(|| SCRATCH_TEMPLATE.to_owned()) },
         starter,
         visible_tests: p.files.visible_tests.clone().unwrap_or_default(),
-        hidden_tests: if solved_ever { p.files.hidden_tests.clone() } else { None },
+        hidden_tests: p.files.hidden_tests.clone(),
         hints: HintsView {
             total: p.meta.hints.len(),
             revealed: p.meta.hints[..revealed].to_vec(),
@@ -474,7 +454,7 @@ pub fn problem_detail(
         },
         solution: solution_view(p, attempt),
         attempt: attempt.into(),
-        runs: runs.into_iter().map(|r| RunView::new(r, solved_ever)).collect(),
+        runs: runs.into_iter().map(RunView::new).collect(),
     }
 }
 
