@@ -1,0 +1,137 @@
+/* The system design reading page and the practice drill (brief, steps, compare), built as in docs/mockups/restyle-reading.html.
+   Classes are `sdr-` and every rule sits under a page class, so no other page changes. */
+.sdr-dup{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+
+/* ---- the frame ---- */
+.sdr .ly-crumb{font-size:12px;letter-spacing:.14em}
+.sdr .ly-head{align-items:flex-end;padding-top:18px;margin-bottom:22px}
+.sdr .ly-h1{font-size:clamp(32px,4.2vw,54px);line-height:1.06;letter-spacing:-.04em;font-weight:700;text-wrap:balance}
+.sdr .ly-sub{font-size:16px;line-height:1.6;max-width:72ch}
+.sdr .ly-tl{border-radius:14px;padding:14px 18px;min-width:130px}
+.sdr .ly-tl strong{font-size:26px}
+.sdr .ly-pn{border-radius:16px;border-color:var(--line2)}
+.sdr .ly-lay{gap:16px}
+@media (min-width:1321px){
+    .sdr-learn .ly-lay:not(.one){grid-template-columns:260px minmax(0,1fr) 240px}
+    .sdr-drill .ly-lay,.sdr-compare .ly-lay{grid-template-columns:230px minmax(0,1fr) 240px}
+}
+@media (min-width:901px) and (max-width:1320px){
+    .sdr-learn .ly-lay:not(.one),.sdr-drill .ly-lay,.sdr-compare .ly-lay{grid-template-columns:220px minmax(0,1fr)}
+}
+
+/* ---- reading ---- */
+.sdr-learn .rd-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0}
+.sdr-learn .rd-wrap>#checks,.sdr-learn .rd-art{min-width:0;width:100%;box-sizing:border-box}
+.sdr-learn .rd-art{padding:40px 44px 36px}
+.sdr-learn .rd-art .sd-lede{font-size:21px;line-height:1.6;color:var(--fg);margin-top:0;max-width:none}
+.sdr-learn .rd-art .sd-md,.sdr-learn .rd-art .sd-call{max-width:none}
+.sdr-learn .rd-sum{border-radius:16px}
+.sdr-learn .rd-art .rd-sum .sd-md{font-size:var(--rd-fs);line-height:var(--rd-lh)}
+.sdr-learn .rd-sec{margin-top:46px;scroll-margin-top:calc(var(--hdr-h) + 16px)}
+.sdr-learn .rd-h{display:grid;grid-template-columns:56px minmax(0,1fr) auto;align-items:baseline;gap:0;margin-bottom:6px}
+.sdr-learn .rd-h em,.sdr-learn .rd-h em.on{font:700 32px/1 var(--sans);letter-spacing:-.04em;color:color-mix(in oklab,var(--warn) 78%,var(--panel))}
+.sdr-learn .rd-h h3{font-size:27px;letter-spacing:-.025em;margin:0}
+.sdr-learn .sd-code{border-radius:14px;background:var(--bg)}
+.sdr-learn .sd-code pre{font-size:13.5px}
+/* code wraps instead of scrolling sideways */
+.sdr-learn .sd-ln{grid-template-columns:46px minmax(0,1fr);width:auto;min-width:0}
+.sdr-learn .sd-ln>span,.sdr-learn .sd-ln>span *{white-space:pre-wrap;overflow-wrap:anywhere}
+.sdr-learn .sd-ln>.sd-lnum{align-self:start}
+.sdr-learn .rd-art figure.sd-fig{margin:26px 0;padding:46px 18px 18px;border-radius:16px;background:var(--bg)}
+.sdr-learn figure.sd-fig>svg{width:100%;height:auto;max-height:520px;min-height:300px}
+.sdr-learn figure.sd-fig>figcaption{font-size:15px;margin:10px 0}
+.sdr-learn .rd-art aside.sd-call{border-radius:14px}
+.sdr-learn .rd-srcs{grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))}
+.sd-fig{position:relative}
+.sd-fig-expand{position:absolute;right:12px;top:10px;min-height:32px;padding:6px 12px;border:0;border-radius:8px;background:var(--panel);color:var(--mut);font:600 12px var(--mono);cursor:pointer}
+.sd-fig-expand:hover{color:var(--fg)}
+.sdr-learn .rd-art figure.sd-fig.sd-fig-big{position:fixed;inset:20px;z-index:200;margin:0;overflow:auto;scrollbar-width:none;align-content:center;box-shadow:0 0 0 100vmax color-mix(in oklab,#000 55%,transparent)}
+.sdr-learn figure.sd-fig.sd-fig-big>svg{max-height:68vh;min-height:min(56vh,100vw * .5)}
+/* margin notes: beside their line when the article is wide enough */
+@container rd (min-width:760px){
+    .sdr-learn .has-sn .rd-art .sd-md{max-width:calc(100cqw - 250px)}
+    .sdr-learn .has-sn .rd-art .sn,.sdr-learn .has-sn .rd-art .sn-toggle:checked+.sn{display:block;float:right;clear:right;width:210px;margin:2px -240px 10px 0;padding:0;background:none;font-size:13px;line-height:1.5;color:var(--dim)}
+}
+
+/* the checks: numbered, a roomy answer box, then yours and the answer side by side */
+.sdr-learn .sd-checks{padding:28px 32px;gap:0}
+.sdr-learn .sd-checks .sd-q{grid-template-columns:56px minmax(0,1fr);row-gap:12px;padding:20px 0}
+.sdr-learn .sd-checks .sd-q>*{grid-column:2;min-width:0}
+.sdr-learn .sd-checks .sd-q>.sdr-qno{grid-column:1;grid-row:1;font:700 28px/1 var(--sans);letter-spacing:-.03em;color:var(--dim)}
+.sdr-learn .sd-checks .sd-q>b{grid-row:1;font-size:17px;line-height:1.5}
+.sdr-learn .sd-checks .sd-q>.sd-row{margin-top:0}
+.sdr-learn .sd-checks textarea{min-height:150px;font-size:15px}
+.sdr-cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start}
+.sdr-cmp>div{min-width:0;margin:0;padding:12px 14px;border-radius:12px;background:var(--inset)}
+.sdr-cmp>.sd-ref{background:color-mix(in oklab,var(--grn) 7%,var(--inset))}
+.sdr-cmp small{display:block;font:600 11px var(--mono);letter-spacing:.12em;color:var(--dim)}
+.sdr-cmp .sd-ref>small{color:var(--grn)}
+.sdr-cmp p{margin:6px 0 0;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.sdr-cmp .sd-md{margin-top:6px}.sdr-cmp .sd-md p{white-space:normal;margin:0 0 .6em}
+
+/* the three widths: N a centred column, S (as it comes) the whole middle, W the right panel under the article */
+.sdr-learn.sdr-w-n .rd-wrap{width:100%;max-width:780px;margin-inline:auto}
+@media (min-width:1321px){
+    .sdr-learn.sdr-w-w .ly-lay:not(.one){grid-template-columns:260px minmax(0,1fr)}
+    .sdr-learn.sdr-w-w .ly-lay:not(.one)>.ly-rp{grid-column:2;position:static;max-height:none;grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
+}
+/* focus mode: the way back sits under the header, in room made for it above the breadcrumb */
+.sdr-learn.rd-focused .ly-head{padding-top:54px}
+.sdr-learn~.rd-unfocus{top:calc(var(--hdr-h) + 8px);bottom:auto}
+
+/* ---- the brief ---- */
+.sdr-brief .ly-cp>.sd-art{padding:40px 44px;border-radius:20px;background:radial-gradient(120% 90% at 100% 0%,color-mix(in oklab,var(--warn) 16%,transparent),transparent 60%),var(--panel)}
+.sdr-brief .sd-art .sd-lede{font-size:clamp(20px,2vw,27px);line-height:1.45;letter-spacing:-.015em;color:var(--fg);margin:12px 0 20px;max-width:none}
+.sdr-brief .sd-art .sd-row{margin:0 0 20px}
+.sdr-brief .sd-art .sd-go{min-height:52px;padding:0 30px;font-size:16px;border-radius:12px}
+.sdr-brief .sd-art .sd-steps{gap:10px}
+.sdr-brief .sd-art .sd-steps li{position:relative;grid-template-columns:minmax(0,1fr) auto;gap:4px 18px;padding:16px 20px 16px 76px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.sdr-brief .sd-art .sd-steps li::before{position:absolute;left:20px;top:50%;translate:0 -50%;width:auto;height:auto;background:none;font:700 30px/1 var(--sans);letter-spacing:-.03em;color:var(--dim)}
+.sdr-brief .sd-steps li>b{grid-column:1;grid-row:1;font-size:17px}
+.sdr-brief .sd-steps li>small{grid-column:1;grid-row:2}
+.sdr-brief .sd-steps li>span{grid-column:2;grid-row:1/span 2;align-self:center;font:600 14px var(--mono);color:var(--warn)}
+.sdr-minbar{grid-column:1/-1;display:block;height:4px;margin-top:6px;border-radius:2px;background:var(--line2)}
+.sdr-minbar>b{display:block;height:100%;border-radius:2px;background:var(--warn)}
+
+/* ---- a drill step ---- */
+.sdr-drill .ly-cp>.sd-art{padding:24px 28px}
+.sdr-drill .sd-art .sd-lede{font-size:18px;line-height:1.55;color:var(--fg);max-width:none}
+.sdr-drill .sd-art textarea{height:96px;min-height:96px;padding:14px 16px;font-size:15px;line-height:1.65}
+.sdr-drill .sd-art textarea.sd-code{margin:0;overflow:auto}
+.sdr-drill .sd-svg{display:block;aspect-ratio:720/300;min-height:320px;border-radius:12px;background:var(--bg)}
+
+/* ---- compare ---- */
+.sdr-compare .ly-cp>.sd-art,.sdr-compare .sd-cmp{padding:24px 28px}
+.sdr-compare .sd-art .sd-lede{max-width:none}
+.sdr-compare .sd-cmp{scroll-margin-top:calc(var(--hdr-h) + 14px)}
+.sdr-compare .sd-cmp h4{margin:0 0 14px;font-size:22px;letter-spacing:-.02em}
+.sdr-compare .sd-cmp .sd-md,.sdr-compare .sd-cmp .sd-call{max-width:none}
+.sdr-compare .sd-two{grid-template-columns:minmax(0,2fr) minmax(0,3fr)}
+.sdr-compare .sd-two>div{padding:14px 16px;border-radius:12px;background:var(--inset);line-height:1.7}
+.sdr-compare .sd-two>div:first-child{align-self:start;position:sticky;top:calc(var(--hdr-h) + 14px);max-height:calc(100vh - var(--hdr-h) - 90px);overflow:auto;scrollbar-width:none}
+.sdr-compare .sd-yours{padding:0;background:none;overflow-wrap:anywhere}
+.sdr-compare .sd-two .sd-code,.sdr-compare .sd-two .sd-steps-fig,.sdr-compare .sd-two .sd-math{background:var(--bg)}
+.sdr-compare .sd-two .sd-md td{background:var(--panel)}
+.sdr-compare .sd-two .sd-steps-row{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+.sdr-compare .sd-rub{gap:8px;margin-top:14px}
+.sdr-compare .sd-rub>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:12px 16px;border:1px solid var(--line2);border-radius:12px;background:none}
+
+@media (max-width:700px){
+    .sdr .ly-crumb,.sdr .ly-crumb>span,.sdr .ly-crumb span span{display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 6px;line-height:1.8}
+    .sdr .ly-h1{font-size:32px}
+    .sdr .ly-tl{min-width:0}
+    .sdr-learn .rd-art,.sdr-brief .ly-cp>.sd-art,.sdr-drill .ly-cp>.sd-art,.sdr-compare .ly-cp>.sd-art,.sdr-compare .sd-cmp,.sdr-learn .sd-checks{padding:20px 16px}
+    .sdr-learn .rd-art .sd-lede{font-size:17px}
+    .sdr-learn .rd-h{grid-template-columns:40px minmax(0,1fr) auto}
+    .sdr-learn .rd-h em,.sdr-learn .rd-h em.on{font-size:22px}
+    .sdr-learn .rd-h h3{font-size:21px}
+    .sdr-learn .sd-checks .sd-q{grid-template-columns:34px minmax(0,1fr)}
+    .sdr-learn .sd-checks .sd-q>.sdr-qno{font-size:20px}
+    .sdr-cmp,.sdr-compare .sd-two,.sdr-compare .sd-rub>div{grid-template-columns:minmax(0,1fr)}
+    .sdr-compare .sd-rub>div>.sd-seg{justify-self:start}
+    .sdr-compare .sd-two>div:first-child{position:static;max-height:none}
+    .sdr-brief .sd-art .sd-steps li{padding-left:56px}
+    .sdr-brief .sd-art .sd-steps li::before{left:14px;font-size:20px}
+    .sdr-drill .sd-svg{min-height:170px}
+    .sdr-learn figure.sd-fig>svg{min-height:0}
+}

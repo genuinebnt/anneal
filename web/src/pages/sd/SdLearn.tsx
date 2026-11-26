@@ -72,13 +72,17 @@ function Check({ concept, index, prompt, answer, marked }: { concept: string; in
     });
     return (
         <div className="sd-q">
+            <span className="sdr-qno" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
             <b>{prompt}</b>
-            <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Write it as you would say it…" rows={3} />
+            <textarea aria-label={`Your answer: ${prompt}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write it as you would say it…" rows={5} />
             {!open ? (
                 <div className="sd-row"><button className="sd-ghost" onClick={() => setOpen(true)}>Compare</button>{marked && <span className="sd-dim">marked before; it is in Review</span>}</div>
             ) : (
                 <>
-                    <div className="sd-ref"><b>A strong answer</b><SdMd text={answer} /></div>
+                    <div className="sdr-cmp">
+                        <div><small>YOURS</small><p>{text.trim() || "Nothing written."}</p></div>
+                        <div className="sd-ref"><small>ANSWER</small><SdMd text={answer} /></div>
+                    </div>
                     <div className="sd-row">
                         <div className="sd-seg" role="group" aria-label="How did you do">
                             {MARKS.map(([m, l]) => <button key={m} className={done === m ? "on" : ""} data-m={m} disabled={mark.isPending} onClick={() => mark.mutate(m)}>{l}</button>)}

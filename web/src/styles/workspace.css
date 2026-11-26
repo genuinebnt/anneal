@@ -1,0 +1,152 @@
+/* The exercise screen (docs/mockups/restyle-exercise.html), shared by every problem the Workspace shows: rounded panes with
+   gaps in place of divider lines. Everything is scoped under .rx-ws, so the other screens that use .ws and .subbar keep
+   their look. What only a series part has (breadcrumb, Connections, completion view) is in series.css. */
+
+/* ---------- the problem bar ---------- */
+.rx-ws .subbar{height:52px;padding:0 14px;border:0;background:var(--bg)}
+.rx-ws .subbar .vr{display:none}
+.rx-ws .subbar .sbr{margin-left:auto}
+.rx-ws .clock{padding:5px 12px;border-radius:8px;font:600 12.5px var(--mono);color:var(--mut)}
+.rx-ws .clock small{font:inherit;letter-spacing:0;color:var(--mut)}
+.rx-ws .clock .dot{width:8px;height:8px;border-radius:50%}
+.rx-ws .clock.over{border-color:var(--bad)}
+.rx-ws .clock.over>span:not(.dot){color:var(--bad)!important}
+.rx-ws .lay button{width:28px;height:24px}
+/* with the problem pane open its heading is the title, so the bar does not repeat it */
+@media (min-width:901px){
+    .rx-ws:has(.pane.l) .subbar .wtitle{display:none}
+}
+
+/* ---------- the three panes ---------- */
+.rx-ws .ws{gap:8px;padding:0 10px 8px;background:var(--bg);height:calc(100vh - var(--hdr-h,52px) - 52px)}
+.rx-ws .ws>.pane{border:0;border-radius:14px;overflow:hidden}
+.rx-ws .lgrip{right:0}
+.rx-ws .rgrip{left:0}
+
+/* pill tabs over the side panes */
+.rx-ws .pane.l>.tabs,.rx-ws .pane.r>.tabs{height:42px;align-items:center;gap:2px;padding:4px 8px 0!important;border:0;font-size:12.5px;overflow-x:auto;scrollbar-width:none}
+.rx-ws .pane.l>.tabs::-webkit-scrollbar,.rx-ws .pane.r>.tabs::-webkit-scrollbar{display:none}
+.rx-ws .pane.l>.tabs button,.rx-ws .pane.r>.tabs button{flex:none;height:30px;margin:0;padding:0 7px;border:0;border-radius:8px;color:var(--mut)}
+.rx-ws .pane>.tabs button:hover{color:var(--fg)}
+.rx-ws .pane>.tabs button.on{background:var(--inset);color:var(--fg);font-weight:700}
+
+.rx-ws .pane.l>.pbody{padding:12px 16px 24px;font-size:14px;line-height:1.65}
+.rx-ws .pane.l .ptitle{margin:0;font-size:21px;line-height:1.2}
+.rx-meta{margin:-8px 0 0;font:400 12.5px var(--sans);color:var(--dim);line-height:1.6}
+.rx-ws .pane.l .md{font-size:14px;line-height:1.65}
+.rx-ws .pane.l .hint{border-radius:10px}
+
+/* ---------- editor: file tabs that open into the code ---------- */
+.rx-ws .ftabs{height:44px;gap:8px;padding:6px 10px 0 6px;border:0}
+.rx-ws .ftab-list{gap:2px}
+.rx-ws .ftab{flex:none;min-width:32px;justify-content:center;padding:0 12px;border:0;border-radius:9px 9px 0 0;box-shadow:none;font:500 12.5px var(--mono);color:var(--mut)}
+.rx-ws .ftab:hover{color:var(--fg)}
+.rx-ws .ftab.on{background:var(--bg);box-shadow:none;color:var(--fg);font-weight:600}
+.rx-ws .ftab:focus-visible{outline-offset:-2px}
+/* what SCRATCH and READ-ONLY said is in each tab's tooltip; the shortcuts are in the buttons' tooltips */
+.rx-ws .ftab small,.rx-ws .ftabs .tools .ebtn kbd{display:none}
+.rx-ws .ftabs .tools{gap:10px;padding-bottom:4px}
+.rx-ws .ftabs .tools .ebtn{height:30px;padding:0 11px}
+.rx-ws .gbar{height:30px;border:0;background:var(--bg)}
+.rx-ws .gbar .fp{padding-left:16px}
+.rx-ws .gbar .rx-ed{display:none}
+.rx-ws .edit-host{background:var(--bg)}
+
+.rx-ws .statusb{height:32px;gap:4px;border:0;background:var(--panel);font-size:12px}
+.rx-ws .statusb .si{flex:none;height:26px;font-size:12px}
+.rx-ws .statusb .dot{width:7px;height:7px;flex:none;border-radius:50%}
+.rx-ws .statusb button.si.off{color:var(--dim)}
+/* a long language-server or rustfmt message is cut short (its tooltip has the whole of it), so the position stays in view */
+.rx-ws .statusb .si:first-child,.rx-ws .statusb .sb-err{flex:0 1 auto;min-width:0;overflow:hidden}
+.rx-ws .statusb .si:first-child>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rx-ws .statusb .sb-err{display:block;line-height:26px;text-overflow:ellipsis}
+.rx-ws .statusb .rx-lang{margin-left:auto}
+.rx-ws .statusb .rx-lang+.sb-pos{margin-left:8px}
+
+/* ---------- the console under the editor ---------- */
+.rx-ws .console{margin-top:2px;border:0}
+.rx-ws .console-bar{height:40px;border:0;padding:0 8px}
+.rx-ws .console-tabs{gap:2px;align-items:center}
+.rx-ws .console-tabs button{height:28px;margin:0;padding:0 10px;border:0;border-radius:7px;color:var(--mut)}
+.rx-ws .console-tabs button:hover{color:var(--fg)}
+.rx-ws .console-tabs button.on{background:var(--inset);color:var(--fg);font-weight:600}
+.rx-ws .console-body{padding:6px 12px 12px}
+.rx-ws .tline-diff .diffx{background:var(--bg)}
+
+/* ---------- tests ---------- */
+.rx-ws .pane.r>.pbody{padding:6px 14px 16px!important}
+.rx-ws .pane.r .tstrip{top:-6px;margin:0 -14px;padding:8px 14px 10px;border:0;background:var(--panel);backdrop-filter:none}
+.rx-ws .pane.r .tstrip .tsum{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px}
+.rx-ws .pane.r .tstrip .tsum b{grid-area:1/1;font-size:18px;white-space:normal;line-height:1.3}
+.rx-ws .pane.r .tstrip .tsum span{grid-area:2/1;margin:0;font-size:12px;white-space:normal}
+.rx-ws .pane.r .tstrip .tsum .tstrip-run{grid-area:1/2/span 2}
+.rx-ws .pane.r .tstrip .tsum .tstrip-run .spin{grid-area:auto;margin:0}
+/* one segment per test, however many there are */
+.rx-ws .pane.r .passbar{gap:2px}
+.rx-ws .pane.r .passbar span{min-width:0}
+.rx-ws .pane.r .tcases{gap:8px;border:0}
+.rx-ws .pane.r .tcase{padding:3px 10px 9px;border:0;border-radius:11px;background:var(--inset)}
+.rx-ws .pane.r .tcase.bad{background:linear-gradient(var(--bad-bg),var(--bad-bg)),var(--inset);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--bad) 55%,var(--line))}
+.rx-ws .pane.r .tcase-h .nm{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.rx-ws .pane.r .tcase-more pre{background:var(--bg)}
+.rx-ws .pane.r :is(.errbox,.rulebox,.solved){border-radius:11px}
+/* the focus timer in the narrow tests pane: its modes take a row of their own */
+.rx-ws .pane.r .ft{margin:0 10px 6px;padding:12px;border:0;background:var(--inset)}
+.rx-ws .pane.r .ft-ring span{background:var(--inset)}
+.rx-ws .pane.r .ft-modes,.rx-ws .pane.r .ft-sb{background:var(--panel)}
+.rx-ws .pane.r .ft-modes button.ft-on,.rx-ws .pane.r .ft-sb:is(:hover:not(:disabled),[aria-expanded="true"]){background:var(--raise)}
+.rx-ws .pane.r .ft-h{flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.rx-ws .pane.r .ft-body{gap:12px}
+.rx-ws .pane.r .acts{padding:6px 10px 10px;border:0}
+.rx-ws .pane.r .acts button{height:42px;border-radius:10px;font-size:14px;font-weight:700}
+/* the tinted button's label needs a little more ink on the light theme */
+.rx-ws .ebtn{color:color-mix(in oklab,var(--acc) 85%,var(--fg))}
+
+/* ---------- narrower windows ---------- */
+@media (min-width:901px) and (max-width:1180px){
+    /* problem and code side by side, the tests across the bottom */
+    .rx-ws .ws{grid-template-columns:var(--cols-mid,280px minmax(0,1fr));height:auto}
+    .rx-ws .ws>:is(.pane.l,.pane.c){height:max(640px,calc(100vh - var(--hdr-h,52px) - 60px))}
+    .rx-ws .pane.l>.pbody{max-height:none}
+    .rx-ws .ws>.pane.r{grid-column:1/-1}
+    .rx-ws .rgrip{display:none}
+}
+@media (max-width:900px){
+    .rx-ws .ws{height:auto;padding:8px}
+    /* the breadcrumb gets a row to itself, so it is not squeezed out by the clock and its neighbours */
+    .rx-ws .subbar{flex-wrap:wrap;height:auto;overflow:hidden;gap:6px 10px;padding:8px 14px}
+    .rx-ws .subbar .crumb{flex:1 0 100%}
+    .rx-ws .subbar .sx-crumb{white-space:normal;line-height:1.4}
+    .rx-ws .subbar .wtitle{flex:1 1 100%;min-width:0;white-space:normal}
+    .rx-ws .subbar .subpills{flex:1 1 100%}
+    .rx-ws .subbar .sbr{margin-left:0;width:100%;gap:10px;justify-content:space-between}
+    .rx-ws .subbar .sbr>*,.rx-ws .clock{white-space:nowrap;flex:none}
+    .rx-ws .clock{gap:6px;padding:5px 10px}
+    .rx-ws .ws-tabs{border:0;background:var(--bg)}
+    .rx-ws .ws-tabs button{text-align:center}
+    .rx-ws .pane.c{min-height:680px}
+    .rx-ws .pane.l>.pbody,.rx-ws .pane.r>.pbody{max-height:none}
+    /* the file tabs get the whole width; the tools go under them */
+    .rx-ws .ftabs{flex-wrap:wrap;height:auto;padding:6px 8px 0}
+    .rx-ws .ftab-list{flex:1 0 100%;height:38px}
+    .rx-ws .ftabs .tools{margin-left:auto;padding:6px 2px}
+    /* the edition moves up to the file line, to leave the status bar to its switches */
+    .rx-ws .gbar .rx-ed{display:inline}
+    .rx-ws .statusb .rx-lang{display:none}
+    .rx-ws .statusb .sb-pos,.rx-ws .statusb .rx-lang+.sb-pos{margin-left:auto}
+    .rx-ws .statusb{flex-wrap:wrap;height:auto;min-height:32px;padding-block:3px}
+    .rx-ws .console-bar{height:auto;flex-wrap:wrap;gap:4px 10px;padding:6px 8px}
+    .rx-ws .console-tabs{height:auto}
+    .rx-ws .console-toggle{order:1;margin-left:auto}
+    .rx-ws .console-sum{order:2;flex-basis:100%;margin:0;padding-left:10px}
+    .rx-ws .tline{grid-template-columns:minmax(0,1fr);height:auto}
+}
+@media (max-width:480px){
+    /* the word goes (the clock's tooltip says what it counts), so the pager, clock and layout buttons fit one row */
+    .rx-ws .clock>small:first-of-type{display:none}
+    .rx-ws .subbar .sbr{flex-wrap:wrap}
+}
+/* an error card's footer: the command stays on one line, and a long note drops below it */
+.lens small{flex-wrap:wrap;row-gap:6px}
+.lens small>span:first-child{white-space:nowrap}
+.lens small>span+span{flex:1 1 260px;min-width:0}

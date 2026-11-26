@@ -84,7 +84,7 @@ test("every system design page renders cleanly: math typeset, figures with step 
     await page.setViewportSize({ width: 390, height: 820 });
     for (const c of o.concepts as { id: string }[]) {
         await page.goto(`/sd/learn/${c.id}`);
-        await expect(page.locator(".rd-art h2")).toBeVisible();
+        await expect(page.locator(".rd-art .sd-lede")).toBeVisible();
         await expect(page.locator(".katex-error"), c.id).toHaveCount(0);
         const figs = await page.locator(".sd-fig").count();
         await expect(page.locator(".sd-fig .id-ctl"), c.id).toHaveCount(figs);

@@ -44,8 +44,8 @@ function Diagram({ value, onChange, readOnly = false }: { value: SdDiagram; onCh
     const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
     const svg = useRef<SVGSVGElement>(null);
     const at = (e: React.PointerEvent) => {
-        const r = svg.current!.getBoundingClientRect();
-        return { x: ((e.clientX - r.left) / r.width) * 720, y: ((e.clientY - r.top) / r.height) * 300 };
+        const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.current!.getScreenCTM()!.inverse());
+        return { x: p.x, y: p.y };
     };
     const add = (kind: "box" | "store" | "queue") => {
         const name = label.trim() || (kind === "store" ? "Database" : kind === "queue" ? "Queue" : "Service");
@@ -115,18 +115,27 @@ function Diagram({ value, onChange, readOnly = false }: { value: SdDiagram; onCh
 }
 
 function Brief({ p, attempts, onStart }: { p: SdProblem; attempts: SdAttempt[]; onStart: () => void }) {
+    const total = p.steps.reduce((n, s) => n + s.minutes, 0) || 1;
     return (
         <section className="ly-pn sd-art">
             <span className="sd-k">THE QUESTION</span>
-            <h2>{p.title}</h2>
+            <h2 className="sdr-dup">{p.title}</h2>
             <p className="sd-lede">“{p.prompt}”</p>
-            <ol className="sd-steps">
-                {p.steps.map((s) => <li key={s.name}><b>{s.name}</b><span>{s.minutes} min</span><small>{s.points.length} rubric point{s.points.length === 1 ? "" : "s"}</small></li>)}
-            </ol>
             <div className="sd-row">
                 <button className="sd-go" onClick={onStart}>Start the clock · {p.minutes} min</button>
                 {attempts.length > 0 && <span className="sd-dim">{attempts.length} earlier attempt{attempts.length === 1 ? "" : "s"}; the rubric and references open after you finish</span>}
             </div>
+            <ol className="sd-steps">
+                {p.steps.map((s) => (
+                    <li key={s.name}>
+                        <b>{s.name}</b>
+                        <span>{s.minutes} min</span>
+                        <small>{s.points.length} rubric point{s.points.length === 1 ? "" : "s"}</small>
+                        {/* this step's share of the clock */}
+                        <i className="sdr-minbar" aria-hidden="true"><b style={{ width: `${(s.minutes / total) * 100}%` }} /></i>
+                    </li>
+                ))}
+            </ol>
         </section>
     );
 }
@@ -239,9 +248,9 @@ export function SdPractice({ id }: { id: string }) {
             <>
                 <section className="ly-pn sd-art">
                     <span className="sd-k">STEP {step + 1} OF {p.steps.length} · {cur.name.toUpperCase()}</span>
-                    <h2>{p.title}</h2>
+                    <h2 className="sdr-dup">{p.title}</h2>
                     <p className="sd-lede">{cur.prompt}</p>
-                    <textarea className={isDesign || /api/i.test(cur.name) ? "sd-code" : ""} value={answers[cur.name]?.answer ?? ""} onChange={(e) => setAnswer(e.target.value)} placeholder="Write it as you would say it…" rows={8} spellCheck={!isDesign} />
+                    <textarea aria-label={`Your answer: ${cur.name}`} className={isDesign || /api/i.test(cur.name) ? "sd-code" : ""} value={answers[cur.name]?.answer ?? ""} onChange={(e) => setAnswer(e.target.value)} placeholder="Write it as you would say it…" rows={8} spellCheck={!isDesign} />
                     <div className="sd-row">
                         {step < p.steps.length - 1 ? <button className="sd-go" onClick={() => go(step + 1)}>Next: {p.steps[step + 1]!.name}</button> : <button className="sd-go" disabled={finish.isPending} onClick={() => { go(step); finish.mutate(p); }}>I'm done, compare</button>}
                         {step < p.steps.length - 1 && <button className="sd-ghost" disabled={finish.isPending} onClick={() => { go(step); finish.mutate(p); }}>Finish early and compare</button>}
@@ -376,7 +385,7 @@ export function SdPractice({ id }: { id: string }) {
 
     return (
         <SdFrame>
-            <Page3 crumb={[<Link to="/sd">SYSTEM DESIGN</Link>, <Link to="/sd/problems">PROBLEMS</Link>, p.kind.toUpperCase()]} title={p.title} sub={phase === "compare" ? "Mark each rubric point: got it, partly or missed" : `${p.kind === "hld" ? "High-level design" : p.kind.toUpperCase()} · ${p.minutes} minutes`} tiles={tiles} left={left} center={center} right={right} label="Framework" />
+            <Page3 className={`sdr sdr-${phase}`} crumb={[<Link to="/sd">SYSTEM DESIGN</Link>, <Link to="/sd/problems">PROBLEMS</Link>, p.kind.toUpperCase()]} title={p.title} sub={phase === "compare" ? "Mark each rubric point: got it, partly or missed" : `${p.kind === "hld" ? "High-level design" : p.kind.toUpperCase()} · ${p.minutes} minutes`} tiles={tiles} left={left} center={center} right={right} label="Framework" />
         </SdFrame>
     );
 }

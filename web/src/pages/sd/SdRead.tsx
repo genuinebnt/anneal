@@ -12,10 +12,10 @@ import { groupOf } from "./SdHome";
  *  laptops like other preferences. */
 type ReadPrefs = { width: "n" | "s" | "w"; size: "s" | "m" | "l" | "xl"; space: "tight" | "normal" | "relaxed"; focus: boolean };
 const DEFAULT_PREFS: ReadPrefs = { width: "s", size: "m", space: "normal", focus: false };
-/** Characters per line for each width; the column is that many characters of the chosen text size. */
-const WIDTH = { n: 60, s: 68, w: 80 };
-const SIZE = { s: "15px", m: "16.5px", l: "18px", xl: "19.5px" };
-const SPACE = { tight: 1.55, normal: 1.75, relaxed: 1.95 };
+/** Text size and line spacing for each setting. Width is layout (styles/sd-reading.css): N is a centred narrow column, S fills the
+ *  middle column, W also moves the right panel under the article. */
+const SIZE = { s: "15px", m: "17px", l: "19px", xl: "21px" };
+const SPACE = { tight: 1.55, normal: 1.75, relaxed: 2 };
 
 function useReadPrefs(): [ReadPrefs, (p: Partial<ReadPrefs>) => void] {
     const [prefs, setPrefs] = useState<ReadPrefs>(() => ({ ...DEFAULT_PREFS, ...getPref<Partial<ReadPrefs>>("sd.read", {}) }));
@@ -200,13 +200,11 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
             </Panel>
         </>
     );
-    const style = { "--rd-w": WIDTH[prefs.width], "--rd-fs": SIZE[prefs.size], "--rd-lh": SPACE[prefs.space] } as CSSProperties;
+    const style = { "--rd-fs": SIZE[prefs.size], "--rd-lh": SPACE[prefs.space] } as CSSProperties;
     const center = (
         <PlansContext.Provider value={v.plans ?? {}}>
         <div className={`rd-wrap${hasNotes ? " has-sn" : ""}`} style={style}>
             <article className="ly-pn sd-art rd-art">
-                <span className="sd-k" style={{ color: g.color }}>{g.name.toUpperCase()}</span>
-                <h2>{c.title}</h2>
                 <p className="sd-lede">{c.lede}</p>
                 <div className="rd-meta">
                     <span>{c.minutes} min read</span>
@@ -228,7 +226,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
                             <button className="rd-anchor" aria-label={`Copy a link to ${s.heading}`} onClick={() => copyLink(ids[i]!)}>{copied === ids[i] ? "✓" : "#"}</button>
                         </div>
                         <SdMd text={s.body} id={ids[i]} notes={notesBefore[i]} />
-                        {c.figures.filter((f) => f.after === s.heading).map((f) => <SdFigure key={f.name} name={f.name} caption={f.caption} />)}
+                        {c.figures.filter((f) => f.after === s.heading).map((f) => <SdFigure key={f.name} name={f.name} caption={f.caption} expandable />)}
                     </section>
                 ))}
                 <aside className="sd-call sd-call-interview rd-say"><b>Say it like this</b><div><p>“{c.say}”</p></div></aside>
@@ -283,7 +281,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
     return (
         <>
             <Page3
-                className={prefs.focus ? "rd-focused" : ""}
+                className={`sdr sdr-learn sdr-w-${prefs.width}${prefs.focus ? " rd-focused" : ""}`}
                 crumb={[<Link to="/sd">SYSTEM DESIGN</Link>, <Link to="/sd/learn">LEARN</Link>, g.name.toUpperCase()]}
                 title={c.title}
                 sub={`${g.name} · ${c.minutes} minutes · ${c.checks.length} checks`}

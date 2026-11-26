@@ -100,12 +100,11 @@
 .sx-entry-p{display:grid;gap:9px;font-size:13.5px;min-width:0}
 .sx-entry-p span{color:var(--mut);font-size:13px}
 
-/* the workspace: breadcrumb, Connections, completion view */
+/* the workspace: breadcrumb, Connections, completion view. The look of the screen itself is in workspace.css. */
 .subbar .crumb.sx-crumb{font:500 13px var(--sans);letter-spacing:0;color:var(--mut)}
 .sx-crumb a{display:inline-block;line-height:32px}
 .sx-crumb a:hover{color:var(--fg)}
 .sx-crumb a.sx-name{font-weight:700;color:var(--fg)}
-.sx-meta{margin:-6px 0 0;font:400 12.5px var(--sans);color:var(--dim);line-height:1.6}
 .sx-about{display:grid;justify-items:start;gap:8px;font-size:12.5px;color:var(--dim)}
 .sx-about p{margin:0}
 .sx-about p a{display:inline-block;color:var(--mut);text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
@@ -168,76 +167,3 @@
     .sx-done th{width:40%}
 }
 .pane.c>.gbar[hidden]{display:none}
-
-/* ---- the exercise screen: the pane layout of docs/mockups/series.html. Only a problem in a series gets it. Every control
-   of the workspace stays; the rules below change how it looks. ---- */
-.sx-ws .subbar{height:52px;padding:0 14px;border:0;background:var(--bg)}
-.sx-ws .clock{padding:5px 12px;border-radius:8px;font:600 12.5px var(--mono);color:var(--mut)}
-.sx-ws .clock small{font:inherit;letter-spacing:0;color:var(--mut)}
-.sx-ws .clock .dot{display:none}
-.sx-ws .clock.over{border-color:var(--bad)}
-.sx-ws .clock.over>span:not(.dot){color:var(--bad)!important}
-
-.sx-ws .ws{gap:8px;padding:0 10px 6px;background:var(--bg);height:calc(100vh - var(--hdr-h,52px) - 52px)}
-.sx-ws .ws>.pane{border:0;border-radius:14px;overflow:hidden}
-
-.sx-ws .pane.l>.tabs,.sx-ws .pane.r>.tabs{height:42px;gap:18px;padding:6px 18px 0!important;border:0;font-size:13.5px}
-.sx-ws .pane.l>.tabs button,.sx-ws .pane.r>.tabs button{margin:0;border:0}
-.sx-ws .pane>.tabs button.on{font-weight:700}
-.sx-ws .pane.l>.pbody{padding:6px 18px 24px;font-size:14px;line-height:1.65}
-.sx-ws .pane.l .ptitle{margin-top:6px;font-size:21px;line-height:1.2}
-.sx-ws .pane.l .md{font-size:14px;line-height:1.65}
-
-.sx-ws .ftabs{height:53px;padding:0 10px 0 16px;border-bottom:1px solid var(--line2)}
-.sx-ws .ftab-list{gap:18px}
-.sx-ws .ftab{min-width:32px;justify-content:center;padding:0;border:0;box-shadow:none;font:500 13px var(--sans)}
-.sx-ws .ftab.on{box-shadow:none;font-weight:700}
-.sx-ws .ftab small,.sx-ws .ftabs .tools .ebtn kbd{display:none}
-.sx-ws .ftabs .tools .ebtn{border-radius:8px;background:transparent}
-.sx-ws .gbar{border:0}
-/* the file line moves to the status bar; the heading of the borrow lanes keeps its row */
-.sx-ws .gbar:not(:has(.lh)){display:none}
-.sx-ws .statusb{height:32px;border-top:1px solid var(--line2);background:transparent;font-size:12px}
-.sx-ws .statusb .si{height:26px;font-size:12px}
-.sx-ws .statusb .dot{width:6px;height:6px;border-radius:50%}
-.sx-ws .statusb .sx-lang{margin-left:auto}
-.sx-ws .statusb .sx-lang+.sb-pos{margin-left:8px}
-
-.sx-ws .pane.r>.pbody{padding:6px 18px 18px!important}
-.sx-ws .pane.r .tstrip{top:-6px;margin:0 -18px;padding:8px 18px 10px;background:var(--panel);backdrop-filter:none}
-.sx-ws .pane.r .tstrip .tsum{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
-.sx-ws .pane.r .tstrip .tsum b{grid-area:1/1;font-size:17px}
-.sx-ws .pane.r .tstrip .tsum span{grid-area:2/1/auto/-1;margin:0;font-size:12.5px;white-space:normal}
-.sx-ws .pane.r .tstrip .tsum .tstrip-run{grid-area:1/2}
-.sx-ws .pane.r .tstrip .tsum .tstrip-run .spin{grid-area:auto}
-.sx-ws .pane.r .passbar{display:none}
-.sx-ws .pane.r .tcases{gap:8px;border:0}
-.sx-ws .pane.r .tcase{padding:2px 12px 8px;border:1px solid var(--line2);border-radius:10px;background:none}
-.sx-ws .pane.r .tcase.ok{border-color:color-mix(in oklab,var(--grn) 45%,var(--line))}
-.sx-ws .pane.r .tcase.bad{border-color:color-mix(in oklab,var(--bad) 55%,var(--line));background:var(--bad-bg)}
-.sx-ws .pane.r .tcase-h .nm{white-space:normal;overflow-wrap:anywhere}
-/* the focus timer in the narrower right pane: its modes take a row of their own */
-.sx-ws .pane.r .ft{margin:0 10px 6px;padding:12px}
-.sx-ws .pane.r .ft-h{flex-wrap:wrap;gap:8px;margin-bottom:10px}
-.sx-ws .pane.r .ft-body{gap:12px}
-.sx-ws .pane.r .acts{padding:8px 18px 14px;border:0}
-.sx-ws .pane.r .acts button{height:42px;border-radius:10px;font-size:14px;font-weight:700}
-
-@media (max-width:1180px){
-    .sx-ws .ws{height:auto}
-}
-@media (max-width:900px){
-    .sx-ws .ws{padding:8px 8px 6px}
-    /* the breadcrumb gets a row to itself, so it is not squeezed out by the clock and its neighbours */
-    .sx-ws .subbar{flex-wrap:wrap;height:auto;gap:2px 10px;padding:6px 14px 8px}
-    .sx-ws .subbar .sx-crumb{flex:1 0 100%;white-space:normal;line-height:1.4}
-    .sx-ws .subbar .sbr{margin-left:0;width:100%;gap:10px;justify-content:space-between}
-    .sx-ws .subbar .sbr>*,.sx-ws .clock{white-space:nowrap;flex:none}
-    .sx-ws .clock{gap:6px;padding:5px 10px}
-    /* the file tabs get the whole width; the tools go under them */
-    .sx-ws .ftabs{flex-wrap:wrap;height:auto;padding:0 10px 0 14px}
-    .sx-ws .ftab-list{flex:1 0 100%;height:44px;gap:14px}
-    .sx-ws .ftabs .tools{margin-left:auto;padding:0 0 8px}
-    .sx-ws .statusb .sx-lang{display:none}
-    .sx-ws .statusb .sx-lang+.sb-pos{margin-left:auto}
-}

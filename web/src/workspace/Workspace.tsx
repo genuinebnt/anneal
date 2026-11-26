@@ -20,6 +20,7 @@ import { Connections, SeriesComplete, placeName } from "../components/seriesBits
 import { Ansi } from "./ansi";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
+import "../styles/workspace.css";
 
 type LeftTab = "problem" | "hints" | "solution" | "related";
 
@@ -400,9 +401,9 @@ function Loaded({ p }: { p: ProblemDetail }) {
   // A series gives its own estimate for the part; everything else has the interview budget for its kind.
   const budget = place?.minutes ?? BUDGET[p.mode][p.level];
   const area = areaOf(p.track.section);
-  // a series part takes the pane widths of docs/mockups/series.html
-  const leftW = storedLeftW || (place ? 340 : 360);
-  const rightW = storedRightW || (place ? 270 : 340);
+  // the default pane widths of docs/mockups/restyle-exercise.html (the tests pane a little wider, for the focus timer)
+  const leftW = storedLeftW || 300;
+  const rightW = storedRightW || 270;
   const overBudget = elapsed > budget * 60;
 
   return (
@@ -427,7 +428,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
           onClose={() => setWin(null)}
         />
       )}
-      <main className={place ? "sx-ws" : undefined}>
+      <main className="rx-ws">
         {p.attempt.resolve && (
           <div className="resolve-bar">
             <b>{p.attempt.solved ? "RE-SOLVED" : "RE-SOLVE"}</b>
@@ -517,7 +518,11 @@ function Loaded({ p }: { p: ProblemDetail }) {
             <button key={k} role="tab" aria-selected={mobilePane === k} className={mobilePane === k ? "on" : ""} onClick={() => setMobilePane(k)}>{label}</button>
           ))}
         </div>
-        <div className="ws" data-pane={mobilePane} style={{ "--cols": [leftOpen ? `${leftW}px` : "", "minmax(0, 1fr)", rightOpen ? `${rightW}px` : ""].join(" ").trim() } as CSSProperties}>
+        <div className="ws" data-pane={mobilePane} style={{
+          "--cols": [leftOpen ? `${leftW}px` : "", "minmax(0, 1fr)", rightOpen ? `${rightW}px` : ""].join(" ").trim(),
+          // between 901 and 1180 px the tests pane goes under the other two
+          "--cols-mid": [leftOpen ? `min(${leftW}px, 36vw)` : "", "minmax(0, 1fr)"].join(" ").trim(),
+        } as CSSProperties}>
           {/* ---------- left: problem, hints, solution ---------- */}
           {leftOpen || narrow ? (
             <section className="pane l">
@@ -539,13 +544,12 @@ function Loaded({ p }: { p: ProblemDetail }) {
               <div className="pbody">
                 {left === "problem" && (
                   <div className="stack">
-                    {!place && (
-                      <div className="lab">
-                        {p.track.code} · {p.stage.name.toUpperCase()} · {p.stage.position} OF {p.stage.count}
-                      </div>
-                    )}
                     <h2 className="ptitle">{p.title}</h2>
-                    {place && <p className="sx-meta">{placeName(place)}{place.minutes ? `, about ${place.minutes} minutes` : ""}</p>}
+                    {place ? (
+                      <p className="rx-meta sx-meta">{placeName(place)}{place.minutes ? `, about ${place.minutes} minutes` : ""}</p>
+                    ) : (
+                      <p className="rx-meta">{p.track.code} · {p.stage.name}, stage {p.stage.position} of {p.stage.count}</p>
+                    )}
                     <div className="md" dangerouslySetInnerHTML={{ __html: md(p.statement) }} />
                     {p.rules && (
                       <div className="stack" style={{ gap: 8 }}>
@@ -618,7 +622,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                       </div>
                     )}
                     {openAboutMethod && p.teaches.length > 0 && (
-                      <div className="stack" style={{ gap: 10, paddingTop: 14, borderTop: "1px solid var(--line2)" }}>
+                      <div className="stack" style={{ gap: 10 }}>
                         <div className="lab">WHAT THIS TEACHES</div>
                         {p.teaches.map((t) => (
                           <div className="bul" key={t} style={{ ["--bul" as string]: modeColor(p.mode) }}>
@@ -749,7 +753,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                     main.rs<small>SCRATCH</small>
                   </button>
                 )}
-                <button className={`ftab${file === "tests" ? " on" : ""}`} onClick={() => setFile("tests")}>
+                <button className={`ftab${file === "tests" ? " on" : ""}`} onClick={() => setFile("tests")} title="The tests (read-only)">
                   tests.{ext}
                   <small>READ-ONLY</small>
                 </button>
@@ -804,7 +808,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                 <span style={{ color: "var(--fg)" }}>
                   {file === "lib" ? (py ? "solution.py" : "src/lib.rs") : file === "main" ? "src/bin/scratch.rs" : file === "solution" ? "reference solution" : file === "hidden" ? `more tests` : `tests/visible.${ext}`}
                 </span>
-                {py ? <span>Python 3 · standard library</span> : <span>edition 2021</span>}
+                {py ? <span>Python 3 · standard library</span> : <span className="rx-ed">edition 2021</span>}
                 {!py && <span>{p.crates.length ? `crates: ${p.crates.join(" · ")}` : "std only"}</span>}
                 <span>{file === "main" ? "⌘' runs it · tests don't run" : `${names.length + (hiddenCases?.length ?? 0)} tests`}</span>
               </div>
@@ -904,7 +908,7 @@ function Loaded({ p }: { p: ProblemDetail }) {
                   rustfmt: {formatError}
                 </span>
               )}
-              {place && !py && <span className="si sx-lang">edition 2021 · {p.crates.length ? `crates: ${p.crates.join(" · ")}` : "std only"}</span>}
+              {!py && <span className="si rx-lang">edition 2021</span>}
               <span className="si sb-pos" title={py ? "Python 3 · Tab indents by 4 spaces · ⇧Tab dedents · sandboxed" : `rustc 1.98.1 stable · clippy ${liveClippy ? "while editing and " : ""}on test runs · ⌘S formats · sandboxed`}>
                 Ln {cursor[0]}, Col {cursor[1]}
               </span>

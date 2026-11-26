@@ -362,13 +362,21 @@ const BASE: Record<string, Fig> = {
 const FIGS: Record<string, Fig> = { ...BASE, ...FIGS_CORE, ...FIGS_DISTRIBUTED, ...FIGS_TECHNOLOGY, ...FIGS_DRILLS };
 
 /** An animated drawing for a system design page, by name (the names are listed in `crates/content/src/sd.rs`). */
-export function SdFigure({ name, caption }: { name: string; caption: string }) {
+export function SdFigure({ name, caption, expandable }: { name: string; caption: string; expandable?: boolean }) {
     const fig = FIGS[name];
     const steps = fig?.steps ?? 1;
     const { t, setT, playing, setPlaying } = useSteps(fig?.ms ?? 1000, steps);
+    const [big, setBig] = useState(false);
+    useEffect(() => {
+        if (!big) return;
+        const esc = (e: KeyboardEvent) => e.key === "Escape" && setBig(false);
+        addEventListener("keydown", esc);
+        return () => removeEventListener("keydown", esc);
+    }, [big]);
     if (!fig) return null;
     return (
-        <figure className="sd-fig" tabIndex={0} onKeyDown={stepKeys(t, steps, setT, setPlaying)}>
+        <figure className={`sd-fig${big ? " sd-fig-big" : ""}`} tabIndex={0} onKeyDown={stepKeys(t, steps, setT, setPlaying)}>
+            {expandable && <button type="button" className="sd-fig-expand" aria-pressed={big} onClick={() => setBig(!big)}>{big ? "Close" : "Expand diagram"}</button>}
             <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={caption}>
                 <defs>
                     <marker id="sf-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">

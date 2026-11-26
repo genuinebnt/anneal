@@ -75,9 +75,14 @@ test("on a phone a part keeps its breadcrumb", async ({ page }) => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
 });
 
-test("a problem outside the series looks as before", async ({ page }) => {
+test("a problem outside the series has no series parts, and shows its title once", async ({ page }) => {
     await page.goto("/p/l1-fix-use-after-move");
+    // the problem pane carries the title; the bar shows it only when that pane is hidden
+    await expect(page.locator(".pane.l .ptitle")).toBeVisible();
+    await expect(page.locator(".subbar .wtitle")).toBeHidden();
+    await page.getByRole("button", { name: /Hide the problem panel/ }).click();
     await expect(page.locator(".subbar .wtitle")).toBeVisible();
+    await page.getByRole("button", { name: /Show the problem panel/ }).click();
     await expect(page.getByRole("region", { name: "Connections" })).toHaveCount(0);
 });
 
