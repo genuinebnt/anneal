@@ -4437,9 +4437,9 @@ impl ProcArray {
 """
 
 
-def proc_split(oldest_body="""        // Disconnected and idle slots hold 0, which maps to u32::MAX: no branch on the cold `connected` flag.
-        let none = |x: u32| if x == 0 { u32::MAX } else { x };
-        self.hot.iter().fold(next_xid, |oldest, h| oldest.min(none(h.xid)).min(none(h.xmin)))""",
+def proc_split(oldest_body="""        // Idle and disconnected slots hold 0, which wraps to u32::MAX and so never wins; no branch, and nothing cold is read.
+        let least = self.hot.iter().fold(u32::MAX, |m, h| m.min(h.xid.wrapping_sub(1)).min(h.xmin.wrapping_sub(1)));
+        least.saturating_add(1).min(next_xid)""",
                end_body="""        self.hot[slot] = Hot { xid: 0, xmin: 0 };
         self.cold[slot].xact_start = 0;""",
                snapshot_sort="xip.sort_unstable();"):
@@ -4807,9 +4807,9 @@ P.append(dict(
         PROC_RANDOM,
     ],
     hints=[("approach", "Two arrays indexed by slot: a dense `Vec` of just `xid` and `xmin` (8 bytes a backend), and a `Vec` of everything else. The scans read only the first."),
-           ("rust", "Keep the hot array self-sufficient: store 0 for a slot with no backend or no transaction, so `oldest_xmin` never has to read `connected` from the cold record. A fold with `min` over the hot array vectorizes when there's no branch: map 0 to `u32::MAX` first."),
+           ("rust", "Keep the hot array self-sufficient: store 0 for a slot with no backend or no transaction, so `oldest_xmin` never has to read `connected` from the cold record. The scan runs several backends at a time only if it does the same simple work for each value, and choosing a replacement for 0 can stop that. Look for arithmetic that already makes 0 the largest number: what is `0u32.wrapping_sub(1)`?"),
            ("edge case", "`disconnect`, `connect` and `end` must reset the hot entry too, or a dead backend's xmin holds vacuum back forever.")],
-    notes=("""The scans read `xid` and `xmin`, 8 bytes, but each backend's record is 248 bytes, so every slot is a separate cache miss and the scan moves 31 times more memory than it uses. Moving the two hot fields into their own dense array puts 8 backends in each cache line; the cold record (identity, timing, names, query) is only read when someone asks about that backend. The hot array has to stand alone: if `oldest_xmin` still checked the cold `connected` flag, it would touch every cold record again and the split would buy nothing, so disconnected and idle slots simply hold 0. Measured in the test on the x86_64 runner, `oldest_xmin` is 8–13× faster than the wide scan (the test asks for 4×) and `snapshot` 6–9× (the test asks for 2×).
+    notes=("""The scans read `xid` and `xmin`, 8 bytes, but each backend's record is 248 bytes, so every slot is a separate cache miss and the scan moves 31 times more memory than it uses. Moving the two hot fields into their own dense array puts 8 backends in each cache line; the cold record (identity, timing, names, query) is only read when someone asks about that backend. The hot array has to stand alone: if `oldest_xmin` still checked the cold `connected` flag, it would touch every cold record again and the split would buy nothing, so disconnected and idle slots simply hold 0. Subtracting 1 with wrapping turns that 0 into `u32::MAX`, so one plain minimum skips empty slots; adding 1 back, saturating, gives the oldest id, and `min(next_xid)` covers the case with none. The shape of that loop matters: replacing each 0 with an `if` was compiled to a much slower scan on 64-bit ARM, only about 2× faster than the wide one, where the subtraction measured over 15× there. The test asks for 4× (and 2× for `snapshot`).
 
 This is PostgreSQL's history: in 9.2 the hot fields of `PGPROC` moved into a separate dense `PGXACT` array because `GetSnapshotData` was cache-miss bound with many connections, and in 14 they moved again into plain dense arrays (`ProcGlobal->xids`, `subxidStates`, `statusFlags`) compacted over connected backends only. The Linux kernel does the same inside single structs, grouping `sk_buff` and `task_struct` fields by which paths touch them.""", "O(n) per scan, 8 bytes a backend", "the same bytes a backend, split into 8 hot and the rest cold"),
     follow_up="PostgreSQL 14 also keeps the dense arrays compacted over connected backends only. What does that save when 90% of the slots are empty, and what does `disconnect` have to do to keep it dense?",

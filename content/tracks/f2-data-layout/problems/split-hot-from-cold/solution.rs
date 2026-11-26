@@ -139,11 +139,11 @@ impl ProcArray {
     /// The oldest xid a connected backend still needs (vacuum keeps every row version newer than this):
     /// the smallest running xid or xmin, or `next_xid` if that's smaller.
     pub fn oldest_xmin(&self, next_xid: u32) -> u32 {
-        // Disconnected and idle slots hold 0, which maps to u32::MAX: no branch on the cold `connected` flag.
-        let none = |x: u32| if x == 0 { u32::MAX } else { x };
-        self.hot.iter().fold(next_xid, |oldest, h| {
-            oldest.min(none(h.xid)).min(none(h.xmin))
-        })
+        // Idle and disconnected slots hold 0, which wraps to u32::MAX and so never wins; no branch, and nothing cold is read.
+        let least = self.hot.iter().fold(u32::MAX, |m, h| {
+            m.min(h.xid.wrapping_sub(1)).min(h.xmin.wrapping_sub(1))
+        });
+        least.saturating_add(1).min(next_xid)
     }
 
     /// GetSnapshotData: clears `xip` and fills it with the running xids in ascending order; returns the
