@@ -15,7 +15,7 @@ import { PracticePage } from "./pages/PracticePage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProgressPage } from "./pages/ProgressPage";
 import { SectionPage } from "./pages/SectionPage";
-import { SeriesPage } from "./pages/SeriesPage";
+import { SeriesListPage, SeriesPage } from "./pages/SeriesPage";
 import { TrackPage } from "./pages/TrackPage";
 import { COURSE_ID, CoursePage } from "./pages/CoursePage";
 import { CourseStagePage } from "./pages/CourseStagePage";
@@ -244,6 +244,8 @@ const routes = [
       return <SeriesPage key={id} id={id} />;
     },
   }),
+  // added last: the routes above are picked out by their position
+  createRoute({ getParentRoute: () => rootRoute, path: "/rust/series", component: SeriesListPage }),
 ] as const;
 const patternsRoute = routes[7];
 const practiceRoute = routes[8];

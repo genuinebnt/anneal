@@ -167,3 +167,4 @@
     .sx-done th{width:40%}
 }
 .pane.c>.gbar[hidden]{display:none}
+.sx-list{margin-top:26px;display:grid;gap:14px}

@@ -2,7 +2,7 @@
 // Everything on it comes from content/series/<id>.toml and the attempts already stored.
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ApiError, api, type SeriesItem, type SeriesRow, type SeriesView } from "../api";
+import { ApiError, api, type SeriesItem, type SeriesRow, type SeriesView, type SeriesSummary } from "../api";
 import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
 import { Segments, lowerFirst, shortDay } from "../components/seriesBits";
@@ -194,7 +194,7 @@ export function SeriesPage({ id }: { id: string }) {
     <>
       <Header area="rust" />
       <main className="page sx-page">
-        <nav className="sx-back" aria-label="Breadcrumb"><Link to="/rust">Rust</Link> / Series</nav>
+        <nav className="sx-back" aria-label="Breadcrumb"><Link to="/rust">Rust</Link> / <Link to="/rust/series">Series</Link></nav>
         {q.data ? <Body s={q.data} /> : q.isError ? (
           <p className="notice bad">{q.error instanceof ApiError && q.error.status === 404 ? "There is no series here." : "Couldn't load the series."} <Link to="/rust">Back to Rust</Link></p>
         ) : <Skeleton lines={8} />}
@@ -203,27 +203,58 @@ export function SeriesPage({ id }: { id: string }) {
   );
 }
 
-/** The entry on the Rust home: one band for each series, with its progress and where to go on. */
+/** One band for a series: its progress and where to go on. */
+function SeriesBand({ s }: { s: SeriesSummary }) {
+  return (
+    <Link className="sx-entry" to="/rust/series/$id" params={{ id: s.id }}>
+      <div>
+        <h3>{s.title}</h3>
+        <p>{s.summary}</p>
+      </div>
+      <div className="sx-entry-p">
+        <b>{s.solved} of {s.segments.length} parts solved</b>
+        <Segments on={s.segments} label="parts" />
+        <span>{s.next ? `Next: ${s.next.kind === "part" ? "part" : "capstone step"} ${s.next.number}, ${lowerFirst(s.next.title)}` : "Everything written so far is solved"}</span>
+      </div>
+      <span className="sx-btn">Open the series</span>
+    </Link>
+  );
+}
+
+/** The entry on the Rust home: one band for each series. */
 export function SeriesEntries() {
   const q = useQuery({ queryKey: ["series"], queryFn: api.seriesList });
   if (!q.data?.length) return null;
   return (
     <section aria-label="Series">
       <h2 className="cb-secth">Series</h2>
-      {q.data.map((s) => (
-        <Link key={s.id} className="sx-entry" to="/rust/series/$id" params={{ id: s.id }}>
-          <div>
-            <h3>{s.title}</h3>
-            <p>{s.summary}</p>
-          </div>
-          <div className="sx-entry-p">
-            <b>{s.solved} of {s.segments.length} parts solved</b>
-            <Segments on={s.segments} label="parts" />
-            <span>{s.next ? `Next: ${s.next.kind === "part" ? "part" : "capstone step"} ${s.next.number}, ${lowerFirst(s.next.title)}` : "Everything written so far is solved"}</span>
-          </div>
-          <span className="sx-btn">Open the series</span>
-        </Link>
-      ))}
+      {q.data.map((s) => <SeriesBand key={s.id} s={s} />)}
     </section>
+  );
+}
+
+/** The Series tab: every series in one place. */
+export function SeriesListPage() {
+  const q = useQuery({ queryKey: ["series"], queryFn: api.seriesList });
+  return (
+    <>
+      <Header area="rust" />
+      <main className="page sx-page">
+        <nav className="sx-back" aria-label="Breadcrumb"><Link to="/rust">Rust</Link> / Series</nav>
+        <header className="sx-hero">
+          <div>
+            <h1>Series</h1>
+            <p>Small exercises in order, each building toward a project you write yourself.</p>
+          </div>
+        </header>
+        <section className="sx-list" aria-label="All series">
+          {q.data ? (
+            q.data.length ? q.data.map((s) => <SeriesBand key={s.id} s={s} />) : <p className="notice">There is no series yet. <Link to="/rust">Back to the tracks</Link></p>
+          ) : q.isError ? (
+            <p className="notice bad">Couldn't load the series. <button type="button" onClick={() => void q.refetch()}>Try again</button></p>
+          ) : <Skeleton lines={6} />}
+        </section>
+      </main>
+    </>
   );
 }

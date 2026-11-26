@@ -7,7 +7,7 @@ const PAGES: [string, string][] = [
     ["dsa-home", "/dsa"], ["problem", "/d/two-sum"], ["review", "/dsa/review"], ["calendar", "/dsa/calendar"], ["plan", "/dsa/plan"], ["company", "/dsa/company"],
     ["settings", "/settings"], ["log", "/log"], ["progress", "/progress"], ["mock-setup", "/dsa/mock"], ["pattern-learn", "/dsa/patterns/D1"],
     ["rust-home", "/rust"], ["rust-track", "/t/l1-ownership-moves"], ["rust-workspace", "/p/l1-fix-use-after-move"],
-    ["series", "/rust/series/web-server"], ["series-part", "/p/c2-thread-pool"],
+    ["series-list", "/rust/series"], ["series", "/rust/series/web-server"], ["series-part", "/p/c2-thread-pool"],
     ["course-home", "/courses"], ["course-stage", "/courses/bustub/1a-01"], ["course-concept", "/courses/bustub/concept/positional-io-and-short-reads"],
 ];
 /** Text this check cannot judge: it cannot see a pill's moving background, gradient headline text, or a blur made on purpose; the dim items are meant to be dim. */

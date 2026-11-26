@@ -3,11 +3,11 @@
 import { expect, test } from "@playwright/test";
 import { PART, SOLUTION, solvePart } from "./seriesSolve";
 
-test("the Rust home leads to the series without a new header tab", async ({ page }) => {
+test("the Rust home leads to the series, and Rust has a Series tab", async ({ page }) => {
     await page.goto("/rust");
     const entry = page.getByRole("region", { name: "Series" }).getByRole("link", { name: /From threads to a web server/ });
     await expect(entry).toContainText(/of \d+ parts solved/);
-    await expect(page.locator(".hd-tabs a", { hasText: /series/i })).toHaveCount(0);
+    await expect(page.locator(".hd-tabs a", { hasText: /series/i })).toHaveCount(1);
     await entry.click();
     await expect(page).toHaveURL(/\/rust\/series\/web-server$/);
     await expect(page.getByRole("heading", { level: 1, name: "From threads to a web server" })).toBeVisible();
@@ -124,4 +124,15 @@ test("on a phone the completion view is in the Code pane and nothing is wider th
     await page.getByRole("button", { name: "Solved", exact: true }).click();
     await expect(page.getByRole("region", { name: "Solved" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+});
+
+test("the Series tab under Rust lists every series and opens one", async ({ page }) => {
+    await page.goto("/rust");
+    await page.locator(".hd-tabs").getByRole("link", { name: "Series", exact: true }).click();
+    await expect(page).toHaveURL(/\/rust\/series$/);
+    await expect(page.locator(".hd-tabs a.on")).toHaveText("Series");
+    await expect(page.getByRole("heading", { level: 1, name: "Series" })).toBeVisible();
+    await page.getByRole("region", { name: "All series" }).getByRole("link").first().click();
+    await expect(page).toHaveURL(/\/rust\/series\/.+/);
+    await expect(page.locator(".hd-tabs a.on")).toHaveText("Series");
 });

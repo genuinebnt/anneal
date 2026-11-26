@@ -69,7 +69,8 @@ const TABS: Record<AreaId, Tab[]> = {
         { to: "/dsa/graph", label: "Graph", match: (p) => p.startsWith("/dsa/graph") },
     ],
     rust: [
-        { to: "/rust", label: "Tracks", match: (p) => p.startsWith("/rust") || p.startsWith("/t/") || p.startsWith("/p/") },
+        { to: "/rust", label: "Tracks", match: (p) => (p.startsWith("/rust") && !p.startsWith("/rust/series")) || p.startsWith("/t/") || p.startsWith("/p/") },
+        { to: "/rust/series" as Tab["to"], label: "Series", match: (p) => p.startsWith("/rust/series") },
     ],
     courses: [
         { to: "/courses", label: "BusTub", match: (p) => p.startsWith("/courses") },
