@@ -35,7 +35,7 @@ space = "O(queued jobs) at shutdown"
 [[cookbook]]
 level = "related"
 page = "graceful-shutdown"
-note = "Stop, then drain what is queued. No deadline, and the channel is not closed."
+note = "Stop, close the channel, then drain what is queued. There is no deadline."
 
 [[cookbook]]
 level = "similar"

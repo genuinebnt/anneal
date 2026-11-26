@@ -1,0 +1,72 @@
+{
+  "id": "x",
+  "subject": "systems",
+  "title": "Fixture lesson",
+  "module": "Module",
+  "chapter": "Ch",
+  "module_order": 3,
+  "chapter_order": 2,
+  "order": 7,
+  "kind": "lesson",
+  "lede": "A fixture.",
+  "status": null,
+  "level": null,
+  "origin": null,
+  "summary": [],
+  "in_short": "A fixture summary with a [link to itself](#cb-how-it-works).\n",
+  "connections": [
+    {
+      "kind": "before",
+      "title": "The other page",
+      "link": "/cookbook/p/y#cb-h",
+      "why": "It comes first.",
+      "level": null
+    },
+    {
+      "kind": "practise",
+      "title": "A problem",
+      "link": "/cookbook/p/y",
+      "why": "To try it.",
+      "level": "exact"
+    },
+    {
+      "kind": "project",
+      "title": "A real program",
+      "link": null,
+      "why": "It does this.",
+      "level": null
+    }
+  ],
+  "layers": [],
+  "layers_on": [],
+  "glance": [],
+  "sections": [
+    {
+      "heading": "How it works",
+      "body": "Some words, then the blocks.\n\n```stepper\n{\"caption\":\"A box fills\",\"frame\":[{\"title\":\"Empty\",\"text\":\"Nothing yet.\",\"lanes\":[{\"name\":\"Box\",\"items\":[],\"slots\":2}]},{\"title\":\"One\",\"text\":\"One thing.\",\"lanes\":[{\"name\":\"Box\",\"items\":[\"a\"],\"slots\":2}]},{\"title\":\"Two\",\"text\":\"Two things.\",\"lanes\":[{\"name\":\"Box\",\"items\":[\"a\",\"b\"],\"slots\":2}]}]}\n```\n\n```walkthrough\n{\"file\":\"examples/a/x.rs\",\"step\":[{\"title\":\"Start\",\"lines\":\"1-2\",\"text\":\"The first lines.\"},{\"title\":\"Near the end\",\"lines\":\"50-51\",\"text\":\"Lines far down the file.\"}]}\n```\n\n```compare\n{\"takeaway\":\"It costs a line.\",\"wrong\":{\"title\":\"Without\",\"code\":\"fn a() {}\\n\",\"result\":\"Nothing happens.\"},\"fixed\":{\"title\":\"With\",\"code\":\"fn b() {}\",\"result\":\"Something happens.\"}}\n```\n"
+    }
+  ],
+  "terms": [],
+  "sources": [],
+  "methods": [],
+  "labs": [
+    {
+      "title": "Code",
+      "after": null,
+      "run": false,
+      "test": false,
+      "files": [
+        "examples/a/x.rs"
+      ],
+      "contents": [
+        {
+          "path": "examples/a/x.rs",
+          "text": "fn line_1() {}\nfn line_2() {}\nfn line_3() {}\nfn line_4() {}\nfn line_5() {}\nfn line_6() {}\nfn line_7() {}\nfn line_8() {}\nfn line_9() {}\nfn line_10() {}\nfn line_11() {}\nfn line_12() {}\nfn line_13() {}\nfn line_14() {}\nfn line_15() {}\nfn line_16() {}\nfn line_17() {}\nfn line_18() {}\nfn line_19() {}\nfn line_20() {}\nfn line_21() {}\nfn line_22() {}\nfn line_23() {}\nfn line_24() {}\nfn line_25() {}\nfn line_26() {}\nfn line_27() {}\nfn line_28() {}\nfn line_29() {}\nfn line_30() {}\nfn line_31() {}\nfn line_32() {}\nfn line_33() {}\nfn line_34() {}\nfn line_35() {}\nfn line_36() {}\nfn line_37() {}\nfn line_38() {}\nfn line_39() {}\nfn line_40() {}\nfn line_41() {}\nfn line_42() {}\nfn line_43() {}\nfn line_44() {}\nfn line_45() {}\nfn line_46() {}\nfn line_47() {}\nfn line_48() {}\nfn line_49() {}\nfn line_50() {}\nfn line_51() {}\nfn line_52() {}\nfn line_53() {}\nfn line_54() {}\nfn line_55() {}\nfn line_56() {}\nfn line_57() {}\nfn line_58() {}\nfn line_59() {}\nfn line_60() {}\n"
+        }
+      ],
+      "recorded": null
+    }
+  ],
+  "illustrative": [],
+  "verified": {}
+}

@@ -17,7 +17,7 @@ export const tint = (subject: string) => ({ "--c": colorOf(subject) }) as CSSPro
 
 export const KIND_LABEL: Record<string, string> = {
     guide: "Guide", recipe: "Example", capstone: "Capstone", questions: "Questions", project: "Project",
-    api: "API", pattern: "Pattern", comparison: "Comparison", concept: "Concept", testing: "Testing", build: "Build",
+    lesson: "Lesson", api: "API", pattern: "Pattern", comparison: "Comparison", concept: "Concept", testing: "Testing", build: "Build",
 };
 export const kindLabel = (kind: string) => KIND_LABEL[kind] ?? kind;
 /** Pages whose code is the point: the reading view shows it first. */

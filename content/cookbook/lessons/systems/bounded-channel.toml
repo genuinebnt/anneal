@@ -1,0 +1,282 @@
+title = "Bounded channels and backpressure"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 270
+kind = "lesson"
+level = "intermediate"
+code = ["examples/async/bounded_channel.rs"]
+lede = "A bounded channel is a queue with a size limit, so a fast sender has to deal with a slow receiver."
+summary = """A bounded channel holds at most a fixed number of waiting messages. When it is full, a sender can wait with `send(value).await` or get an error at once with `try_send`. Use one when work can arrive faster than you can finish it, and decide whether to slow the sender or refuse work. The limit counts queued messages, not total memory."""
+
+[[sections]]
+heading = "Why put a limit on a queue?"
+body = """
+Imagine a log service where one task reads lines from the network and another writes them to storage. A **channel** connects them: a queue with a sending side and a receiving side. Tokio's `mpsc` channel allows many senders and one receiver.
+
+Now storage slows down. With an **unbounded channel**, which has no size limit, every send succeeds while the receiving side is open. Extra lines pile up in memory.
+
+If the receiver never catches up, the process can run out of memory, and Tokio's documentation says it is then aborted. Both programs below send 1,000 numbers to a reader that takes at least 1 ms for each. Only the channel changes.
+
+Both use `flavor = "current_thread"`, which runs every task on one thread. So the reader gets a turn only when `main` pauses at an `.await`.
+
+```compare
+takeaway = "The reader is equally slow in both. The limit keeps the backlog small, and in return the sender spends time waiting. Your program must be able to afford that wait."
+[wrong]
+title = "No limit"
+code = '''
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<u64>();
+    let reader = tokio::spawn(async move {
+        let mut most_waiting = 0;
+        while rx.recv().await.is_some() {
+            most_waiting = most_waiting.max(rx.len());
+            tokio::time::sleep(Duration::from_millis(1)).await; // a slow reader
+        }
+        most_waiting
+    });
+    for line in 0..1_000 {
+        tx.send(line).unwrap();
+    }
+    drop(tx);
+    println!("most seen waiting: {}", reader.await.unwrap());
+}
+'''
+result = "It prints `most seen waiting: 999`. The sender queued the rest while the reader had taken only one."
+[fixed]
+title = "Room for 10"
+code = '''
+use std::time::Duration;
+use tokio::sync::mpsc;
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel::<u64>(10);
+    let reader = tokio::spawn(async move {
+        let mut most_waiting = 0;
+        while rx.recv().await.is_some() {
+            most_waiting = most_waiting.max(rx.len());
+            tokio::time::sleep(Duration::from_millis(1)).await; // a slow reader
+        }
+        most_waiting
+    });
+    for line in 0..1_000 {
+        tx.send(line).await.unwrap();
+    }
+    drop(tx);
+    println!("most seen waiting: {}", reader.await.unwrap());
+}
+'''
+result = "It prints `most seen waiting: 9`, just after a message is taken. The sender waited whenever all 10 places were full."
+```
+"""
+
+[[sections]]
+heading = "What happens when the queue is full?"
+body = """
+You choose, each time you send. `send(value).await` waits until there is room, or until the receiving side closes. `try_send(value)` never waits. If the queue is full, it returns an error right away.
+
+When a send fails, you get your value back. `try_send` reports `Full(value)` or `Closed(value)`, and `send` returns a `SendError` holding it.
+
+```rust
+use tokio::sync::mpsc::{self, error::TrySendError};
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel::<&str>(1);
+    tx.send("first").await.unwrap(); // there is room
+
+    match tx.try_send("second") {
+        Err(TrySendError::Full(line)) => println!("full, still holding {line}"),
+        other => println!("{other:?}"),
+    }
+
+    let sender = tokio::spawn(async move { tx.send("third").await });
+    println!("received {:?}", rx.recv().await); // makes room
+    sender.await.unwrap().unwrap();
+    println!("received {:?}", rx.recv().await);
+}
+```
+
+The line `second` was never queued. In real code, decide here whether to drop it, retry later or answer "busy".
+
+Now step through a wait. This queue has room for two and already holds 0 and 1, as in the code file.
+
+```stepper
+caption = "A sender meets a full queue"
+[[frame]]
+title = "The queue is full"
+text = "The sender calls `send(10).await`. Both places are taken, so this task waits. Tokio can run other tasks in the meantime."
+lanes = [ { name = "Sender", items = ["waiting with 10"] }, { name = "Queue", items = ["0", "1"], slots = 2 }, { name = "Receiver", items = ["ready"] } ]
+[[frame]]
+title = "The receiver takes one"
+text = "`recv` removes 0, the oldest message. One place is now free for the waiting sender."
+lanes = [ { name = "Sender", items = ["waiting with 10"] }, { name = "Queue", items = ["1"], slots = 2 }, { name = "Receiver", items = ["has 0"] } ]
+[[frame]]
+title = "The send finishes"
+text = "10 enters the queue. The sender moves on to 11, finds the queue full again, and waits."
+lanes = [ { name = "Sender", items = ["waiting with 11"] }, { name = "Queue", items = ["1", "10"], slots = 2 }, { name = "Receiver", items = ["working on 0"] } ]
+[[frame]]
+title = "The pattern repeats"
+text = "About 20 ms later, the receiver takes 1. Then 11 gets in, and the sender waits with 12."
+lanes = [ { name = "Sender", items = ["waiting with 12"] }, { name = "Queue", items = ["10", "11"], slots = 2 }, { name = "Receiver", items = ["working on 1"] } ]
+```
+
+When several sends are waiting on one channel, they get room in the order they asked.
+"""
+
+[[sections]]
+heading = "Why is waiting called backpressure?"
+body = """
+**Backpressure** means a slow stage pushes back on the stage that feeds it. Here, a slow receiver leaves the queue full. A full queue makes `send` wait, so the sender cannot race ahead.
+
+In the log service, the network task stops taking in lines while it waits to send. Whether the delay reaches the machines sending logs depends on your network protocol.
+
+`try_send` gives the same signal as an error. If you retry in a loop without pausing, you waste CPU time and may keep other tasks from running.
+"""
+
+[[sections]]
+heading = "How does the example show both choices?"
+body = """
+The code file puts the two side by side: first it refuses, then it waits.
+
+```walkthrough
+file = "examples/async/bounded_channel.rs"
+[[step]]
+title = "Create room for two"
+lines = "17"
+text = "The capacity is 2. It counts messages waiting in the queue. It must be at least 1, and `channel(0)` panics."
+[[step]]
+title = "Try four sends with no receiver running"
+lines = "18-29"
+text = "With nothing receiving, 0 and 1 are queued. The code throws away the refused 2 and 3."
+[[step]]
+title = "Start a slow receiver"
+lines = "31-38"
+text = "The new task pauses for 20 ms after each message. Its loop ends when `recv` returns `None`."
+[[step]]
+title = "Send and wait"
+lines = "39-46"
+text = "Each send needs a free place. The printed time is mostly spent waiting, about 60 ms in one test run. Your timing will differ."
+[[step]]
+title = "Close the channel and check"
+lines = "47-51"
+text = "Dropping the only sender closes the channel. The receiver drains the queue, gets `None`, and the code checks what arrived."
+```
+
+The final check expects `[0, 1, 10, 11, 12, 13]`. The receiver never sees 2 or 3, because the code did not retry them.
+"""
+
+[[sections]]
+heading = "What does the limit not protect?"
+body = """
+A capacity of 100 does not mean "this part of the program uses little memory". It only limits how many messages sit in the queue.
+
+**Waiting tasks still hold their messages.** Suppose 1,000 tasks call `send` on an empty channel with room for one, and nobody receives. One message is queued, while the other 999 stay alive inside waiting tasks. To limit them too, limit how many tasks you start.
+
+**Message size is not counted.** A slot can hold a number or a pointer to a 50 MB buffer. One hundred such buffers are about 5 GB, even with a capacity of 100. If sizes vary a lot, you need a separate limit on bytes.
+
+A larger capacity absorbs longer bursts, but work may wait longer. With one receiver taking 20 ms per message, 100 queued messages mean about two seconds of delay. Choose a size from the delay and memory you can accept.
+"""
+
+[[sections]]
+heading = "Which way of sending should you use?"
+body = """
+| Your need | Use | What you accept |
+|---|---|---|
+| Every message should get into the queue, and the sender can pause | `send(value).await` | The sender may wait for a long time |
+| You must answer now, even if the answer is "busy" | `try_send(value)` | You handle the refused value |
+| You want room before you give up or build the value | `reserve().await`, then send on the returned **permit** | The place stays taken while you hold the permit |
+| Something else already limits how much can be sent | `unbounded_channel()` | The channel itself never slows the sender |
+
+A **permit** here is a claim on one free place in the queue. Dropping it without sending gives the place back.
+
+A successful send does not prove the work was done. If you need confirmation, the receiver has to send an answer back.
+"""
+
+[[sections]]
+heading = "Why can the program get stuck or lose a message?"
+body = """
+**The receiver never finishes.** If a spare sender is still alive, `recv` keeps waiting. Drop senders you no longer need, including the original after cloning it.
+
+**One task sends everything before receiving.** With room for two, the third `send` waits for a receive. That receive comes later in the same task, so it never runs. Run the sender and receiver so that both can make progress.
+
+**A time limit throws the message away.** `send` takes ownership of the value. If a timeout or `tokio::select!` abandons the send before it finishes, the message was not sent and is dropped. To keep it, wait with `reserve` first, and move the value only after you have a permit.
+
+**The receiver disappears.** Dropping it makes waiting and later sends return errors. Messages still in the queue are dropped too, so an earlier successful send may never be processed.
+
+To test a full queue, use a small channel and don't receive.
+"""
+
+[[connections]]
+kind = "before"
+title = "Tokio essentials on a paused clock"
+link = "/cookbook/p/tokio-runtime-tasks-channels-timers"
+why = "Read it if tasks, `spawn` or `.await` are still new to you."
+
+[[connections]]
+kind = "practise"
+title = "A bounded MPMC channel with disconnect"
+link = "/p/c2-bounded-channel"
+level = "related"
+why = "You build a channel for ordinary threads yourself, with several receivers. This page uses Tokio's ready-made async channel."
+
+[[connections]]
+kind = "practise"
+title = "Say no when you are full"
+link = "/p/b7-turn-work-away"
+level = "related"
+why = "Apply the idea of refusing work to a small service built on threads. This page does not solve it."
+
+[[connections]]
+kind = "returns"
+title = "A generic async worker pool"
+link = "/cookbook/p/worker-pool"
+why = "A bounded channel feeds a fixed number of jobs. You also see which memory the queue limit misses."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "Look there next for how to stop a program that still has work in progress."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its early parts hand work between threads, and later parts return to waiting and overload."
+
+[[connections]]
+kind = "project"
+title = "FlowForge task executor"
+why = "A scheduler that receives ready tasks faster than it can run them has to choose between waiting and refusing."
+
+[[sources]]
+title = "Tokio: the mpsc module"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/index.html"
+note = "Read how bounded and unbounded channels behave when one side is dropped."
+
+[[sources]]
+title = "Tokio: mpsc::channel"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/fn.channel.html"
+note = "Check the capacity rules and when a send waits."
+
+[[sources]]
+title = "Tokio: mpsc::Sender"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html"
+note = "Compare send, try_send and reserve, including what happens if you abandon a wait."
+
+[[sources]]
+title = "Tokio: mpsc::unbounded_channel"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/fn.unbounded_channel.html"
+note = "Read the warning about running out of memory."
+
+[[sources]]
+title = "Tokio tutorial: Channels"
+url = "https://tokio.rs/tokio/tutorial/channels"
+note = "Follow a longer example. Its last section explains why queues and concurrency need limits."

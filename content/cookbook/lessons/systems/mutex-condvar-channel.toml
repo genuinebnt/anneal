@@ -1,0 +1,368 @@
+title = "A channel from a mutex and condition variables"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 237
+kind = "lesson"
+level = "advanced"
+code = ["examples/concurrency/mutex_condvar_channel.rs"]
+code_spoils = ["/p/c1-blocking-queue"]
+lede = "A mutex protects a shared queue, and a condition variable lets threads sleep until that queue changes."
+summary = """A mutex lets one thread at a time use shared data, and a condition variable lets a thread sleep until that data may have changed. Together they make a bounded queue that waits when it is full or empty. Check the condition in a loop after every wake-up. In production, prefer a library channel, and treat this file's hand-written locks as study material."""
+
+[[sections]]
+heading = "What should a thread do when the queue is empty?"
+body = """
+Picture one thread that finds files and a faster one that processes them. They share a queue, so the second thread often finds it empty.
+
+It could check again and again, but that keeps a CPU core busy doing nothing. It could sleep for 10 ms, but then new work may sit unnoticed. What you want is, "Sleep, and wake me when something changes."
+
+You need two tools from the standard library:
+
+- A **mutex** is a lock around data. Only the thread holding it can use the data. Calling `lock` gives you a **guard**, and dropping the guard unlocks.
+- A **condition variable**, or `Condvar`, is a place for threads to sleep. Another thread **notifies** it to wake them.
+"""
+
+[[sections]]
+heading = "How can a thread sleep without missing the wake-up?"
+body = """
+Suppose a consumer sees an empty queue, unlocks, and only then goes to sleep. A producer could add an item and notify in that gap, while nobody is sleeping yet.
+
+`Condvar` does not save notifications for later. `wait(guard)` closes the gap. It unlocks and sleeps in one **atomic** step, with no gap between the two. Before `wait` returns, it locks the mutex again.
+
+A producer needs the same mutex to change the queue. So it acts either before the consumer checks or after the consumer starts waiting.
+
+```stepper
+caption = "A consumer waits for the first item"
+[[frame]]
+title = "Check while locked"
+text = "The consumer locks the mutex and finds the queue empty."
+lanes = [ { name = "Consumer", items = ["holds lock"] }, { name = "Queue", items = [], slots = 2 }, { name = "Producer", items = ["has item A"] } ]
+[[frame]]
+title = "Unlock and sleep together"
+text = "`wait` releases the lock and puts the consumer to sleep. The producer can now take the lock."
+lanes = [ { name = "Consumer", items = ["asleep"] }, { name = "Queue", items = [], slots = 2 }, { name = "Producer", items = ["has item A"] } ]
+[[frame]]
+title = "Change the data, then notify"
+text = "The producer adds A, unlocks, and notifies the condition variable."
+lanes = [ { name = "Consumer", items = ["woken"] }, { name = "Queue", items = ["A"], slots = 2 }, { name = "Producer", items = ["done"] } ]
+[[frame]]
+title = "Lock and check again"
+text = "Once the consumer has the lock again, `wait` returns. The consumer checks the queue and takes A."
+lanes = [ { name = "Consumer", items = ["has A"] }, { name = "Queue", items = [], slots = 2 }, { name = "Producer", items = ["done"] } ]
+```
+
+The queue, not the notification, records that work exists.
+"""
+
+[[sections]]
+heading = "Why must you check again after waking?"
+body = """
+Waking up does not promise that there is work. The standard library allows **spurious wake-ups**, where `wait` returns without the change you hoped for. Another thread may also take the item before you get the lock.
+
+These programs force the second case. Two consumers wait, item 7 arrives, and `notify_all` wakes both. Item 8 arrives later.
+
+```compare
+takeaway = "The loop rechecks the data after each wake-up. A consumer that finds nothing goes back to sleep instead of failing."
+[wrong]
+title = "Check once with if"
+code = '''
+use std::sync::{Arc, Condvar, Mutex};
+use std::{collections::VecDeque, thread, time::Duration};
+
+#[derive(Default)]
+struct State {
+    queue: VecDeque<u32>,
+    waiting: u32,
+}
+
+fn main() {
+    let shared = Arc::new((Mutex::new(State::default()), Condvar::new()));
+    let consumers: Vec<_> = (0..2)
+        .map(|_| {
+            let shared = shared.clone();
+            thread::spawn(move || {
+                let (lock, changed) = &*shared;
+                let mut state = lock.lock().unwrap();
+                state.waiting += 1;
+                if state.queue.is_empty() {
+                    state = changed.wait(state).unwrap();
+                }
+                state.queue.pop_front().expect("woke to an empty queue")
+            })
+        })
+        .collect();
+
+    let (lock, changed) = &*shared;
+    while lock.lock().unwrap().waiting < 2 {
+        thread::yield_now();
+    }
+    lock.lock().unwrap().queue.push_back(7);
+    changed.notify_all();
+    thread::sleep(Duration::from_millis(100));
+    lock.lock().unwrap_or_else(|e| e.into_inner()).queue.push_back(8);
+    changed.notify_all();
+    for consumer in consumers {
+        println!("{:?}", consumer.join().ok());
+    }
+}
+'''
+result = "One consumer gets 7. The other panics with `woke to an empty queue` before 8 arrives, so it prints `None`."
+[fixed]
+title = "Check in a while loop"
+code = '''
+use std::sync::{Arc, Condvar, Mutex};
+use std::{collections::VecDeque, thread, time::Duration};
+
+#[derive(Default)]
+struct State {
+    queue: VecDeque<u32>,
+    waiting: u32,
+}
+
+fn main() {
+    let shared = Arc::new((Mutex::new(State::default()), Condvar::new()));
+    let consumers: Vec<_> = (0..2)
+        .map(|_| {
+            let shared = shared.clone();
+            thread::spawn(move || {
+                let (lock, changed) = &*shared;
+                let mut state = lock.lock().unwrap();
+                state.waiting += 1;
+                while state.queue.is_empty() {
+                    state = changed.wait(state).unwrap();
+                }
+                state.queue.pop_front()
+            })
+        })
+        .collect();
+
+    let (lock, changed) = &*shared;
+    while lock.lock().unwrap().waiting < 2 {
+        thread::yield_now();
+    }
+    lock.lock().unwrap().queue.push_back(7);
+    changed.notify_all();
+    thread::sleep(Duration::from_millis(100));
+    lock.lock().unwrap().queue.push_back(8);
+    changed.notify_all();
+    for consumer in consumers {
+        println!("{:?}", consumer.join().unwrap());
+    }
+}
+'''
+result = "One consumer returns `Some(7)`. The other goes back to sleep, then returns `Some(8)`. Either one may get 7."
+```
+"""
+
+[[sections]]
+heading = "How does the bounded channel work?"
+body = """
+This section explains the design behind [A bounded blocking queue with Condvar](/p/c1-blocking-queue). To work it out yourself, solve that before reading on.
+
+A **channel** is a queue for handing values between threads. In the file's `Channel<T>`, senders wait for room and receivers wait for items. So one mutex has two condition variables, `not_full` and `not_empty`.
+
+Both sides lock, check and then act or wait, inside a loop. Adding an item notifies `not_empty`, and taking one notifies `not_full`. One new item or place helps one thread, so `notify_one` is enough.
+
+Closing sets a flag under the same mutex. It changes the answer for every waiting thread, so `close` uses `notify_all`. A send then returns your value as an error. Receivers still get the queued items, then `None`.
+
+The next fold goes through the code, which gives away much more of that exercise.
+
+:::deeper Walk through the code of Channel<T> (gives away much of the queue exercise)
+```walkthrough
+file = "examples/concurrency/mutex_condvar_channel.rs"
+[[step]]
+title = "Keep changing data under one mutex"
+lines = "341-350"
+text = "The queue and the `closed` flag share a mutex. The capacity `cap` never changes."
+[[step]]
+title = "Reject a send after close"
+lines = "365-370"
+text = "`send` locks the state and enters a loop. If the channel is closed, `Err(v)` gives your value back."
+[[step]]
+title = "Add an item or wait for room"
+lines = "371-378"
+text = "With room, `send` adds the item, unlocks, and notifies one receiver. Otherwise, it waits and returns to the top of the loop."
+[[step]]
+title = "Take queued work first"
+lines = "381-388"
+text = "`recv` removes an item if one exists. That makes room, so it notifies one waiting sender."
+[[step]]
+title = "Finish or wait for work"
+lines = "389-394"
+text = "An empty, closed queue returns `None`. An empty, open queue waits, then checks everything again."
+[[step]]
+title = "Wake everyone on close"
+lines = "395-399"
+text = "`close` sets the flag under the mutex. It then uses `notify_all` for both senders and receivers."
+```
+:::
+"""
+
+[[sections]]
+heading = "What else is in the code file?"
+body = """
+| Part | How it waits | What it teaches |
+|---|---|---|
+| `TicketLock` | **Spins**: keeps checking while running | Threads enter in ticket order, so one paused thread delays all those behind it |
+| `TtasLock` | Reads before trying to take the lock, and pauses between checks | Reading first avoids repeated writes while the lock is busy |
+| `ParkMutex` | Spins briefly, then **parks** (sleeps) the thread | A lock that no other thread wants can skip the waiting queue |
+| `MyCondvar` | Gives each sleeping thread a wake-up flag | A condition variable can be built from parking |
+| `Semaphore` | Waits for a free **permit**, or place | It limits how many threads may enter at once |
+| `Barrier` | Waits for a group to arrive | A round number keeps one round separate from the next |
+
+Spinning suits only very short waits, because it uses CPU time.
+"""
+
+[[sections]]
+heading = "Why does a lock guard need its own Sync rule?"
+body = """
+This matters if you write your own lock. `Sync` means threads may safely share a `&T`. `Cell` is not `Sync`, because it changes a value without any synchronisation.
+
+Here are the two rules for one of the file's locks, cut down to their types.
+
+```rust title="The lock's rule and the guard's rule"
+use std::cell::UnsafeCell;
+use std::sync::atomic::AtomicBool;
+
+pub struct TtasLock<T> {
+    locked: AtomicBool,
+    data: UnsafeCell<T>,
+}
+// Threads may share the lock if T may move between threads.
+unsafe impl<T: Send> Sync for TtasLock<T> {}
+
+pub struct TtasGuard<'a, T>(&'a TtasLock<T>);
+// Sharing a guard shares a &T, so T itself must be Sync.
+unsafe impl<T: Sync> Sync for TtasGuard<'_, T> {}
+
+fn main() {}
+```
+
+The lock needs only `T: Send`, since one thread at a time gets in. Without the guard's own rule, Rust would decide the guard's `Sync` from its `&TtasLock<T>` field. A `Cell` is `Send`, so its guard could be shared. That would be **unsound**: safe code could cause undefined behaviour.
+
+With the rule, sharing a guard of a `Cell` fails, as it does with the standard guard:
+
+```rust compile_fail=E0277
+use std::cell::Cell;
+use std::sync::Mutex;
+
+fn main() {
+    let lock = Mutex::new(Cell::new(0u64));
+    let guard = lock.lock().unwrap();
+    let shared = &guard;
+    std::thread::scope(|s| {
+        s.spawn(move || shared.set(shared.get() + 1));
+    });
+}
+```
+
+The compiler says: `` error[E0277]: `Cell<u64>` cannot be shared between threads safely ``. A compile-time check in the file protects this rule.
+"""
+
+[[sections]]
+heading = "What can go wrong?"
+body = """
+**Nobody closes the channel.** This `Channel<T>` has no separate sender and receiver ends. If your producers finish without calling `close`, receivers wait forever. If consumers stop while the queue is full, senders wait too.
+
+**A thread panics while holding the mutex.** The standard mutex becomes **poisoned**, a warning that data may be half-updated. This file calls `unwrap`, so later lock attempts panic.
+"""
+
+[[sections]]
+heading = "Should you use this in your own code?"
+body = """
+Usually, no. For one receiver, use `std::sync::mpsc::sync_channel`, which is bounded and notices when the other side is gone. For several receivers, consider the `crossbeam-channel` crate.
+
+In tests, close the channel while threads wait, and fail any test that hangs.
+"""
+
+[[connections]]
+kind = "before"
+title = "OS threads"
+link = "/cookbook/p/threads-channels"
+why = "Start here if spawning and joining threads, `Send` or `Sync` are new."
+
+[[connections]]
+kind = "practise"
+title = "A bounded blocking queue with Condvar"
+link = "/p/c1-blocking-queue"
+level = "similar"
+why = "Solve it before reading how the bounded channel works here, or opening the code. It asks for more operations."
+
+[[connections]]
+kind = "practise"
+title = "A bounded MPMC channel with disconnect"
+link = "/p/c2-bounded-channel"
+level = "similar"
+why = "It asks for a different interface and rules for ending. This page does not provide the whole solution."
+
+[[connections]]
+kind = "practise"
+title = "A thread pool with results and graceful shutdown"
+link = "/p/c2-thread-pool"
+level = "related"
+why = "Waiting on shared work returns inside a larger design. This page does not solve it."
+
+[[connections]]
+kind = "returns"
+title = "Bounded channels and backpressure"
+link = "/cookbook/p/bounded-channel"
+why = "See the choice between waiting and refusing work in Tokio's async channel."
+
+[[connections]]
+kind = "returns"
+title = "Thread pool work stealing"
+link = "/cookbook/p/thread-pool-work-stealing"
+why = "Continue to how a pool of threads shares work."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "It starts by handing work between threads and returns to waiting several times."
+
+[[sources]]
+title = "Rust standard library: Condvar"
+url = "https://doc.rust-lang.org/std/sync/struct.Condvar.html"
+note = "Check what wait and notify promise, including spurious wake-ups."
+
+[[sources]]
+title = "Rust standard library: Mutex"
+url = "https://doc.rust-lang.org/std/sync/struct.Mutex.html"
+note = "Read how locking and poisoning work."
+
+[[sources]]
+title = "Rust standard library: MutexGuard"
+url = "https://doc.rust-lang.org/std/sync/struct.MutexGuard.html"
+note = "Find the rule that a guard is Sync only when its data is Sync."
+
+[[sources]]
+title = "Rust standard library: thread::park"
+url = "https://doc.rust-lang.org/std/thread/fn.park.html"
+note = "Use it to follow ParkMutex and MyCondvar."
+
+[[sources]]
+title = "Rust Atomics and Locks: Building a Spin Lock"
+url = "https://mara.nl/atomics/building-spinlock.html"
+note = "See a spin lock guard with the correct Send and Sync bounds."
+
+[[sources]]
+title = "Rust Atomics and Locks: Building Our Own Locks"
+url = "https://mara.nl/atomics/building-locks.html"
+note = "Go deeper into futex-based mutexes and condition variables."
+
+[[sources]]
+title = "parking_lot_core documentation"
+url = "https://docs.rs/parking_lot_core/latest/parking_lot_core/"
+note = "Read how parking_lot keeps its queues of sleeping threads."
+
+[[sources]]
+title = "Rust standard library: sync_channel"
+url = "https://doc.rust-lang.org/std/sync/mpsc/fn.sync_channel.html"
+note = "The ready-made bounded channel with one receiver."
+
+[[sources]]
+title = "crossbeam-channel documentation"
+url = "https://docs.rs/crossbeam-channel/latest/crossbeam_channel/"
+note = "A library channel that allows several receivers."

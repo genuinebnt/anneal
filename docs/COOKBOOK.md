@@ -26,7 +26,8 @@ A reference to look things up in: how something works, the code for it, and what
 | API (`/api/cookbook`, `/api/cookbook/pages/{id}`) | `crates/api/src/cookbook.rs` |
 | Web pages: front page, subject, reading view, code viewer | `web/src/pages/cookbook/`, `web/src/styles/cookbook.css` |
 | Page renderer, shared with System design | `web/src/components/SdMd.tsx` |
-| Browser tests (every page is opened) | `web/e2e/cookbook.spec.ts` |
+| Browser tests (every page is opened) | `web/e2e/cookbook.spec.ts`, `web/e2e/cookbook-lesson.spec.ts` |
+| Lessons: format, blocks, links, readability; and how the web draws them | `crates/content/src/lesson.rs`; `web/src/pages/cookbook/Lesson.tsx`, `web/src/styles/cookbook-lesson.css` |
 
 A page about code names its files (`code = [...]`, relative to `cookbook/`); the code is not copied into the page. The
 Docker image copies `cookbook/` for this.
@@ -58,6 +59,53 @@ renaming either changes the address.
 
 Add it to `SUBJECTS` in `crates/content/src/cookbook.rs`, give it a colour in `web/src/pages/cookbook/shared.tsx`, and add
 its header tab in `web/src/components/Header.tsx`.
+
+## Hand-written lessons
+
+A lesson is `content/cookbook/lessons/<subject>/<page id>.toml`. It replaces the generated page of that id and keeps its
+address, subject, module, chapter and order. These come from the generated page: the lesson's copies are not used, so a
+change to the outline cannot move a lesson by mistake. Never edit the generated page; the converter never writes or deletes
+a lesson, and it changes nothing if a run would leave a lesson without a page (a renamed guide title or file).
+Check it with `python3 -m unittest discover -s tools/cookbook -p 'test_*.py'`.
+
+    kind = "lesson"
+    title, module, chapter, chapter_order, order, code   # copied from the generated page
+    lede = "one plain sentence"
+    summary = """In short: 50-100 words of Markdown."""
+    [[sections]]        # heading, body
+    [[connections]]     # kind = before | practise | returns | project; title; why; link (optional for project);
+                        # level (practise only) = related | similar | exact. An exact one stays closed until asked.
+    [[sources]]
+
+**Full code that gives away an exercise.** Add `code_spoils`, a list of the exercises (`/p/<problem-id>`) or series
+(`/rust/series/<id>`) the page's `code` gives away, as a top-level key above the first `[[…]]`:
+
+    code_spoils = ["/p/c4-bounded-fan-out"]
+
+The reading page then says which exercises the code gives away much of (by their own titles) and keeps the code viewer closed
+until the reader opens it; Jump to code lands on the closed block. `validate` refuses an address that is not a problem or series, a
+repeat, and `code_spoils` on a page with no `code`. It covers the full code only. A walkthrough draws the whole file, whatever lines it
+highlights, so on such a page put it in a `:::deeper` fold that names the exercise, and the same for a snippet that gives
+the answer away.
+
+A section body may hold three fenced blocks, each with TOML inside: `stepper` (`caption`, two or more `[[frame]]` with
+`title`, `text`, `lanes = [{ name, items, slots? }]`), `walkthrough` (`file`, one of `code`; `[[step]]` with `title`,
+`lines = "10-18"`, `text`) and `compare` (`takeaway`, `[wrong]` and `[fixed]` with `title`, `code`, `result`). A line of
+three backticks ends the block, so use `~~~` for a fence inside block text.
+
+- **Backslashes:** `body` is a `"""` string, so TOML reads its escapes first, also inside `'''` code in a block. Write
+  `\\n` for Rust's `\n`. A single `\n` or `\"` is changed without any error.
+- **Anchors:** problems point at section headings of some pages (`section = "cb-…"`); keep those headings or update the
+  problem. No section may be headed Connections, Sources, Methods or In short.
+- **Links** to this site start with `/cookbook/p/`, `/p/` or `/rust/series/` (or `#cb-…` on the same page) and must lead
+  somewhere.
+- A bad lesson is reported and the generated page stays in its place.
+- **Readability** (`anneal validate` only, lessons only): no paragraph over 90 words and no sentence over 35 in the summary,
+  section bodies or block text, not counting code and link addresses. Aim for 70 and 30. List items and table cells count
+  on their own.
+
+The loader sends each block to the web app as JSON. `web/e2e/fixtures/lesson-page.json` is what it makes of
+`crates/content/tests/fixtures/lesson.toml` (a Rust test compares them), and `web/e2e/cookbook-lesson.spec.ts` serves it.
 
 ## Page format
 

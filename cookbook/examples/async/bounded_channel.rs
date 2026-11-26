@@ -4,7 +4,8 @@
 //! COMMON USES: producer/consumer queues where memory must stay bounded: backpressure is the whole point.
 //!
 //! Pattern: a bounded `mpsc` makes producers wait (`send().await`) or fail fast (`try_send`) when the
-//! consumer is slow, so memory stays bounded. An unbounded channel just grows until the process dies.
+//! queue is full. The capacity limits QUEUED messages only: not their size, and not the messages held by tasks
+//! waiting in `send`. An unbounded channel never makes a sender wait, so a backlog can grow until memory runs out.
 //! Docs: https://docs.rs/tokio/latest/tokio/sync/mpsc/
 #![allow(dead_code)]
 use std::time::{Duration, Instant};
@@ -44,5 +45,8 @@ async fn main() {
         start.elapsed()
     );
     drop(tx);
-    println!("consumer got {:?}", consumer.await.unwrap());
+    let got = consumer.await.unwrap();
+    // 2 and 3 were refused by `try_send` and never retried; everything accepted arrives once, in order
+    assert_eq!(got, [0, 1, 10, 11, 12, 13]);
+    println!("consumer got {got:?}");
 }

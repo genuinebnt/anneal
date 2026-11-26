@@ -1,0 +1,289 @@
+title = "Graceful shutdown"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 269
+kind = "lesson"
+level = "intermediate"
+lede = "How to stop a worker without silently dropping the jobs it already accepted."
+code = ["examples/async/graceful_shutdown.rs"]
+summary = """
+A graceful shutdown stops new work, deals with work already accepted, and then exits. Use it when a deploy or Ctrl+C could interrupt jobs that matter. Finishing everything can take too long, so set a time limit and decide what happens to unfinished jobs. The example signals a Tokio worker, which closes its job queue before draining it, but sets no time limit.
+"""
+
+[[sections]]
+heading = "What breaks if the process exits right away?"
+body = """
+Picture a queue of emails to send. Each caller adds a job and gets `Ok` back. Then you deploy a new version, and the old process has to stop.
+
+If `main` returns now, Tokio won't finish your spawned tasks for you. A running job may be dropped at an `.await`, where it pauses, and queued jobs never run. Yet that `Ok` was a promise to your caller.
+
+A graceful shutdown keeps it in three steps:
+
+1. Stop accepting new work.
+2. Deal with the work you already accepted.
+3. Wait until the workers have exited.
+"""
+
+[[sections]]
+heading = "How does the worker hear about it?"
+body = """
+The worker can't do any of this until it hears about the stop. In the example, a bounded `mpsc` channel carries up to 16 queued jobs from senders to one receiver. A `watch` channel keeps only the latest value, here a stop flag.
+
+Tokio's `select!` macro lets the worker wait for both at once. When one wait completes, its branch runs and the other wait is dropped. Both `recv` and `changed` are **cancel safe**, so dropping their unfinished calls loses nothing.
+
+```walkthrough
+file = "examples/async/graceful_shutdown.rs"
+[[step]]
+title = "Create two channels"
+lines = "92-93"
+text = "Jobs and the stop signal travel separately. A full job queue can't hold back the signal."
+[[step]]
+title = "Wait for either one"
+lines = "31-39"
+text = "A stop signal breaks the loop, and so does a closed job channel. A job runs inside its branch, so the signal can't cancel it halfway."
+[[step]]
+title = "Close, then drain"
+lines = "40-45"
+text = "`close` stops new sends. The loop then receives until `recv` returns `None`, which means nothing accepted is left."
+[[step]]
+title = "Queue, then stop"
+lines = "97-100"
+text = "All five sends finish before `main` sends the stop signal. This is the easy case."
+[[step]]
+title = "Wait for the worker"
+lines = "101-103"
+text = "Awaiting the worker's handle keeps `main` alive until the worker ends. It also returns the jobs that ran."
+[[step]]
+title = "Test the hard case"
+lines = "50-60"
+text = "A slot is reserved before stop and filled only after the worker has closed the queue. The job must still run."
+```
+
+By default, `select!` checks its branches in random order, so the worker may take jobs before it notices the flag.
+"""
+
+[[sections]]
+heading = "Why not stop when the queue looks empty?"
+body = """
+It's tempting to call `try_recv` until it fails. But an empty answer from `try_recv` only means no message is ready now. For example, a sender can call `reserve` to hold a slot, then fill it later using the **permit** it gets back.
+
+A `try_recv` loop doesn't wait for that permit. The worker can exit, and the later `permit.send` reports no error as the job vanishes.
+
+```compare
+takeaway = "close() sets a boundary, and recv() waits for what was accepted before it. The cost is that a sender holding a permit can delay shutdown."
+[wrong]
+title = "Stop when the queue looks empty"
+code = '''
+async fn drain(mut jobs: mpsc::Receiver<u32>) -> Vec<u32> {
+    let mut done = Vec::new();
+    while let Ok(job) = jobs.try_recv() {
+        done.push(job);
+    }
+    done // returning drops `jobs`
+}
+'''
+result = "With job 1 queued and a slot reserved for job 2, it returned `[1]`. `permit.send(2)` then ran without an error, and job 2 was lost."
+[fixed]
+title = "Close, then receive to the end"
+code = '''
+async fn drain(mut jobs: mpsc::Receiver<u32>) -> Vec<u32> {
+    jobs.close(); // from now on, a new send fails and returns the job
+    let mut done = Vec::new();
+    while let Some(job) = jobs.recv().await {
+        done.push(job);
+    }
+    done
+}
+'''
+result = "In the same case, it waited for the permit and returned `[1, 2]`."
+```
+
+A busy producer causes a second problem. If it refills the queue as fast as you empty it, a `try_recv` loop never ends. After `close`, its next send fails, so no new work can keep the drain going.
+
+```stepper
+caption = "A drain that closes the queue first"
+[[frame]]
+title = "Normal work"
+text = "The worker runs job 1 while jobs 2 and 3 wait."
+lanes = [ { name = "Producer", items = ["has job 4"] }, { name = "Queue", items = ["2", "3"], slots = 3 }, { name = "Worker", items = ["running 1"] } ]
+[[frame]]
+title = "Stop is requested"
+text = "The flag changes, but the worker is busy with job 1. The queue stays open, so job 4 gets in."
+lanes = [ { name = "Producer", items = ["job 4 accepted"] }, { name = "Queue", items = ["2", "3", "4"], slots = 3 }, { name = "Worker", items = ["running 1"] } ]
+[[frame]]
+title = "The worker closes the queue"
+text = "Job 1 is done, and the worker sees the flag. A send of job 5 now fails and hands the job back."
+lanes = [ { name = "Producer", items = ["keeps job 5"] }, { name = "Queue (closed)", items = ["2", "3", "4"], slots = 3 }, { name = "Worker", items = ["closing"] } ]
+[[frame]]
+title = "It drains"
+text = "The worker receives and runs jobs 2, 3 and 4."
+lanes = [ { name = "Producer", items = ["keeps job 5"] }, { name = "Queue (closed)", items = ["3", "4"], slots = 3 }, { name = "Worker", items = ["running 2"] } ]
+[[frame]]
+title = "It exits"
+text = "The queue is closed and empty with no permits left, so `recv` returns `None`."
+lanes = [ { name = "Producer", items = ["keeps job 5"] }, { name = "Queue (closed)", items = [], slots = 3 }, { name = "Worker", items = ["exited"] } ]
+```
+
+As the second frame shows, setting the flag doesn't close the queue. If you must refuse work the moment stop is requested, design for that. Also stop any outer source of work, such as incoming client requests.
+"""
+
+[[sections]]
+heading = "What if finishing takes too long?"
+body = """
+A stuck job can make a drain wait forever. So set a **grace period**, a fixed time allowed for finishing. The simplest version limits how long you wait for the worker, starting when you send the signal.
+
+```rust title="Give up on the worker after a grace period"
+async fn wait_with_deadline(mut worker: JoinHandle<u32>, grace: Duration) -> Option<u32> {
+    match timeout(grace, &mut worker).await {
+        Ok(result) => Some(result.expect("worker panicked")),
+        Err(_) => {
+            worker.abort(); // dropping the handle would leave the task running
+            let _ = worker.await; // wait until the task is really gone
+            None
+        }
+    }
+}
+```
+
+Passing `&mut worker` means you still own the handle after a timeout. `abort` can only cancel a task when it pauses. It won't stop a loop that never pauses, or `spawn_blocking` work that has started.
+
+This version doesn't report which jobs finished. Queued jobs are discarded, and one may be half done. If that matters, store jobs durably and make running one twice harmless.
+"""
+
+[[sections]]
+heading = "Where does the stop signal come from?"
+body = """
+The example sends the stop signal from `main` and listens for no operating system signal. **SIGTERM** is the usual Unix request to terminate, and Ctrl+C sends **SIGINT**. This Unix-only function listens for both.
+
+```rust title="Turn a Unix signal into the stop flag"
+async fn stop_on_signal(stop_tx: watch::Sender<bool>) -> std::io::Result<()> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    tokio::select! {
+        _ = terminate.recv() => {}
+        result = tokio::signal::ctrl_c() => result?,
+    }
+    let _ = stop_tx.send(true); // an error only means every worker has gone
+    Ok(())
+}
+```
+
+Spawn it early as its own task, with Tokio's `signal` feature enabled. Before the listener exists, either signal ends the process by default. After Tokio registers it, a second Ctrl+C won't kill the program unless your code handles it.
+
+By default, Kubernetes gives a pod 30 seconds, then force-kills what still runs. Any `preStop` hook uses part of that time, so set your own limit lower. Traffic routing changes alongside shutdown, so new requests may not stop instantly.
+"""
+
+[[sections]]
+heading = "Which way of signalling should you use?"
+body = """
+| Your situation | A good choice | Watch out for |
+| --- | --- | --- |
+| Workers should stop when there are no more senders | Drop every `mpsc` sender, then receive until `None` | One forgotten sender keeps the channel open |
+| The receiver must refuse new jobs while senders still exist | `Receiver::close`, then receive until `None` | Unused permits delay the end |
+| Several tasks need one "stop" flag | A `watch` channel | A late subscriber can miss the change |
+| You need to cancel groups of tasks | `CancellationToken` from `tokio-util` | Each task must listen and clean up |
+
+A receiver made with `subscribe` treats the current value as already seen. If stop was sent earlier, its `changed()` call keeps waiting. Use `wait_for(|stop| *stop)` when the current value should count.
+
+All of this works for async tasks that wait on your signal. A thread stuck in a blocking standard-library call isn't waiting on it. Stopping a blocking server needs a different design, which the practice links cover.
+
+To test your own shutdown, don't only queue jobs before stopping. Reserve a permit before you stop, or keep a producer running. Then check that every accepted job is processed or reported.
+"""
+
+[[connections]]
+kind = "before"
+title = "Bounded channels and backpressure"
+link = "/cookbook/p/bounded-channel"
+why = "Why the job queue has a limit, and what happens to senders when it is full."
+
+[[connections]]
+kind = "before"
+title = "Cancellation with select!, and timeouts"
+link = "/cookbook/p/select-cancel"
+why = "How one async wait can interrupt another."
+
+[[connections]]
+kind = "before"
+title = "Cancellation safety"
+link = "/cookbook/p/async-cancel-safety"
+why = "What can be lost when select! drops an unfinished operation."
+
+[[connections]]
+kind = "practise"
+title = "Shut down without losing work"
+link = "/p/c4-drain-with-deadline"
+why = "A stricter worker task with a time limit. This page covers only part of the technique it needs."
+level = "similar"
+
+[[connections]]
+kind = "practise"
+title = "Stop a server that is waiting"
+link = "/p/b7-stop-a-listening-server"
+why = "Shutdown for a server built on threads and sockets. This page covers async tasks only."
+level = "related"
+
+[[connections]]
+kind = "practise"
+title = "Shut down cleanly"
+link = "/p/b8-shut-down-cleanly"
+why = "The last capstone step of From threads to a web server. Its starter contains code for earlier steps."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "A generic async worker pool"
+link = "/cookbook/p/worker-pool"
+why = "The drain question returns when many jobs run at once."
+
+[[connections]]
+kind = "returns"
+title = "Structured concurrency on tokio"
+link = "/cookbook/p/structured-concurrency-cancellation"
+why = "Covers cancelling and waiting for whole groups of tasks."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "This series ends with a server that has to shut down."
+
+[[sources]]
+title = "Tokio guide: graceful shutdown"
+url = "https://tokio.rs/tokio/topics/shutdown"
+note = "A short tour of deciding to stop, telling tasks and waiting for them."
+
+[[sources]]
+title = "mpsc::Receiver, including close"
+url = "https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Receiver.html#method.close"
+note = "The rules for closing a queue, draining it and outstanding permits."
+
+[[sources]]
+title = "tokio::select!"
+url = "https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety"
+note = "Lists cancel-safe operations. The same page explains random and biased branch order."
+
+[[sources]]
+title = "tokio::sync::watch"
+url = "https://docs.rs/tokio/latest/tokio/sync/watch/index.html"
+note = "Explains when a value counts as seen."
+
+[[sources]]
+title = "JoinHandle"
+url = "https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html"
+note = "What dropping and aborting a task handle do."
+
+[[sources]]
+title = "Runtime shutdown"
+url = "https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html#shutdown"
+note = "What happens to unfinished tasks when the runtime is dropped."
+
+[[sources]]
+title = "tokio::signal"
+url = "https://docs.rs/tokio/latest/tokio/signal/index.html"
+note = "Signal listeners and their effect on the process's default behaviour."
+
+[[sources]]
+title = "Kubernetes: termination of pods"
+url = "https://kubernetes.io/docs/concepts/workloads/pods/pod-termination/"
+note = "The order of preStop, the termination signal, the grace period and the forced kill."

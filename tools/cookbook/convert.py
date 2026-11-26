@@ -8,6 +8,10 @@ The page body is the Markdown anneal already renders (web/src/components/SdMd.ts
 folds become `:::deeper` blocks, side notes become `<aside data-call="…">`, and everything else stays plain HTML.
 The guides' exercises and "Done when" checklists are left out (the cookbook is reference only); their reading
 links become the page's sources. Which section goes in which chapter is tools/cookbook/outline.json.
+
+Hand-written lessons (content/cookbook/lessons/<subject>/<id>.toml) are never written or deleted here. A lesson replaces
+the generated page of the same id when the content is loaded, and takes that page's place from it, so the generated page
+is still made. If a run would no longer make a lesson's page in its subject, nothing is changed and the run fails.
 """
 import html, json, pathlib, re, sys
 from html.parser import HTMLParser
@@ -384,6 +388,16 @@ def write_page(out, subject, pid, fields, sections, sources, code=()):
     (d / f"{pid}.toml").write_text("\n".join(lines) + "\n")
 
 
+# folders of content/cookbook that are written by hand: nothing in them is ever deleted or written
+BY_HAND = ("samples", "lessons")
+
+
+def stranded_lessons(out, planned):
+    """The lessons whose page this run would not make. `planned` holds (subject, id) pairs."""
+    lessons = out / "lessons"
+    return [f for f in sorted(lessons.rglob("*.toml")) if (f.parent.name, f.stem) not in planned or f.parent.parent != lessons]
+
+
 def main(db, co):
     outline = json.loads((ROOT / "tools/cookbook/outline.json").read_text())
     files = {"db": sections_of(db), "co": sections_of(co)}
@@ -420,8 +434,12 @@ def main(db, co):
                 pid = fresh(slug(stem), "code" if kind == "code" else "project")
                 plan.append((order, mod, ci, ch, kind, x, pid))
     out = ROOT / "content/cookbook"
+    stranded = stranded_lessons(out, {(t[1]["subject"], t[-1]) for t in plan})
+    if stranded:
+        sys.exit("nothing was changed: these lessons would have no page to replace (was a guide title or a file renamed, or a page moved to another subject?)\n"
+                 + "\n".join(f"  {f.relative_to(ROOT)}" for f in stranded))
     for old in out.glob("*/*.toml"):
-        if old.parent.name != "samples":
+        if old.parent.name not in BY_HAND:
             old.unlink()
     made = {"guide": 0, "code": 0, "crate": 0}
     for order, mod, ci, ch, kind, x, pid in sorted(plan, key=lambda t: t[0]):

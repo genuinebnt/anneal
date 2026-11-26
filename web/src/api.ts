@@ -1026,9 +1026,10 @@ export interface CbMethod { type: string; name: string; signature: string; since
 export interface CbLab { title: string; after: string | null; run: boolean; test: boolean; files: string[]; contents: { path: string; text: string }[]; recorded: { run: string; tests: string; passed: number; stamp: string; problems: string } | null }
 export interface CbPage {
     id: string; subject: string; title: string; module: string; chapter: string; kind: string; lede: string; status: string | null; level: string | null; origin: string | null;
-    summary: string[]; glance: { label: string; value: string }[]; sections: { heading: string; body: string }[];
+    summary: string[]; in_short?: string; connections?: CbConnection[]; code_spoils?: { link: string; title: string }[]; glance: { label: string; value: string }[]; sections: { heading: string; body: string }[];
     terms: { term: string; means: string; section: string }[]; sources: CbSource[]; methods: CbMethod[]; labs: CbLab[]; illustrative: string[]; verified: Record<string, unknown>;
 }
+export interface CbConnection { kind: "before" | "practise" | "returns" | "project"; title: string; link: string | null; why: string; level: "related" | "similar" | "exact" | null }
 export interface CbNear { id: string; title: string; chapter: string }
 export interface CbPageView { page: CbPage; previous: CbNear | null; next: CbNear | null; linked_from: CbRow[] }
 

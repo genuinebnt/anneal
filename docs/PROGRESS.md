@@ -9,6 +9,12 @@ the date below. Do not let it drift: a wrong line here costs the next agent more
 
 Last updated: **2026-11-02** (SQL course modules 5 to 7, which finish part I; system design in depth and the reading view, error screens, the crash fix, the SQL performance course pilot with its plan pipeline and plan view; see section 0 for what to do next).
 
+## Cookbook lessons (local, not committed or released; 2026-11-27)
+
+The format and reading features for hand-written lessons are built: the loader and converter protection, the In short
+block, stepper, code walkthrough, wrong and fixed pair and Connections box, with link, block and readability checks. No
+lesson is in the repository yet. Waiting for review of the screens. See "Hand-written lessons" in [COOKBOOK.md](COOKBOOK.md).
+
 ## Series (local, not committed or released; 2026-11-26)
 
 The series feature is built from the approved `docs/mockups/series.html`: `content/series/*.toml`, the page at

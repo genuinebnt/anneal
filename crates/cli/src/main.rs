@@ -120,6 +120,8 @@ async fn main() -> anyhow::Result<ExitCode> {
             let problems: usize = catalog.tracks.iter().map(|t| t.problems.len()).sum();
             let mut issues: Vec<String> = issues.iter().map(ToString::to_string).collect();
             issues.extend(unknown_crates(&catalog));
+            // long paragraphs and sentences in hand-written lessons fail the check, but do not stop the server
+            issues.extend(anneal_content::lesson::readability(&cli.content).iter().map(ToString::to_string));
             for issue in &issues {
                 println!("{issue}");
             }

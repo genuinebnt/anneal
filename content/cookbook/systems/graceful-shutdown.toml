@@ -18,13 +18,15 @@ worker pool / service stages.
 [[sections]]
 heading = "Common uses"
 body = """
-servers and workers: finish in-flight work on SIGTERM instead of dropping jobs (Kubernetes rolling deploys).
+servers and workers: finish accepted work before a restart or deploy instead of dropping it. This example sends the stop signal from `main`; it does not listen for operating system signals such as SIGTERM.
 """
 
 [[sections]]
 heading = "Design notes"
 body = """
-Pattern: a `watch` channel broadcasts "shutting down". The worker `select!`s between a job and that signal; when it fires, it drains jobs already queued (`try_recv`) before returning. No job is lost.
+Pattern: a `watch` channel broadcasts "shutting down". The worker `select!`s between a job and that signal; when it sees it, it calls `close` on the job channel and then `recv`s until `None`. After `close`, new sends fail and return the job, while queued jobs and slots already reserved with `reserve` are still received.
+
+So every job the channel accepted is run, as long as the worker is not aborted or panics. There is no time limit: a slot that is reserved and never used or dropped keeps the worker waiting. `try_recv` until it fails is not enough: "empty" does not mean "nothing more is coming".
 
 Docs: <https://tokio.rs/tokio/topics/shutdown>
 """

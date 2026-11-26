@@ -1,6 +1,6 @@
 import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
-import { createContext, useContext } from "react";
+import { Fragment, createContext, useContext } from "react";
 import { CODE_LANGS, highlightLines } from "../highlight";
 import { fromPostgresJson, type PlanFile } from "../plan";
 import { PlanView } from "./PlanView";
@@ -163,6 +163,7 @@ export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
     const [lit, setLit] = useState<number | null>(null);
     const b = blocks[Math.min(tab, blocks.length - 1)]!;
     const lines = useMemo(() => highlightLines(b.lang, b.code), [b]);
+    const stops = useContext(LineStopsContext);
     const ref = useRef<HTMLElement>(null);
     useEffect(() => {
         const m = new RegExp(`^#${id}-L(\\d+)$`).exec(window.location.hash);
@@ -202,6 +203,7 @@ export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
                     <div key={i} className={`sd-ln${b.hl.has(i + 1) ? " sd-hl" : ""}${lit === i + 1 ? " sd-lit" : ""}`}>
                         <button
                             className="sd-lnum"
+                            tabIndex={stops ? undefined : -1}
                             aria-label={`Copy a link to line ${i + 1}`}
                             onClick={() => {
                                 setLit(i + 1);
@@ -220,6 +222,13 @@ export function CodeGroup({ blocks, id }: { blocks: CodeSeg[]; id: string }) {
 
 /** The plans a page shows, by id (the page's API response carries them). */
 export const PlansContext = createContext<Record<string, PlanFile>>({});
+
+/** Whether line numbers are tab stops. A cookbook lesson turns it off: its snippets would otherwise put a stop on every line
+ *  between the reader and the next control. A pointer can still press a number. */
+export const LineStopsContext = createContext(true);
+
+/** Fenced blocks a page draws itself, by the fence's name (a cookbook lesson's stepper, walkthrough and compare). */
+export const FencesContext = createContext<Record<string, (code: string, id: string) => ReactElement>>({});
 
 /** A ```plan block: the plan captured for its id, drawn with the plan view. */
 function PlanBlock({ id }: { id?: string }) {
@@ -242,19 +251,22 @@ function PlanBlock({ id }: { id?: string }) {
     );
 }
 
-/** The controls the Idea tab's lab uses: back, next, play or pause, restart, the step count and a tick per step. */
-export function StepControls({ i, n, playing, set, play }: { i: number; n: number; playing: boolean; set: (i: number) => void; play: (on: boolean) => void }) {
+/** The controls the Idea tab's lab uses: back, next, play or pause, restart, the step count and a tick per step. Without
+ *  `play` there is no Play button, and Back and Next stay focusable at the ends, so the keyboard keeps its place. */
+export function StepControls({ i, n, playing = false, set, play }: { i: number; n: number; playing?: boolean; set: (i: number) => void; play?: (on: boolean) => void }) {
+    const stop = () => play?.(false);
+    const end = (at: boolean) => (play ? { disabled: at } : { "aria-disabled": at });
     return (
         <>
             <div className="id-ctl">
-                <button onClick={() => { play(false); set(Math.max(0, i - 1)); }} disabled={i === 0}>← Back</button>
-                <button onClick={() => { play(false); set(Math.min(n - 1, i + 1)); }} disabled={i === n - 1}>Next →</button>
-                <button className={playing ? "id-on" : ""} onClick={() => { if (!playing && i >= n - 1) set(0); play(!playing); }}>{playing ? "Pause" : "Play"}</button>
-                <button onClick={() => { play(false); set(0); }}>Restart</button>
+                <button type="button" onClick={() => { stop(); set(Math.max(0, i - 1)); }} {...end(i === 0)}>← Back</button>
+                <button type="button" onClick={() => { stop(); set(Math.min(n - 1, i + 1)); }} {...end(i === n - 1)}>Next →</button>
+                {play && <button type="button" className={playing ? "id-on" : ""} onClick={() => { if (!playing && i >= n - 1) set(0); play(!playing); }}>{playing ? "Pause" : "Play"}</button>}
+                <button type="button" onClick={() => { stop(); set(0); }}>Restart</button>
                 <span className="id-n">step {i + 1} of {n}</span>
             </div>
             <div className="id-ticks" role="group" aria-label="Steps">
-                {Array.from({ length: n }, (_, k) => <button key={k} className={k < i ? "id-past" : k === i ? "id-now" : ""} aria-label={`Step ${k + 1}`} aria-current={k === i ? "step" : undefined} onClick={() => { play(false); set(k); }} />)}
+                {Array.from({ length: n }, (_, k) => <button key={k} className={k < i ? "id-past" : k === i ? "id-now" : ""} aria-label={`Step ${k + 1}`} aria-current={k === i ? "step" : undefined} onClick={() => { stop(); set(k); }} />)}
             </div>
         </>
     );
@@ -317,6 +329,7 @@ function Deeper({ title, meta, text, id, start }: { title: string; meta?: string
 
 function Blocks({ text, id, start }: { text: string; id: string; start: number }) {
     const segs = useMemo(() => segments(text), [text]);
+    const fences = useContext(FencesContext);
     const out: ReactElement[] = [];
     let code = 0;
     let notes = start;
@@ -333,6 +346,7 @@ function Blocks({ text, id, start }: { text: string; id: string; start: number }
             notes += countNotes(s.text);
         }
         else if (s.lang === "plan") out.push(<PlanBlock key={i} id={s.id} />);
+        else if (Object.hasOwn(fences, s.lang)) out.push(<Fragment key={i}>{fences[s.lang]!(s.code, `${id}-b${i}`)}</Fragment>);
         else {
             // consecutive code blocks that name the same group are one block with a tab per language
             const group: CodeSeg[] = [s];

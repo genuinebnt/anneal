@@ -8,10 +8,14 @@
 //!     then try the CAS; exponential backoff via `spin_loop` hints, escalating to `yield_now` when oversubscribed.
 //! (3) `ParkMutex`, a futex-STYLE mutex: one `AtomicU32` state (0 unlocked, 1 locked, 2 locked+contended) so the uncontended
 //!     path is one CAS and unlock is one swap with NO syscall unless state == 2. Waiters sleep with `thread::park` and sit in
-//!     a queue. Real implementations (std on Linux, parking_lot, Linux pthread) wait on the state word itself with the futex
-//!     syscall (the kernel keeps the queue and checks "value still == 2" atomically). We emulate that check by enqueueing
-//!     first and then re-trying the swap, which closes the lost-wakeup window: either the unlocker sees our queue entry
+//!     a queue. std's `Mutex` on Linux waits on the state word itself with the futex syscall (the kernel keeps the queue,
+//!     and sleeps the thread only if the value is still 2). `parking_lot` works differently: its `Mutex` holds one byte, a
+//!     sleeping thread joins a queue in a global hash table keyed by the lock's address (`parking_lot_core`), the state is
+//!     re-checked while that queue is locked, and the thread then sleeps on its own parker (a futex on Linux).
+//!     We close the same gap by enqueueing first and then re-trying the swap: either the unlocker sees our queue entry
 //!     (we enqueued before our swap, it saw our `2`), or our swap sees `0` and we take the lock.
+//!     GUARDS: each guard has an explicit `unsafe impl<T: Sync> Sync`. Without it the compiler derives `Sync` from the
+//!     `&Lock<T>` field, which needs only `T: Send`, and safe code could share a guard of a `Cell` between threads.
 //! (4) `MyCondvar` on top of it: each waiter registers a (thread, flag) pair BEFORE releasing the mutex, so a notify issued
 //!     after the release cannot be missed; the flag makes spurious `park` wakeups harmless.
 //! (5) A bounded MPMC channel = `Mutex<VecDeque>` + two Condvars (not_full / not_empty) with close semantics.
@@ -19,11 +23,12 @@
 //! WHY: spin locks are for critical sections of a few instructions with threads <= cores; with more threads than cores a
 //! preempted holder makes everyone spin, so production locks spin briefly and then sleep. Ticket locks give fairness at the
 //! price of convoying (every waiter must be scheduled in turn). Always re-check the predicate in a loop around a condvar wait.
-//! Each lock is tested for exact totals on a NON-atomic counter, so a broken lock shows up as a wrong sum.
+//! Each lock is tested for exact totals on a NON-atomic counter, so a broken lock shows up as a wrong sum. The guards'
+//! thread-safety bounds are checked at compile time (`assert_not_sync!`).
 //! COMMON USES: spinlocks in kernels (Linux uses ticket/queued spinlocks), parking_lot-style small mutexes, work queues and
 //! pipelines (bounded channels give back-pressure), semaphores for connection/IO limits, barriers in phase-based simulations.
 //! Read: https://marabos.nl/atomics/building-locks.html , https://doc.rust-lang.org/std/thread/fn.park.html , https://doc.rust-lang.org/std/sync/struct.Condvar.html
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -65,6 +70,8 @@ impl<T> TicketLock<T> {
         TicketGuard { lock: self, ticket }
     }
 }
+// SAFETY: sharing a `TicketGuard` hands out only `&T`, so it is `Sync` exactly when `T` is (as for std's `MutexGuard`).
+unsafe impl<T: Sync> Sync for TicketGuard<'_, T> {}
 impl<T> Deref for TicketGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -126,6 +133,8 @@ impl<T> TtasLock<T> {
         }
     }
 }
+// SAFETY: sharing a `TtasGuard` hands out only `&T`, so it is `Sync` exactly when `T` is (as for std's `MutexGuard`).
+unsafe impl<T: Sync> Sync for TtasGuard<'_, T> {}
 impl<T> Deref for TtasGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -208,6 +217,8 @@ impl<T> ParkMutex<T> {
         }
     }
 }
+// SAFETY: sharing a `ParkGuard` hands out only `&T`, so it is `Sync` exactly when `T` is (as for std's `MutexGuard`).
+unsafe impl<T: Sync> Sync for ParkGuard<'_, T> {}
 impl<T> Deref for ParkGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -273,7 +284,7 @@ impl MyCondvar {
     }
 }
 
-/// Bounded MPMC queue built on ParkMutex + MyCondvar (same logic as the std-based channel below).
+/// Bounded MPMC queue built on ParkMutex + MyCondvar, with the same send/recv/close rules as the std-based channel below.
 struct ParkQueue {
     st: ParkMutex<(VecDeque<u64>, bool)>, // (items, closed)
     not_empty: MyCondvar,
@@ -281,14 +292,29 @@ struct ParkQueue {
     cap: usize,
 }
 impl ParkQueue {
-    fn send(&self, v: u64) {
+    fn new(cap: usize) -> Self {
+        Self {
+            st: ParkMutex::new((VecDeque::new(), false)),
+            not_empty: MyCondvar::new(),
+            not_full: MyCondvar::new(),
+            cap,
+        }
+    }
+    /// Blocks while full. Err(v) gives the value back if the queue is (or becomes) closed.
+    fn send(&self, v: u64) -> Result<(), u64> {
         let mut g = self.st.lock();
-        while g.0.len() >= self.cap {
+        loop {
+            if g.1 {
+                return Err(v);
+            }
+            if g.0.len() < self.cap {
+                g.0.push_back(v);
+                drop(g);
+                self.not_empty.notify_one();
+                return Ok(());
+            }
             g = self.not_full.wait(g);
         }
-        g.0.push_back(v);
-        drop(g);
-        self.not_empty.notify_one();
     }
     fn recv(&self) -> Option<u64> {
         let mut g = self.st.lock();
@@ -306,6 +332,7 @@ impl ParkQueue {
     }
     fn close(&self) {
         self.st.lock().1 = true;
+        self.not_full.notify_all();
         self.not_empty.notify_all();
     }
 }
@@ -373,6 +400,9 @@ impl<T> Channel<T> {
     pub fn len(&self) -> usize {
         self.st.lock().unwrap().q.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 // ---------------- (6) semaphore and barrier ----------------
@@ -430,6 +460,34 @@ impl Barrier {
         false
     }
 }
+
+// ---------------- compile-time checks on the guards ----------------
+/// Stops compiling if any listed type is `Sync`: both impls of the trait would then apply, so `_` is ambiguous.
+macro_rules! assert_not_sync {
+    ($($t:ty),+) => {$(
+        const _: () = {
+            trait AmbiguousIfSync<A> {
+                fn check() {}
+            }
+            impl<S: ?Sized> AmbiguousIfSync<()> for S {}
+            impl<S: ?Sized + Sync> AmbiguousIfSync<u8> for S {}
+            let _ = <$t as AmbiguousIfSync<_>>::check;
+        };
+    )+};
+}
+// `Cell` is Send but not Sync, so a guard of a `Cell` must not be shareable between threads.
+assert_not_sync!(
+    TicketGuard<'static, Cell<u64>>,
+    TtasGuard<'static, Cell<u64>>,
+    ParkGuard<'static, Cell<u64>>
+);
+// A guard of a Sync value must still be shareable.
+const _: () = {
+    const fn needs_sync<S: Sync>() {}
+    needs_sync::<TicketGuard<'static, u64>>();
+    needs_sync::<TtasGuard<'static, u64>>();
+    needs_sync::<ParkGuard<'static, u64>>();
+};
 
 // ---------------- harness ----------------
 trait Lk: Sync + Send + 'static {
@@ -610,16 +668,11 @@ fn main() {
     println!("close/drain semantics ok");
 
     // custom ParkMutex + MyCondvar queue: 4x4, 100k items, tiny capacity to force blocking both ways
-    let q = Arc::new(ParkQueue {
-        st: ParkMutex::new((VecDeque::new(), false)),
-        not_empty: MyCondvar::new(),
-        not_full: MyCondvar::new(),
-        cap: 4,
-    });
+    let q = Arc::new(ParkQueue::new(4));
     let prods: Vec<_> = (0..4u64)
         .map(|p| {
             let q = q.clone();
-            thread::spawn(move || (0..25_000u64).for_each(|i| q.send(p * 25_000 + i + 1)))
+            thread::spawn(move || (0..25_000u64).for_each(|i| q.send(p * 25_000 + i + 1).unwrap()))
         })
         .collect();
     let cons: Vec<_> = (0..4)
@@ -644,6 +697,27 @@ fn main() {
         .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
     assert_eq!((n, sum), (100_000, 100_000u64 * 100_001 / 2));
     println!("ParkMutex+MyCondvar queue: no lost wakeups ({n} items)");
+
+    // ParkQueue follows the same close rules. The 10 s limit only turns a missed wake-up into a failure, not a hang.
+    let q = Arc::new(ParkQueue::new(1));
+    q.send(1).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let sender = {
+        let q = q.clone();
+        thread::spawn(move || done_tx.send(q.send(2)).unwrap())
+    };
+    thread::sleep(Duration::from_millis(30)); // let it block; the result is Err(2) either way
+    q.close();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(10)),
+        Ok(Err(2)),
+        "close must wake a blocked ParkQueue sender"
+    );
+    sender.join().unwrap();
+    assert_eq!(q.recv(), Some(1), "drain after close");
+    assert_eq!(q.send(3), Err(3), "no send after close, even with room");
+    assert_eq!(q.recv(), None);
+    println!("ParkQueue close/drain semantics ok");
 
     // semaphore: never more than 3 holders at once
     let sem = Arc::new(Semaphore::new(3));

@@ -118,9 +118,18 @@ impl Catalog {
         check_unlocks(&tracks, &mut issues);
         let retired = read_retired(root);
         let sd = crate::sd::load(root, &mut issues);
-        let cookbook = crate::cookbook::load(root, &mut issues);
+        let mut cookbook = crate::cookbook::load(root, &mut issues);
         check_cookbook_refs(&tracks, &cookbook, &mut issues);
         let series = crate::series::load(root, &tracks, &cookbook, &mut issues);
+        let titles = tracks
+            .iter()
+            .chain(&practice_tracks)
+            .flat_map(|t| &t.problems)
+            .map(|p| (format!("/p/{}", p.id), p.meta.title.clone()))
+            .chain(series.iter().map(|s| (format!("/rust/series/{}", s.id), s.title.clone())))
+            .collect();
+        crate::lesson::resolve_spoils(root, &mut cookbook, &titles, &mut issues);
+        crate::lesson::check_links(root, &cookbook, &tracks, &practice_tracks, &series, &mut issues);
         for id in tracks.iter().flat_map(|t| &t.problems).map(|p| &p.id).filter(|id| retired.contains(*id)) {
             issues.push(Issue { path: root.join("retired.txt"), message: format!("{id} is retired but also a current problem") });
         }

@@ -1,0 +1,295 @@
+title = "A generic async worker pool"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Async Rust"
+chapter_order = 4
+order = 271
+kind = "lesson"
+level = "advanced"
+code = ["examples/async/worker_pool.rs"]
+code_spoils = ["/p/c4-bounded-fan-out"]
+lede = "A worker pool accepts a stream of jobs and runs only a few of them at once."
+summary = """This pool takes jobs through a bounded queue, and a semaphore limits how many run at once. A job that panics becomes a result, so other jobs can continue. It suits a finite batch of async jobs that arrive over time. It is not ready for a long-running service, because stored results keep growing and shutdown has no deadline."""
+
+[[sections]]
+heading = "Why not start every job at once?"
+body = """
+Say 10,000 uploaded images arrive together. Resizing them all at once could overload your memory, your CPU or your storage service.
+
+A **worker pool** puts a limit between "a job arrived" and "a job is running". This one has no permanent worker tasks. Here, `workers = 3` means that at most three jobs can run at once. It is **generic**: you choose the job type, result type and async function.
+"""
+
+[[sections]]
+heading = "How does a job get through the pool?"
+body = """
+A job goes into a bounded channel. One **dispatcher** task takes jobs out. A **semaphore** counts the free running places. Before starting a job, the dispatcher takes a **permit**, which claims one place.
+
+With three running places and room for two in the queue, how many submissions can complete before any job does?
+
+```stepper
+caption = "Three running places and a queue of two"
+[[frame]]
+title = "Three jobs run"
+text = "The dispatcher has started jobs 0, 1 and 2. Each holds one permit."
+lanes = [ { name = "Caller", items = ["submitting"] }, { name = "Queue", items = [], slots = 2 }, { name = "Dispatcher", items = [] }, { name = "Running", items = ["0", "1", "2"], slots = 3 } ]
+[[frame]]
+title = "The dispatcher holds one more"
+text = "It takes job 3 from the queue, then waits for a permit. Job 3 is neither queued nor running."
+lanes = [ { name = "Caller", items = ["submitting"] }, { name = "Queue", items = [], slots = 2 }, { name = "Dispatcher", items = ["3, waiting"] }, { name = "Running", items = ["0", "1", "2"], slots = 3 } ]
+[[frame]]
+title = "The caller has to wait"
+text = "Jobs 4 and 5 fill the queue. The call to submit job 6 cannot finish yet."
+lanes = [ { name = "Caller", items = ["waiting with 6"] }, { name = "Queue", items = ["4", "5"], slots = 2 }, { name = "Dispatcher", items = ["3, waiting"] }, { name = "Running", items = ["0", "1", "2"], slots = 3 } ]
+[[frame]]
+title = "One job finishes"
+text = "If job 0 finishes first, its permit lets job 3 start. The dispatcher takes job 4, and job 6 enters the queue."
+lanes = [ { name = "Caller", items = ["6 accepted"] }, { name = "Queue", items = ["5", "6"], slots = 2 }, { name = "Dispatcher", items = ["4, waiting"] }, { name = "Running", items = ["1", "2", "3"], slots = 3 } ]
+```
+
+So the answer is six, one more than workers plus queue size. Callers waiting in `submit` also keep their jobs in memory.
+"""
+
+[[sections]]
+heading = "How does the code put the limit into practice?"
+body = """
+This section covers ideas that [At most N in flight](/p/c4-bounded-fan-out) asks you to find. To work them out yourself, solve that before reading on.
+
+The dispatcher repeats three steps: receive a job, wait for a permit, then create a task. The task holds the permit until it ends. Dropping the permit frees the place, even after a panic.
+
+Tokio's `JoinSet` holds these tasks, and keeps finished ones until you collect them. If it already holds `workers` tasks, the dispatcher collects one before adding another. It has a free permit then, so one of those tasks is ending.
+
+When you call `finish`, it drops the job sender. The dispatcher runs what is still queued, waits for its tasks and exits. Then `finish` reads all the results.
+
+The demo submits 12 jobs, and job 7 panics on purpose. The next fold shows the code, which gives away much more of that exercise.
+
+:::deeper Show the limiting code (gives away much of the fan-out exercise)
+This smaller program keeps only the limit, with six jobs and two permits.
+
+```rust
+use std::{sync::Arc, time::Duration};
+use tokio::{sync::Semaphore, task::JoinSet};
+
+#[tokio::main]
+async fn main() {
+    let places = Arc::new(Semaphore::new(2));
+    let mut running = JoinSet::new();
+    for job in 0..6 {
+        let place = places.clone().acquire_owned().await.unwrap();
+        while running.len() >= 2 {
+            running.join_next().await; // collect a finished task
+        }
+        running.spawn(async move {
+            let _place = place; // returned when this task ends
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            println!("finished {job}");
+        });
+    }
+    while running.join_next().await.is_some() {}
+}
+```
+
+In the full demo, a **barrier** holds each job until three have arrived. So the demo finishes only if three jobs really run together.
+
+```walkthrough
+file = "examples/async/worker_pool.rs"
+[[step]]
+title = "Keep the two ends"
+lines = "36-40"
+text = "The caller's handle holds the job sender, the result receiver, and a handle for waiting on the dispatcher."
+[[step]]
+title = "Set up the limits"
+lines = "48-51"
+text = "Jobs use a bounded channel and results an unbounded one. The semaphore gets `workers` permits, and `Arc` lets tasks share the job function."
+[[step]]
+title = "Wait for a place, then tidy up"
+lines = "54-64"
+text = "For each job, the dispatcher waits for a permit. While the set holds `workers` tasks, it collects one. This keeps the set within that size."
+[[step]]
+title = "Run the job and report it"
+lines = "65-78"
+text = "An outer task holds the permit while an inner task runs the job. The final `assert!` only checks that the set holds at most `workers` tasks."
+[[step]]
+title = "Submit a job"
+lines = "89-92"
+text = "`submit` waits if the job queue is full. Success means the job entered the queue, not that it finished."
+[[step]]
+title = "Close and collect"
+lines = "94-107"
+text = "`finish` drops the job sender and waits until the dispatcher has run every queued job. Then it collects the results."
+```
+
+Results arrive in finish order, so include a job ID if you need to match them to requests.
+:::
+"""
+
+[[sections]]
+heading = "How can one job panic without stopping the pool?"
+body = """
+A **panic** stops the current task with an error. Tokio catches it at the task boundary. Awaiting the task's **join handle**, returned by `tokio::spawn`, gives you a `JoinError` instead.
+
+For each job, the pool starts two tasks. The outer one holds the permit and reports an outcome: a result or a panic message. The inner one runs your job.
+
+Where you call the job function matters. In `tokio::spawn(f(job))`, Rust calls `f(job)` first, and only then spawns what it returns.
+
+If `f` panics before returning its future, the outer task fails. No outcome is sent, and the caller gets one result too few. These programs show the mistake and the fix the code file uses.
+
+```compare
+takeaway = "Calling the function inside the spawned block covers both kinds of panic. In the pool, an `Arc` handle to the function moves into that block."
+[wrong]
+title = "Call the function before spawning"
+code = '''
+use std::future::{Ready, ready};
+
+fn job(id: u32) -> Ready<u32> {
+    if id == 1 {
+        panic!("bad input");
+    }
+    ready(id)
+}
+
+#[tokio::main]
+async fn main() {
+    let outer = tokio::spawn(async {
+        let outcome = tokio::spawn(job(1)).await;
+        println!("outcome: {}", outcome.is_err());
+    });
+    println!("outer task failed: {}", outer.await.is_err());
+}
+'''
+result = "The panic message appears, then `outer task failed: true`. The outcome line never prints."
+[fixed]
+title = "Call it inside the inner task"
+code = '''
+use std::future::{Ready, ready};
+
+fn job(id: u32) -> Ready<u32> {
+    if id == 1 {
+        panic!("bad input");
+    }
+    ready(id)
+}
+
+#[tokio::main]
+async fn main() {
+    let outer = tokio::spawn(async {
+        let outcome = tokio::spawn(async { job(1).await }).await;
+        println!("outcome: {}", outcome.is_err());
+    });
+    println!("outer task failed: {}", outer.await.is_err());
+}
+'''
+result = "After the panic message, it prints `outcome: true` and `outer task failed: false`."
+```
+
+None of this helps if your build aborts the process on a panic. The demo checks a panic raised before the future too, and expects four outcomes from four jobs.
+"""
+
+[[sections]]
+heading = "What can still grow or get stuck?"
+body = """
+A limit on running jobs does not make the whole pool bounded.
+
+| Problem in this example | What you would see | What to change |
+|---|---|---|
+| The result channel has no limit and is read only in `finish` | Submit 10,000 jobs before `finish`, and up to 10,000 results wait in memory | Read results while submitting; use a bounded result channel |
+| A job never finishes | It keeps a permit, and `finish` waits forever | Decide on a timeout or cancellation rule |
+
+Bounding results needs care. If workers wait to send results but nobody reads until all workers finish, the program can deadlock. Your caller must submit jobs and read results so that both keep moving.
+
+Real image resizing is **CPU-bound**, meaning it spends its time computing. Inside an async task, that can keep other tasks from running. Tokio's `spawn_blocking` moves it to other threads, but you still need a limit.
+
+If you drop `Pool` without calling `finish`, the dispatcher is not stopped, but you can no longer collect results.
+"""
+
+[[sections]]
+heading = "When should you use this pattern?"
+body = """
+| Your situation | A reasonable choice |
+|---|---|
+| Async jobs arrive over time, and callers can pause | A bounded queue and a limit on running jobs |
+| You already have a short list of async jobs | A simpler loop that limits how many run, with no job queue |
+| Jobs spend most of their time computing | A pool built for CPU work, with a limit on waiting jobs |
+| Work must survive a restart | A queue stored outside the process, with a plan for repeated work |
+| You need to reuse database connections | A connection pool, which manages objects rather than jobs |
+
+Before real use, test a reader that falls behind and a job that never ends.
+"""
+
+[[connections]]
+kind = "before"
+title = "Bounded channels and backpressure"
+link = "/cookbook/p/bounded-channel"
+why = "Learn what a full queue does to `submit` and what the queue's limit leaves out."
+
+[[connections]]
+kind = "before"
+title = "Joinset semaphore"
+link = "/cookbook/p/joinset-semaphore"
+why = "See a smaller program that limits running work and checks the limit."
+
+[[connections]]
+kind = "practise"
+title = "At most N in flight"
+link = "/p/c4-bounded-fan-out"
+level = "similar"
+why = "Solve it before reading how this page puts the limit into practice, or opening its code. Its rules differ."
+
+[[connections]]
+kind = "practise"
+title = "A thread pool with results and graceful shutdown"
+link = "/p/c2-thread-pool"
+level = "related"
+why = "Compare the goals with a pool that uses ordinary threads. This async example does not solve it."
+
+[[connections]]
+kind = "returns"
+title = "Thread pool work stealing"
+link = "/cookbook/p/thread-pool-work-stealing"
+why = "Read about a different kind of pool, built on threads."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "This pool only drains. Continue there to think about stopping with work in progress."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "It builds worker pools with ordinary threads, then deals with overload and shutdown."
+
+[[connections]]
+kind = "project"
+title = "FlowForge task executor"
+why = "An executor that runs at most N tasks needs these same choices about waiting, failure and results."
+
+[[sources]]
+title = "Tokio: Semaphore"
+url = "https://docs.rs/tokio/latest/tokio/sync/struct.Semaphore.html"
+note = "Check how permits are handed out and returned."
+
+[[sources]]
+title = "Tokio: JoinSet"
+url = "https://docs.rs/tokio/latest/tokio/task/struct.JoinSet.html"
+note = "Read how join_next removes finished tasks, and what dropping the set does."
+
+[[sources]]
+title = "Tokio: JoinHandle"
+url = "https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html"
+note = "See what you get from a task that panics and what dropping its handle does."
+
+[[sources]]
+title = "Tokio: CPU-bound tasks and blocking code"
+url = "https://docs.rs/tokio/latest/tokio/index.html#cpu-bound-tasks-and-blocking-code"
+note = "Decide where long computations should run."
+
+[[sources]]
+title = "Tokio: spawn_blocking"
+url = "https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html"
+note = "Read its limits before moving computation there."
+
+[[sources]]
+title = "deadpool documentation"
+url = "https://docs.rs/deadpool/latest/deadpool/"
+note = "See the other kind of pool, for reusing connections and objects."

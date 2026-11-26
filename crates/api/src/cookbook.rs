@@ -5,6 +5,7 @@ use axum::extract::{Path, State};
 use serde_json::{Value, json};
 
 use anneal_content::cookbook::{Cookbook, Page, SAMPLES, SUBJECTS};
+use anneal_content::lesson::markdown_links_to;
 
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
@@ -44,6 +45,14 @@ pub async fn index(State(s): State<AppState>) -> Json<Value> {
     Json(json!({ "subjects": subjects, "samples": samples }))
 }
 
+/// Whether a lesson links to `path`: in its Markdown, or as a connection. Other pages link in HTML only.
+fn lesson_links(page: &Page, path: &str) -> bool {
+    let Some(in_short) = &page.in_short else { return false };
+    let texts = std::iter::once(in_short).chain(page.sections.iter().map(|s| &s.body));
+    let connected = page.connections.iter().filter_map(|c| c.link.as_deref()).any(|l| l.split('#').next() == Some(path));
+    connected || texts.into_iter().any(|t| markdown_links_to(t, path))
+}
+
 /// `GET /api/cookbook/pages/{id}`: one page, with the pages before and after it in its subject and those that link to it.
 pub async fn page(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let c = &s.catalog.cookbook;
@@ -53,6 +62,6 @@ pub async fn page(State(s): State<AppState>, Path(id): Path<String>) -> ApiResul
     let near = |i: Option<usize>| i.and_then(|i| list.get(i)).map(|x| json!({ "id": x.id, "title": x.title, "chapter": x.chapter }));
     // the pages whose text links to this one
     let link = format!("\"/cookbook/p/{}\"", p.id);
-    let linked_from: Vec<Value> = c.pages.values().filter(|x| x.id != p.id && x.sections.iter().any(|s| s.body.contains(&link))).map(row).collect();
+    let linked_from: Vec<Value> = c.pages.values().filter(|x| x.id != p.id && (x.sections.iter().any(|s| s.body.contains(&link)) || lesson_links(x, &format!("/cookbook/p/{}", p.id)))).map(row).collect();
     Ok(Json(json!({ "page": p, "previous": near(at.checked_sub(1)), "next": near(Some(at + 1)), "linked_from": linked_from })))
 }

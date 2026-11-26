@@ -3,17 +3,21 @@
 //!
 //! - `<root>/cookbook/<subject>/<id>.toml` for each subject in [`SUBJECTS`]: pages made from the owner's guides by
 //!   `tools/cookbook/convert.py`.
+//! - `<root>/cookbook/lessons/<subject>/<id>.toml`: hand-written lessons ([`crate::lesson`]); each replaces the page of the
+//!   same id and keeps its address and place.
 //! - `<root>/cookbook/samples/<id>/page.toml`: draft pages in the full page format, each with the project it quotes in
 //!   `code/` and the output recorded from running it in `recorded.json`.
 //!
 //! Page bodies are the Markdown the web app reads (`web/src/components/SdMd.tsx`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::Issue;
+use crate::lesson::{self, Connection, LESSONS, LessonFile, Spoil};
 use crate::sd::{check_markdown_with, read_dir_toml};
 
 /// The subjects with their own tab, in tab order: id, title, one line about it.
@@ -77,6 +81,12 @@ pub struct Page {
     pub origin: Option<String>,
     #[serde(default)]
     pub summary: Vec<String>,
+    /// A lesson's "In short" text, in Markdown. Only lessons have it.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub in_short: Option<String>,
+    /// A lesson's Connections box.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<Connection>,
     #[serde(default)]
     pub layers: Vec<String>,
     #[serde(default)]
@@ -92,6 +102,9 @@ pub struct Page {
     pub methods: Vec<Method>,
     #[serde(default)]
     pub labs: Vec<Lab>,
+    /// The exercises a lesson's full code gives away; the reading page then keeps the code closed.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub code_spoils: Vec<Spoil>,
     /// Source files the page is about, as paths inside the repository's `cookbook/` folder; the loader makes them a lab.
     #[serde(default, skip_serializing)]
     pub code: Vec<String>,
@@ -238,7 +251,9 @@ fn problems_with(p: &Page) -> Vec<String> {
         if !headings.insert(s.heading.as_str()) {
             bad.push(format!("two sections are headed {:?}", s.heading));
         }
-        bad.extend(check_markdown_with(&s.body, CALLOUTS).into_iter().map(|m| format!("section {:?}: {m}", s.heading)));
+        // a lesson's blocks are checked on their own
+        let markdown = if p.in_short.is_some() { Cow::Owned(lesson::without_blocks(&s.body)) } else { Cow::Borrowed(s.body.as_str()) };
+        bad.extend(check_markdown_with(&markdown, CALLOUTS).into_iter().map(|m| format!("section {:?}: {m}", s.heading)));
     }
     for s in &p.sources {
         if blank(&s.title) || !(s.url.starts_with("https://") || s.url.starts_with("http://")) {
@@ -270,6 +285,7 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> Cookbook {
             }
         }
     }
+    let lessons = load_lessons(&dir, &found, issues);
     // the code a page is about lives beside the content folder, in the repository's own cookbook crate
     let sources = root.parent().unwrap_or(root).join("cookbook");
     let mut cookbook = Cookbook::default();
@@ -289,7 +305,49 @@ pub(crate) fn load(root: &Path, issues: &mut Vec<Issue>) -> Cookbook {
             issues.extend(bad.into_iter().map(|message| Issue { path: path.clone(), message }));
         }
     }
+    // a lesson takes the place of its page only when all of it is right; otherwise the generated page stays
+    for (id, path, mut page) in lessons {
+        let mut bad = Vec::new();
+        match attach_code(&sources, &mut page) {
+            Ok(()) => {
+                bad.extend(lesson::finish(&mut page));
+                bad.extend(problems_with(&page));
+            }
+            Err(message) => bad.push(message),
+        }
+        if bad.is_empty() {
+            page.id.clone_from(&id);
+            cookbook.pages.insert(id, page);
+        } else {
+            issues.extend(bad.into_iter().map(|message| Issue { path: path.clone(), message }));
+        }
+    }
     cookbook
+}
+
+/// Reads `lessons/<subject>/<id>.toml`, each paired with the place of the generated page it replaces.
+fn load_lessons(dir: &Path, generated: &[(String, std::path::PathBuf, Page)], issues: &mut Vec<Issue>) -> Vec<(String, std::path::PathBuf, Page)> {
+    let dir = dir.join(LESSONS);
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return out };
+    let mut paths: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let known = path.is_dir() && SUBJECTS.iter().any(|s| s.0 == name);
+        if !known && !name.starts_with('.') && (path.is_dir() || name.ends_with(".toml")) {
+            issues.push(Issue { path: path.clone(), message: "a lesson is lessons/<subject>/<page id>.toml".to_owned() });
+        }
+    }
+    for (subject, _, _) in SUBJECTS {
+        for (id, path, file) in read_dir_toml::<LessonFile>(&dir.join(subject), issues) {
+            match generated.iter().find(|(gid, _, page)| *gid == id && page.subject == *subject) {
+                Some((_, _, page)) => out.push((id, path, file.into_page(page))),
+                None => issues.push(Issue { path, message: format!("there is no generated page {id:?} in {subject} for this lesson to replace") }),
+            }
+        }
+    }
+    out
 }
 
 /// Reads the files a page names in `code` into one lab.

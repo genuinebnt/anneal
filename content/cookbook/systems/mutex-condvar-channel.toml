@@ -20,11 +20,15 @@ heading = "What it is"
 body = """
 (1) `TicketLock`, FIFO-fair spinlock: take a ticket with fetch_add, spin until `now_serving == ticket`. (2) `TtasLock`, test-and-test-and-set spinlock: spin on a plain **load** (cache-line stays shared, no coherence storm) and only then try the CAS; exponential backoff via `spin_loop` hints, escalating to `yield_now` when oversubscribed.
 
-(3) `ParkMutex`, a futex-**style** mutex: one `AtomicU32` state (0 unlocked, 1 locked, 2 locked+contended) so the uncontended path is one CAS and unlock is one swap with NO syscall unless state == 2. Waiters sleep with `thread::park` and sit in a queue.
+(3) `ParkMutex`, a futex-**style** mutex: one `AtomicU32` state (0 unlocked, 1 locked, 2 locked+contended) so the uncontended path is one CAS and unlock is one swap with NO syscall unless state == 2.
 
-Real implementations (std on Linux, parking_lot, Linux pthread) wait on the state word itself with the futex syscall (the kernel keeps the queue and checks "value still == 2" atomically).
+Waiters sleep with `thread::park` and sit in a queue. std's `Mutex` on Linux waits on the state word itself with the futex syscall (the kernel keeps the queue, and sleeps the thread only if the value is still 2).
 
-We emulate that check by enqueueing first and then re-trying the swap, which closes the lost-wakeup window: either the unlocker sees our queue entry (we enqueued before our swap, it saw our `2`), or our swap sees `0` and we take the lock.
+`parking_lot` works differently: its `Mutex` holds one byte, a sleeping thread joins a queue in a global hash table keyed by the lock's address (`parking_lot_core`), the state is re-checked while that queue is locked, and the thread then sleeps on its own parker (a futex on Linux).
+
+We close the same gap by enqueueing first and then re-trying the swap: either the unlocker sees our queue entry (we enqueued before our swap, it saw our `2`), or our swap sees `0` and we take the lock. **Guards**: each guard has an explicit `unsafe impl<T: Sync> Sync`.
+
+Without it the compiler derives `Sync` from the `&Lock<T>` field, which needs only `T: Send`, and safe code could share a guard of a `Cell` between threads.
 
 (4) `MyCondvar` on top of it: each waiter registers a (thread, flag) pair **before** releasing the mutex, so a notify issued after the release cannot be missed; the flag makes spurious `park` wakeups harmless. (5) A bounded MPMC channel = `Mutex<VecDeque>` + two Condvars (not_full / not_empty) with close semantics.
 
@@ -36,7 +40,7 @@ heading = "Why it matters"
 body = """
 spin locks are for critical sections of a few instructions with threads &lt;= cores; with more threads than cores a preempted holder makes everyone spin, so production locks spin briefly and then sleep. Ticket locks give fairness at the price of convoying (every waiter must be scheduled in turn). Always re-check the predicate in a loop around a condvar wait.
 
-Each lock is tested for exact totals on a **non**-atomic counter, so a broken lock shows up as a wrong sum.
+Each lock is tested for exact totals on a **non**-atomic counter, so a broken lock shows up as a wrong sum. The guards' thread-safety bounds are checked at compile time (`assert_not_sync!`).
 """
 
 [[sections]]

@@ -2,15 +2,16 @@
 // hidden to give code more room. A long draft page opens with its first two sections and keeps the rest folded.
 import { marked } from "marked";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { ApiError, api, type CbLab, type CbMethod, type CbPage, type CbRow } from "../../api";
 import { Header } from "../../components/Header";
 import { Panel } from "../../components/layout";
-import { SdMd, countNotes } from "../../components/SdMd";
+import { FencesContext, LineStopsContext, SdMd, countNotes } from "../../components/SdMd";
 import { getPref, setPref } from "../../prefs";
 import { KIND_COLOR, sourceKind } from "../sd/SdRead";
 import { CodeViewer } from "./CodeViewer";
+import { Connections, InShort, SpoilerGate, lessonFences } from "./Lesson";
 import { Shelf, anchorOf, isCodeKind, kindLabel, scrollToId, subjectPath, tint, topicsOf, useCookbook } from "./shared";
 
 /** Sections shown open on a draft page with many: the answer comes first. */
@@ -19,14 +20,18 @@ const FOLD_FROM = 6;
 
 const inline = (text: string) => ({ __html: marked.parseInline(text, { async: false }) });
 
+/** A lesson's code is the whole file its text walks through; other pages that are not about code call theirs a project. */
+const labTitle = (page: CbPage, lab: CbLab) => (page.kind === "lesson" ? "Full code" : `Project: ${lab.title}`);
+
 /** A project that goes with the page: its files in the viewer and, for a sample, the output recorded from running it. */
 function Lab({ lab, n, page, wrap, onWrap }: { lab: CbLab; n: number; page: CbPage; wrap: boolean; onWrap: () => void }) {
     const code = isCodeKind(page.kind);
     if (!lab.contents.length) return null;
+    const viewer = <CodeViewer files={lab.contents} label={code || page.kind === "lesson" ? `Code of ${page.title}` : lab.title} wrap={wrap} onWrap={onWrap} foldHeader={page.kind === "lesson" || (code && page.kind !== "project")} />;
     return (
-        <section className="cb-lab" id={`cb-lab-${n}`} aria-label={code ? "The code" : `Project: ${lab.title}`}>
-            {!code && <h2>Project: {lab.title}</h2>}
-            <CodeViewer files={lab.contents} label={code ? `Code of ${page.title}` : lab.title} wrap={wrap} onWrap={onWrap} foldHeader={code && page.kind !== "project"} />
+        <section className="cb-lab" id={`cb-lab-${n}`} aria-label={code ? "The code" : labTitle(page, lab)}>
+            {!code && <h2>{labTitle(page, lab)}</h2>}
+            {page.code_spoils?.length ? <SpoilerGate spoils={page.code_spoils}>{viewer}</SpoilerGate> : viewer}
             {lab.recorded && (
                 <details className="cb-out">
                     <summary>
@@ -151,8 +156,12 @@ function usePlace(ids: string[]) {
 function Contents({ page, open }: { page: CbPage; open: (i: number, anchor: string) => void }) {
     const parts = useMemo(() => {
         const sections = page.sections.map((s, i) => ({ label: s.heading, id: anchorOf(s.heading), section: i as number | null }));
-        const labs = page.labs.map((l, n) => ({ label: isCodeKind(page.kind) ? "The code" : `Project: ${l.title}`, id: `cb-lab-${n}`, section: null }));
-        return [...(isCodeKind(page.kind) ? [...labs, ...sections] : [...sections, ...labs]), ...(page.sources.length ? [{ label: "Go deeper", id: "cb-sources", section: null }] : [])];
+        const labs = page.labs.map((l, n) => ({ label: isCodeKind(page.kind) ? "The code" : labTitle(page, l), id: `cb-lab-${n}`, section: null }));
+        const after = [
+            ...(page.connections?.length ? [{ label: "Connections", id: "cb-connections", section: null }] : []),
+            ...(page.sources.length ? [{ label: "Go deeper", id: "cb-sources", section: null }] : []),
+        ];
+        return [...(isCodeKind(page.kind) ? [...labs, ...sections] : [...sections, ...labs]), ...after];
     }, [page]);
     const ids = useMemo(() => parts.map((p) => p.id), [parts]);
     const { at, done } = usePlace(ids);
@@ -224,7 +233,10 @@ function Methods({ methods }: { methods: CbMethod[] }) {
 
 function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: () => void }) {
     const labs = page.labs.map((l, n) => <Lab key={l.title} lab={l} n={n} page={page} wrap={wrap} onWrap={onWrap} />);
-    const fold = page.status === "draft" && page.sections.length >= FOLD_FROM;
+    const lesson = page.kind === "lesson";
+    // a lesson's explanation is never folded
+    const fold = !lesson && page.status === "draft" && page.sections.length >= FOLD_FROM;
+    const fences = useMemo(() => (lesson ? lessonFences(page) : {}), [lesson, page]);
     const [open, setOpen] = useState<Set<number>>(() => new Set(page.sections.map((_, i) => i).filter((i) => !fold || i < OPEN_FIRST)));
     // opening a folded section from the contents or an address
     useEffect(() => {
@@ -236,12 +248,16 @@ function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: 
         if (i >= 0) {
             setOpen((s) => new Set(s).add(i));
             requestAnimationFrame(() => scrollToId(wanted));
+        } else if (page.kind === "lesson" && wanted) {
+            requestAnimationFrame(() => scrollToId(wanted));
         }
         return () => removeEventListener("cb-open", show);
     }, [page]);
     let notes = 0;
     return (
-        <>
+        <LineStopsContext.Provider value={!lesson}>
+        <FencesContext.Provider value={fences}>
+            {page.in_short && <InShort page={page} />}
             {page.summary.length > 0 && (
                 <section className="cb-sum">
                     <h2>In short</h2>
@@ -281,6 +297,7 @@ function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: 
                 );
             })}
             {!isCodeKind(page.kind) && labs}
+            {!!page.connections?.length && <Connections list={page.connections} />}
             {page.sources.length > 0 && (
                 <section className="cb-sources" id="cb-sources">
                     <h2>Go deeper</h2>
@@ -296,7 +313,8 @@ function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: 
                     </ul>
                 </section>
             )}
-        </>
+        </FencesContext.Provider>
+        </LineStopsContext.Provider>
     );
 }
 
@@ -306,6 +324,7 @@ export function CookbookRead({ id }: { id: string }) {
     const missing = view.error instanceof ApiError && view.error.status === 404;
     const book = useCookbook();
     const nav = useNavigate();
+    const router = useRouter();
     const [panels, setPanels] = useState(() => ({ left: true, right: true, wrap: false, big: false, ...getPref<{ left?: boolean; right?: boolean; wrap?: boolean; big?: boolean }>("cookbook.view", {}) }));
     const [drawer, setDrawer] = useState(false);
     const toggle = (side: "left" | "right" | "wrap" | "big") => setPanels((p) => { const n = { ...p, [side]: !p[side] }; setPref("cookbook.view", n); return n; });
@@ -338,7 +357,14 @@ export function CookbookRead({ id }: { id: string }) {
     // links between pages inside the page's HTML move without reloading
     const follow = (e: MouseEvent) => {
         const a = (e.target as HTMLElement).closest("a");
-        const m = /^\/cookbook\/p\/([\w-]+)$/.exec(a?.getAttribute("href") ?? "");
+        const href = a?.getAttribute("href") ?? "";
+        // a lesson also links to problems, series and sections of other pages
+        if (page?.kind === "lesson" && href.startsWith("/") && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.shiftKey && a?.target !== "_blank") {
+            e.preventDefault();
+            router.history.push(href);
+            return;
+        }
+        const m = /^\/cookbook\/p\/([\w-]+)$/.exec(href);
         if (!m || e.metaKey || e.ctrlKey || e.shiftKey) return;
         e.preventDefault();
         void nav({ to: "/cookbook/p/$id", params: { id: m[1]! } });
@@ -346,7 +372,7 @@ export function CookbookRead({ id }: { id: string }) {
     return (
         <>
             <Header area="cb" />
-            <main style={tint(page?.subject ?? "data")} className={`page cb-read${panels.left ? "" : " no-left"}${panels.right ? "" : " no-right"}${panels.wrap ? " wrap" : ""}${panels.big ? " big" : ""}${drawer ? " drawer" : ""}`}>
+            <main style={tint(page?.subject ?? "data")} className={`page cb-read${page?.kind === "lesson" ? " cb-lesson" : ""}${panels.left ? "" : " no-left"}${panels.right ? "" : " no-right"}${panels.wrap ? " wrap" : ""}${panels.big ? " big" : ""}${drawer ? " drawer" : ""}`}>
                 <div className="cb-bar">
                     <button type="button" className="cb-drawer" onClick={() => setDrawer(true)} aria-expanded={drawer}>Pages</button>
                     <nav className="cb-crumb" aria-label="Where this page is">

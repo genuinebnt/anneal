@@ -8,6 +8,7 @@ mod catalog;
 pub mod cookbook;
 pub mod course;
 mod dsa;
+pub mod lesson;
 pub mod sd;
 pub mod series;
 pub mod model;

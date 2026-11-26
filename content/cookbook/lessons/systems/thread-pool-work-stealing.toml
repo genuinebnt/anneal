@@ -1,0 +1,316 @@
+title = "Thread pool work stealing"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Threads, locks and channels"
+chapter_order = 1
+order = 244
+kind = "lesson"
+level = "advanced"
+lede = "How a pool lets each worker keep its own queue and still share the load."
+code = ["examples/concurrency/thread_pool_work_stealing.rs"]
+code_spoils = ["/p/c2-thread-pool"]
+summary = """
+In a work-stealing pool, each worker thread has its own job queue and takes work elsewhere when that runs out. Use the design for CPU work that keeps splitting into many small jobs. The price is harder code for waiting, sleeping and shutdown. In real programs use rayon, and read this example to learn how stealing works and what shutdown must promise.
+"""
+
+[[sections]]
+heading = "Why isn't one shared queue enough?"
+body = """
+Say you want to compute `fib(27)` on eight threads. You split the work: each call hands one half to the pool and computes the other half itself. Below `fib(8)` it stops splitting. That still creates 17,710 mostly tiny jobs.
+
+The obvious pool keeps one `Mutex<VecDeque<Job>>`. Every thread takes that lock to add or remove a job. With tiny jobs, threads can spend much of their time waiting for it, which is called **contention**.
+
+A work-stealing pool instead gives each worker its own **deque**, a queue with two usable ends.
+"""
+
+[[sections]]
+heading = "Which job does a worker take next?"
+body = """
+The `crossbeam-deque` crate supplies three types. A `Worker` is one thread's own deque, and a `Stealer` lets other threads take from it. The `Injector` is a shared inbox for jobs from outside the pool.
+
+A worker looks in its own deque first. If that is empty, it tries the injector, and then the other workers' deques. Taking from another worker is called **stealing**, and the worker being taken from is the **victim**.
+
+This example tries victims in the same order every time, starting with worker 0. rayon and Tokio's multi-thread scheduler start at a random one, which spreads the thieves out.
+
+The two ends matter. The owner pushes and pops at the back, so it gets its newest job first, called **LIFO** order. A thief takes the oldest job from the front.
+
+```stepper
+caption = "How two workers share a job that splits"
+[[frame]]
+title = "A job arrives from outside"
+text = "Your main thread isn't a worker, so job A goes into the injector."
+lanes = [ { name = "Injector", items = ["A"] }, { name = "Worker 1 deque (front first)", items = [] }, { name = "Worker 2 deque (front first)", items = [] }, { name = "Running", items = [] } ]
+[[frame]]
+title = "Worker 1 picks it up"
+text = "Its own deque is empty, so it takes A from the injector."
+lanes = [ { name = "Injector", items = [] }, { name = "Worker 1 deque (front first)", items = [] }, { name = "Worker 2 deque (front first)", items = [] }, { name = "Running", items = ["Worker 1: A"] } ]
+[[frame]]
+title = "A splits"
+text = "A spawns B and then C. Both go to the back of Worker 1's own deque."
+lanes = [ { name = "Injector", items = [] }, { name = "Worker 1 deque (front first)", items = ["B", "C"] }, { name = "Worker 2 deque (front first)", items = [] }, { name = "Running", items = ["Worker 1: A"] } ]
+[[frame]]
+title = "Worker 2 steals"
+text = "Say Worker 2 is free. It takes B, the oldest job, from the front."
+lanes = [ { name = "Injector", items = [] }, { name = "Worker 1 deque (front first)", items = ["C"] }, { name = "Worker 2 deque (front first)", items = [] }, { name = "Running", items = ["Worker 1: A", "Worker 2: B"] } ]
+[[frame]]
+title = "A waits by working"
+text = "A now needs its children. Worker 1 pops C from the back and runs it while A waits."
+lanes = [ { name = "Injector", items = [] }, { name = "Worker 1 deque (front first)", items = [] }, { name = "Worker 2 deque (front first)", items = [] }, { name = "Running", items = ["Worker 1: C, on top of A", "Worker 2: B"] } ]
+```
+
+A newest job's data may still be cached. An oldest job tends to be large, so one steal keeps a thief busy longer.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+The shared state holds the injector, a stealer for each deque, and the tools for sleeping and shutdown. Each worker keeps its own deque in a **thread-local** variable, which has one value per thread. A job spawned by a worker of this pool goes there. Other callers use the injector, unless the pool is closing.
+
+To find work, a worker tries its own deque, then the injector, then each stealer. This function is the stealing part:
+
+```rust title="Find the next job"
+fn find_task(local: Option<&Worker<Job>>, sh: &WsShared) -> Option<Job> {
+    if let Some(j) = local.and_then(|l| l.pop()) {
+        return Some(j);
+    }
+    loop {
+        let s = match local {
+            Some(l) => sh.injector.steal_batch_and_pop(l),
+            None => sh.injector.steal(),
+        }
+        .or_else(|| sh.stealers.iter().map(|s| s.steal()).collect());
+        match s {
+            Steal::Success(j) => return Some(j),
+            Steal::Empty => return None,
+            Steal::Retry => continue,
+        }
+    }
+}
+```
+
+`steal_batch_and_pop` returns one injector job and may move more into the local deque. `Steal::Retry` means an attempt collided with another thread, so the loop tries again.
+
+An idle worker mustn't sleep through a new job. It reads a counter, the **epoch**, before searching, and every spawn bumps it. The worker sleeps on a **condition variable** (`Condvar`) for at most 100 ms. It does so only if the counter hasn't changed and shutdown hasn't started.
+
+If a sleeper is registered, the spawner takes the same lock before signalling. This stops the signal landing between the sleeper's check and its sleep.
+
+Local push and pop take no lock, but every spawn still updates the epoch and reads the sleeper count.
+
+The fold below shows the whole code file. Its single-queue pool gives away much of [A thread pool with results and graceful shutdown](/p/c2-thread-pool), so try that exercise first.
+
+:::deeper Walk through the pool's code (gives away much of the thread pool exercise)
+```walkthrough
+file = "examples/concurrency/thread_pool_work_stealing.rs"
+[[step]]
+title = "Split the state"
+lines = "67-78"
+text = "`WsShared` holds what every thread can reach."
+[[step]]
+title = "Spawn a job"
+lines = "141-158"
+text = "The local push comes first. Everyone else goes through the injector."
+[[step]]
+title = "Find the next job"
+lines = "122-138"
+text = "This is the search shown above, in its place in the file."
+[[step]]
+title = "Sleep without missing a job"
+lines = "236-244"
+text = "After an empty search, the worker takes the lock. It sleeps only if shutdown hasn't started and the epoch it read before searching is unchanged."
+[[step]]
+title = "Wake a sleeper"
+lines = "113-119"
+text = "The spawner bumps the epoch, then signals if anyone is registered as a sleeper."
+```
+:::
+"""
+
+[[sections]]
+heading = "What happens when a job waits for another job?"
+body = """
+Suppose your pool has one worker. Its job spawns a child and needs the child's answer. If the job waits on an ordinary channel, the only worker goes to sleep. The child sits in its deque with nobody to run it.
+
+The file's answer is `Batch`, a group of jobs you can wait for together. You add jobs with `batch.spawn`. While any are unfinished, `batch.join` doesn't sleep on them. Instead, it runs whatever pending job it can find.
+
+```compare
+takeaway = "Waiting by working lets this nested job finish on one worker. The cost: unrelated jobs can run on top of the waiting one, which makes the call stack deeper."
+[wrong]
+title = "Block the worker"
+code = '''
+fn double_in_child(pool: WsHandle, out: mpsc::Sender<u32>) {
+    let worker_side = pool.clone();
+    pool.spawn_job(Box::new(move || {
+        let (child_tx, child_rx) = mpsc::channel();
+        let child: Job = Box::new(move || child_tx.send(21).unwrap());
+        worker_side.spawn_job(child).unwrap();
+        let n: u32 = child_rx.recv().unwrap(); // this worker now sleeps
+        out.send(n * 2).unwrap();
+    }))
+    .expect("pool is open");
+}
+'''
+result = "With one worker, the answer never arrives. With a second, idle worker it returns 42, but extra workers only hide the problem."
+[fixed]
+title = "Help while waiting"
+code = '''
+fn double_in_child(pool: WsHandle, out: mpsc::Sender<u32>) {
+    let worker_side = pool.clone();
+    pool.spawn_job(Box::new(move || {
+        let slot = Arc::new(AtomicU64::new(0));
+        let child_slot = slot.clone();
+        let batch = Batch::new(&worker_side);
+        batch.spawn(move || child_slot.store(21, SeqCst)).unwrap();
+        batch.join().unwrap(); // runs pending jobs while it waits
+        out.send(slot.load(SeqCst) as u32 * 2).unwrap();
+    }))
+    .expect("pool is open");
+}
+'''
+result = "It returned 42 with one worker and with two."
+```
+
+Helping has a limit. Each helped job runs on top of the waiting one's call stack, and nothing limits how deep that goes. Deep splitting can overflow a stack, so the demo calls from a thread with a very large one. That adds room but guarantees nothing.
+
+Only `join` helps. A job that blocks on a channel or socket still holds its worker.
+"""
+
+[[sections]]
+heading = "What happens when a job panics?"
+body = """
+A **panic** abandons the current operation after a serious error. The pool runs each job inside `catch_unwind`, so a panic doesn't end the worker thread. For batch jobs, `join` returns the panic messages as an error.
+
+Without a batch, your code gets no report, although the default panic message still prints. With `panic = "abort"`, nothing is caught and the process ends.
+"""
+
+[[sections]]
+heading = "What does shutdown promise?"
+body = """
+Dropping the pool promises that every accepted job runs before `drop` returns, if the jobs finish. After shutdown begins, an outside spawn returns your job as `Err(Rejected(job))`. Running jobs may still spawn children.
+
+Pushing and shutting down race, so a job could be stranded. An outside thread might see an open pool, then push after the workers have gone. A **read-write lock** prevents this by making check and push one protected step.
+
+Inside a worker, a job and a stop request could both arrive just after an empty search. So it reads the flag into `stopping` before each search. Follow both possible orders.
+
+**Case 1: the worker reads before the stop.**
+
+1. It reads `stopping` as false and searches, finding nothing.
+2. A job is queued, then shutdown sets the flag.
+3. `stopping` is still false, so the worker doesn't exit.
+4. It searches again, and can see the job if nobody else took it.
+
+**Case 2: the worker reads after the stop.**
+
+1. Every accepted outside job is queued, then shutdown sets the flag.
+2. The worker reads `stopping` as true and searches.
+3. This search can see any of those jobs that are still queued.
+4. If it finds nothing, the worker exits.
+
+The next fold shows these lines inside the whole file. It also gives away much of [A thread pool with results and graceful shutdown](/p/c2-thread-pool).
+
+:::deeper Walk through the shutdown code (gives away much of the thread pool exercise)
+```walkthrough
+file = "examples/concurrency/thread_pool_work_stealing.rs"
+[[step]]
+title = "Close first, then raise the flag"
+lines = "207-212"
+text = "The write lock waits for outside pushes in progress. After closing, it sets `shutdown` and wakes the workers."
+[[step]]
+title = "Read, search, then decide"
+lines = "222-235"
+text = "The worker reads `stopping`, searches, then decides. The hook in between is for tests."
+[[step]]
+title = "Drop waits for every worker"
+lines = "247-254"
+text = "`drop` starts shutdown, then waits for each worker thread to exit."
+```
+:::
+
+The worker's gap needs exact timing, so a test hook pauses a worker after an empty search. In a copy, move the `stopping` line below the hook block, just before `if stopping`. The check then fails with `a job queued before shutdown was lost`.
+
+Moving it only to just below the search is also a bug, but that check passes, because the hook runs later. A random race check can still fail with `accepted jobs and jobs run differ`.
+
+So a passing run doesn't show that the order is safe.
+"""
+
+[[sections]]
+heading = "When is stealing worth it?"
+body = """
+It depends on job size. The table shows medians of 15 release runs on a busy 12-core Mac. Each pool had eight workers, and the calling thread helped.
+
+| Workload | Work stealing | One shared queue |
+| --- | --- | --- |
+| `fib(27)`, 17,710 mostly tiny jobs | 6.6 ms | 18.0 ms |
+| Merge sort of 1 million numbers, 63 spawned jobs | 11.2 ms | 12.6 ms |
+
+Stealing was clearly ahead only with the tiny jobs. Single runs varied widely, so measure your own workload.
+
+| If you have | Reach for |
+| --- | --- |
+| CPU work over a collection, or work that splits in two | rayon's parallel iterators or `rayon::join` |
+| Many tasks that mostly wait on the network or timers | tokio |
+| A few longer, independent jobs | A single shared queue |
+| A scheduler to study or build | `crossbeam-deque` |
+"""
+
+[[connections]]
+kind = "before"
+title = "OS threads"
+link = "/cookbook/p/threads-channels"
+why = "Spawning and joining threads, and what makes a value safe to send between them."
+
+[[connections]]
+kind = "before"
+title = "A channel from a mutex and condition variables"
+link = "/cookbook/p/mutex-condvar-channel"
+why = "How a thread sleeps until there is something to do."
+
+[[connections]]
+kind = "practise"
+title = "A thread pool with results and graceful shutdown"
+link = "/p/c2-thread-pool"
+why = "Build a thread pool yourself. Try it before opening this page's code folds or full code, which give away much of it."
+level = "similar"
+
+[[connections]]
+kind = "returns"
+title = "Data parallelism with rayon"
+link = "/cookbook/p/rayon-data-parallelism"
+why = "The library to use when you have real CPU work to split."
+
+[[connections]]
+kind = "returns"
+title = "A generic async worker pool"
+link = "/cookbook/p/worker-pool"
+why = "A pool for async jobs, with a limit on how many run at once."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "The same question in async code: which accepted work still runs when you stop?"
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Part 3 of From threads to a web server is a thread pool. You don't need work stealing to build the server."
+
+[[sources]]
+title = "crossbeam-deque documentation"
+url = "https://docs.rs/crossbeam-deque/0.8.8/crossbeam_deque/"
+note = "Explains the three queue types, which end a thief uses, and what Retry means."
+
+[[sources]]
+title = "rayon::join"
+url = "https://docs.rs/rayon/latest/rayon/fn.join.html"
+note = "Read how rayon splits work, and its warning about blocking inside a job."
+
+[[sources]]
+title = "Tokio runtime: how the multi-thread scheduler behaves"
+url = "https://docs.rs/tokio/latest/tokio/runtime/index.html#multi-threaded-runtime-behavior-at-the-time-of-writing"
+note = "A production scheduler's queue rules. Tokio says they may change."
+
+[[sources]]
+title = "std::panic::catch_unwind"
+url = "https://doc.rust-lang.org/std/panic/fn.catch_unwind.html"
+note = "States which panics can be caught and which cannot."

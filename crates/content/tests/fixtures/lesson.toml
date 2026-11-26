@@ -1,0 +1,78 @@
+# A made-up lesson for tests. It is not cookbook content.
+title = "Fixture lesson"
+module = "Copied module"
+chapter = "Copied chapter"
+chapter_order = 9
+order = 9
+code = ["examples/a/x.rs"]
+kind = "lesson"
+lede = "A fixture."
+summary = """
+A fixture summary with a [link to itself](#cb-how-it-works).
+"""
+
+[[sections]]
+heading = "How it works"
+body = """
+Some words, then the blocks.
+
+```stepper
+caption = "A box fills"
+[[frame]]
+title = "Empty"
+text = "Nothing yet."
+lanes = [ { name = "Box", items = [], slots = 2 } ]
+[[frame]]
+title = "One"
+text = "One thing."
+lanes = [ { name = "Box", items = ["a"], slots = 2 } ]
+[[frame]]
+title = "Two"
+text = "Two things."
+lanes = [ { name = "Box", items = ["a", "b"], slots = 2 } ]
+```
+
+```walkthrough
+file = "examples/a/x.rs"
+[[step]]
+title = "Start"
+lines = "1-2"
+text = "The first lines."
+[[step]]
+title = "Near the end"
+lines = "50-51"
+text = "Lines far down the file."
+```
+
+```compare
+takeaway = "It costs a line."
+[wrong]
+title = "Without"
+code = '''
+fn a() {}
+'''
+result = "Nothing happens."
+[fixed]
+title = "With"
+code = '''fn b() {}'''
+result = "Something happens."
+```
+"""
+
+[[connections]]
+kind = "before"
+title = "The other page"
+link = "/cookbook/p/y#cb-h"
+why = "It comes first."
+
+[[connections]]
+kind = "practise"
+title = "A problem"
+link = "/p/nothing"
+why = "To try it."
+level = "exact"
+
+[[connections]]
+kind = "project"
+title = "A real program"
+why = "It does this."

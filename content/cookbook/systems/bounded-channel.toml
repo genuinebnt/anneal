@@ -24,7 +24,9 @@ producer/consumer queues where memory must stay bounded: backpressure is the who
 [[sections]]
 heading = "Design notes"
 body = """
-Pattern: a bounded `mpsc` makes producers wait (`send().await`) or fail fast (`try_send`) when the consumer is slow, so memory stays bounded. An unbounded channel just grows until the process dies. Docs: <https://docs.rs/tokio/latest/tokio/sync/mpsc/>
+Pattern: a bounded `mpsc` makes producers wait (`send().await`) or fail fast (`try_send`) when the queue is full. The capacity limits **queued** messages only: not their size, and not the messages held by tasks waiting in `send`. An unbounded channel never makes a sender wait, so a backlog can grow until memory runs out.
+
+Docs: <https://docs.rs/tokio/latest/tokio/sync/mpsc/>
 """
 
 [[sources]]

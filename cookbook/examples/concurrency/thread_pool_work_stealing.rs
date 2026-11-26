@@ -3,39 +3,58 @@
 //! Use in: CPU-bound fork-join parallelism, understanding rayon/tokio schedulers.   Run: cargo run --release --example thread_pool_work_stealing
 #![allow(dead_code)]
 //!
-//! WHAT: each worker owns a `crossbeam_deque::Worker` (LIFO for its own jobs = cache-hot, depth-first), a global
-//! `Injector` takes jobs from outside threads, and idle workers `Stealer::steal` from the FRONT of other workers'
-//! deques (oldest = biggest subtrees of a recursive computation). Jobs are `Box<dyn FnOnce() + Send>`.
-//! WHY: a single `Mutex<VecDeque>` is one contention point every spawn/pop crosses; with many tiny recursive jobs the
-//! lock dominates. In the stealing pool the common path (push/pop on your own deque) touches no shared state.
+//! WHAT: each worker owns a `crossbeam_deque::Worker` (LIFO for its own jobs), a global `Injector` takes jobs from
+//! outside threads, and idle workers `Stealer::steal` from the FRONT of other workers' deques (the oldest job, which
+//! in a recursive split is usually a large one). Jobs are `Box<dyn FnOnce() + Send>`.
+//! WHY: a single `Mutex<VecDeque>` is a lock every spawn and pop must take; with many tiny recursive jobs it can become
+//! the bottleneck. In the stealing pool, pushing and popping your own deque takes no lock. Spawning is not free of
+//! shared state: every spawn updates a shared epoch counter and reads the sleeper count, and a `Batch` spawn also
+//! updates the batch's pending count.
 //! HOW:
-//!  * a worker's deque lives in a thread-local, so a job that calls `spawn` pushes to its own deque (no lock);
-//!  * `Batch::join` HELPS: while its jobs are pending it runs other jobs instead of blocking, so recursive
-//!    fork-join cannot deadlock the pool even with fewer threads than the recursion depth;
+//!  * a worker's deque lives in a thread-local, so a job that calls `spawn_job` pushes to its own deque (no lock);
+//!  * idle workers try the other deques in index order, always starting at worker 0. That is simple and correct but
+//!    does not spread thieves out (rayon and tokio's multi-thread runtime start at a random worker);
+//!  * `Batch::join` HELPS: while its jobs are pending it runs other jobs instead of blocking, so fork-join that waits
+//!    through `join` does not deadlock the pool even with fewer threads than the recursion depth. The cost: helped jobs
+//!    nest on the waiting thread's stack with no depth limit. This demo overflowed an 8 MiB main stack in some debug
+//!    runs, so it now calls from a thread with a large stack. A job that blocks any other way still holds its thread;
 //!  * idle workers sleep on a condvar using an epoch counter (spawn bumps the epoch, sleeper re-checks it under the
 //!    lock: no lost wakeups; a 100 ms timed wait is only a safety net);
-//!  * panics: every job runs under `catch_unwind`; a `Batch` records the message and `join` returns `Err(messages)`;
-//!  * Drop sets `shutdown`, wakes everyone and joins; workers drain remaining jobs before exiting.
+//!  * panics: every job runs under `catch_unwind` (unwinding panics only); a `Batch` records the message and `join`
+//!    returns `Err(messages)`;
+//!  * shutdown: once Drop starts, `spawn_job` from outside the pool returns `Err(Rejected(job))`. Jobs already
+//!    accepted still run, including jobs they spawn from a worker. A worker notes whether shutdown has started BEFORE
+//!    it searches, and exits only if it had and the search found nothing; Drop then joins every worker.
+//!
 //! Both pools implement the same tiny `Exec` trait so the identical parallel fib / merge sort runs on each.
 //!
-//! COMMON USES: data-parallel CPU work (sorting, parsing, image tiles, parallel search), the executors under rayon
-//! and tokio's multi-thread runtime (per-worker queues + stealing + a global injection queue), game-engine job
-//! systems, build tools. For async I/O use tokio; for CPU-bound data parallelism use rayon, shown below.
+//! COMMON USES: data-parallel CPU work (sorting, parsing, image tiles, parallel search), game-engine job systems,
+//! build tools. Rayon and tokio's multi-thread runtime also schedule by work stealing, with far more refined queues
+//! and sleeping. For async I/O use tokio; for CPU-bound data parallelism use rayon, shown below.
 //! Read: https://github.com/rayon-rs/rayon and https://docs.rs/crossbeam-deque and https://github.com/crossbeam-rs/crossbeam
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use rayon::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering::SeqCst};
+use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
+/// The pool is shutting down, so the job was not queued. It is handed back to the caller.
+struct Rejected(Job);
+impl std::fmt::Debug for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rejected(job): the pool is shutting down")
+    }
+}
+
 trait Exec: Clone + Send + Sync + 'static {
-    fn spawn_job(&self, job: Job);
+    /// Queues a job. `Err` means it was refused and will never run unless the caller runs it.
+    fn spawn_job(&self, job: Job) -> Result<(), Rejected>;
     /// Run one pending job on the calling thread if any; used by `Batch::join` to help instead of block.
     fn help_one(&self) -> bool;
 }
@@ -53,6 +72,30 @@ struct WsShared {
     epoch: AtomicU64,
     sleepers: AtomicUsize,
     shutdown: AtomicU64,
+    /// Outside callers hold this for reading while they push, so none can push after it is set.
+    closed: RwLock<bool>,
+    gate: Option<Arc<Gate>>,
+}
+/// Test hook: parks one worker, once, right after a search that found nothing.
+struct Gate {
+    armed: AtomicBool,
+    reached: Barrier,
+    resume: Barrier,
+}
+impl Gate {
+    fn new() -> Arc<Self> {
+        Arc::new(Gate {
+            armed: AtomicBool::new(true),
+            reached: Barrier::new(2),
+            resume: Barrier::new(2),
+        })
+    }
+    fn pause_once(&self) {
+        if self.armed.swap(false, SeqCst) {
+            self.reached.wait();
+            self.resume.wait();
+        }
+    }
 }
 struct WorkerCtx {
     pool_id: usize,
@@ -95,7 +138,7 @@ fn find_task(local: Option<&Worker<Job>>, sh: &WsShared) -> Option<Job> {
 }
 
 impl Exec for WsHandle {
-    fn spawn_job(&self, job: Job) {
+    fn spawn_job(&self, job: Job) -> Result<(), Rejected> {
         let id = self.0.id();
         let mut job = Some(job);
         CTX.with(|c| {
@@ -104,9 +147,14 @@ impl Exec for WsHandle {
             }
         });
         if let Some(j) = job {
+            let closed = self.0.closed.read().unwrap(); // held across the push
+            if *closed {
+                return Err(Rejected(j));
+            }
             self.0.injector.push(j);
         }
         self.0.wake();
+        Ok(())
     }
     fn help_one(&self) -> bool {
         let id = self.0.id();
@@ -125,6 +173,9 @@ struct WsPool {
 }
 impl WsPool {
     fn new(n: usize) -> Self {
+        Self::with_gate(n, None)
+    }
+    fn with_gate(n: usize, gate: Option<Arc<Gate>>) -> Self {
         let workers: Vec<Worker<Job>> = (0..n).map(|_| Worker::new_lifo()).collect();
         let shared = Arc::new(WsShared {
             injector: Injector::new(),
@@ -134,6 +185,8 @@ impl WsPool {
             epoch: AtomicU64::new(0),
             sleepers: AtomicUsize::new(0),
             shutdown: AtomicU64::new(0),
+            closed: RwLock::new(false),
+            gate,
         });
         let threads = workers
             .into_iter()
@@ -150,6 +203,13 @@ impl WsPool {
             threads,
         }
     }
+    /// Starts shutting down without waiting for the workers; `drop` then joins them.
+    fn begin_shutdown(&self) {
+        *self.handle.0.closed.write().unwrap() = true; // waits for outside pushes in progress
+        self.handle.0.shutdown.store(1, SeqCst); // set after the last outside push
+        self.handle.0.wake();
+        self.handle.0.cv.notify_all();
+    }
 }
 fn ws_worker(sh: Arc<WsShared>, local: Worker<Job>) {
     CTX.with(|c| {
@@ -160,13 +220,18 @@ fn ws_worker(sh: Arc<WsShared>, local: Worker<Job>) {
     });
     loop {
         let e = sh.epoch.load(SeqCst);
+        // read BEFORE searching: if this is true, every outside job is already queued where the search can see it
+        let stopping = sh.shutdown.load(SeqCst) != 0;
         let task = CTX.with(|c| find_task(c.borrow().as_ref().map(|x| &x.local), &sh));
         if let Some(job) = task {
             run_job(job);
             continue;
         }
-        if sh.shutdown.load(SeqCst) != 0 {
-            break; // shutdown is set before the last wake, and we only exit with nothing left to find
+        if let Some(gate) = &sh.gate {
+            gate.pause_once();
+        }
+        if stopping {
+            break; // shutdown had started before a search that found nothing
         }
         let g = sh.lock.lock().unwrap();
         sh.sleepers.fetch_add(1, SeqCst);
@@ -181,9 +246,7 @@ fn ws_worker(sh: Arc<WsShared>, local: Worker<Job>) {
 }
 impl Drop for WsPool {
     fn drop(&mut self) {
-        self.handle.0.shutdown.store(1, SeqCst);
-        self.handle.0.wake();
-        self.handle.0.cv.notify_all();
+        self.begin_shutdown();
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
@@ -196,12 +259,20 @@ struct QShared {
     cv: Condvar,
     shutdown: AtomicU64,
 }
+thread_local! { static Q_WORKER_OF: Cell<usize> = const { Cell::new(0) }; }
 #[derive(Clone)]
 struct QHandle(Arc<QShared>);
 impl Exec for QHandle {
-    fn spawn_job(&self, job: Job) {
-        self.0.q.lock().unwrap().push_back(job);
+    fn spawn_job(&self, job: Job) -> Result<(), Rejected> {
+        let mut q = self.0.q.lock().unwrap();
+        let own_worker = Q_WORKER_OF.get() == Arc::as_ptr(&self.0) as usize;
+        if self.0.shutdown.load(SeqCst) != 0 && !own_worker {
+            return Err(Rejected(job));
+        }
+        q.push_back(job);
+        drop(q);
         self.0.cv.notify_one();
+        Ok(())
     }
     fn help_one(&self) -> bool {
         let j = self.0.q.lock().unwrap().pop_back(); // newest first, same locality as the LIFO deques
@@ -225,6 +296,7 @@ impl QPool {
                 thread::Builder::new()
                     .stack_size(16 << 20)
                     .spawn(move || {
+                        Q_WORKER_OF.set(Arc::as_ptr(&sh) as usize);
                         let mut g = sh.q.lock().unwrap();
                         loop {
                             if let Some(j) = g.pop_back() {
@@ -249,8 +321,10 @@ impl QPool {
 }
 impl Drop for QPool {
     fn drop(&mut self) {
-        self.handle.0.shutdown.store(1, SeqCst);
-        drop(self.handle.0.q.lock().unwrap());
+        {
+            let _q = self.handle.0.q.lock().unwrap(); // spawners check the flag under this lock
+            self.handle.0.shutdown.store(1, SeqCst);
+        }
         self.handle.0.cv.notify_all();
         for t in self.threads.drain(..) {
             let _ = t.join();
@@ -277,10 +351,10 @@ impl<E: Exec> Batch<E> {
             }),
         }
     }
-    fn spawn(&self, f: impl FnOnce() + Send + 'static) {
+    fn spawn(&self, f: impl FnOnce() + Send + 'static) -> Result<(), Rejected> {
         self.st.pending.fetch_add(1, SeqCst);
         let st = self.st.clone();
-        self.exec.spawn_job(Box::new(move || {
+        let queued = self.exec.spawn_job(Box::new(move || {
             if let Err(p) = panic::catch_unwind(AssertUnwindSafe(f)) {
                 let msg = p
                     .downcast_ref::<&str>()
@@ -291,6 +365,10 @@ impl<E: Exec> Batch<E> {
             }
             st.pending.fetch_sub(1, SeqCst); // last: join may return as soon as this hits zero
         }));
+        if queued.is_err() {
+            self.st.pending.fetch_sub(1, SeqCst); // a refused job must not be waited for
+        }
+        queued
     }
     /// Wait for every job spawned on this batch; helps run other jobs meanwhile. Err = panic messages.
     fn join(self) -> Result<(), Vec<String>> {
@@ -333,7 +411,8 @@ fn fib_par<E: Exec>(ex: &E, n: u32, cutoff: u32) -> u64 {
         b.spawn(move || {
             JOBS_RUN.fetch_add(1, SeqCst);
             slot.store(fib_par(&ex, n - 1, cutoff), SeqCst);
-        });
+        })
+        .expect("pool is open");
     }
     let right = fib_par(ex, n - 2, cutoff);
     b.join().expect("fib child");
@@ -376,7 +455,8 @@ fn sort_par<E: Exec>(ex: &E, mut v: Vec<u32>, cutoff: usize) -> Vec<u32> {
         b.spawn(move || {
             JOBS_RUN.fetch_add(1, SeqCst);
             *slot.lock().unwrap() = Some(sort_par(&ex, right, cutoff));
-        });
+        })
+        .expect("pool is open");
     }
     let left = sort_par(ex, v, cutoff);
     b.join().expect("sort child");
@@ -391,13 +471,123 @@ fn sort_jobs(n: usize, cutoff: usize) -> usize {
     }
 }
 
+// ---------------------------------------------------------------- shutdown self-checks
+
+/// A job queued after a worker's empty search, but before it decides whether to exit, must still run.
+fn check_job_queued_in_the_gap_runs() {
+    let gate = Gate::new();
+    let pool = WsPool::with_gate(1, Some(gate.clone()));
+    gate.reached.wait(); // the only worker has searched, found nothing, and is parked
+    let ran = Arc::new(AtomicUsize::new(0));
+    let r = ran.clone();
+    pool.handle
+        .spawn_job(Box::new(move || {
+            r.fetch_add(1, SeqCst);
+        }))
+        .expect("pool is open");
+    pool.begin_shutdown();
+    gate.resume.wait();
+    drop(pool);
+    assert_eq!(ran.load(SeqCst), 1, "a job queued before shutdown was lost");
+}
+
+/// A handle kept after the pool is gone is told so, and gets its job back.
+fn check_spawn_after_drop_is_refused<E: Exec>(pool: impl Sized, handle: E) {
+    drop(pool);
+    let ran = Arc::new(AtomicUsize::new(0));
+    let r = ran.clone();
+    let refused = handle.spawn_job(Box::new(move || {
+        r.fetch_add(1, SeqCst);
+    }));
+    let Err(Rejected(job)) = refused else {
+        panic!("a job was accepted by a pool that has no workers");
+    };
+    assert_eq!(ran.load(SeqCst), 0);
+    job(); // the caller still owns it
+    assert_eq!(ran.load(SeqCst), 1);
+    let batch = Batch::new(&handle);
+    assert!(batch.spawn(|| {}).is_err());
+    batch.join().expect("a refused job is not waited for");
+}
+
+/// Refusing outsiders must not break the drain: a queued job may still split while the pool shuts down.
+fn check_job_can_spawn_during_shutdown() {
+    let gate = Gate::new();
+    let pool = WsPool::with_gate(1, Some(gate.clone()));
+    gate.reached.wait();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let (r, inside) = (ran.clone(), pool.handle.clone());
+    pool.handle
+        .spawn_job(Box::new(move || {
+            inside
+                .spawn_job(Box::new(move || {
+                    r.fetch_add(1, SeqCst);
+                }))
+                .expect("a worker of this pool may still spawn");
+        }))
+        .expect("pool is open");
+    pool.begin_shutdown();
+    gate.resume.wait();
+    drop(pool);
+    assert_eq!(ran.load(SeqCst), 1, "the child job was lost");
+}
+
+/// Outside threads keep spawning while the pool is dropped. The interleaving varies; the invariant may not:
+/// every job that was accepted has run by the time `drop` returns.
+fn check_every_accepted_job_runs() {
+    for _ in 0..20 {
+        let ran = Arc::new(AtomicUsize::new(0));
+        let pool = WsPool::new(2);
+        let start = Arc::new(Barrier::new(4));
+        let spawners: Vec<_> = (0..3)
+            .map(|_| {
+                let (h, ran, start) = (pool.handle.clone(), ran.clone(), start.clone());
+                thread::spawn(move || {
+                    start.wait();
+                    let mut accepted = 0usize;
+                    while accepted < 2_000 {
+                        let r = ran.clone();
+                        let job: Job = Box::new(move || {
+                            r.fetch_add(1, SeqCst);
+                        });
+                        if h.spawn_job(job).is_err() {
+                            break;
+                        }
+                        accepted += 1;
+                    }
+                    accepted
+                })
+            })
+            .collect();
+        start.wait();
+        drop(pool);
+        let ran_when_drop_returned = ran.load(SeqCst);
+        let accepted: usize = spawners.into_iter().map(|t| t.join().unwrap()).sum();
+        assert_eq!(
+            ran_when_drop_returned, accepted,
+            "accepted jobs and jobs run differ"
+        );
+    }
+}
+
 fn time<T>(f: impl FnOnce() -> T) -> (T, Duration) {
     let t = Instant::now();
     let r = f();
     (r, t.elapsed())
 }
 
+/// The thread that calls `join` helps, so pending jobs pile up on its stack, as deep as chance allows. In 240 debug
+/// runs the caller used up to 18 MiB, more than a main thread usually has. This is generous headroom, not a bound.
+const CALLER_STACK: usize = 256 << 20;
+
 fn main() {
+    let demo = thread::Builder::new().stack_size(CALLER_STACK).spawn(demo);
+    if let Err(panic) = demo.expect("spawn the demo thread").join() {
+        panic::resume_unwind(panic);
+    }
+}
+
+fn demo() {
     let n = thread::available_parallelism()
         .map_or(4, |p| p.get())
         .clamp(2, 8);
@@ -417,12 +607,15 @@ fn main() {
                 // nested spawn from a worker goes to its local deque
                 let inner = Batch::new(&h);
                 let f2 = f.clone();
-                inner.spawn(move || {
-                    f2[i + 1].fetch_add(1, SeqCst);
-                });
+                inner
+                    .spawn(move || {
+                        f2[i + 1].fetch_add(1, SeqCst);
+                    })
+                    .expect("pool is open");
                 inner.join().unwrap();
             }
-        });
+        })
+        .expect("pool is open");
     }
     b.join().unwrap();
     let total: usize = flags.iter().map(|f| f.load(SeqCst) as usize).sum();
@@ -445,7 +638,8 @@ fn main() {
             if i == 7 {
                 panic!("boom {i}")
             }
-        });
+        })
+        .expect("pool is open");
     }
     let err = b.join().unwrap_err();
     panic::set_hook(prev);
@@ -456,7 +650,8 @@ fn main() {
         let a = after.clone();
         b.spawn(move || {
             a.fetch_add(1, SeqCst);
-        });
+        })
+        .expect("pool is open");
     }
     b.join().unwrap();
     assert_eq!(after.load(SeqCst), 1000);
@@ -538,13 +733,25 @@ fn main() {
         let pool = WsPool::new(3);
         for _ in 0..10_000 {
             let d = done.clone();
-            pool.handle.spawn_job(Box::new(move || {
-                d.fetch_add(1, SeqCst);
-            }));
+            pool.handle
+                .spawn_job(Box::new(move || {
+                    d.fetch_add(1, SeqCst);
+                }))
+                .expect("pool is open");
         }
     } // drop joins all workers
     assert_eq!(done.load(SeqCst), 10_000);
     println!("drop drained 10000 queued jobs");
+
+    // 6. the edges of shutdown
+    check_job_queued_in_the_gap_runs();
+    check_job_can_spawn_during_shutdown();
+    check_every_accepted_job_runs();
+    let (a, b) = (WsPool::new(2), QPool::new(2));
+    let (ha, hb) = (a.handle.clone(), b.handle.clone());
+    check_spawn_after_drop_is_refused(a, ha);
+    check_spawn_after_drop_is_refused(b, hb);
+    println!("shutdown: accepted jobs all ran; late outside spawns were refused");
     drop(qp);
     drop(ws);
     println!("thread_pool_work_stealing: all assertions passed");
