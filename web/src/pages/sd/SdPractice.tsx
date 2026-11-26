@@ -8,6 +8,7 @@ import { SdMd } from "../../components/SdMd";
 import { mmss } from "../../focusStore";
 import { SdFrame } from "./SdHome";
 import { KIND_COLOR, sourceKind } from "./SdRead";
+import { Inline } from "../../components/InlineMd";
 
 type Phase = "brief" | "drill" | "compare";
 type Answers = Record<string, { answer: string; seconds: number }>;
@@ -334,7 +335,7 @@ export function SdPractice({ id }: { id: string }) {
                                     <a key={x.url} href={x.url} target="_blank" rel="noreferrer">
                                         <small style={{ color: KIND_COLOR[k] }}>{k.toUpperCase()}</small>
                                         <b>{x.title}</b>
-                                        {x.note && <span>{x.note}</span>}
+                                        {x.note && <span><Inline text={x.note} /></span>}
                                     </a>
                                 );
                             })}

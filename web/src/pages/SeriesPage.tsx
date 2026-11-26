@@ -7,6 +7,7 @@ import { Header } from "../components/Header";
 import { Skeleton } from "../components/Skeleton";
 import { Segments, lowerFirst, shortDay } from "../components/seriesBits";
 import "../styles/series.css";
+import { Inline } from "../components/InlineMd";
 
 const STATE: Record<SeriesItem["state"], string> = { solved: "Solved", assisted: "With help", next: "Next", started: "Started", open: "", to_write: "To write" };
 
@@ -72,7 +73,7 @@ function Capstone({ cap }: { cap: NonNullable<SeriesView["capstone"]> }) {
       {cap.cookbook && (
         <details>
           <summary>Show the Cookbook solution<small>This shows the complete approach</small></summary>
-          <Link to="/cookbook/p/$id" params={{ id: cap.cookbook.id }}>Open in the Cookbook: {cap.cookbook.title}</Link>
+          <Link to="/cookbook/p/$id" params={{ id: cap.cookbook.id }}><span>Open in the Cookbook: <Inline text={cap.cookbook.title} /></span></Link>
         </details>
       )}
     </section>

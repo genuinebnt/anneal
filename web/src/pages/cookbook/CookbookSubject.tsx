@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Header } from "../../components/Header";
 import { PageRow, Search, Shelf, anchorOf, grouped, kindLabel, rowMatches, scrollToId, tint, useCookbook, wordsOf } from "./shared";
+import { Inline } from "../../components/InlineMd";
 
 export function CookbookSubject({ id }: { id: string }) {
     const book = useCookbook();
@@ -42,7 +43,7 @@ export function CookbookSubject({ id }: { id: string }) {
                                 <span className="cb-dotline"><b>Subject</b><span>{subject.pages.length} pages</span><span>{grouped(all).reduce((n, m) => n + m.chapters.length, 0)} chapters</span>{lines > 0 && <span>{Math.round(lines / 1000)}k lines of code</span>}</span>
                                 <h1>{name.join(" ")}{name.length > 0 && " "}<em className="cb-rgb">{last}.</em></h1>
                                 <p>{subject.about}</p>
-                                {all[0] && <Link to="/cookbook/p/$id" params={{ id: all[0].id }} className="cb-btn">Start with {all[0].title}</Link>}
+                                {all[0] && <Link to="/cookbook/p/$id" params={{ id: all[0].id }} className="cb-btn"><span>Start with <Inline text={all[0].title} /></span></Link>}
                             </header>
                             <div className="cb-kbar">
                                 <Search value={q} onChange={setQ} label="Filter the pages" placeholder={`Filter ${subject.title}: a name or a word in the description`} />

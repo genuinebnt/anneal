@@ -11,7 +11,7 @@ minutes: 6
 | bind or bail out, with a custom bail | `let Some(x) = opt else { return ..; };` (`let-else`) |
 | transform the inside | `opt.map(f)`, `res.map(f)`, `res.map_err(f)` |
 | chain a step that may fail | `opt.and_then(f)`, `res.and_then(f)` |
-| `None` to an error | `opt.ok_or(err)`, `opt.ok_or_else(|| err)` |
+| `None` to an error | `opt.ok_or(err)`, `opt.ok_or_else(\|\| err)` |
 | keep only if a test holds | `opt.filter(pred)` |
 | both must be present | `a.zip(b)` |
 | a default | `opt.unwrap_or(d)`, `unwrap_or_else(f)`, `unwrap_or_default()` |

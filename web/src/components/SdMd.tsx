@@ -5,6 +5,7 @@ import { CODE_LANGS, highlightLines } from "../highlight";
 import { fromPostgresJson, type PlanFile } from "../plan";
 import { PlanView } from "./PlanView";
 import { EXPLORER_HANDOFF } from "../pages/sd/SdPlans";
+import { Inline, plain } from "./InlineMd";
 
 /** The callouts a system design page can use: `> [!NOTE]` and the like at the start of a quote. */
 const CALLOUTS: Record<string, { label: string; icon: string }> = {
@@ -83,7 +84,8 @@ export function segments(text: string): Seg[] {
             for (i++; i < lines.length && !/^:::\s*$/.test(lines[i]!); i++) body.push(lines[i]!);
             if (dir[1] === "steps") {
                 const items = body
-                    .map((l) => /^-\s+(.+?)\s+\|\s+(.+?)(?:\s+\|\s+(.+))?$/.exec(l))
+                    // the third field, the narration, may be left empty: `- who | what |`
+                    .map((l) => /^-\s+(.+?)\s+\|\s+(.+?)(?:\s+\|(?:\s+(.+?))?)?\s*$/.exec(l))
                     .filter((m): m is RegExpExecArray => !!m)
                     .map((m) => ({ who: m[1]!, what: m[2]!, say: m[3] }));
                 out.push({ k: "steps", title: dir[2]!.trim(), items });
@@ -299,17 +301,17 @@ function Steps({ title, items }: { title: string; items: { who: string; what: st
     }, [playing, i, items.length]);
     const cur = items[i];
     return (
-        <figure className="sd-steps-fig" tabIndex={0} onKeyDown={stepKeys(i, items.length, setI, setPlaying)} aria-label={`${title}: step ${i + 1} of ${items.length}. ${cur?.who}: ${cur?.what}`}>
-            <div className="sd-steps-h"><span>STEP THROUGH</span><b>{title}</b></div>
+        <figure className="sd-steps-fig" tabIndex={0} onKeyDown={stepKeys(i, items.length, setI, setPlaying)} aria-label={plain(`${title}: step ${i + 1} of ${items.length}. ${cur?.who}: ${cur?.what}`)}>
+            <div className="sd-steps-h"><span>STEP THROUGH</span><b><Inline text={title} /></b></div>
             <div className="sd-steps-row" style={{ "--n": items.length } as CSSProperties}>
                 {items.map((s, k) => (
                     <button key={k} className={k < i ? "past" : k === i ? "now" : ""} onClick={() => { setPlaying(false); setI(k); }}>
-                        <small>{k + 1} · {s.who}</small>
-                        <span>{s.what}</span>
+                        <small>{k + 1} · <Inline text={s.who} /></small>
+                        <span><Inline text={s.what} /></span>
                     </button>
                 ))}
             </div>
-            {cur?.say && <figcaption className="sd-steps-say">{cur.say}</figcaption>}
+            {cur?.say && <figcaption className="sd-steps-say"><Inline text={cur.say} /></figcaption>}
             <StepControls i={i} n={items.length} playing={playing} set={setI} play={setPlaying} />
         </figure>
     );
@@ -319,7 +321,7 @@ function Deeper({ title, meta, text, id, start }: { title: string; meta?: string
     return (
         <details className="sd-deeper">
             <summary>
-                <span>{title}</span>
+                <span><Inline text={title} /></span>
                 <em>{meta ? `optional · ${meta}` : "optional"}</em>
             </summary>
             <Blocks text={text} id={`${id}-d`} start={start} />

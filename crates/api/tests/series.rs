@@ -163,6 +163,11 @@ async fn a_new_reader_starts_at_part_one_and_reading_stores_nothing(db: PgPool) 
     assert_eq!(place["required"][0]["id"], ONE);
     assert_eq!(place["done"], Value::Null, "the completion view is not sent before a solve");
     assert_eq!(get(&app, &format!("/api/problems/{STEP}/series")).await["kind"], "step");
+    // the pager's neighbours follow the parts and then the capstone, passing over what is still to be written
+    let sides = |place: Value| (place["prev"].clone(), place["next"].clone());
+    assert_eq!(sides(get(&app, &format!("/api/problems/{ONE}/series")).await), (Value::Null, json!(TWO)));
+    assert_eq!(sides(place.clone()), (json!(ONE), json!(STEP)));
+    assert_eq!(sides(get(&app, &format!("/api/problems/{STEP}/series")).await), (json!(TWO), Value::Null));
     assert_eq!(get(&app, "/api/problems/no-such-problem/series").await, Value::Null);
     assert_eq!(call(&app, Method::GET, "/api/series/none", None).await.0, StatusCode::NOT_FOUND);
     assert_eq!(stored_rows(&db).await, (0, 0, 0));

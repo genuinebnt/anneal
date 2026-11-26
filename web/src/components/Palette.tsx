@@ -10,6 +10,7 @@ import { toggleTimer } from "../focusStore";
 import { useShowIdeas } from "../spoilers";
 import { toast } from "./toasts";
 import { useDialog } from "./useDialog";
+import { plain } from "./InlineMd";
 
 /** Something a result can do: the first runs on ↵, the second on ⌘↵, all of them from Tab. */
 type Act = { label: string; run: () => void };
@@ -354,7 +355,7 @@ export function Palette({ onClose }: { onClose: () => void }) {
         }
         for (const p of [...(cookbook.data?.subjects.flatMap((s) => s.pages) ?? []), ...(cookbook.data?.samples ?? [])]) {
             const go = close(() => nav({ to: "/cookbook/p/$id", params: { id: p.id } }), `cb-${p.id}`);
-            hits.push({ key: `cb-${p.id}`, label: p.title, kind: "Cookbook", glyph: "≡", color: "var(--mac)", sub: `cookbook · ${p.module} · ${p.chapter}`, rows: [["Chapter", p.chapter]], go, acts: [{ label: "Open", run: go }, { label: "Open in a new tab", run: () => window.open(`/cookbook/p/${p.id}`, "_blank", "noopener") }] });
+            hits.push({ key: `cb-${p.id}`, label: plain(p.title), kind: "Cookbook", glyph: "≡", color: "var(--mac)", sub: `cookbook · ${p.module} · ${p.chapter}`, rows: [["Chapter", p.chapter]], go, acts: [{ label: "Open", run: go }, { label: "Open in a new tab", run: () => window.open(`/cookbook/p/${p.id}`, "_blank", "noopener") }] });
         }
         for (const t of tracks.data ?? []) hits.push({ key: `t-${t.slug}`, label: `${t.code} · ${t.name}`, kind: "Track", glyph: "R", color: "var(--vio)", go: close(() => nav({ to: "/t/$track", params: { track: t.slug } }), `t-${t.slug}`) });
         for (const p of course.data?.projects ?? [])

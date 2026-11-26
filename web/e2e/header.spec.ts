@@ -64,3 +64,35 @@ test("on a phone the areas are a bar at the bottom", async ({ page }) => {
     await expect(dock.getByRole("link", { name: /Courses/ })).toHaveAttribute("aria-current", "page");
     await expect(page.locator(".hd-areas")).toBeHidden();
 });
+
+// The bottom bar starts at 900, so the top switcher has to be there at every width above it, and still fit beside the search.
+for (const width of [901, 960, 1024, 1100, 1101, 1180, 1181]) {
+    test(`at ${width} the header has all six area links and nothing overflows`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        // a page with the second header row, and a workspace with the compact one
+        for (const path of ["/dsa", "/p/l1-fix-use-after-move"]) {
+            await page.goto(path);
+            await expect(page.locator(".hd-dock")).toBeHidden();
+            const areas = page.getByRole("navigation", { name: "Areas" });
+            for (const name of ["DSA", "Rust", "Courses", "System design", "Cookbook", "Progress"]) await expect(areas.getByRole("link", { name, exact: true })).toBeVisible();
+            await page.evaluate(() => document.fonts.ready);
+            const r = await page.evaluate(() => {
+                const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+                const [l, search, right] = [box(".hd-l"), box(".hd-srch"), box(".hdr-r")];
+                const links = [...document.querySelectorAll(".hd-areas a, .hd-t1 .hd-srch, .hdr-r > *")].filter((e) => e.getBoundingClientRect().width > 0);
+                const covered = links.filter((e) => {
+                    const b = e.getBoundingClientRect();
+                    if (!e.matches("a, button")) return false;
+                    return !e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2));
+                });
+                return { left: search.left - l.right, rightGap: right.left - search.right, end: right.right - document.documentElement.clientWidth, search: search.width, covered: covered.map((e) => e.outerHTML.slice(0, 80)), page: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+            });
+            expect(r.left, "areas run into the search").toBeGreaterThanOrEqual(0);
+            expect(r.rightGap, "the search runs into the actions").toBeGreaterThanOrEqual(0);
+            expect(r.end, "the actions leave the window").toBeLessThanOrEqual(0);
+            expect(r.search, "the search is squeezed away").toBeGreaterThanOrEqual(120);
+            expect(r.covered).toEqual([]);
+            expect(r.page).toBeLessThanOrEqual(0);
+        }
+    });
+}

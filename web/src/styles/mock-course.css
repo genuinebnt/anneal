@@ -164,6 +164,8 @@
 .k-root .k-prose p{color:var(--mut);max-width:68ch;margin:0 0 16px}
 .k-root .k-sh{margin:30px 0 12px;display:flex;gap:12px;align-items:center;font:500 11px var(--mono);letter-spacing:.2em;color:var(--dim);scroll-margin-top:70px}
 .k-root .k-sh b{color:var(--grn);font-weight:500}
+.k-root .k-sh>span{min-width:0;text-transform:uppercase}
+.k-root .k-sh code.il,.k-root .k-co b.k-t0 code.il{text-transform:none;letter-spacing:0}
 .k-root .k-sh::after{content:"";flex:1;height:1px;background:var(--line2)}
 .k-root .k-task{border:1px solid color-mix(in oklab,var(--grn) 50%,var(--line2));border-radius:12px;overflow:hidden;background:var(--panel)}
 .k-root .k-task .k-th{display:flex;align-items:center;gap:12px;padding:11px 20px;background:var(--grn-bg);font:600 11px var(--mono);letter-spacing:.2em;color:var(--grn)}
@@ -209,7 +211,7 @@
 .k-root .k-toc a{display:block;padding:5px 0 5px 14px;font-size:13px;color:var(--dim);transition:color .2s}
 .k-root .k-toc a:hover,.k-root .k-toc a.k-on{color:var(--fg)}
 .k-root .k-mk{position:absolute;left:-1px;width:2px;height:24px;background:var(--grn);transition:transform .35s var(--ease)}
-.k-root .k-strip{position:fixed;left:0;right:0;bottom:0;z-index:50;background:color-mix(in oklab,var(--panel) 92%,transparent);backdrop-filter:blur(8px);border-top:1px solid var(--line2);transition:transform .35s var(--ease)}
+.k-root .k-strip{position:fixed;left:0;right:0;bottom:var(--dock-h,0px);z-index:50;background:color-mix(in oklab,var(--panel) 92%,transparent);backdrop-filter:blur(8px);border-top:1px solid var(--line2);transition:transform .35s var(--ease)}
 .k-root .k-strip .k-in{max-width:1180px;margin:0 auto;display:flex;align-items:center;gap:16px;padding:12px 24px}
 .k-root .k-sd{width:10px;height:10px;border-radius:50%;background:var(--bad);flex:none}
 .k-root .k-sd.k-ok{background:var(--grn)}
@@ -351,10 +353,17 @@
 .k-root .k-phead{position:fixed;left:0;right:0;top:var(--k-off);z-index:45;display:flex;align-items:center;gap:14px;padding:0 24px;height:46px;background:color-mix(in oklab,var(--bg) 90%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line2);transform:translateY(-100%);opacity:0;visibility:hidden;transition:transform .4s var(--ease),opacity .3s,visibility .4s}
 .k-root .k-phead.k-show{transform:none;opacity:1;visibility:visible}
 .k-root .k-phead b{font-size:14px}
-.k-root .k-phead span{font:500 11px var(--mono);color:var(--dim)}
+.k-root .k-phead>span{font:500 11px var(--mono);color:var(--dim)}
+.k-root .k-phead>.k-cta{flex:none}
+.k-root .k-phead>b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:640px){.k-root .k-phead{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;align-content:center;height:52px;padding:0 16px}
+.k-root .k-phead>b{grid-area:1/1/2/3}.k-root .k-phead>b+span{grid-area:2/1;white-space:nowrap}.k-root .k-phead>.k-sp{display:none}.k-root .k-phead>.k-pct{grid-area:2/2;white-space:nowrap}.k-root .k-phead>.k-cta{grid-area:1/3/3/4}}
+/* the narrowest phones: beside the button there is room for one label a line */
+@media (max-width:380px){.k-root .k-phead{grid-template-columns:minmax(0,1fr) auto;height:64px;gap:1px 10px}
+.k-root .k-phead>b{grid-area:1/1}.k-root .k-phead>b+span{grid-area:2/1}.k-root .k-phead>.k-pct{grid-area:3/1}.k-root .k-phead>.k-cta{grid-area:1/2/4/3;padding:0 10px}}
 .k-root .k-phead .k-sp{flex:1}
 .k-root .k-phead .k-pct{font:600 11px var(--mono);color:var(--grn);font-variant-numeric:tabular-nums}
-.k-root .k-totop{position:fixed;right:22px;bottom:84px;z-index:55;width:44px;height:44px;border-radius:50%;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line);color:var(--fg);display:grid;place-items:center;opacity:0;transform:translateY(12px) scale(.9);pointer-events:none;transition:opacity .25s,transform .35s var(--ease)}
+.k-root .k-totop{position:fixed;right:22px;bottom:calc(84px + var(--dock-h,0px));z-index:55;width:44px;height:44px;border-radius:50%;background:var(--panel);box-shadow:inset 0 0 0 1px var(--line);color:var(--fg);display:grid;place-items:center;opacity:0;transform:translateY(12px) scale(.9);pointer-events:none;transition:opacity .25s,transform .35s var(--ease)}
 .k-root .k-totop.k-show{opacity:1;transform:none;pointer-events:auto}
 .k-root .k-totop:hover{box-shadow:inset 0 0 0 1px var(--grn);color:var(--grn)}
 .k-root .k-totop svg{position:absolute;inset:0;transform:rotate(-90deg)}
@@ -412,7 +421,7 @@
 .k-root .k-co::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--cc)}
 .k-root .k-co:hover{transform:translateX(2px)}
 .k-root .k-co .k-ic{width:26px;height:26px;border-radius:7px;background:color-mix(in oklab,var(--cc) 18%,transparent);color:var(--cc);display:grid;place-items:center;font:700 13px var(--mono);margin-left:6px}
-.k-root .k-co b.k-t0{display:block;font:700 10.5px var(--mono);letter-spacing:.16em;color:var(--cc);margin-bottom:3px}
+.k-root .k-co b.k-t0{display:block;font:700 10.5px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--cc);margin-bottom:3px}
 .k-root .k-co p{margin:0;color:var(--mut);font-size:14.5px;max-width:none}
 .k-root .k-co.k-tip{--cc:var(--grn)}
 .k-root .k-co.k-note{--cc:oklch(0.79 0.10 235)}
@@ -808,15 +817,22 @@
 .k-root .k-mbar button:active{transform:scale(.96)}
 .k-root .k-mbar button b{font:700 10px var(--mono);padding:1px 7px;border-radius:9px;background:var(--grn-bg);color:var(--grn)}
 .k-root .k-mbar .k-sp{flex:1}
-.k-root .k-tree,.k-root .k-toc{display:flex;position:fixed;top:var(--k-off);bottom:62px;z-index:95;width:min(360px,90vw);height:auto;background:var(--inset);box-shadow:0 30px 60px -20px var(--shadow);transition:transform .45s var(--ease),visibility .45s;visibility:hidden}
+.k-root .k-tree,.k-root .k-toc{display:flex;position:fixed;top:var(--k-off);bottom:calc(var(--strip-h,67px) + var(--dock-h,0px));z-index:95;width:min(360px,90vw);height:auto;background:var(--inset);box-shadow:0 30px 60px -20px var(--shadow);transition:transform .45s var(--ease),visibility .45s;visibility:hidden}
 .k-root .k-tree{left:0;transform:translateX(-104%);border-right:1px solid var(--line);align-self:auto}
 .k-root .k-toc{right:0;transform:translateX(104%);border-left:1px solid var(--line);padding:18px 0 0 14px;align-self:auto}
 .k-root .k-tree.k-open,.k-root .k-toc.k-open{transform:none;visibility:visible}
 .k-root .k-lc .k-tree .k-chead>div:not(.k-cring),.k-root .k-lc .k-tm,.k-root .k-lc .k-tsrch,.k-root .k-lc .k-tswitch{display:revert}
-.k-root .k-dbk{display:block;position:fixed;inset:var(--k-off) 0 62px;z-index:92;background:color-mix(in oklab,var(--bg) 55%,transparent);backdrop-filter:blur(0);opacity:0;visibility:hidden;transition:opacity .3s,backdrop-filter .3s,visibility .3s}
+.k-root .k-dbk{display:block;position:fixed;inset:var(--k-off) 0 calc(var(--strip-h,67px) + var(--dock-h,0px));z-index:92;background:color-mix(in oklab,var(--bg) 55%,transparent);backdrop-filter:blur(0);opacity:0;visibility:hidden;transition:opacity .3s,backdrop-filter .3s,visibility .3s}
 .k-root .k-dbk.k-on{opacity:1;visibility:visible;backdrop-filter:blur(5px)}
 .k-root #lt,.k-root #rt{display:none}
 .k-root .k-drawer-x{display:grid!important}}
+@media (max-width:1100px) and (max-height:600px){.k-root .k-tree,.k-root .k-toc{top:0;bottom:0}
+.k-root .k-dbk{inset:0}
+.k-root .k-tree .k-chead{padding:8px 14px}
+.k-root .k-tree .k-chead .k-cring{width:36px;height:36px}
+.k-root .k-tree .k-tsrch{flex:none;margin-bottom:6px}
+.k-root .k-tree .k-tlist{flex:1;min-height:0}
+.k-root .k-tree .k-tfoot{flex:none;padding-block:6px;gap:6px}}
 .k-root .k-drawer-x{display:none;width:34px;height:34px;place-items:center;border-radius:9px;color:var(--dim);font-size:18px;margin-left:auto}
 .k-root .k-drawer-x:hover{background:var(--raise);color:var(--fg)}
 @media (max-width:640px){.k-root h2.k-ttl{font-size:30px}
@@ -824,6 +840,7 @@
 .k-root .k-tabs button{flex:none}
 .k-root .k-snr p,.k-root .k-prose p{font-size:15px}
 .k-root .k-pn{grid-template-columns:1fr}
+.k-root{--strip-h:63px}
 .k-root .k-strip .k-in{padding:10px 14px;gap:10px}
 .k-root .k-sb{display:none}
 .k-root .k-strip .k-tx{font-size:11px}

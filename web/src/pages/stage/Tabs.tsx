@@ -8,6 +8,7 @@ import { handleCodeClick, handleCodeKey, highlightDiffLines, initCodeTabs, rende
 import { MockCopy } from "../../components/mock";
 import { toast } from "../../components/toasts";
 import { ago } from "./shared";
+import { Inline, plain } from "../../components/InlineMd";
 
 /** Markdown rendered with the mockup's components; the code tabs measure their underline once they are in the page. */
 export function Prose({ text, className = "k-prose" }: { text: string; className?: string }) {
@@ -49,7 +50,7 @@ export function HintsTab({ page, onOpen, pending }: { page: Page; onOpen: () => 
                         >
                             <span>
                                 Hint {i + 1}
-                                {h ? ` · ${h.title}` : ""}
+                                {h && <> · <Inline text={h.title} /></>}
                             </span>
                             <span className={`k-cost${h ? "" : " k-lock"}`}>{h ? "opened" : next ? (state === "todo" ? "marks the stage as assisted" : "open it") : `🔒 open after hint ${i}`}</span>
                         </button>
@@ -169,9 +170,9 @@ export function ConceptsTab({ course, page, queryKey }: { course: string; page: 
                                 <span className="k-cic">{k.read ? "✓" : page.concepts.indexOf(k) + 1}</span>
                                 <div style={{ minWidth: 0 }}>
                                     <h4>
-                                        {k.title} <span className={`k-badge2 ${k.required ? "k-req" : "k-op"}`}>{k.required ? "REQUIRED" : "OPTIONAL"}</span>
+                                        <Inline text={k.title} /> <span className={`k-badge2 ${k.required ? "k-req" : "k-op"}`}>{k.required ? "REQUIRED" : "OPTIONAL"}</span>
                                     </h4>
-                                    <p>{k.summary}</p>
+                                    <p><Inline text={k.summary} /></p>
                                     <div className="k-cmeta">
                                         <span>{k.minutes} min read</span>
                                         <span className="k-mp2">
@@ -195,12 +196,12 @@ export function ConceptsTab({ course, page, queryKey }: { course: string; page: 
                                     <div className="k-cpi">
                                         <div>
                                             <h6>IN SHORT</h6>
-                                            <p style={{ margin: 0, color: "var(--mut)", fontSize: 14, maxWidth: "62ch" }}>{k.summary}</p>
+                                            <p style={{ margin: 0, color: "var(--mut)", fontSize: 14, maxWidth: "62ch" }}><Inline text={k.summary} /></p>
                                         </div>
                                     </div>
                                     <div className="k-cfoot">
                                         <label style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13.5, color: "var(--mut)" }}>
-                                            <button type="button" role="switch" aria-checked={k.read} className={`k-sw${k.read ? " k-on" : ""}`} aria-label={`Mark "${k.title}" as read`} onClick={() => mark.mutate({ id: k.id, read: !k.read })} />
+                                            <button type="button" role="switch" aria-checked={k.read} className={`k-sw${k.read ? " k-on" : ""}`} aria-label={`Mark "${plain(k.title)}" as read`} onClick={() => mark.mutate({ id: k.id, read: !k.read })} />
                                             Mark as read
                                         </label>
                                         <span className="k-spacer" />

@@ -38,7 +38,7 @@ A comparator must be a **total order**: antisymmetric, transitive, and defined f
 
 | C / C++ | Rust |
 |---|---|
-| `std::sort(v.begin(), v.end(), cmp)` with `cmp` returning `bool` ("a before b"), strict weak ordering | `v.sort_by(|a, b| ..)` returning `Ordering` |
+| `std::sort(v.begin(), v.end(), cmp)` with `cmp` returning `bool` ("a before b"), strict weak ordering | `v.sort_by(\|a, b\| ..)` returning `Ordering` |
 | `std::stable_sort` for equal rows in input order | `sort_by` is stable (`sort_unstable_by` is the fast, unstable one) |
 | `std::priority_queue` with a comparator type | `BinaryHeap<T>` where `T: Ord` (wrap data and comparator in a struct) |
 | `TupleComparator::operator()(SortEntry a, SortEntry b) -> bool` | `Ordering` instead of a bool |

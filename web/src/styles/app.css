@@ -37,8 +37,8 @@ a.tile:hover { border-color: var(--line); }
 .cm-lens .gr { grid-template-columns: 34px minmax(0, 190px) minmax(0, 1fr); }
 .cm-lens .gr > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run { background: none; text-align: left; cursor: pointer; }
-.solved { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid var(--grn); border-radius:8px; background: var(--grn-bg); font-size: 13px; }
-.solved a { color: var(--grn); }
+.ws-solved { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid var(--grn); border-radius:8px; background: var(--grn-bg); font-size: 13px; }
+.ws-solved a { color: var(--grn); }
 .rulebox { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 4px; background: var(--warn-bg); font-size:12px; line-height: 1.55; color: var(--fg); }
 .errbox { padding: 12px 14px; border-radius: 4px; background: var(--bad-bg); font-size:12px; line-height: 1.55; color: var(--fg); }
 .tpanic { display: block; white-space: pre-wrap; color: var(--bad); }

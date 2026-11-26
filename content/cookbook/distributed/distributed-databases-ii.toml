@@ -426,7 +426,7 @@ body = """
 [[sections]]
 heading = "CAP and PACELC, honestly"
 body = """
-<p><strong>CAP</strong> is narrower than its slogan: it's about <strong>linearizability vs availability <em>during a partition***. A CP system (Spanner, etcd, CockroachDB) stops serving the minority side; an AP system (Cassandra at low consistency levels, Dynamo) answers from both sides and reconciles later (versions, CRDTs, last-writer-wins). Partitions are not optional in a real network, so the actual choice is C or A *when they happen</em>. **PACELC</strong> adds the everyday cost: even <strong>without</strong> a partition, strong consistency needs coordination (a quorum or a leader round trip): you trade <strong>latency for consistency</strong> all the time. Dynamo/Cassandra are PA/EL; Spanner and CockroachDB are PC/EC; MongoDB defaults are PA/EC.</p>
+<p><strong>CAP</strong> is narrower than its slogan: it's about <strong>linearizability vs availability <em>during a partition</em></strong>. A CP system (Spanner, etcd, CockroachDB) stops serving the minority side; an AP system (Cassandra at low consistency levels, Dynamo) answers from both sides and reconciles later (versions, CRDTs, last-writer-wins). Partitions are not optional in a real network, so the actual choice is C or A <em>when they happen</em>. <strong>PACELC</strong> adds the everyday cost: even <strong>without</strong> a partition, strong consistency needs coordination (a quorum or a leader round trip): you trade <strong>latency for consistency</strong> all the time. Dynamo/Cassandra are PA/EL; Spanner and CockroachDB are PC/EC; MongoDB defaults are PA/EC.</p>
 """
 
 [[sections]]

@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, type CbIndex, type CbRow, type CbSubject } from "../../api";
 import "../../styles/cookbook.css";
+import { Inline } from "../../components/InlineMd";
 
 export const useCookbook = () => useQuery({ queryKey: ["cookbook"], queryFn: api.cookbook, staleTime: 5 * 60_000 });
 
@@ -98,8 +99,8 @@ export function PageRow({ row, subject, where }: { row: CbRow; subject: string; 
     return (
         <li style={tint(subject)}>
             <Link to="/cookbook/p/$id" params={{ id: row.id }}>
-                <span className="cb-row-t">{row.title}</span>
-                <span className="cb-row-d">{row.lede.replace(/`/g, "")}</span>
+                <span className="cb-row-t"><Inline text={row.title} /></span>
+                <span className="cb-row-d"><Inline text={row.lede} /></span>
                 <span className="cb-row-m">
                     {where && <small>{where}</small>}
                     <em className={`cb-kind cb-kind-${row.kind}`}>{kindLabel(row.kind)}</em>
@@ -115,7 +116,7 @@ function Book({ rows, current, flat }: { rows: CbRow[]; current?: string; flat: 
     const here = rows.find((r) => r.id === current);
     const link = (p: CbRow) => (
         <Link key={p.id} to="/cookbook/p/$id" params={{ id: p.id }} className={p.id === current ? "on" : ""} aria-current={p.id === current ? "page" : undefined}>
-            {p.title}
+            <span><Inline text={p.title} /></span>
         </Link>
     );
     if (flat) return <div className="cb-book-pages">{rows.map(link)}</div>;
@@ -161,7 +162,7 @@ export function Shelf({ data, subject, current, chapters }: { data: CbIndex; sub
                     <div className="cb-book-pages cb-found">
                         {found.length === 0 && <p className="cb-dim">No page here matches. ⌘K searches everything.</p>}
                         {found.slice(0, 60).map((p) => (
-                            <Link key={p.id} to="/cookbook/p/$id" params={{ id: p.id }} className={p.id === current ? "on" : ""}>{p.title}</Link>
+                            <Link key={p.id} to="/cookbook/p/$id" params={{ id: p.id }} className={p.id === current ? "on" : ""}><span><Inline text={p.title} /></span></Link>
                         ))}
                     </div>
                 ) : (

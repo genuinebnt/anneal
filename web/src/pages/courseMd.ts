@@ -10,6 +10,7 @@
 import { rust } from "@codemirror/lang-rust";
 import { highlightTree, tagHighlighter, tags as t } from "@lezer/highlight";
 import { Marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
+import { inlineHtml } from "../components/InlineMd";
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const span = (cls: string, text: string) => `<span class="${cls}">${esc(text)}</span>`;
@@ -139,7 +140,7 @@ const LANGS: Record<string, { label: string; kind: "rust" | "cpp" | "shell" | "p
 function diagram(text: string): string {
     const m = /^caption:\s*(.*)\n/.exec(text);
     const svg = m ? text.slice(m[0].length) : text;
-    return `<figure class="cx-diagram">${svg}${m ? `<figcaption>${esc(m[1] ?? "")}</figcaption>` : ""}</figure>`;
+    return `<figure class="cx-diagram">${svg}${m ? `<figcaption>${inlineHtml(m[1] ?? "")}</figcaption>` : ""}</figure>`;
 }
 
 // ---------- code ----------
@@ -258,12 +259,12 @@ const LEADS: [RegExp, CalloutKind][] = [
 
 function callout(kind: CalloutKind, title: string, body: string): string {
     const dismiss = kind === "danger" || kind === "bus" || kind === "rule" ? "" : `<button class="k-x" type="button" aria-label="Dismiss this note">×</button>`;
-    return `<div class="k-co k-${kind}"><span class="k-ic" aria-hidden="true">${ICON[kind] ?? "i"}</span><div><b class="k-t0">${esc(title)}</b>${body}</div>${dismiss}</div>`;
+    return `<div class="k-co k-${kind}"><span class="k-ic" aria-hidden="true">${ICON[kind] ?? "i"}</span><div><b class="k-t0">${inlineHtml(title)}</b>${body}</div>${dismiss}</div>`;
 }
 
 /** An aside: a longer tangent (prose, code, a table) that opens when asked. `> [!ASIDE] Its title`, then the body. */
 function aside(title: string, body: string): string {
-    return `<div class="k-asd"><button class="k-ah" type="button" aria-expanded="false"><span class="k-badge2 k-as">ASIDE</span><b>${esc(title || "More on this")}</b><span class="k-r"><span>optional</span><span class="k-chev" aria-hidden="true">›</span></span></button><div class="k-ab"><div><div class="k-in3">${body}</div></div></div></div>`;
+    return `<div class="k-asd"><button class="k-ah" type="button" aria-expanded="false"><span class="k-badge2 k-as">ASIDE</span><b>${inlineHtml(title || "More on this")}</b><span class="k-r"><span>optional</span><span class="k-chev" aria-hidden="true">›</span></span></button><div class="k-ab"><div><div class="k-in3">${body}</div></div></div></div>`;
 }
 
 /** A question to try before looking: `> [!CHECK] The question`, then the answer in `||spoiler||` marks, then a list of nudges that open one at a time. */
@@ -348,7 +349,7 @@ const marked: Marked = new Marked({
                     const answer = this.parser.parse((rest ? [para(rest)] : []).concat(others as Tokens.Paragraph[]));
                     return check(marked.parseInline(m[2] ?? "", { async: false }) as string, answer.replace(/^<p>/, "<p>Answer: "), nudges);
                 }
-                const body: string = (m[2] ? `<p><strong>${esc(m[2])}</strong></p>` : "") + this.parser.parse(rest ? [para(rest), ...tokens.slice(1)] : tokens.slice(1));
+                const body: string = (m[2] ? `<p><strong>${inlineHtml(m[2])}</strong></p>` : "") + this.parser.parse(rest ? [para(rest), ...tokens.slice(1)] : tokens.slice(1));
                 return callout(alert[0], alert[1], body);
             }
             return `<blockquote>${this.parser.parse(tokens)}</blockquote>`;
@@ -359,7 +360,7 @@ const marked: Marked = new Marked({
                 const text = (lead as Tokens.Strong).text;
                 for (const [re, kind] of LEADS) {
                     if (re.test(text)) {
-                        const title = text.replace(/[.:!?]+$/, "").toUpperCase();
+                        const title = text.replace(/[.:!?]+$/, "");
                         return callout(kind, title, `<p>${this.parser.parseInline(tokens.slice(1)).replace(/^\s+/, "")}</p>`);
                     }
                 }

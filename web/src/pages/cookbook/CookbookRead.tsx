@@ -13,6 +13,7 @@ import { KIND_COLOR, sourceKind } from "../sd/SdRead";
 import { CodeViewer } from "./CodeViewer";
 import { Connections, InShort, SpoilerGate, lessonFences } from "./Lesson";
 import { Shelf, anchorOf, isCodeKind, kindLabel, scrollToId, subjectPath, tint, topicsOf, useCookbook } from "./shared";
+import { Inline, plain } from "../../components/InlineMd";
 
 /** Sections shown open on a draft page with many: the answer comes first. */
 const OPEN_FIRST = 2;
@@ -27,7 +28,7 @@ const labTitle = (page: CbPage, lab: CbLab) => (page.kind === "lesson" ? "Full c
 function Lab({ lab, n, page, wrap, onWrap }: { lab: CbLab; n: number; page: CbPage; wrap: boolean; onWrap: () => void }) {
     const code = isCodeKind(page.kind);
     if (!lab.contents.length) return null;
-    const viewer = <CodeViewer files={lab.contents} label={code || page.kind === "lesson" ? `Code of ${page.title}` : lab.title} wrap={wrap} onWrap={onWrap} foldHeader={page.kind === "lesson" || (code && page.kind !== "project")} />;
+    const viewer = <CodeViewer files={lab.contents} label={code || page.kind === "lesson" ? `Code of ${plain(page.title)}` : lab.title} wrap={wrap} onWrap={onWrap} foldHeader={page.kind === "lesson" || (code && page.kind !== "project")} />;
     return (
         <section className="cb-lab" id={`cb-lab-${n}`} aria-label={code ? "The code" : labTitle(page, lab)}>
             {!code && <h2>{labTitle(page, lab)}</h2>}
@@ -68,7 +69,7 @@ function Around({ chapter, current, linked }: { chapter: CbRow[]; current: strin
                     <ol className="cb-rail">
                         {chapter.map((r) => (
                             <li key={r.id}>
-                                <Link to="/cookbook/p/$id" params={{ id: r.id }} className={r.id === current ? "on" : ""} aria-current={r.id === current ? "page" : undefined}>{r.title}</Link>
+                                <Link to="/cookbook/p/$id" params={{ id: r.id }} className={r.id === current ? "on" : ""} aria-current={r.id === current ? "page" : undefined}><Inline text={r.title} /></Link>
                             </li>
                         ))}
                     </ol>
@@ -76,7 +77,7 @@ function Around({ chapter, current, linked }: { chapter: CbRow[]; current: strin
             )}
             {linked.length > 0 && (
                 <Panel title="Linked from" aside={<small className="cb-dim">{linked.length}</small>}>
-                    <ul className="cb-linked">{linked.map((r) => <li key={r.id}><Link to="/cookbook/p/$id" params={{ id: r.id }}>{r.title}</Link></li>)}</ul>
+                    <ul className="cb-linked">{linked.map((r) => <li key={r.id}><Link to="/cookbook/p/$id" params={{ id: r.id }}><Inline text={r.title} /></Link></li>)}</ul>
                 </Panel>
             )}
         </>
@@ -104,7 +105,7 @@ function Head({ page, subject, place }: { page: CbPage; subject: string; place: 
                 {page.chapter}
                 {place && <><i>/</i>{place}</>}
             </p>
-            <h1>{page.title}</h1>
+            <h1><Inline text={page.title} /></h1>
             <div className="cb-meta">
                 <span className="cb-subj">{subject}</span>
                 <span>{kindLabel(page.kind)}</span>
@@ -306,7 +307,7 @@ function Article({ page, wrap, onWrap }: { page: CbPage; wrap: boolean; onWrap: 
                             <li key={s.url}>
                                 <em style={{ color: KIND_COLOR[sourceKind(s)] }}>{sourceKind(s)}</em>
                                 <a href={s.url} target="_blank" rel="noreferrer">{s.title}</a>
-                                {s.note && <p>{s.note}</p>}
+                                {s.note && <p><Inline text={s.note} /></p>}
                                 {s.read === false && <p className="cb-dim">Not read by the page's author.</p>}
                             </li>
                         ))}
@@ -401,8 +402,8 @@ export function CookbookRead({ id }: { id: string }) {
                                 <Head page={page} subject={subject?.title ?? "Draft samples"} place={chapter.length > 1 && at >= 0 ? `page ${at + 1} of ${chapter.length}` : ""} />
                                 <Article key={page.id} page={page} wrap={panels.wrap} onWrap={() => toggle("wrap")} />
                                 <nav className="cb-pn" aria-label="Previous and next page">
-                                    {view.data?.previous ? <Link to="/cookbook/p/$id" params={{ id: view.data.previous.id }}><small>‹ Previous · {view.data.previous.chapter}</small><span>{view.data.previous.title}</span></Link> : <span />}
-                                    {view.data?.next ? <Link to="/cookbook/p/$id" params={{ id: view.data.next.id }} className="next"><small>Up next · {view.data.next.chapter} ›</small><span>{view.data.next.title}</span></Link> : <span />}
+                                    {view.data?.previous ? <Link to="/cookbook/p/$id" params={{ id: view.data.previous.id }}><small>‹ Previous · {view.data.previous.chapter}</small><span><Inline text={view.data.previous.title} /></span></Link> : <span />}
+                                    {view.data?.next ? <Link to="/cookbook/p/$id" params={{ id: view.data.next.id }} className="next"><small>Up next · {view.data.next.chapter} ›</small><span><Inline text={view.data.next.title} /></span></Link> : <span />}
                                 </nav>
                             </>
                         )}

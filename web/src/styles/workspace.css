@@ -89,7 +89,7 @@
 .rx-ws .pane.r .tcase.bad{background:linear-gradient(var(--bad-bg),var(--bad-bg)),var(--inset);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--bad) 55%,var(--line))}
 .rx-ws .pane.r .tcase-h .nm{min-width:0;white-space:normal;overflow-wrap:anywhere}
 .rx-ws .pane.r .tcase-more pre{background:var(--bg)}
-.rx-ws .pane.r :is(.errbox,.rulebox,.solved){border-radius:11px}
+.rx-ws .pane.r :is(.errbox,.rulebox,.ws-solved){border-radius:11px}
 /* the focus timer in the narrow tests pane: its modes take a row of their own */
 .rx-ws .pane.r .ft{margin:0 10px 6px;padding:12px;border:0;background:var(--inset)}
 .rx-ws .pane.r .ft-ring span{background:var(--inset)}

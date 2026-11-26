@@ -11,6 +11,7 @@ import { toast } from "../components/toasts";
 import { getPref, setPref } from "../prefs";
 import { ago } from "./stage/shared";
 import { plannedCount, useShowPlanned, withoutPlanned } from "./plannedModules";
+import { Inline } from "../components/InlineMd";
 
 /** "Project 3" for BusTub's four projects; the optional extras (the Rust on-ramp, the primer) are named by their title. */
 export function projectLabel(number: number, title: string): string {
@@ -372,7 +373,7 @@ export function CoursePage({ course = COURSE_ID }: { course?: string }) {
                                                                 {m.beyond && !m.planned && <span className="k-btag k-beyond" title="Not part of BusTub: this module is an extra the course adds">BEYOND BUSTUB</span>}
                                                                 {m.planned && <span className="k-planned" title="This module is being rewritten. Its stages are the old ones and will change.">PLANNED</span>}
                                                             </b>
-                                                            {m.summary && <p>{m.summary}</p>}
+                                                            {m.summary && <p><Inline text={m.summary} /></p>}
                                                         </span>
                                                         <span className="k-mp">
                                                             <span className="k-mini" aria-hidden="true">

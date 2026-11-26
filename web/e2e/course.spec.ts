@@ -137,3 +137,105 @@ test("a run stopped for taking too long says time limit exceeded, and keeps the 
     await page.locator(".k-rph").click();
     await expect(page.locator(".k-rwrap", { hasText: fine })).toBeVisible();
 });
+
+for (const width of [320, 390, 760, 900]) {
+    test(`at ${width} the stage's test bar sits above the bottom bar, whose links all stay clickable`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 844 });
+        await page.goto("/courses/bustub/4a-04");
+        const dock = page.locator(".hd-dock");
+        await expect(dock).toBeVisible();
+        await expect(page.locator(".k-strip")).toBeVisible();
+        await page.evaluate(() => document.fonts.ready);
+        const links = dock.getByRole("link");
+        await expect(links).toHaveCount(6);
+        await expect.poll(() => links.evaluateAll((all) => all.filter((e) => {
+            const b = e.getBoundingClientRect();
+            return !e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2));
+        }).length), { message: "covered bottom links" }).toBe(0);
+        const strip = (await page.locator(".k-strip").boundingBox())!;
+        const bar = (await dock.boundingBox())!;
+        expect(strip.y + strip.height).toBeLessThanOrEqual(bar.y + 0.5);
+        // the end of the page clears both bars
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+        const top = page.getByRole("button", { name: "Back to top" });
+        await expect.poll(async () => { const t = (await top.boundingBox())!; return t.y + t.height - (await page.locator(".k-strip").boundingBox())!.y; }, { message: "back to top sits on the test bar" }).toBeLessThanOrEqual(0);
+        const end = (await page.locator(".k-read2 > *").last().boundingBox())!;
+        expect(end.y + end.height).toBeLessThanOrEqual((await page.locator(".k-strip").boundingBox())!.y + 0.5);
+        // the drawer of stages ends above them too
+        await page.locator(".k-mbar button").first().click();
+        await expect.poll(async () => { const t = (await page.locator(".k-tree").boundingBox())!; return t.y + t.height; }).toBeLessThanOrEqual(strip.y + 0.5);
+    });
+}
+
+// A phone on its side, and other windows with little height: the drawers must still hold a list one can use.
+for (const [width, height] of [[844, 390], [667, 375], [740, 360], [900, 400], [1000, 420]] as const) {
+    test(`at ${width}x${height} the stage drawers keep room for their lists, and their buttons can be pressed`, async ({ page }) => {
+        await page.setViewportSize({ width, height });
+        await page.goto("/courses/bustub/4a-04");
+        const hit = (sel: string) => page.locator(sel).first().evaluate((e) => {
+            const b = e.getBoundingClientRect();
+            return b.height > 0 && b.bottom <= innerHeight + 0.5 && e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2));
+        });
+        await page.locator(".k-mbar button", { hasText: "Stages" }).click();
+        await expect.poll(() => page.locator(".k-tree").evaluate((e) => e.getBoundingClientRect().x)).toBe(0);
+        expect((await page.locator(".k-tree .k-tlist").boundingBox())!.height).toBeGreaterThanOrEqual(120);
+        for (const sel of [".k-tree .k-drawer-x", ".k-tree .k-tfoot .k-cta", ".k-tree .k-tsrch input"]) await expect.poll(() => hit(sel), { message: sel }).toBe(true);
+        await page.locator(".k-tree .k-drawer-x").click();
+        await expect(page.locator(".k-tree")).toBeHidden();
+        await page.locator(".k-mbar button", { hasText: "Page & notes" }).click();
+        await expect.poll(() => page.locator(".k-toc").evaluate((e) => Math.round(e.getBoundingClientRect().right) - innerWidth)).toBe(0);
+        expect((await page.locator(".k-toc .k-tscroll").boundingBox())!.height).toBeGreaterThanOrEqual(200);
+    });
+}
+
+for (const width of [320, 360, 390]) test(`at ${width} the sticky stage bar's labels and Copy button are all whole`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/courses/bustub/r-02");
+    await expect(page.locator(".k-ttl")).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, 1400));
+    const button = page.locator(".k-phead .k-cta");
+    await expect(button).toBeVisible();
+    const m = await button.evaluate((e) => ({ over: e.scrollWidth - e.clientWidth, right: e.getBoundingClientRect().right - innerWidth, button: getComputedStyle(e).color, label: getComputedStyle(e.querySelector(".k-lbl")!).color }));
+    expect(m.over).toBeLessThanOrEqual(0);
+    expect(m.right).toBeLessThanOrEqual(0);
+    expect(m.label).toBe(m.button);
+    // the labels beside it are whole too: nothing cut off, nothing under the button
+    await expect.poll(() => page.locator(".k-phead").evaluate((bar) => {
+        const cta = bar.querySelector(".k-cta")!.getBoundingClientRect();
+        return [...bar.querySelectorAll<HTMLElement>(":scope>span:not(.k-sp)")].filter((e) => {
+            const r = e.getBoundingClientRect();
+            return e.scrollWidth > e.clientWidth + 1 || r.right > cta.left + 0.5 || r.bottom > bar.getBoundingClientRect().bottom + 0.5 || r.left < 0;
+        }).map((e) => e.textContent);
+    })).toEqual([]);
+});
+
+/** Course text a reader sees outside code that still carries Markdown. */
+const rawCourseMarks = (page: import("@playwright/test").Page) =>
+    page.evaluate(() => {
+        const out: string[] = [];
+        const walk = document.createTreeWalker(document.querySelector(".k-root")!, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+            if (n.parentElement!.closest("pre, code, textarea, svg, .cm-editor, .k-cb")) continue;
+            const t = n.textContent ?? "";
+            if (/`|\*\*[^*]+\*\*|(^|\s)\*[A-Za-z][^*\n]{1,60}[A-Za-z]\*(\s|[.,;:]|$)/i.test(t)) out.push(`${n.parentElement!.tagName}.${n.parentElement!.className}: ${t.slice(0, 80)}`);
+        }
+        for (const e of document.querySelectorAll(".k-root [title], .k-root [aria-label]")) for (const a of ["title", "aria-label"]) if ((e.getAttribute(a) ?? "").includes("`")) out.push(`@${a}: ${e.getAttribute(a)}`);
+        return out;
+    });
+
+// one page for each place that showed the marks: headings, the outline, ledes, "you'll learn", note cards, callout titles, captions and table cells
+for (const path of ["1b-01", "1g-c2", "3d-06", "3e-03", "concept/bytes-endianness-and-views", "concept/name-resolution-and-the-binder", "concept/shifts-masks-and-bit-tricks", "concept/reader-writer-latches", "concept/positional-io-and-short-reads", "concept/property-testing-and-fuzzing", "concept/durability-and-fsync", "concept/option-and-result-combinators", "concept/top-n-with-a-bounded-heap"]) {
+    test(`course page ${path} shows no Markdown marks`, async ({ page }) => {
+        await page.goto(`/courses/bustub/${path}`);
+        await expect(page.locator(".k-ttl")).toBeVisible();
+        await page.waitForLoadState("networkidle");
+        await expect.poll(() => rawCourseMarks(page)).toEqual([]);
+    });
+}
+
+test("code with a pipe in a table cell is whole", async ({ page }) => {
+    await page.goto("/courses/bustub/3e-03");
+    await expect(page.locator(".k-vt td", { hasText: ".iter().map(|e| e.evaluate(..)).collect::<Result<Vec<_>>>()?" })).toHaveCount(1);
+    await page.goto("/courses/bustub/concept/option-and-result-combinators");
+    await expect(page.locator(".k-vt td", { hasText: "opt.ok_or_else(|| err)" })).toHaveCount(1);
+});

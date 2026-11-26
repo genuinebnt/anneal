@@ -98,7 +98,7 @@ body = """
 
 **Detach partition.** ALTER TABLE ... DETACH PARTITION: turns a partition into an ordinary table, which can then be dropped or archived without scanning or deleting rows. *Page: Partitioning: what it speeds up and what it only moves.*
 
-**Detoast.** Fetching and decompressing a stored wide value to use its contents; the step that makes a query on a wide column expensive. *Page: TOAST: wide values, jsonb and SELECT *.*
+**Detoast.** Fetching and decompressing a stored wide value to use its contents; the step that makes a query on a wide column expensive. *Page: TOAST: wide values, jsonb and SELECT \\*.*
 """
 
 [[sections]]
@@ -382,7 +382,7 @@ body = """
 
 **Staleness.** How far behind the live data a stored result is; a materialized view is as old as its last refresh. *Page: Materialized views: precompute, then manage the staleness.*
 
-**STORAGE (plain, main, extended, external).** The per-column TOAST policy: whether a value may be compressed and whether it may be moved out of the row. *Page: TOAST: wide values, jsonb and SELECT *.*
+**STORAGE (plain, main, extended, external).** The per-column TOAST policy: whether a value may be compressed and whether it may be moved out of the row. *Page: TOAST: wide values, jsonb and SELECT \\*.*
 
 **Streaming replication.** A standby server receives the primary's write-ahead log as it is written and replays it, staying a copy a short distance behind. *Page: Read replicas: lag, stale reads and query conflicts.*
 
@@ -404,7 +404,7 @@ body = """
 
 **TIMING OFF.** An EXPLAIN option that skips the per-row clock reads, removing most of ANALYZE's overhead. *Page: Reading EXPLAIN.*
 
-**TOAST.** The mechanism that compresses and moves values larger than about 2 kB to a hidden side table, chunked, so a row fits in a page; the row keeps a pointer. *Page: TOAST: wide values, jsonb and SELECT *.*
+**TOAST.** The mechanism that compresses and moves values larger than about 2 kB to a hidden side table, chunked, so a row fits in a page; the row keeps a pointer. *Page: TOAST: wide values, jsonb and SELECT \\*.*
 
 **Top-N heapsort.** The sort Postgres uses with LIMIT: it keeps only the N best rows so far in a small heap instead of sorting everything. *Page: ORDER BY and GROUP BY from an index.*
 

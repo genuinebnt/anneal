@@ -21,6 +21,8 @@ input{font:inherit;color:inherit}
 /* --mono is the UI's label font; --code is for programming text: code, pre, diffs, compiler output */
 code,pre,kbd,textarea{font-family:var(--code)}
 code{font-size:.92em;color:var(--fg)}
+/* inline code in a title, link or button (InlineMd) takes the colour of the text around it */
+code.il{color:inherit;overflow-wrap:anywhere}
 /* Code is Fira Code with its ligatures (!= as ≠, => as ⇒); the small interface labels (.m) are plain mono */
 code,pre,kbd,textarea{font-variant-ligatures:normal;font-feature-settings:"calt" 1,"liga" 1}
 .m{font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}

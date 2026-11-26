@@ -7,6 +7,7 @@ import { SdFigure } from "../../components/SdFigure";
 import { PlansContext, SdMd, countNotes } from "../../components/SdMd";
 import { getPref, setPref } from "../../prefs";
 import { groupOf } from "./SdHome";
+import { Inline } from "../../components/InlineMd";
 
 /** How the article is set: column width, text size, line spacing, and focus (the article alone). They follow the owner across
  *  laptops like other preferences. */
@@ -205,7 +206,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
         <PlansContext.Provider value={v.plans ?? {}}>
         <div className={`rd-wrap${hasNotes ? " has-sn" : ""}`} style={style}>
             <article className="ly-pn sd-art rd-art">
-                <p className="sd-lede">{c.lede}</p>
+                <p className="sd-lede"><Inline text={c.lede} /></p>
                 <div className="rd-meta">
                     <span>{c.minutes} min read</span>
                     <span>{c.checks.length} checks</span>
@@ -229,7 +230,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
                         {c.figures.filter((f) => f.after === s.heading).map((f) => <SdFigure key={f.name} name={f.name} caption={f.caption} expandable />)}
                     </section>
                 ))}
-                <aside className="sd-call sd-call-interview rd-say"><b>Say it like this</b><div><p>“{c.say}”</p></div></aside>
+                <aside className="sd-call sd-call-interview rd-say"><b>Say it like this</b><div><p>“<Inline text={c.say} />”</p></div></aside>
                 {(sources.length > 0 || c.credit) && (
                     <section className="sd-srcs">
                         <h4>Sources and further reading</h4>
@@ -241,7 +242,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
                                         <a key={x.url} href={x.url} target="_blank" rel="noreferrer">
                                             <small style={{ color: KIND_COLOR[k] }}>{k.toUpperCase()}</small>
                                             <b>{x.title}</b>
-                                            {x.note && <span>{x.note}</span>}
+                                            {x.note && <span><Inline text={x.note} /></span>}
                                         </a>
                                     );
                                 })}
@@ -260,7 +261,7 @@ export function ConceptReader({ id, v, all, checks }: { id: string; v: SdConcept
             <AskPanel kind="sd-concept" id={id} />
             {terms.length > 0 && (
                 <Panel title="Key terms here">
-                    <div className="rd-terms">{terms.map((t) => <div key={t.term}><b>{t.term}</b><span>{t.means}</span></div>)}</div>
+                    <div className="rd-terms">{terms.map((t) => <div key={t.term}><b><Inline text={t.term} /></b><span><Inline text={t.means} /></span></div>)}</div>
                 </Panel>
             )}
             {v.used_in.length > 0 && (

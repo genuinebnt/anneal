@@ -64,6 +64,9 @@ export interface SeriesPlace {
   kind: "part" | "step";
   number: number;
   total: number;
+  /** The problems either side in the series' order (parts, then capstone steps); null at the ends. */
+  prev: string | null;
+  next: string | null;
   minutes: number | null;
   segments: boolean[];
   know_first: string | null;

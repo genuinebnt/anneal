@@ -97,7 +97,7 @@ The executors of Project 3, task 1 (`seq_scan_executor.cpp`, `insert_executor.cp
 | C / C++ | Rust |
 |---|---|
 | `table_info->table_->UpdateTupleMeta({0, true}, rid)` | `table.update_tuple_meta(&TupleMeta { ts: 0, is_deleted: true }, rid)?` |
-| `std::vector<Value> values; for (auto &expr : target_expressions_) values.push_back(expr->Evaluate(...))` | `.iter().map(|e| e.evaluate(..)).collect::<Result<Vec<_>>>()?` |
+| `std::vector<Value> values; for (auto &expr : target_expressions_) values.push_back(expr->Evaluate(...))` | `.iter().map(\|e\| e.evaluate(..)).collect::<Result<Vec<_>>>()?` |
 | `index->index_->DeleteEntry(key, rid, txn)` | `index.index.delete_entry(&key)` |
 
 **Port rule:** a loop that pushes into a vector and may throw becomes an iterator chain collected into a `Result`.

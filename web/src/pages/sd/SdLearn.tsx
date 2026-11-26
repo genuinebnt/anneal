@@ -5,6 +5,7 @@ import { HowFound, ListCard, Page3, Panel, Tile, PageLoading, LoadFailed } from 
 import { SdMd } from "../../components/SdMd";
 import { SD_GROUPS, SdFrame } from "./SdHome";
 import { ConceptReader } from "./SdRead";
+import { Inline, plain } from "../../components/InlineMd";
 
 /** Every concept page, by group. */
 export function SdLearn() {
@@ -38,7 +39,7 @@ export function SdLearn() {
                     <h2 className="sd-gh" style={{ "--c": g.color } as CSSProperties}>{g.name}<span>{g.blurb}</span></h2>
                     <div className="sd-cards">
                         {g.items.map((c, i) => (
-                            <ListCard key={c.id} i={i} title={c.title} note={`${c.minutes} min`} w={c.checks ? (Math.min(c.checked, c.checks) / c.checks) * 100 : 0} color={g.color} text={c.lede} to={{ to: "/sd/learn/$id", params: { id: c.id } }} />
+                            <ListCard key={c.id} i={i} title={c.title} note={`${c.minutes} min`} w={c.checks ? (Math.min(c.checked, c.checks) / c.checks) * 100 : 0} color={g.color} text={<Inline text={c.lede} />} to={{ to: "/sd/learn/$id", params: { id: c.id } }} />
                         ))}
                     </div>
                 </section>
@@ -73,8 +74,8 @@ function Check({ concept, index, prompt, answer, marked }: { concept: string; in
     return (
         <div className="sd-q">
             <span className="sdr-qno" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-            <b>{prompt}</b>
-            <textarea aria-label={`Your answer: ${prompt}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write it as you would say it…" rows={5} />
+            <b><Inline text={prompt} /></b>
+            <textarea aria-label={`Your answer: ${plain(prompt)}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Write it as you would say it…" rows={5} />
             {!open ? (
                 <div className="sd-row"><button className="sd-ghost" onClick={() => setOpen(true)}>Compare</button>{marked && <span className="sd-dim">marked before; it is in Review</span>}</div>
             ) : (

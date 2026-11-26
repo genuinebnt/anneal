@@ -67,7 +67,7 @@ None for this stage. The *Other designs* sections of 0b-01 and 0b-02 list the al
 | C / C++ | Rust |
 |---|---|
 | `std::atomic<int> successful_insertions` | `Arc<AtomicUsize>` |
-| `std::thread` with a lambda capturing by reference | `thread::spawn(move || ...)` with a cloned `Arc` |
+| `std::thread` with a lambda capturing by reference | `thread::spawn(move \|\| ...)` with a cloned `Arc` |
 
 **Port rule:** threads cannot borrow locals in Rust (without scoped threads), so shared state is an `Arc`.
 

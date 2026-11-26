@@ -82,3 +82,27 @@ test("the Learn tab shows the phases and one simple card for each problem", asyn
     await expect(card.locator(".rp-tags code").first()).toBeVisible();
     await expect(page.locator(".rt-brief .rt-fold, .rt-brief .rt-rel")).toHaveCount(0);
 });
+
+// Whatever state a segment is in, it is one thin slice of the bar: no other style may reach it.
+for (const [width, tab] of [[1500, "learn"], [1500, "problems"], [390, "learn"], [390, "problems"]] as const) {
+    test(`at ${width} on the ${tab} tab the track's progress segments are all one size`, async ({ page }) => {
+        // three states side by side, whatever the database holds
+        await page.route("**/api/tracks/l1-ownership-moves", async (route) => {
+            const res = await route.fetch();
+            const body = await res.json();
+            ["solved", "started", "assisted", "not_started"].forEach((state, i) => (body.problems[i].progress = state));
+            await route.fulfill({ response: res, json: body });
+        });
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`/t/l1-ownership-moves?tab=${tab}`);
+        const bar = page.locator(".bk-segs").first();
+        await expect(bar).toBeVisible();
+        const m = await bar.evaluate((el) => ({ h: el.getBoundingClientRect().height, segs: [...el.children].map((c) => { const r = c.getBoundingClientRect(); return { w: r.width, h: r.height }; }) }));
+        expect(m.segs.length).toBeGreaterThan(5);
+        expect(m.h).toBe(6);
+        for (const s of m.segs) {
+            expect(s.h).toBe(m.h);
+            expect(Math.abs(s.w - m.segs.at(-1)!.w)).toBeLessThan(1);
+        }
+    });
+}

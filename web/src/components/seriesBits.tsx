@@ -3,6 +3,7 @@
 import { Link } from "@tanstack/react-router";
 import type { SeriesDone, SeriesLink, SeriesPlace } from "../api";
 import "../styles/series.css";
+import { Inline } from "./InlineMd";
 
 /** `Part 2 of 21` or `Capstone step 3 of 10`. */
 export const placeName = (s: SeriesPlace) => `${s.kind === "part" ? "Part" : "Capstone step"} ${s.number} of ${s.total}`;
@@ -59,7 +60,7 @@ export function Connections({ place, solved }: { place: SeriesPlace; solved: boo
           {place.cookbook.map((c) => (
             <Link key={c.page} to="/cookbook/p/$id" params={{ id: c.page }}>
               <em>{COOKBOOK_TAG[c.level]}</em>
-              <span>Cookbook: {c.title}</span>
+              <span>Cookbook: <Inline text={c.title} /></span>
             </Link>
           ))}
         </details>

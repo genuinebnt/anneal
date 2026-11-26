@@ -457,6 +457,9 @@ pub struct Place {
     pub number: usize,
     /// How many parts (or steps) there are.
     pub total: usize,
+    /// The written problems either side in the series' order (the parts, then the capstone steps); absent at the ends.
+    pub prev: Option<String>,
+    pub next: Option<String>,
     pub minutes: Option<u32>,
     /// Which of those are solved.
     pub segments: Vec<bool>,
@@ -554,12 +557,24 @@ fn done(series: &Series, item: &Item, facts: &Facts) -> Done {
     }
 }
 
+/// The nearest written part or step before and after `item`; those still to be written are passed over.
+fn neighbours(series: &Series, item: &Item) -> (Option<String>, Option<String>) {
+    let is_item = |i: &&Item| i.kind == item.kind && i.number == item.number;
+    let open = |i: &Item| i.written.then(|| i.id.clone()).flatten();
+    let prev = series.items().take_while(|i| !is_item(i)).filter_map(open).last();
+    let next = series.items().skip_while(|i| !is_item(i)).skip(1).find_map(open);
+    (prev, next)
+}
+
 fn place(catalog: &Catalog, series: &Series, item: &Item, facts: &Facts) -> Place {
     let all = match item.kind {
         ItemKind::Part => &series.parts,
         ItemKind::Step => &series.steps,
     };
+    let (prev, next) = neighbours(series, item);
     Place {
+        prev,
+        next,
         series: PageRef { id: series.id.clone(), title: series.title.clone() },
         kind: match item.kind {
             ItemKind::Part => "part",

@@ -136,3 +136,44 @@ test("the Series tab under Rust lists every series and opens one", async ({ page
     await expect(page).toHaveURL(/\/rust\/series\/.+/);
     await expect(page.locator(".hd-tabs a.on")).toHaveText("Series");
 });
+
+test("the pager of a series problem follows the series: its count, its order, both ends and the capstone", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const s = await (await request.get("/api/series/web-server")).json();
+    type Item = { kind: "part" | "step"; number: number; id: string | null };
+    const parts: Item[] = s.groups.flatMap((g: { rows: (Item & { row: string })[] }) => g.rows.filter((r) => r.row === "item"));
+    parts.sort((a, b) => a.number - b.number);
+    const steps: Item[] = s.capstone.steps;
+    const written = [...parts, ...steps].filter((x) => x.id !== null);
+    // the ends, the second part (the one that used to point back at part 3), and both sides of the way into the capstone
+    const firstStep = written.findIndex((x) => x.kind === "step");
+    const at = [...new Set([0, 1, firstStep - 1, firstStep, written.length - 1].filter((i) => i >= 0))];
+    for (const i of at) {
+        const item = written[i]!;
+        await page.goto(`/p/${item.id}`);
+        const pager = page.locator(".subbar .sbr > div").first();
+        await expect(pager.locator("span", { hasText: " / " })).toHaveText(`${item.number} / ${item.kind === "part" ? parts.length : steps.length}`);
+        for (const [name, to] of [["Previous problem", written[i - 1]], ["Next problem", written[i + 1]]] as const) {
+            const link = pager.getByRole("link", { name });
+            if (to) await expect(link).toHaveAttribute("href", `/p/${to.id}`);
+            else await expect(link).toHaveCount(0);
+        }
+    }
+    // and the links work
+    await page.goto(`/p/${written[1]!.id}`);
+    await page.locator(".subbar").getByRole("link", { name: "Previous problem" }).click();
+    await expect(page).toHaveURL(new RegExp(`/p/${written[0]!.id}$`));
+});
+
+test("outside a series the pager still follows the track", async ({ page, request }) => {
+    const id = "l1-fix-use-after-move";
+    expect(await (await request.get(`/api/problems/${id}/series`)).json()).toBeNull();
+    const p = await (await request.get(`/api/problems/${id}`)).json();
+    await page.goto(`/p/${id}`);
+    const pager = page.locator(".subbar .sbr > div").first();
+    await expect(pager.locator("span", { hasText: " / " })).toHaveText(`${p.position} / ${p.count}`);
+    for (const [name, to] of [["Previous problem", p.prev], ["Next problem", p.next]] as const) {
+        if (to) await expect(pager.getByRole("link", { name })).toHaveAttribute("href", `/p/${to}`);
+        else await expect(pager.getByRole("link", { name })).toHaveCount(0);
+    }
+});

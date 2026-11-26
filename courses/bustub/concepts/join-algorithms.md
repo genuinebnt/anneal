@@ -7,9 +7,9 @@ A join combines two inputs, **left** (outer) and **right** (inner), on a predica
 
 | algorithm | idea | cost (pairs examined) | needs |
 |---|---|---|---|
-| **nested loop** | for every left row, scan the whole right side and test the predicate | `|L| × |R|` | nothing: any predicate |
-| **hash join** | build a hash table of the right side on its join key; for every left row, look up its key | `|L| + |R|` | an equality predicate |
-| **index nested loop** | for every left row, probe an index on the right table | `|L| × log|R|` | an equality predicate and an index |
+| **nested loop** | for every left row, scan the whole right side and test the predicate | `\|L\| × \|R\|` | nothing: any predicate |
+| **hash join** | build a hash table of the right side on its join key; for every left row, look up its key | `\|L\| + \|R\|` | an equality predicate |
+| **index nested loop** | for every left row, probe an index on the right table | `\|L\| × log\|R\|` | an equality predicate and an index |
 
 ```svg
 caption: A hash join in two phases. Build: hash every right row on the join key into a table. Probe: for each left row, hash its key and look in the one bucket that could match.

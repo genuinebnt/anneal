@@ -6,6 +6,7 @@ import { api } from "../api";
 import { Header } from "../components/Header";
 import { MockRoot, reducedMotion } from "../components/mock";
 import { Prose } from "./stage/Tabs";
+import { Inline } from "../components/InlineMd";
 
 /** A concept: a short article that teaches one idea a stage needs, in the mockup's reading column and page panel. */
 export function CourseConceptPage({ course, id }: { course: string; id: string }) {
@@ -69,16 +70,16 @@ export function CourseConceptPage({ course, id }: { course: string; id: string }
                             / CONCEPT / ~{p.concept.minutes} MIN READ{first && <> / USED IN {first.id.toUpperCase()}</>}
                         </div>
                         <h2 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
-                            {p.concept.title}
+                            <Inline text={p.concept.title} />
                         </h2>
                         <p className="k-lead k-rv" style={{ "--i": 2 } as React.CSSProperties}>
-                            {p.concept.summary}
+                            <Inline text={p.concept.summary} />
                         </p>
                         {p.concept.sections.map((s, i) => (
                             <section key={s.id} id={`c-${s.id}`}>
                                 <div className="k-sh">
                                     <b>{String(i + 1).padStart(2, "0")}</b>
-                                    {s.title.toUpperCase()}
+                                    <span><Inline text={s.title} /></span>
                                 </div>
                                 <Prose text={s.md} />
                             </section>
@@ -94,7 +95,7 @@ export function CourseConceptPage({ course, id }: { course: string; id: string }
                                             <small>
                                                 STAGE {s.rank} · {s.module.toUpperCase()}
                                             </small>
-                                            {s.title}
+                                            <Inline text={s.title} />
                                         </Link>
                                     ))}
                                 </nav>
@@ -117,7 +118,7 @@ export function CourseConceptPage({ course, id }: { course: string; id: string }
                                                 document.getElementById(`c-${s.id}`)?.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
                                             }}
                                         >
-                                            {s.title}
+                                            <Inline text={s.title} />
                                         </a>
                                     ))}
                                 </div>

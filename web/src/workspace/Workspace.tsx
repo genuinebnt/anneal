@@ -21,6 +21,7 @@ import { Ansi } from "./ansi";
 import { type TestCase, pythonTestCases, testCases } from "./testcases";
 import { type RaSession, type RaStatus, connectRa } from "./lsp";
 import "../styles/workspace.css";
+import { Inline } from "../components/InlineMd";
 
 type LeftTab = "problem" | "hints" | "solution" | "related";
 
@@ -49,9 +50,9 @@ function CookbookHelp({ links }: { links: CookbookLink[] }) {
               {here.map((l) => (
                 <li key={`${l.page}#${l.section ?? ""}`}>
                   <a href={`/cookbook/p/${l.page}${l.section ? `#${l.section}` : ""}`} target="_blank" rel="noopener">
-                    {l.title} ↗
+                    <Inline text={l.title} /> ↗
                   </a>
-                  <p className="note">{l.note}</p>
+                  <p className="note"><Inline text={l.note} /></p>
                 </li>
               ))}
             </ul>
@@ -159,6 +160,8 @@ function Loaded({ p }: { p: ProblemDetail }) {
   // Where this problem sits in a series (content/series), or null. It carries the completion view once solved.
   const placeQuery = useQuery({ queryKey: ["problem-series", p.id], queryFn: () => api.problemSeries(p.id) });
   const place = placeQuery.data ?? null;
+  // The pager follows the series for a part of one, the track otherwise; nothing is linked until that is known.
+  const pager = placeQuery.isPending ? null : place ? { prev: place.prev, next: place.next, at: place.number, of: place.total } : { prev: p.prev, next: p.next, at: p.position, of: p.count };
   // What names the method (tags, what this teaches, follow-ups) waits until it is known that this is not a part of a
   // series, or until the part is solved. While the answer is on its way, nothing is shown that might have to be hidden.
   const outsideSeries = placeQuery.isSuccess && !place;
@@ -484,18 +487,18 @@ function Loaded({ p }: { p: ProblemDetail }) {
           )}
           <div className="sbr">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {p.prev ? (
-                <Link to="/p/$id" params={{ id: p.prev }} style={{ color: "var(--dim)" }} aria-label="Previous problem">
+              {pager?.prev ? (
+                <Link to="/p/$id" params={{ id: pager.prev }} style={{ color: "var(--dim)" }} aria-label="Previous problem">
                   ‹
                 </Link>
               ) : (
                 <span style={{ color: "var(--line)" }}>‹</span>
               )}
               <span>
-                {p.position} / {p.count}
+                {pager ? `${pager.at} / ${pager.of}` : "– / –"}
               </span>
-              {p.next ? (
-                <Link to="/p/$id" params={{ id: p.next }} style={{ color: "var(--dim)" }} aria-label="Next problem">
+              {pager?.next ? (
+                <Link to="/p/$id" params={{ id: pager.next }} style={{ color: "var(--dim)" }} aria-label="Next problem">
                   ›
                 </Link>
               ) : (
@@ -999,13 +1002,17 @@ function Loaded({ p }: { p: ProblemDetail }) {
               </div>
               <div className="pbody" style={{ padding: 18 }}>
                 {p.attempt.solved && (
-                  <div className="solved">
+                  <div className="ws-solved">
                     <span className="lab" style={{ color: "var(--grn)" }}>
                       SOLVED{p.attempt.assisted ? " · ASSISTED" : ""}
                     </span>
                     {done?.next?.id ? (
                       <Link to="/p/$id" params={{ id: done.next.id }}>
                         Next {done.next.kind === "part" ? "part" : "step"} →
+                      </Link>
+                    ) : place ? (
+                      <Link to="/rust/series/$id" params={{ id: place.series.id }}>
+                        Back to the series →
                       </Link>
                     ) : p.next ? (
                       <Link to="/p/$id" params={{ id: p.next }}>

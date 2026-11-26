@@ -221,3 +221,47 @@ test("screenshots for review", async ({ page }) => {
         }
     }
 });
+
+/** Text a reader sees outside code that still carries Markdown: a backtick or a doubled asterisk. */
+const rawMarkup = (page: Page) =>
+    page.evaluate(() => {
+        const out: string[] = [];
+        const walk = document.createTreeWalker(document.querySelector("#root") ?? document.body, NodeFilter.SHOW_TEXT);
+        for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+            const el = n.parentElement!;
+            if (el.closest("pre, code, textarea, .cm-editor, script, style")) continue;
+            const t = n.textContent ?? "";
+            if (/`|\*\*/.test(t)) out.push(`${el.className || el.tagName}: ${t.slice(0, 80)}`);
+        }
+        for (const el of document.querySelectorAll("[title], [aria-label], [placeholder]"))
+            for (const a of ["title", "aria-label", "placeholder"]) if (/`/.test(el.getAttribute(a) ?? "") && !el.closest("pre, .cm-editor")) out.push(`@${a}: ${el.getAttribute(a)!.slice(0, 80)}`);
+        return out;
+    });
+
+test("a step-through shows its code as code, and a step without narration keeps no pipe", async ({ page }) => {
+    await page.goto("/cookbook/p/mini-kv-store");
+    // a long draft page keeps its later sections folded
+    await page.evaluate(() => document.querySelectorAll("details").forEach((d) => (d.open = true)));
+    const flush = page.locator(".sd-steps-fig", { hasText: "A flush" });
+    await expect(flush).toBeVisible();
+    await expect(flush.locator(".sd-steps-row button", { hasText: "cleared" }).locator("span")).toHaveText("cleared");
+    await expect(flush.locator(".sd-steps-row code", { hasText: "set_len(0)" })).toBeVisible();
+    // no step anywhere on the page ends in a pipe
+    for (const t of await page.locator(".sd-steps-row button").allTextContents()) expect(t).not.toMatch(/\|\s*$/);
+    expect(await rawMarkup(page)).toEqual([]);
+});
+
+test("page titles and descriptions show inline code, not backticks, wherever they are listed", async ({ page }) => {
+    for (const path of ["/cookbook", "/cookbook/rust", "/cookbook/p/cow", "/cookbook/p/drop-raii", "/cookbook/p/mini-kv-store"]) {
+        await page.goto(path);
+        await expect(page.locator("h1").first()).toBeVisible();
+        await expect.poll(() => rawMarkup(page), { message: path }).toEqual([]);
+    }
+    await page.goto("/cookbook/rust");
+    await expect(page.locator(".cb-row-t code", { hasText: "Cow" }).first()).toHaveText("Cow");
+    // search results too
+    await page.goto("/cookbook");
+    await page.getByLabel("Search the cookbook").fill("RAII");
+    await expect(page.locator(".cb-rows li").first()).toBeVisible();
+    expect(await rawMarkup(page)).toEqual([]);
+});

@@ -42,7 +42,6 @@
 .hd-srch{max-width:none;margin:0;width:100%}
 .hdr-r{justify-self:end}
 @media (max-width:1420px){.hdr .hd-t1{grid-template-columns:auto minmax(0,1fr) auto}.hd-srch{max-width:440px;justify-self:center}}
-@media (max-width:1180px){.hd-l .hd-areas{display:none}}
 @media (max-width:900px){.hdr .hd-t1{gap:10px}}
 .hd-chip span{display:inline}
 /* the second bar: tabs only, with a gentle fade where they scroll */

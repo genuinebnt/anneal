@@ -16,6 +16,7 @@ import { Resizer, usePanels } from "./stagePanels";
 import { ConceptsTab, HintsTab, Prose, RunTab, SolutionTab } from "./stage/Tabs";
 import { Tree } from "./stage/Tree";
 import { DIFFICULTY_LABEL, ago } from "./stage/shared";
+import { Inline, plain } from "../components/InlineMd";
 
 const LIMIT = "Time limit exceeded";
 
@@ -79,7 +80,7 @@ function HowTo({ boxed, taskTitle, testsTitle, onTask, onTests, cmd }: { boxed: 
                 <b aria-hidden="true">1</b>
                 <div>
                     <strong>Read the task</strong>
-                    <span>{boxed ? 'The box marked "Your turn" is all you must build.' : taskTitle ? `"${taskTitle}" says what you must do.` : "The instructions say what you must do."}</span>
+                    <span>{boxed ? 'The box marked "Your turn" is all you must build.' : taskTitle ? `"${plain(taskTitle)}" says what you must do.` : "The instructions say what you must do."}</span>
                     {(boxed || taskTitle) && (
                         <button type="button" data-jump="task" onClick={onTask}>
                             Go to the task
@@ -436,7 +437,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
             <MockRoot>
                 <div className="k-read" ref={barRef} aria-hidden="true" />
                 <div className="k-phead" ref={pheadRef}>
-                    <b>{p.stage.title}</b>
+                    <b><Inline text={p.stage.title} /></b>
                     <span>
                         {p.module.code.toUpperCase()} · stage {inModule + 1} of {p.module.stages.length}
                     </span>
@@ -469,7 +470,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                             {p.state !== "todo" && <> / {p.state === "assisted" ? "PASSED · ASSISTED" : "PASSED"}</>}
                         </div>
                         <h2 className="k-ttl k-rv" style={{ "--i": 1 } as React.CSSProperties}>
-                            {p.stage.title}
+                            <Inline text={p.stage.title} />
                         </h2>
                         <HowTo boxed={boxed} taskTitle={taskEntry?.title} testsTitle={testsEntry?.title} onTask={() => jumpTo(boxed ? '[data-anchor="task"]' : `#${taskEntry?.id}`)} onTests={() => jumpTo(`#${testsEntry?.id}`)} cmd={cmd} />
                         {p.stage.learn.length > 0 && (
@@ -477,7 +478,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                 <span>YOU'LL LEARN</span>
                                 {p.stage.learn.map((l) => (
                                     <span className="k-cp" key={l}>
-                                        {l}
+                                        <Inline text={l} />
                                     </span>
                                 ))}
                             </div>
@@ -519,7 +520,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                         >
                                             <b>READ FIRST</b>
                                             <span>
-                                                {reqConcepts[0]?.title}
+                                                <Inline text={reqConcepts[0]?.title ?? ""} />
                                                 {reqConcepts.length > 1 && <> · and {reqConcepts.length - 1} more</>}
                                             </span>
                                             <em>~{reqConcepts.reduce((n, k) => n + k.minutes, 0)} min</em>
@@ -546,7 +547,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                                             }
                                                         >
                                                             <span className="k-badge2 k-op">OPTIONAL</span>
-                                                            <b>{e.title}</b>
+                                                            <b><Inline text={e.title} /></b>
                                                             <span className="k-r">
                                                                 <span className="k-chev" style={{ transform: isOpen ? "rotate(90deg)" : undefined }}>›</span>
                                                             </span>
@@ -584,7 +585,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                             <Fragment key={e.id}>
                                                 <div className="k-sh" id={e.id} data-anchor={e.id === testsEntry?.id ? "tests" : undefined}>
                                                     <b>{pt ? `PART ${pt[1]}` : String(number).padStart(2, "0")}</b>
-                                                    {(pt ? pt[2] ?? "" : e.title).toUpperCase()}
+                                                    <span><Inline text={pt ? pt[2] ?? "" : e.title} /></span>
                                                 </div>
                                                 {e.title === "The task" ? (
                                                     <TaskBox stageId={p.stage.id} text={e.md} />
@@ -682,7 +683,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                                 }, 30);
                                             }}
                                         >
-                                            {label}
+                                            <Inline text={label} />
                                         </a>
                                     ))}
                                 </div>
@@ -756,7 +757,7 @@ export function CourseStagePage({ course, stage }: { course: string; stage: stri
                                             <Link key={k.id} className={`k-cc2${k.read ? "" : " k-todo"}`} to="/courses/$course/concept/$id" params={{ course, id: k.id }}>
                                                 <span className="k-ci">{k.read ? "✓" : i + 1}</span>
                                                 <div>
-                                                    <b>{k.title}</b>
+                                                    <b><Inline text={k.title} /></b>
                                                     <small>{k.minutes} min read</small>
                                                 </div>
                                                 <span className="k-st4">{k.read ? "READ" : k.required ? "TO READ" : "OPTIONAL"}</span>

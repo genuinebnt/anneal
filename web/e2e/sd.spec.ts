@@ -183,3 +183,27 @@ test("a SQL course page draws its captured plans: the hottest step marked, bars 
     await expect(plan.locator(".pv-raw")).toContainText('"Node Type"');
     await expect(page.getByText("has not been captured yet")).toHaveCount(0);
 });
+
+test("concept pages show inline code in ledes and checks, not backticks", async ({ page }) => {
+    await page.goto("/sd/learn/sql-vectors");
+    await expect(page.locator(".sd-q").first()).toBeVisible();
+    expect(await page.locator(".sd-lede, .sd-q > b, .rd-terms, .sd-srcs").allTextContents().then((all) => all.filter((t) => t.includes("`")))).toEqual([]);
+    for (const label of await page.locator(".sd-q textarea").evaluateAll((all) => all.map((e) => e.getAttribute("aria-label")!))) expect(label).not.toContain("`");
+    await expect(page.locator(".sd-q > b code").first()).toBeVisible();
+});
+
+test("an asterisk that is part of the text stays one", async ({ page }) => {
+    await page.goto("/sd/learn/sql-aggregates");
+    const say = page.locator(".rd-say p").first();
+    await expect(say).toContainText("An exact count(*) of 2,000,000 rows");
+    await expect(say).toContainText("SELECT count(*) FROM");
+    await expect(say.locator("em")).toHaveCount(0);
+    await page.goto("/sd/learn/sql-glossary");
+    await expect(page.locator(".rd-art .sd-md").first()).toBeVisible();
+    await page.evaluate(() => document.querySelectorAll("details").forEach((d) => (d.open = true)));
+    const entries = page.locator(".rd-art em", { hasText: "Page: TOAST: wide values, jsonb and SELECT" });
+    await expect(entries).toHaveCount(3);
+    for (const t of await entries.allTextContents()) expect(t).toBe("Page: TOAST: wide values, jsonb and SELECT *.");
+    // no italic that is only punctuation, which is what a stray pair of asterisks leaves behind
+    expect((await page.locator(".rd-art em").allTextContents()).filter((t) => !/[\p{L}\p{N}]/u.test(t))).toEqual([]);
+});

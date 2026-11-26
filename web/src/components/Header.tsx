@@ -184,6 +184,21 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
         return () => ro.disconnect();
     }, []);
 
+    // Bars fixed to the bottom of a page stack on the phone dock: --dock-h is its height, 0 where it is hidden.
+    const dock = useRef<HTMLElement>(null);
+    useLayoutEffect(() => {
+        const el = dock.current;
+        if (!el) return;
+        const set = () => document.documentElement.style.setProperty("--dock-h", `${el.offsetHeight}px`);
+        set();
+        const ro = new ResizeObserver(set);
+        ro.observe(el);
+        return () => {
+            ro.disconnect();
+            document.documentElement.style.removeProperty("--dock-h");
+        };
+    }, []);
+
     useEffect(() => {
         const open = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -312,7 +327,7 @@ export function Header({ area, compact = false, stats = true }: { area?: AreaId;
                 )}
             </header>
             {stats && !compact && current !== "cb" && <StatsBar area={current} />}
-            <nav className="hd-dock" aria-label="Areas">
+            <nav className="hd-dock" ref={dock} aria-label="Areas">
                 {AREAS.map((a) => (
                     <Link key={a.id} to={a.to} className={!global && a.id === current ? "on" : ""} style={{ "--c": a.color } as React.CSSProperties} aria-current={!global && a.id === current ? "page" : undefined}>
                         <Ring p={ratio(counts[a.id])} color={a.color} />

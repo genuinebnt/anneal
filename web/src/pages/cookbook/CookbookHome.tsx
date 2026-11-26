@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Header } from "../../components/Header";
 import { PageRow, Search, allPages, chaptersIn, grouped, anchorOf, rowMatches, subjectPath, tint, useCookbook, wordsOf, kindLabel } from "./shared";
+import { Inline } from "../../components/InlineMd";
 
 /** Pages shown first: chosen by hand. Each is skipped if it no longer exists. */
 const FEATURED: { id: string; art: string[] }[] = [
@@ -63,8 +64,8 @@ export function CookbookHome() {
                             <span className="cb-dotline"><b>Featured</b><span>{lead.title}</span><span>{kindLabel(lead.row.kind)}</span></span>
                             <span className="cb-art-chips" aria-hidden="true">{lead.art.map((a) => <code key={a}>{a}</code>)}</span>
                             <span>
-                                <span className="cb-lead-t">{lead.row.title}</span>
-                                <span className="cb-lead-d">{lead.row.lede.replace(/`/g, "")}</span>
+                                <span className="cb-lead-t"><Inline text={lead.row.title} /></span>
+                                <span className="cb-lead-d"><Inline text={lead.row.lede} /></span>
                                 <span className="cb-btn">Read the page</span>
                             </span>
                         </Link>
@@ -73,8 +74,8 @@ export function CookbookHome() {
                                 <Link key={f.row.id} to="/cookbook/p/$id" params={{ id: f.row.id }} className="cb-mini" style={tint(f.subject)}>
                                     <span>
                                         <span className="cb-dotline"><span>{f.title}</span><span>{kindLabel(f.row.kind)}</span></span>
-                                        <span className="cb-mini-t">{f.row.title}</span>
-                                        <span className="cb-mini-d">{f.row.lede.replace(/`/g, "")}</span>
+                                        <span className="cb-mini-t"><Inline text={f.row.title} /></span>
+                                        <span className="cb-mini-d"><Inline text={f.row.lede} /></span>
                                     </span>
                                     <span className="cb-thumb" aria-hidden="true"><code>{f.art.join("\n")}</code></span>
                                 </Link>
