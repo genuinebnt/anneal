@@ -44,10 +44,15 @@ The classic price: a worker is pinned to a connection while it is open, so idle 
 heading = "How it works"
 body = """
 - a TCP read can contain half a request, one request, or five; the parser is a pure function over the buffer that answers Incomplete / Done(request, bytes_used) / Bad(error), so pipelining is just "parse again on the rest".
-- limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), syntax and ambiguity (both Content-Length and chunked: a request-smuggling vector) are 400. Errors close the connection.
-- the read side uses 50 ms timeout slices so idle keep-alive connections notice shutdown, the idle timeout and a slow-loris request timeout (408) without a separate timer thread.
+- limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), chunk size line 40 bytes (400), trailer section 8 KiB (431). Syntax and ambiguity (both Content-Length and chunked, or Transfer-Encoding twice: request-smuggling vectors) are 400. Errors close the connection.
+- a limit must give the same answer however the bytes are cut: an unfinished line may end in the CR of its CRLF, so that CR is not counted. The checks parse every prefix of requests at and just over the limits.
+- the read side uses 50 ms timeout slices so idle keep-alive connections notice shutdown and the idle timeout without a separate timer thread. The request timeout (slow loris, 408) is checked on every turn of the loop: checked only after a silent read, a client that keeps dripping bytes would escape it and block shutdown.
 - a handler panic is caught by middleware (500) and, as a second line, around the whole connection, so one bad request never costs the pool a thread.
-- closing a socket that still holds unread input sends RST, which can destroy the error response in flight; so error paths do a lingering close: shutdown(Write), drain briefly, then drop.
+- closing a socket that still holds unread input sends RST, which can destroy the error response in flight; so error paths do a lingering close: shutdown(Write), drain briefly, then drop. It is bounded in bytes **and** time. A refused (503) socket is handed to one `rejector` thread that drains all of them without blocking, so the acceptor never waits.
+
+   Any bounded linger has a limit: bytes sent after it can still draw a reset, and when more than 64 refused sockets are open the oldest is dropped early.
+- HTTP/1.0 has no chunked coding: a streamed response to such a client is ended by closing the connection (the client then cannot tell a cut-off body from a complete one). Range applies to `GET` only, not `HEAD`.
+- the latency histogram is approximate, but the Prometheus `le` buckets are inclusive and need exact counters.
 - graceful shutdown: set `stopping`, wake the blocked `accept`, drop the queue sender (workers drain what is queued then exit), in-flight requests finish and answer `Connection: close`, idle connections are closed, all joined.
 """
 

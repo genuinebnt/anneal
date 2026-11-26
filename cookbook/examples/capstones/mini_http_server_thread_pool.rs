@@ -25,14 +25,24 @@
 //! HOW (the details that bite):
 //!  * a TCP read can contain half a request, one request, or five; the parser is a pure function over the buffer that
 //!    answers Incomplete / Done(request, bytes_used) / Bad(error), so pipelining is just "parse again on the rest".
-//!  * limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), syntax
-//!    and ambiguity (both Content-Length and chunked: a request-smuggling vector) are 400. Errors close the connection.
-//!  * the read side uses 50 ms timeout slices so idle keep-alive connections notice shutdown, the idle timeout and a
-//!    slow-loris request timeout (408) without a separate timer thread.
+//!  * limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), chunk
+//!    size line 40 bytes (400), trailer section 8 KiB (431). Syntax and ambiguity (both Content-Length and chunked,
+//!    or Transfer-Encoding twice: request-smuggling vectors) are 400. Errors close the connection.
+//!  * a limit must give the same answer however the bytes are cut: an unfinished line may end in the CR of its CRLF,
+//!    so that CR is not counted. The checks parse every prefix of requests at and just over the limits.
+//!  * the read side uses 50 ms timeout slices so idle keep-alive connections notice shutdown and the idle timeout
+//!    without a separate timer thread. The request timeout (slow loris, 408) is checked on every turn of the loop:
+//!    checked only after a silent read, a client that keeps dripping bytes would escape it and block shutdown.
 //!  * a handler panic is caught by middleware (500) and, as a second line, around the whole connection, so one bad
 //!    request never costs the pool a thread.
 //!  * closing a socket that still holds unread input sends RST, which can destroy the error response in flight; so
-//!    error paths do a lingering close: shutdown(Write), drain briefly, then drop.
+//!    error paths do a lingering close: shutdown(Write), drain briefly, then drop. It is bounded in bytes AND time.
+//!    A refused (503) socket is handed to one `rejector` thread that drains all of them without blocking, so the
+//!    acceptor never waits. Any bounded linger has a limit: bytes sent after it can still draw a reset, and when
+//!    more than 64 refused sockets are open the oldest is dropped early.
+//!  * HTTP/1.0 has no chunked coding: a streamed response to such a client is ended by closing the connection (the
+//!    client then cannot tell a cut-off body from a complete one). Range applies to `GET` only, not `HEAD`.
+//!  * the latency histogram is approximate, but the Prometheus `le` buckets are inclusive and need exact counters.
 //!  * graceful shutdown: set `stopping`, wake the blocked `accept`, drop the queue sender (workers drain what is queued
 //!    then exit), in-flight requests finish and answer `Connection: close`, idle connections are closed, all joined.
 //!
@@ -57,20 +67,27 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // ======================================================================== histogram
 
 /// Log-linear histogram (8 sub-buckets per power of two, so <= 12.5% relative error), lock-free `record`.
-/// Values are microseconds. Same idea as HdrHistogram, in 40 lines.
+/// Values are microseconds and may be any `u64`. Same idea as HdrHistogram, in a page of code.
+/// The `le` bounds of the Prometheus report fall inside these approximate buckets, so each bound also has an exact counter.
 struct Histogram {
     buckets: Vec<AtomicU64>,
+    /// `exact[i]` counts samples in `(LE_US[i - 1], LE_US[i]]`; larger samples appear only in `count`.
+    exact: [AtomicU64; LE_US.len()],
     count: AtomicU64,
     sum: AtomicU64,
     max: AtomicU64,
 }
 
-const NB: usize = 16 + 8 * 36; // covers values up to 2^40 us (~12 days)
+const NB: usize = 16 + 8 * 60; // 16 exact values, then 8 buckets for each of 2^4 ..= 2^63: all of u64
+
+/// Upper bounds (inclusive, microseconds) of the buckets in the Prometheus report.
+const LE_US: [u64; 9] = [100, 250, 500, 1000, 2500, 5000, 10_000, 50_000, 100_000];
 
 impl Histogram {
     fn new() -> Histogram {
         Histogram {
             buckets: (0..NB).map(|_| AtomicU64::new(0)).collect(),
+            exact: Default::default(),
             count: AtomicU64::new(0),
             sum: AtomicU64::new(0),
             max: AtomicU64::new(0),
@@ -82,7 +99,7 @@ impl Histogram {
         }
         let e = 63 - v.leading_zeros() as usize; // floor(log2 v) >= 4
         let sub = ((v >> (e - 3)) & 7) as usize; // the 3 bits after the leading one
-        (16 + (e - 4) * 8 + sub).min(NB - 1)
+        16 + (e - 4) * 8 + sub
     }
     /// Largest value that maps to bucket `idx`.
     fn upper(idx: usize) -> u64 {
@@ -91,11 +108,15 @@ impl Histogram {
         }
         let k = idx - 16;
         let (e, sub) = (k / 8 + 4, (k % 8) as u64);
-        ((8 + sub + 1) << (e - 3)) - 1
+        let width = 1u64 << (e - 3);
+        (8 + sub) * width + (width - 1) // in this order the last bucket ends at u64::MAX without overflow
     }
     fn record(&self, v: u64) {
+        self.count.fetch_add(1, SeqCst); // first: `cumulative` is then never ahead of a `count` read after it
         self.buckets[Self::index(v)].fetch_add(1, SeqCst);
-        self.count.fetch_add(1, SeqCst);
+        if let Some(i) = LE_US.iter().position(|&le| v <= le) {
+            self.exact[i].fetch_add(1, SeqCst);
+        }
         self.sum.fetch_add(v, SeqCst);
         self.max.fetch_max(v, SeqCst);
     }
@@ -118,12 +139,13 @@ impl Histogram {
         }
         self.max.load(SeqCst)
     }
-    /// Number of samples whose bucket lies entirely at or below `le` (Prometheus cumulative bucket).
-    fn cumulative_le(&self, le: u64) -> u64 {
-        (0..NB)
-            .filter(|&i| Self::upper(i) <= le)
-            .map(|i| self.buckets[i].load(SeqCst))
-            .sum()
+    /// Prometheus cumulative buckets: for each bound in `LE_US`, the number of samples `<=` it.
+    fn cumulative(&self) -> [u64; LE_US.len()] {
+        let mut total = 0;
+        std::array::from_fn(|i| {
+            total += self.exact[i].load(SeqCst);
+            total
+        })
     }
 }
 
@@ -197,6 +219,12 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Length of the content of a line whose CRLF has not arrived: a trailing CR may be the first half of it.
+/// Every line limit must measure this, or the verdict depends on where the network cut the bytes.
+fn unfinished_line_len(b: &[u8]) -> usize {
+    b.strip_suffix(b"\r").unwrap_or(b).len()
+}
+
 /// Pure incremental parser: re-run it whenever more bytes arrive. Never panics on any input.
 fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     use HttpError::*;
@@ -204,7 +232,7 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
         expect_continue: false,
     };
     let Some(line_end) = find(buf, b"\r\n") else {
-        return if buf.len() > lim.max_request_line {
+        return if unfinished_line_len(buf) > lim.max_request_line {
             Parsed::Bad(UriTooLong)
         } else {
             incomplete
@@ -285,6 +313,15 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
             cl = Some(n);
         }
     }
+    // Reading only the first of two copies would let a proxy that reads the other one disagree about the framing.
+    if headers
+        .iter()
+        .filter(|(k, _)| k == "transfer-encoding")
+        .count()
+        > 1
+    {
+        return Parsed::Bad(BadRequest("repeated Transfer-Encoding"));
+    }
     let chunked = match get("transfer-encoding") {
         None => false,
         Some(v) if v.eq_ignore_ascii_case("chunked") => true,
@@ -304,7 +341,7 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
         body: Vec::new(),
     };
     if chunked {
-        return match parse_chunked(buf, head_len, lim.max_body) {
+        return match parse_chunked(buf, head_len, lim) {
             Err(e) => Parsed::Bad(e),
             Ok(None) => Parsed::Incomplete {
                 expect_continue: expect,
@@ -328,21 +365,28 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     Parsed::Done(req, head_len + n)
 }
 
+/// Longest chunk-size line (size and extensions, without its CRLF).
+const MAX_CHUNK_LINE: usize = 40;
+
 /// Decode a chunked body starting at `pos`. Ok(None) = need more bytes.
 fn parse_chunked(
     buf: &[u8],
     mut pos: usize,
-    max: usize,
+    lim: &Limits,
 ) -> Result<Option<(Vec<u8>, usize)>, HttpError> {
     let mut body = Vec::new();
     loop {
+        let too_long = HttpError::BadRequest("chunk size line too long");
         let Some(e) = find(&buf[pos..], b"\r\n") else {
-            return if buf.len() - pos > 40 {
-                Err(HttpError::BadRequest("chunk size line too long"))
+            return if unfinished_line_len(&buf[pos..]) > MAX_CHUNK_LINE {
+                Err(too_long)
             } else {
                 Ok(None)
             };
         };
+        if e > MAX_CHUNK_LINE {
+            return Err(too_long);
+        }
         let line = std::str::from_utf8(&buf[pos..pos + e])
             .map_err(|_| HttpError::BadRequest("bad chunk size"))?;
         let hex = line.split(';').next().unwrap_or("").trim(); // ignore chunk extensions
@@ -352,18 +396,28 @@ fn parse_chunked(
         let size = usize::from_str_radix(hex, 16).unwrap_or(usize::MAX);
         pos += e + 2;
         if size == 0 {
+            // Trailer section: skip lines until the empty one. The body limit does not cover these bytes, so the
+            // whole section (with the final CRLF) shares the size limit of the header block.
+            let start = pos;
             loop {
-                // trailer section: skip lines until the empty one
                 let Some(e) = find(&buf[pos..], b"\r\n") else {
-                    return Ok(None);
+                    // at least one more byte is still to come
+                    return if buf.len() - start >= lim.max_header_bytes {
+                        Err(HttpError::HeaderTooLarge)
+                    } else {
+                        Ok(None)
+                    };
                 };
                 pos += e + 2;
+                if pos - start > lim.max_header_bytes {
+                    return Err(HttpError::HeaderTooLarge);
+                }
                 if e == 0 {
                     return Ok(Some((body, pos)));
                 }
             }
         }
-        if body.len() + size > max {
+        if body.len() + size > lim.max_body {
             return Err(HttpError::BodyTooLarge);
         }
         if buf.len() < pos + size + 2 {
@@ -392,8 +446,11 @@ fn pct_decode(s: &str) -> Option<String> {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            let h = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
-            out.push(u8::from_str_radix(h, 16).ok()?);
+            let hex = |c: &u8| char::from(*c).to_digit(16); // `from_str_radix` would also accept a sign: "+5"
+            let [hi, lo] = b.get(i + 1..i + 3)? else {
+                return None;
+            };
+            out.push((hex(hi)? * 16 + hex(lo)?) as u8);
             i += 3;
         } else {
             out.push(b[i]);
@@ -461,14 +518,21 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-/// Serialise a response. `head_only` (HEAD) sends the same headers, including Content-Length, but no body.
+/// HTTP/1.0 has no chunked coding, so a streamed body sent to such a client has no length: closing ends it.
+fn can_keep_alive(minor: u8, resp: &Response) -> bool {
+    minor >= 1 || !matches!(resp.body, Body::Stream(_))
+}
+
+/// Serialise a response for a client speaking HTTP/1.`minor`. `head_only` (HEAD) sends the same headers, including Content-Length, but no body.
 /// Works on any `Write`, so the tokio server reuses it with a `Vec<u8>`.
 fn write_response<W: Write>(
     w: &mut W,
     resp: Response,
     head_only: bool,
     keep_alive: bool,
+    minor: u8,
 ) -> io::Result<u64> {
+    let keep_alive = keep_alive && can_keep_alive(minor, &resp);
     let mut out: Vec<u8> = Vec::with_capacity(256);
     write!(
         out,
@@ -487,20 +551,31 @@ fn write_response<W: Write>(
     let bodyless = resp.status / 100 == 1 || resp.status == 204 || resp.status == 304;
     match resp.body {
         Body::Stream(chunks) => {
-            out.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
+            let chunked = minor >= 1;
+            if chunked {
+                out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
+            }
+            out.extend_from_slice(b"\r\n");
             let mut total = out.len() as u64;
             w.write_all(&out)?;
             if !head_only {
                 for c in chunks.filter(|c| !c.is_empty()) {
-                    let mut f = format!("{:x}\r\n", c.len()).into_bytes();
-                    f.extend_from_slice(&c);
-                    f.extend_from_slice(b"\r\n");
+                    let f = if chunked {
+                        let mut f = format!("{:x}\r\n", c.len()).into_bytes();
+                        f.extend_from_slice(&c);
+                        f.extend_from_slice(b"\r\n");
+                        f
+                    } else {
+                        c
+                    };
                     w.write_all(&f)?;
                     w.flush()?; // each chunk leaves immediately: that is what "streaming" means
                     total += f.len() as u64;
                 }
-                w.write_all(b"0\r\n\r\n")?;
-                total += 5;
+                if chunked {
+                    w.write_all(b"0\r\n\r\n")?;
+                    total += 5;
+                }
             }
             Ok(total)
         }
@@ -759,10 +834,9 @@ impl Metrics {
             ));
         }
         s.push_str("# HELP http_request_duration_us Handler latency in microseconds.\n# TYPE http_request_duration_us histogram\n");
-        for le in [100u64, 250, 500, 1000, 2500, 5000, 10_000, 50_000, 100_000] {
+        for (le, n) in LE_US.iter().zip(self.latency.cumulative()) {
             s.push_str(&format!(
-                "http_request_duration_us_bucket{{le=\"{le}\"}} {}\n",
-                self.latency.cumulative_le(le)
+                "http_request_duration_us_bucket{{le=\"{le}\"}} {n}\n"
             ));
         }
         s.push_str(&format!(
@@ -929,7 +1003,9 @@ fn serve_static(root: &Path, rest: &str, req: &Request) -> Response {
         return base(Response::new(304));
     }
     let ct = content_type(&canon);
-    match req.header("range").map(|h| parse_range(h, data.len())) {
+    // Range is defined for GET only (RFC 9110 section 14.2): HEAD describes the whole file.
+    let range = req.header("range").filter(|_| req.method == "GET");
+    match range.map(|h| parse_range(h, data.len())) {
         Some(RangeSpec::Bytes(s, e)) => base(Response::new(206))
             .header("Content-Type", ct)
             .header("Content-Range", format!("bytes {s}-{e}/{}", data.len()))
@@ -1119,6 +1195,7 @@ struct Config {
     idle_timeout: Duration,
     request_timeout: Duration,
     max_requests_per_conn: usize,
+    reject_linger: Duration,
     limits: Limits,
     mode: Mode,
 }
@@ -1130,6 +1207,7 @@ fn test_cfg() -> Config {
         idle_timeout: Duration::from_secs(5),
         request_timeout: Duration::from_secs(2),
         max_requests_per_conn: 1000,
+        reject_linger: Duration::from_millis(500),
         limits: Limits {
             max_request_line: 2048,
             max_header_bytes: 8192,
@@ -1241,6 +1319,15 @@ fn acceptor_loop(listener: TcpListener, sh: Arc<Shared>, tx: SyncSender<TcpStrea
     let m = &sh.app.metrics;
     let mut conn_threads: Vec<JoinHandle<()>> = Vec::new();
     let mut n = 0u64;
+    let (refused_tx, refused_rx) = sync_channel::<TcpStream>(MAX_REFUSED_OPEN);
+    let (sh2, linger) = (sh.clone(), sh.cfg.reject_linger);
+    let rejector = thread::Builder::new()
+        .name("rejector".into())
+        .spawn(move || {
+            let _live = LiveGuard::new(&sh2.live);
+            reject_loop(refused_rx, linger);
+        })
+        .expect("spawn rejector");
     loop {
         let stream = match listener.accept() {
             Ok((s, _)) => s,
@@ -1265,7 +1352,9 @@ fn acceptor_loop(listener: TcpListener, sh: Arc<Shared>, tx: SyncSender<TcpStrea
                         m.queued.fetch_sub(1, SeqCst);
                         m.rejected.fetch_add(1, SeqCst);
                         m.count_response(503);
-                        reject_503(s);
+                        if let Some(s) = reject_503(s) {
+                            let _ = refused_tx.try_send(s); // rejector far behind: drop the socket now
+                        }
                     }
                     Err(TrySendError::Disconnected(_)) => {
                         m.queued.fetch_sub(1, SeqCst);
@@ -1291,23 +1380,68 @@ fn acceptor_loop(listener: TcpListener, sh: Arc<Shared>, tx: SyncSender<TcpStrea
         }
     }
     drop(tx); // workers drain the queue, then see Disconnected and exit
+    drop(refused_tx);
     for h in conn_threads {
         let _ = h.join();
     }
+    let _ = rejector.join();
 }
 
 /// Load shedding: tell the client to come back later instead of letting it wait in an ever-growing queue.
-fn reject_503(mut s: TcpStream) {
+/// Runs on the acceptor, so it never waits for the client; the socket then goes to `reject_loop` to be closed.
+fn reject_503(mut s: TcpStream) -> Option<TcpStream> {
     let _ = s.set_write_timeout(Some(Duration::from_millis(200)));
     let body = "503 Service Unavailable: server busy, retry shortly\n";
     let msg = format!(
         "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
-    let _ = s.write_all(msg.as_bytes());
-    let _ = s.shutdown(Shutdown::Write);
-    let _ = s.set_nonblocking(true);
-    let _ = s.read(&mut [0u8; 1024]); // swallow an early request so close() does not RST our response away
+    s.write_all(msg.as_bytes()).ok()?;
+    s.shutdown(Shutdown::Write).ok()?;
+    s.set_nonblocking(true).ok()?;
+    Some(s)
+}
+
+/// Most refused sockets held open at once; beyond it the oldest is dropped early.
+const MAX_REFUSED_OPEN: usize = 64;
+
+/// One thread closes all refused sockets. Closing while input is unread, or before late input arrives, sends RST,
+/// which can destroy the 503. So each socket is read (without blocking) until the client closes, or for `linger`.
+fn reject_loop(rx: Receiver<TcpStream>, linger: Duration) {
+    let mut open: VecDeque<(TcpStream, Instant, usize)> = VecDeque::new();
+    let mut sink = [0u8; 4096];
+    let mut accepting = true;
+    while accepting || !open.is_empty() {
+        let next = if open.is_empty() {
+            rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        } else {
+            rx.recv_timeout(Duration::from_millis(5))
+        };
+        match next {
+            Ok(s) => {
+                if open.len() == MAX_REFUSED_OPEN {
+                    open.pop_front();
+                }
+                open.push_back((s, Instant::now(), 0));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                accepting = false;
+                thread::sleep(Duration::from_millis(5)); // recv no longer waits: do not spin while the rest close
+            }
+        }
+        open.retain_mut(|(s, since, total)| {
+            let alive = match s.read(&mut sink) {
+                Ok(0) => false, // the client closed: nothing can be lost now
+                Ok(n) => {
+                    *total += n;
+                    *total <= 64 * 1024
+                }
+                Err(e) => matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted),
+            };
+            alive && since.elapsed() < linger
+        });
+    }
 }
 
 fn worker_loop(sh: Arc<Shared>, rx: Arc<Mutex<Receiver<TcpStream>>>) {
@@ -1322,13 +1456,19 @@ fn worker_loop(sh: Arc<Shared>, rx: Arc<Mutex<Receiver<TcpStream>>>) {
     }
 }
 
-/// Close politely: send FIN, then read and discard what the peer still sends for a moment.
+/// Longest a worker spends on a lingering close, however steadily the peer keeps sending.
+const LINGER_TOTAL: Duration = Duration::from_millis(500);
+
+/// Close politely: send FIN, then read and discard what the peer still sends until it closes, goes quiet for
+/// 50 ms, has sent 64 KiB or `LINGER_TOTAL` has passed.
 fn lingering_close(mut s: TcpStream) {
     let _ = s.shutdown(Shutdown::Write);
     let _ = s.set_read_timeout(Some(Duration::from_millis(50)));
+    let began = Instant::now();
     let mut sink = [0u8; 4096];
     let mut total = 0;
-    while let Ok(n) = s.read(&mut sink) {
+    while began.elapsed() < LINGER_TOTAL {
+        let Ok(n) = s.read(&mut sink) else { break };
         total += n;
         if n == 0 || total > 64 * 1024 {
             break;
@@ -1364,10 +1504,12 @@ fn serve_connection(sh: &Shared, mut stream: TcpStream) {
                     }
                     let resp = sh.app.handle(&req);
                     let keep = wants_keep_alive(&req)
+                        && can_keep_alive(req.minor, &resp)
                         && served < sh.cfg.max_requests_per_conn
                         && !sh.stopping.load(SeqCst);
                     m.count_response(resp.status); // counted before the write: a client that has the response sees it counted
-                    match write_response(&mut stream, resp, req.method == "HEAD", keep) {
+                    let head = req.method == "HEAD";
+                    match write_response(&mut stream, resp, head, keep, req.minor) {
                         Ok(n) => m.bytes_out.fetch_add(n, SeqCst),
                         Err(_) => return,
                     };
@@ -1381,12 +1523,21 @@ fn serve_connection(sh: &Shared, mut stream: TcpStream) {
                 Parsed::Bad(e) => {
                     let resp = error_response(&e);
                     m.count_response(resp.status);
-                    let _ = write_response(&mut stream, resp, false, false);
+                    let _ = write_response(&mut stream, resp, false, false, 1);
                     lingering_close(stream);
                     return;
                 }
                 Parsed::Incomplete { expect_continue } => {
-                    partial_since.get_or_insert_with(Instant::now);
+                    // Checked on every turn, not only after a silent read: a client that sends one byte
+                    // just often enough would otherwise hold the worker (and shutdown) for ever.
+                    let since = *partial_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= sh.cfg.request_timeout {
+                        let resp = Response::text(408, "408 Request Timeout\n");
+                        m.count_response(408);
+                        let _ = write_response(&mut stream, resp, false, false, 1);
+                        lingering_close(stream);
+                        return;
+                    }
                     if expect_continue && !sent_continue {
                         sent_continue = true;
                         if stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
@@ -1408,17 +1559,11 @@ fn serve_connection(sh: &Shared, mut stream: TcpStream) {
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
                 ) =>
             {
-                if buf.is_empty() {
-                    if sh.stopping.load(SeqCst) || last_activity.elapsed() >= sh.cfg.idle_timeout {
-                        m.idle_closed.fetch_add(1, SeqCst);
-                        return; // idle keep-alive connection: close it
-                    }
-                } else if partial_since.is_some_and(|t| t.elapsed() >= sh.cfg.request_timeout) {
-                    let resp = Response::text(408, "408 Request Timeout\n");
-                    m.count_response(408);
-                    let _ = write_response(&mut stream, resp, false, false);
-                    lingering_close(stream);
-                    return;
+                if buf.is_empty()
+                    && (sh.stopping.load(SeqCst) || last_activity.elapsed() >= sh.cfg.idle_timeout)
+                {
+                    m.idle_closed.fetch_add(1, SeqCst);
+                    return; // idle keep-alive connection: close it
                 }
             }
             Err(_) => return,
@@ -1464,16 +1609,16 @@ async fn tokio_conn(mut s: tokio::net::TcpStream, app: Arc<App>, lim: Limits) {
                 Parsed::Done(req, used) => {
                     buf.drain(..used);
                     let resp = app.handle(&req);
-                    let keep = wants_keep_alive(&req);
+                    let keep = wants_keep_alive(&req) && can_keep_alive(req.minor, &resp);
                     let mut out = Vec::new();
-                    let _ = write_response(&mut out, resp, req.method == "HEAD", keep);
+                    let _ = write_response(&mut out, resp, req.method == "HEAD", keep, req.minor);
                     if s.write_all(&out).await.is_err() || !keep {
                         return;
                     }
                 }
                 Parsed::Bad(e) => {
                     let mut out = Vec::new();
-                    let _ = write_response(&mut out, error_response(&e), false, false);
+                    let _ = write_response(&mut out, error_response(&e), false, false, 1);
                     let _ = s.write_all(&out).await;
                     return;
                 }
@@ -1694,6 +1839,43 @@ fn wait_until(what: &str, f: impl Fn() -> bool) {
     }
 }
 
+/// What the parser says about `raw` (200 = one whole request, else the error status), provided no earlier cut of
+/// the same bytes said something different: every shorter prefix is Incomplete or already the same refusal.
+/// `None` means the answer depends on where the network cut the bytes.
+fn verdict_at_every_cut(raw: &[u8], lim: &Limits) -> Option<u16> {
+    let whole = match parse_request(raw, lim) {
+        Parsed::Done(_, used) if used == raw.len() => 200,
+        Parsed::Bad(e) => e.status(),
+        _ => return None,
+    };
+    (0..raw.len())
+        .all(|cut| match parse_request(&raw[..cut], lim) {
+            Parsed::Incomplete { .. } => true,
+            Parsed::Bad(e) => e.status() == whole,
+            Parsed::Done(..) => false,
+        })
+        .then_some(whole)
+}
+
+/// Sends one byte about every 10 ms, collecting whatever arrives, until `done` is true. The 5 s cap is many times
+/// longer than any server timeout involved, so it is reached only when the server never acts.
+fn drip_until(c: &mut Client, got: &mut Vec<u8>, done: impl Fn(&[u8]) -> bool) -> bool {
+    c.s.set_nonblocking(true).unwrap();
+    let began = Instant::now();
+    let mut tmp = [0u8; 512];
+    while began.elapsed() < Duration::from_secs(5) {
+        if done(got) {
+            return true;
+        }
+        let _ = c.s.write(b"a"); // fails once the server has gone, which is fine
+        thread::sleep(Duration::from_millis(10));
+        if let Ok(n) = c.s.read(&mut tmp) {
+            got.extend_from_slice(&tmp[..n]);
+        }
+    }
+    false
+}
+
 fn make_site() -> (PathBuf, PathBuf) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1787,6 +1969,96 @@ fn main() {
         );
     }
     check("parser: no valid prefix is ever 'Bad'", true);
+
+    let request_line = |n: usize| {
+        let target = "a".repeat(n - "GET / HTTP/1.1".len());
+        format!("GET /{target} HTTP/1.1\r\nHost: h\r\n\r\n").into_bytes()
+    };
+    let max = lim.max_request_line;
+    check(
+        "request-line limit does not depend on where the bytes are cut",
+        verdict_at_every_cut(&request_line(max), &lim) == Some(200)
+            && verdict_at_every_cut(&request_line(max + 1), &lim) == Some(414),
+    );
+    const CHUNKED: &str = "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n";
+    let chunk_line =
+        |n: usize| format!("{CHUNKED}1;{}\r\nz\r\n0\r\n\r\n", "e".repeat(n - 2)).into_bytes();
+    check(
+        "chunk-line limit does not depend on where the bytes are cut",
+        verdict_at_every_cut(&chunk_line(MAX_CHUNK_LINE), &lim) == Some(200)
+            && verdict_at_every_cut(&chunk_line(MAX_CHUNK_LINE + 1), &lim) == Some(400),
+    );
+    let small = Limits {
+        max_header_bytes: 128,
+        ..lim.clone()
+    };
+    // `n` bytes of trailer section: one trailer line, then the empty line
+    let trailers = |n: usize| {
+        format!(
+            "{CHUNKED}0\r\nT: {}\r\n\r\n",
+            "t".repeat(n - "T: \r\n\r\n".len())
+        )
+        .into_bytes()
+    };
+    let many_trailers = format!("{CHUNKED}0\r\n{}", "T: x\r\n".repeat(100)).into_bytes();
+    let endless_trailer = format!("{CHUNKED}0\r\n{}", "t".repeat(1000)).into_bytes();
+    check(
+        "the trailer section is bounded, finished or not",
+        verdict_at_every_cut(&trailers(128), &small) == Some(200)
+            && verdict_at_every_cut(&trailers(129), &small) == Some(431)
+            && verdict_at_every_cut(&many_trailers, &small) == Some(431)
+            && verdict_at_every_cut(&endless_trailer, &small) == Some(431),
+    );
+    for second in ["gzip", "chunked", "identity"] {
+        let raw = format!(
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: {second}\r\n\r\n0\r\n\r\n"
+        );
+        assert!(
+            matches!(
+                parse_request(raw.as_bytes(), &lim),
+                Parsed::Bad(HttpError::BadRequest(_))
+            ),
+            "second Transfer-Encoding: {second}"
+        );
+    }
+    check("parser: a repeated Transfer-Encoding is rejected", true);
+    check(
+        "percent decoding takes exactly two hex digits",
+        pct_decode("%2e%2E%41").as_deref() == Some("..A")
+            && ["a%+5", "%-0", "% 5", "%4", "%", "%g0", "%ff"]
+                .iter()
+                .all(|bad| pct_decode(bad).is_none()),
+    );
+    let m = Metrics::new();
+    for le in LE_US {
+        m.latency.record(le);
+        m.latency.record(le + 1);
+    }
+    let report = m.render();
+    check(
+        "Prometheus le buckets include a sample equal to the bound, and not the next value",
+        LE_US.iter().enumerate().all(|(i, le)| {
+            let line = format!(
+                "http_request_duration_us_bucket{{le=\"{le}\"}} {}\n",
+                2 * i + 1
+            );
+            report.contains(&line)
+        }),
+    );
+    let covered = (0..64)
+        .flat_map(|e| [(1u64 << e) - 1, 1 << e, (1 << e) + 1])
+        .chain([u64::MAX])
+        .all(|v| {
+            let top = Histogram::upper(Histogram::index(v));
+            top >= v && top - v <= v / 8
+        });
+    let huge = Histogram::new();
+    huge.record(1 << 50);
+    huge.record(u64::MAX);
+    check(
+        "histogram covers all of u64 within 12.5%",
+        covered && ((1u64 << 50)..=(9 << 47)).contains(&huge.quantile(0.5)),
+    );
 
     let (base, public) = make_site();
     let (ctl, slow_rx) = new_ctl();
@@ -2031,6 +2303,15 @@ fn main() {
         "416 with Content-Range: bytes */1000",
         r.status == 416 && r.header("content-range") == Some("bytes */1000"),
     );
+    for range in ["bytes=0-9", "bytes=2000-3000"] {
+        let r = c.request("HEAD", "/static/big.bin", &[("Range", range)], b"");
+        check(
+            &format!("HEAD ignores Range: {range}"),
+            r.status == 200
+                && r.header("content-length") == Some("1000")
+                && r.header("content-range").is_none(),
+        );
+    }
     check(
         "full file without Range",
         c.get("/static/big.bin").body == big,
@@ -2083,6 +2364,19 @@ fn main() {
     check(
         "connection reusable after a chunked response",
         c.get("/hello").text() == "hello",
+    );
+    let mut old = Client::connect(srv.addr);
+    old.send(b"GET /stream/3 HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
+    let mut raw = Vec::new();
+    let ended = old.s.read_to_end(&mut raw).is_ok();
+    let raw = String::from_utf8_lossy(&raw);
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or_default();
+    check(
+        "HTTP/1.0 stream: no chunked coding, the body ends when the connection closes",
+        ended
+            && !head.contains("Transfer-Encoding")
+            && head.contains("Connection: close")
+            && body == "line 0\nline 1\nline 2\n",
     );
 
     // ---- 7. metrics
@@ -2183,7 +2477,43 @@ fn main() {
     );
     drop((c, sl));
     srv.shutdown();
-    srv_slow.shutdown();
+    // after an error response, a client that keeps sending must not keep the worker in the lingering close
+    let srv = Server::start(test_cfg(), build_app(&public, ctl.clone())).unwrap();
+    let mut dripper = Client::connect(srv.addr);
+    dripper.send(b"BOGUS\r\n\r\n");
+    let mut got = Vec::new();
+    check(
+        "lingering close ends although the client keeps sending",
+        drip_until(&mut dripper, &mut got, |g| {
+            g.starts_with(b"HTTP/1.1 400") && srv.metrics().active.load(SeqCst) == 0
+        }),
+    );
+    drop(dripper);
+    srv.shutdown();
+    // a client that never goes quiet must meet the same deadline
+    let partial = b"GET /hello HTTP/1.1\r\nHost: t\r\nX-Drip: ";
+    let mut dripper = Client::connect(srv_slow.addr);
+    dripper.send(partial);
+    let mut got = Vec::new();
+    check(
+        "a client that keeps dripping bytes still gets 408",
+        drip_until(&mut dripper, &mut got, |g| g.starts_with(b"HTTP/1.1 408")),
+    );
+    drop(dripper);
+    wait_until("no active connection", || {
+        srv_slow.metrics().active.load(SeqCst) == 0
+    });
+    let mut dripper = Client::connect(srv_slow.addr);
+    dripper.send(partial);
+    wait_until("the dripper has a worker", || {
+        srv_slow.metrics().active.load(SeqCst) == 1
+    });
+    let stopper = thread::spawn(move || srv_slow.shutdown());
+    check(
+        "shutdown returns while a client is still dripping",
+        drip_until(&mut dripper, &mut Vec::new(), |_| stopper.is_finished()),
+    );
+    stopper.join().expect("shutdown thread");
 
     // ---- 9. saturation: bounded queue -> 503
     println!("\n[9] saturation: 2 workers, queue of 2, handlers blocked on a gate");
@@ -2191,6 +2521,7 @@ fn main() {
     let mut cfg = test_cfg();
     cfg.workers = 2;
     cfg.queue_cap = 2;
+    cfg.reject_linger = Duration::from_secs(5); // far longer than the pauses below, so a slow machine still passes
     let srv = Server::start(cfg, build_app(&public, ctl2.clone())).unwrap();
     let mut busy: Vec<Client> = (0..2).map(|_| Client::connect(srv.addr)).collect();
     for b in busy.iter_mut() {
@@ -2222,6 +2553,21 @@ fn main() {
         "rejection is counted",
         srv.metrics().rejected.load(SeqCst) == 1,
     );
+    let mut late = Client::connect(srv.addr);
+    wait_until("the late sender is refused", || {
+        srv.metrics().rejected.load(SeqCst) == 2
+    });
+    // The pauses only give a server that closes at once the time to do it, and its reset the time to come back.
+    thread::sleep(Duration::from_millis(50));
+    late.send(b"GET /hello HTTP/1.1\r\nHost: t\r\n\r\n");
+    thread::sleep(Duration::from_millis(50));
+    let mut raw = Vec::new();
+    let clean = late.s.read_to_end(&mut raw).is_ok();
+    check(
+        "a request sent after the refusal does not turn the 503 into a reset",
+        clean && raw.starts_with(b"HTTP/1.1 503"),
+    );
+    drop(late);
     ctl2.gate.open();
     for b in busy.iter_mut() {
         assert_eq!(b.read_response(false).unwrap().text(), "released");
