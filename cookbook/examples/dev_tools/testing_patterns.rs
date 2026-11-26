@@ -1,4 +1,4 @@
-//! RECIPE 49 (testing): unit-test patterns: table-driven, Result-returning, should_panic, fakes, builders, seeded randomness.
+//! RECIPE 49 (testing): unit-test patterns: table-driven, Result-returning, should_panic, fakes, seeded randomness.
 //! LEVEL: intermediate
 //! Use in: every stage; unit tests live NEXT TO the code, black-box tests in `tests/`.   Run: cargo test --release --example testing_patterns
 //! COMMON USES: every codebase: table-driven tests, injected fakes, seeded property tests.
@@ -67,23 +67,49 @@ mod tests {
         }
     }
 
-    // property-style: idempotent. Seeded generator: deterministic, no extra crate.
-    #[test]
-    fn slugify_is_idempotent() {
+    /// Short strings from a small awkward alphabet. A fixed seed (xorshift): the same inputs on every run, no extra crate.
+    fn awkward_strings() -> impl Iterator<Item = String> {
+        let alphabet: Vec<char> = "ab Z-_!9 é".chars().collect();
         let mut x = 0x9E37_79B9_7F4A_7C15u64;
-        let alphabet: Vec<char> = "ab Z-_!9 ".chars().collect();
-        for _ in 0..500 {
-            let s: String = (0..12)
+        (0..500).map(move |_| {
+            (0..12)
                 .map(|_| {
                     x ^= x << 13;
                     x ^= x >> 7;
                     x ^= x << 17;
                     alphabet[(x % alphabet.len() as u64) as usize]
                 })
-                .collect();
+                .collect()
+        })
+    }
+
+    // PROPERTY: a second run changes nothing. Useful, but a slugify that always returns "" passes it.
+    #[test]
+    fn slugify_is_idempotent() {
+        for s in awkward_strings() {
             let once = slugify(&s);
             assert_eq!(slugify(&once), once, "not idempotent for {s:?}");
         }
+    }
+
+    // PROPERTY: nothing is lost or invented. The ASCII letters and digits come through, in order, in lower case.
+    #[test]
+    fn slugify_keeps_letters_and_digits() {
+        let kept = |s: &str| -> String {
+            s.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect()
+        };
+        for s in awkward_strings() {
+            assert_eq!(kept(&slugify(&s)), kept(&s), "input: {s:?}");
+        }
+    }
+
+    // BOUNDARY: test the last value that is allowed, not only the first one that is not
+    #[test]
+    fn percent_accepts_100() {
+        Percent::new(100);
     }
 
     #[test]

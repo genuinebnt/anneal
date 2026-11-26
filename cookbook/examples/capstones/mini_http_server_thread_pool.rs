@@ -26,7 +26,7 @@
 //!  * a TCP read can contain half a request, one request, or five; the parser is a pure function over the buffer that
 //!    answers Incomplete / Done(request, bytes_used) / Bad(error), so pipelining is just "parse again on the rest".
 //!  * limits everywhere: request line 2 KiB (414), header block 8 KiB or 64 headers (431), body 64 KiB (413), chunk
-//!    size line 40 bytes (400), trailer section 8 KiB (431). Syntax and ambiguity (both Content-Length and chunked,
+//!    size line 40 bytes (400), trailer section 8 KiB (431), a whole chunked body as encoded 72 KiB (413). Syntax and ambiguity (both Content-Length and chunked,
 //!    or Transfer-Encoding twice: request-smuggling vectors) are 400. Errors close the connection.
 //!  * a limit must give the same answer however the bytes are cut: an unfinished line may end in the CR of its CRLF,
 //!    so that CR is not counted. The checks parse every prefix of requests at and just over the limits.
@@ -117,7 +117,9 @@ impl Histogram {
         if let Some(i) = LE_US.iter().position(|&le| v <= le) {
             self.exact[i].fetch_add(1, SeqCst);
         }
-        self.sum.fetch_add(v, SeqCst);
+        let _ = self
+            .sum
+            .fetch_update(SeqCst, SeqCst, |s| Some(s.saturating_add(v))); // a plain add would wrap
         self.max.fetch_max(v, SeqCst);
     }
     fn count(&self) -> u64 {
@@ -225,6 +227,10 @@ fn unfinished_line_len(b: &[u8]) -> usize {
     b.strip_suffix(b"\r").unwrap_or(b).len()
 }
 
+fn is_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 /// Pure incremental parser: re-run it whenever more bytes arrive. Never panics on any input.
 fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     use HttpError::*;
@@ -272,6 +278,9 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     if !target.starts_with('/') {
         return Parsed::Bad(BadRequest("target must be an absolute path"));
     }
+    if target.bytes().any(|b| b.is_ascii_control()) {
+        return Parsed::Bad(BadRequest("control byte in the target"));
+    }
     let mut headers: Vec<(String, String)> = Vec::new();
     for line in lines {
         if headers.len() >= lim.max_headers {
@@ -283,10 +292,19 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
         let Some((name, value)) = line.split_once(':') else {
             return Parsed::Bad(BadRequest("header line without a colon"));
         };
-        if name.is_empty() || name.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        // A name must be an RFC 9110 token. "Content-Length\u{a0}" would otherwise pass as some other header: the
+        // body would count as empty here, and its bytes would be read as the next request.
+        if name.is_empty() || !name.bytes().all(is_token_byte) {
             return Parsed::Bad(BadRequest("bad header name"));
         }
-        headers.push((name.to_ascii_lowercase(), value.trim().to_string()));
+        // A bare CR or LF left inside a value may end the line for another reader (RFC 9110 section 5.5).
+        if value.contains(['\r', '\n', '\0']) {
+            return Parsed::Bad(BadRequest("CR, LF or NUL in a header value"));
+        }
+        // Only space and tab are padding. `str::trim` would also strip a no-break space and others,
+        // turning "chunked\u{a0}" into "chunked" where a proxy in front may not.
+        let value = value.trim_matches([' ', '\t']);
+        headers.push((name.to_ascii_lowercase(), value.to_string()));
     }
     let get = |n: &str| {
         headers
@@ -296,6 +314,13 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     };
     if minor == 1 && get("host").is_none() {
         return Parsed::Bad(BadRequest("HTTP/1.1 requires a Host header"));
+    }
+    if headers.iter().filter(|(k, _)| k == "host").count() > 1 {
+        return Parsed::Bad(BadRequest("repeated Host header"));
+    }
+    // HTTP/1.0 has no chunked coding, so its framing cannot be trusted (RFC 9112 section 6.1).
+    if minor == 0 && get("transfer-encoding").is_some() {
+        return Parsed::Bad(BadRequest("Transfer-Encoding on HTTP/1.0"));
     }
     // Content-Length: all copies must agree and be plain digits.
     let mut cl: Option<usize> = None;
@@ -330,7 +355,9 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
     if chunked && cl.is_some() {
         return Parsed::Bad(BadRequest("both Content-Length and Transfer-Encoding"));
     }
-    let expect = get("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue"));
+    // An HTTP/1.0 client must never be sent `100 Continue` (RFC 9110 section 10.1.1).
+    let expect =
+        minor == 1 && get("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue"));
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let mut req = Request {
         method: method.to_string(),
@@ -368,8 +395,24 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Parsed {
 /// Longest chunk-size line (size and extensions, without its CRLF).
 const MAX_CHUNK_LINE: usize = 40;
 
-/// Decode a chunked body starting at `pos`. Ok(None) = need more bytes.
+/// Decode a chunked body starting at `start`. Ok(None) = need more bytes.
+///
+/// The body limit counts data only, so size lines and extensions could make a sender's bytes many times the body.
+/// The ENCODED body is therefore capped at `max_body + max_header_bytes`. Only that many bytes are looked at: if
+/// they do not finish the body, nothing more can. So the answer is the same however the bytes are cut.
 fn parse_chunked(
+    buf: &[u8],
+    start: usize,
+    lim: &Limits,
+) -> Result<Option<(Vec<u8>, usize)>, HttpError> {
+    let cap = start.saturating_add(lim.max_body.saturating_add(lim.max_header_bytes));
+    match decode_chunks(&buf[..buf.len().min(cap)], start, lim) {
+        Ok(None) if buf.len() >= cap => Err(HttpError::BodyTooLarge),
+        other => other,
+    }
+}
+
+fn decode_chunks(
     buf: &[u8],
     mut pos: usize,
     lim: &Limits,
@@ -389,7 +432,15 @@ fn parse_chunked(
         }
         let line = std::str::from_utf8(&buf[pos..pos + e])
             .map_err(|_| HttpError::BadRequest("bad chunk size"))?;
-        let hex = line.split(';').next().unwrap_or("").trim(); // ignore chunk extensions
+        if line.contains(['\r', '\n']) {
+            return Err(HttpError::BadRequest("bare CR or LF in a chunk size line"));
+        }
+        // chunk extensions are ignored; only space or tab may stand between the size and the `;`
+        let hex = line
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches([' ', '\t']);
         if hex.is_empty() || hex.len() > 8 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(HttpError::BadRequest("bad chunk size"));
         }
@@ -408,16 +459,20 @@ fn parse_chunked(
                         Ok(None)
                     };
                 };
+                let bare = buf[pos..pos + e].iter().any(|&b| b == b'\r' || b == b'\n');
                 pos += e + 2;
                 if pos - start > lim.max_header_bytes {
                     return Err(HttpError::HeaderTooLarge);
+                }
+                if bare {
+                    return Err(HttpError::BadRequest("bare CR or LF in a trailer line"));
                 }
                 if e == 0 {
                     return Ok(Some((body, pos)));
                 }
             }
         }
-        if body.len() + size > lim.max_body {
+        if size > lim.max_body - body.len() {
             return Err(HttpError::BodyTooLarge);
         }
         if buf.len() < pos + size + 2 {
@@ -432,8 +487,14 @@ fn parse_chunked(
 }
 
 fn wants_keep_alive(req: &Request) -> bool {
-    let conn = req.header("connection").unwrap_or("").to_ascii_lowercase();
-    let has = |t: &str| conn.split(',').any(|x| x.trim() == t);
+    // A repeated header means the same as one comma-joined value, so every copy counts.
+    let has = |t: &str| {
+        req.headers
+            .iter()
+            .filter(|(k, _)| k == "connection")
+            .flat_map(|(_, v)| v.split(','))
+            .any(|x| x.trim().eq_ignore_ascii_case(t))
+    };
     if has("close") {
         return false;
     }
@@ -532,6 +593,17 @@ fn write_response<W: Write>(
     keep_alive: bool,
     minor: u8,
 ) -> io::Result<u64> {
+    // A CR or LF in a header would let whoever supplied the text add headers, or a whole second response.
+    if resp
+        .headers
+        .iter()
+        .any(|(k, v)| k.contains(['\r', '\n']) || v.contains(['\r', '\n']))
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "CR or LF in a header",
+        ));
+    }
     let keep_alive = keep_alive && can_keep_alive(minor, &resp);
     let mut out: Vec<u8> = Vec::with_capacity(256);
     write!(
@@ -549,7 +621,8 @@ fn write_response<W: Write>(
         if keep_alive { "keep-alive" } else { "close" }
     )?;
     let bodyless = resp.status / 100 == 1 || resp.status == 204 || resp.status == 304;
-    match resp.body {
+    let body = if bodyless { Body::Empty } else { resp.body };
+    match body {
         Body::Stream(chunks) => {
             let chunked = minor >= 1;
             if chunked {
@@ -589,7 +662,7 @@ fn write_response<W: Write>(
                 write!(out, "Content-Length: {}\r\n", bytes.len())?;
             }
             out.extend_from_slice(b"\r\n");
-            if !head_only && !bodyless {
+            if !head_only {
                 out.extend_from_slice(&bytes);
             }
             w.write_all(&out)?;
@@ -908,23 +981,28 @@ fn parse_range(h: &str, len: usize) -> RangeSpec {
     let Some((a, b)) = spec.split_once('-') else {
         return RangeSpec::Ignore;
     };
+    // Digits only (`str::parse` would also take "+5"). A number too big for `usize` is just very large.
+    let number = |t: &str| {
+        (!t.is_empty() && t.bytes().all(|c| c.is_ascii_digit()))
+            .then(|| t.parse().unwrap_or(usize::MAX))
+    };
     if a.is_empty() {
         // suffix range: the last n bytes
-        return match b.parse::<usize>() {
-            Ok(0) => RangeSpec::Unsatisfiable,
-            Ok(n) if len > 0 => RangeSpec::Bytes(len.saturating_sub(n), len - 1),
-            Ok(_) => RangeSpec::Unsatisfiable,
-            Err(_) => RangeSpec::Ignore,
+        return match number(b) {
+            Some(0) => RangeSpec::Unsatisfiable,
+            Some(n) if len > 0 => RangeSpec::Bytes(len.saturating_sub(n), len - 1),
+            Some(_) => RangeSpec::Unsatisfiable,
+            None => RangeSpec::Ignore,
         };
     }
-    let Ok(start) = a.parse::<usize>() else {
+    let Some(start) = number(a) else {
         return RangeSpec::Ignore;
     };
     let end = if b.is_empty() {
         usize::MAX
     } else {
-        match b.parse::<usize>() {
-            Ok(e) if e >= start => e,
+        match number(b) {
+            Some(e) if e >= start => e,
             _ => return RangeSpec::Ignore, // syntactically invalid: ignore the header
         }
     };
@@ -1379,6 +1457,7 @@ fn acceptor_loop(listener: TcpListener, sh: Arc<Shared>, tx: SyncSender<TcpStrea
             }
         }
     }
+    drop(listener); // refuse new connections now, not after the waits below
     drop(tx); // workers drain the queue, then see Disconnected and exit
     drop(refused_tx);
     for h in conn_threads {
@@ -1876,6 +1955,23 @@ fn drip_until(c: &mut Client, got: &mut Vec<u8>, done: impl Fn(&[u8]) -> bool) -
     false
 }
 
+/// The body is itself a request. A server that skips the odd header sees an empty body and then answers the
+/// "next request". The one right answer is a single 400 and a closed connection.
+fn check_no_smuggling(server: &str, addr: SocketAddr) {
+    let hidden = "GET /hello HTTP/1.1\r\nHost: t\r\n\r\n";
+    let raw = format!(
+        "POST /upload HTTP/1.1\r\nHost: t\r\nContent-Length\u{a0}: {}\r\n\r\n{hidden}",
+        hidden.len()
+    );
+    let mut c = Client::connect(addr);
+    c.send(raw.as_bytes());
+    let r = c.read_response(false).expect("a reply");
+    check(
+        &format!("{server}: a disguised Content-Length gets one 400 and a closed connection"),
+        r.status == 400 && c.closed_by_peer() && c.buf.is_empty(),
+    );
+}
+
 fn make_site() -> (PathBuf, PathBuf) {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2060,6 +2156,149 @@ fn main() {
         covered && ((1u64 << 50)..=(9 << 47)).contains(&huge.quantile(0.5)),
     );
 
+    let refused: [(&str, &str); 7] = [
+        (
+            "a bare LF in a header value",
+            "GET / HTTP/1.1\r\nHost: h\r\nX: a\nContent-Length: 9\r\n\r\n",
+        ),
+        (
+            "a bare LF in the target",
+            "GET /a\nb HTTP/1.1\r\nHost: h\r\n\r\n",
+        ),
+        (
+            "a no-break space after chunked",
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\u{a0}\r\n\r\n0\r\n\r\n",
+        ),
+        (
+            "two Host headers",
+            "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",
+        ),
+        (
+            "Transfer-Encoding on HTTP/1.0",
+            "POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+        ),
+        (
+            "a bare LF in a chunk extension",
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n1;a\nb\r\nz\r\n0\r\n\r\n",
+        ),
+        (
+            "a bare LF in a trailer",
+            "POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nT: a\nb\r\n\r\n",
+        ),
+    ];
+    for (what, raw) in refused {
+        check(
+            &format!("parser refuses {what}"),
+            matches!(
+                parse_request(raw.as_bytes(), &lim),
+                Parsed::Bad(HttpError::BadRequest(_))
+            ),
+        );
+    }
+    check(
+        "no 100 Continue is asked for on HTTP/1.0",
+        matches!(
+            parse_request(
+                b"POST / HTTP/1.0\r\nContent-Length: 1\r\nExpect: 100-continue\r\n\r\n",
+                &lim
+            ),
+            Parsed::Incomplete {
+                expect_continue: false
+            }
+        ),
+    );
+    let two_headers = Request {
+        minor: 1,
+        headers: ["keep-alive", "close"]
+            .map(|v| ("connection".to_string(), v.to_string()))
+            .to_vec(),
+        ..Default::default()
+    };
+    check(
+        "`close` in a second Connection header counts",
+        !wants_keep_alive(&two_headers),
+    );
+    check(
+        "Range takes digits only, and a huge number is merely large",
+        matches!(parse_range("bytes=+0-+5", 10), RangeSpec::Ignore)
+            && matches!(parse_range("bytes=-+5", 10), RangeSpec::Ignore)
+            && matches!(
+                parse_range("bytes=0-99999999999999999999999", 10),
+                RangeSpec::Bytes(0, 9)
+            )
+            && matches!(
+                parse_range("bytes=99999999999999999999999-", 10),
+                RangeSpec::Unsatisfiable
+            ),
+    );
+    let mut wire = Vec::new();
+    let stray = Response::new(304).body_stream([b"x".to_vec()].into_iter());
+    write_response(&mut wire, stray, false, true, 1).expect("write into a Vec");
+    check(
+        "a 304 sends no body and no framing header, even if given a stream",
+        wire.ends_with(b"Connection: keep-alive\r\n\r\n")
+            && find(&wire, b"Transfer-Encoding").is_none(),
+    );
+    let mut wire = Vec::new();
+    let injected = Response::new(200).header("X-Note", "a\r\nSet-Cookie: stolen=1");
+    check(
+        "a header holding CR or LF is not written",
+        write_response(&mut wire, injected, false, true, 1).is_err() && wire.is_empty(),
+    );
+    let full = Histogram::new();
+    full.record(u64::MAX);
+    full.record(5);
+    check(
+        "the histogram sum saturates",
+        full.sum.load(SeqCst) == u64::MAX,
+    );
+
+    for name in [
+        "Content-Length\u{a0}",
+        "Content-Length\u{2003}",
+        "Transfer(Encoding)",
+        "X Y",
+        "X\"Y\"",
+    ] {
+        let raw = format!("POST / HTTP/1.1\r\nHost: h\r\n{name}: 3\r\n\r\nabc");
+        assert!(
+            matches!(
+                parse_request(raw.as_bytes(), &lim),
+                Parsed::Bad(HttpError::BadRequest(_))
+            ),
+            "header name {name:?}"
+        );
+    }
+    check("parser refuses a header name that is not a token", true);
+    // `last` is the length of the last size line; four full lines of 40 bytes come before it
+    let padded = |last: usize| {
+        let chunk = |n: usize| format!("1;{}\r\nz\r\n", "e".repeat(n - 2));
+        format!("{CHUNKED}{}{}0\r\n\r\n", chunk(40).repeat(4), chunk(last)).into_bytes()
+    };
+    let tight = Limits {
+        max_body: 100,
+        max_header_bytes: 128,
+        ..lim.clone()
+    };
+    check(
+        "the encoded chunked body is capped at max_body + max_header_bytes, wherever it is cut",
+        verdict_at_every_cut(&padded(38), &tight) == Some(200)
+            && verdict_at_every_cut(&padded(39), &tight) == Some(413),
+    );
+    // one byte of body for every 45 sent: the body limit alone would let this buffer almost 3 MB
+    let mut flood = CHUNKED.as_bytes().to_vec();
+    for _ in 0..2000 {
+        flood.extend_from_slice(format!("1;{}\r\nz\r\n", "e".repeat(38)).as_bytes());
+    }
+    let cap = lim.max_body + lim.max_header_bytes;
+    check(
+        "an unfinished flood of padded chunks is refused once it fills the cap",
+        matches!(
+            parse_request(&flood[..CHUNKED.len() + cap], &lim),
+            Parsed::Bad(HttpError::BodyTooLarge)
+        ),
+    );
+
     let (base, public) = make_site();
     let (ctl, slow_rx) = new_ctl();
 
@@ -2210,6 +2449,8 @@ fn main() {
             r.status == want && r.header("connection") == Some("close") && e.closed_by_peer(),
         );
     }
+
+    check_no_smuggling("thread pool", srv.addr);
 
     // ---- 5. static files
     println!("\n[5] static files: ETag, Last-Modified, Range, traversal");
@@ -2655,6 +2896,36 @@ fn main() {
         rep.live_threads == 0 && rep.workers_joined == 8,
     );
 
+    // new connections must be refused while a request is still being handled, not only afterwards
+    for mode in [Mode::Pool, Mode::PerConn] {
+        let (ctl3, _rx3) = new_ctl();
+        let mut cfg = test_cfg();
+        cfg.mode = mode;
+        let srv = Server::start(cfg, build_app(&public, ctl3.clone())).unwrap();
+        let addr = srv.addr;
+        let mut held = Client::connect(addr);
+        held.send(b"GET /block HTTP/1.1\r\nHost: t\r\n\r\n");
+        wait_until("the request is inside /block", || {
+            ctl3.gate.entered.load(SeqCst) == 1
+        });
+        let stopper = thread::spawn(move || srv.shutdown());
+        // `ConnectionRefused` exactly: a listener that is open but no longer accepting fills its backlog,
+        // and then connects time out, which would look like success to a check for any error
+        wait_until("new connections refused during shutdown", || {
+            matches!(
+                TcpStream::connect_timeout(&addr, Duration::from_millis(200)),
+                Err(e) if e.kind() == ErrorKind::ConnectionRefused
+            )
+        });
+        check(
+            &format!("{mode:?}: connects are refused while a request is still in flight"),
+            !stopper.is_finished(),
+        );
+        ctl3.gate.open();
+        assert_eq!(held.read_response(false).unwrap().text(), "released");
+        stopper.join().expect("shutdown thread");
+    }
+
     // ---- 12. load test and comparison
     println!(
         "\n[12] load test: 32 clients x 800 requests, persistent connections, same routes, three servers"
@@ -2697,6 +2968,7 @@ fn main() {
         per,
     ));
     let tk_accepted = tk.app.metrics.accepted.load(SeqCst);
+    check_no_smuggling("tokio", tk.addr);
     tk.rt.shutdown_timeout(Duration::from_secs(2));
     println!(
         "  {:<40} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",

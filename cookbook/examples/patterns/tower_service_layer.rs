@@ -13,19 +13,20 @@
 //! Layer ORDER is behaviour. `ServiceBuilder::new().layer(A).layer(B).service(s)` is `A(B(s))`: A is OUTERMOST (sees the request
 //! first, the response last). So `Retry` outside `Timeout` gives EACH attempt its own deadline; `Timeout` outside `Retry` puts ONE
 //! deadline over all attempts including backoff sleeps. A circuit breaker outside a retry counts the final outcome, inside it counts
-//! every attempt. Both orders are tested below.
+//! every attempt. All of these orders are tested below.
 //!
-//! axum: every `Router`, every handler, and every `MethodRouter` is a `tower::Service<Request>`; that is why `.layer(...)` accepts
-//! anything from `tower` or `tower-http` (CORS, tracing, compression) and why `ServiceExt::oneshot` can call an app directly in
-//! tests (shown at the end, using the real `tower` crate from this cookbook's dependencies).
+//! axum: `Router` and `MethodRouter` are `tower::Service`s, and axum turns your handler functions into services for you. That is
+//! why `.layer(...)` accepts middleware from `tower` or `tower-http` (CORS, tracing, compression) and why `ServiceExt::oneshot`
+//! can call an app directly in tests (shown at the end, using the real `tower` crate from this cookbook's dependencies).
 //! COMMON USES: client resilience (timeouts, retries with backoff, circuit breakers, rate limits) in hyper/tonic/reqwest-style stacks,
 //! server middleware (auth, tracing, compression), load shedding and concurrency limiting at service boundaries.
 //! Read: https://github.com/tower-rs/tower , https://docs.rs/tower , https://tokio.rs/blog/2021-05-14-inventing-the-service-trait
+use futures_util::poll;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 // ----------------------------------------------------------------- core traits
 #[derive(Debug, Clone, PartialEq)]
@@ -88,15 +89,18 @@ trait Clock: Send + Sync {
     fn now(&self) -> Duration;
 }
 #[derive(Default)]
-struct ManualClock(AtomicU64); // milliseconds
+struct ManualClock(AtomicU64); // microseconds
 impl ManualClock {
     fn advance(&self, d: Duration) {
-        self.0.fetch_add(d.as_millis() as u64, SeqCst);
+        self.0.fetch_add(d.as_micros() as u64, SeqCst);
+    }
+    fn set(&self, d: Duration) {
+        self.0.store(d.as_micros() as u64, SeqCst);
     }
 }
 impl Clock for ManualClock {
     fn now(&self) -> Duration {
-        Duration::from_millis(self.0.load(SeqCst))
+        Duration::from_micros(self.0.load(SeqCst))
     }
 }
 
@@ -106,6 +110,8 @@ enum Step {
     Ok,
     Fail,
     SleepThenOk(Duration),
+    /// Answers `Ok` only after the test calls `notify_one` on the gate: no timing involved.
+    WaitThenOk(Arc<Notify>),
 }
 /// Behaviour scripted per call number; after the script runs out it answers `Ok`. Counts calls and peak concurrency.
 #[derive(Clone)]
@@ -133,18 +139,27 @@ impl Service<u32> for Mock {
     async fn call(&self, req: u32) -> Result<String, Error> {
         let n = self.calls.fetch_add(1, SeqCst);
         let now = self.in_flight.fetch_add(1, SeqCst) + 1;
+        let _leave = Leave(&self.in_flight); // runs even if a timeout drops this future
         self.peak.fetch_max(now, SeqCst);
         let step = self.script.get(n).cloned().unwrap_or(Step::Ok);
-        let r = match step {
+        match step {
             Step::Ok => Ok(format!("ok:{req}")),
             Step::Fail => Err(Error::Failed(format!("boom #{n}"))),
             Step::SleepThenOk(d) => {
                 tokio::time::sleep(d).await;
                 Ok(format!("ok:{req}"))
             }
-        };
-        self.in_flight.fetch_sub(1, SeqCst);
-        r
+            Step::WaitThenOk(gate) => {
+                gate.notified().await;
+                Ok(format!("ok:{req}"))
+            }
+        }
+    }
+}
+struct Leave<'a>(&'a AtomicUsize);
+impl Drop for Leave<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, SeqCst);
     }
 }
 
@@ -217,7 +232,12 @@ struct ExpBackoff {
 }
 impl ExpBackoff {
     fn delay(&self, attempt: u32) -> Duration {
-        (self.base * 2u32.saturating_pow(attempt - 1)).min(self.cap)
+        // `Duration * u32` panics on overflow, and `attempt - 1` would underflow for 0
+        let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+        self.base
+            .checked_mul(factor)
+            .unwrap_or(self.cap)
+            .min(self.cap)
     }
 }
 impl Policy for ExpBackoff {
@@ -299,9 +319,14 @@ impl Bucket {
     fn try_take(&self) -> bool {
         let mut s = self.state.lock().unwrap();
         let now = self.clock.now();
-        let added = (now - s.1).as_millis() as u64 * self.refill_per_sec; // ms * tokens/s = milli-tokens
-        s.0 = (s.0 + added).min(self.capacity * 1000);
-        s.1 = now;
+        // a clock that went backwards counts as no time passed
+        let whole_ms = u64::try_from(now.saturating_sub(s.1).as_millis()).unwrap_or(u64::MAX);
+        let added = whole_ms.saturating_mul(self.refill_per_sec); // ms * tokens/s = milli-tokens
+        s.0 =
+            s.0.saturating_add(added)
+                .min(self.capacity.saturating_mul(1000));
+        // move the mark only past what was counted: with `s.1 = now`, calls under 1 ms apart never refill
+        s.1 += Duration::from_millis(whole_ms);
         if s.0 >= 1000 {
             s.0 -= 1000;
             true
@@ -317,7 +342,7 @@ struct RateLimit<S> {
 }
 impl RateLimitLayer {
     fn new(capacity: u64, refill_per_sec: u64, clock: Arc<dyn Clock>) -> Self {
-        let state = Mutex::new((capacity * 1000, clock.now()));
+        let state = Mutex::new((capacity.saturating_mul(1000), clock.now()));
         Self(Arc::new(Bucket {
             capacity,
             refill_per_sec,
@@ -353,30 +378,98 @@ enum Breaker {
     Open { until: Duration },
     HalfOpen, // exactly one probe call is in flight
 }
-struct CircuitBreakerLayer {
+/// The state, plus a number that goes up whenever the breaker changes phase. A call remembers the number it
+/// started under, so a slow answer from an earlier phase cannot change the current one.
+struct Core {
+    state: Breaker,
+    phase: u64,
+}
+impl Core {
+    fn enter(&mut self, state: Breaker) {
+        self.state = state;
+        self.phase += 1;
+    }
+}
+#[derive(Clone)]
+struct Shared {
     threshold: u32,
     cooldown: Duration,
     clock: Arc<dyn Clock>,
-    state: Arc<Mutex<Breaker>>,
+    core: Arc<Mutex<Core>>,
 }
+impl Shared {
+    /// `Err` while open; otherwise the phase this call belongs to, and whether it is the probe.
+    fn admit(&self) -> Result<(u64, bool), Error> {
+        let mut core = self.core.lock().unwrap();
+        match core.state {
+            Breaker::Open { until } if self.clock.now() >= until => {
+                core.enter(Breaker::HalfOpen); // this call is the probe
+                Ok((core.phase, true))
+            }
+            Breaker::Open { .. } | Breaker::HalfOpen => Err(Error::CircuitOpen),
+            Breaker::Closed { .. } => Ok((core.phase, false)),
+        }
+    }
+    fn record(&self, phase: u64, ok: bool) {
+        let mut core = self.core.lock().unwrap();
+        if core.phase != phase {
+            return; // a late answer from before the breaker last changed
+        }
+        let open = Breaker::Open {
+            until: self.clock.now().saturating_add(self.cooldown),
+        };
+        match (ok, core.state) {
+            (true, Breaker::Closed { .. }) => core.state = Breaker::Closed { failures: 0 },
+            (true, Breaker::HalfOpen) => core.enter(Breaker::Closed { failures: 0 }),
+            (false, Breaker::HalfOpen) => core.enter(open),
+            (false, Breaker::Closed { failures }) if failures + 1 >= self.threshold => {
+                core.enter(open)
+            }
+            (false, Breaker::Closed { failures }) => {
+                core.state = Breaker::Closed {
+                    failures: failures + 1,
+                }
+            }
+            (_, Breaker::Open { .. }) => {}
+        }
+    }
+}
+/// If the probe's future is dropped before it answers, count that as a failed probe. Without this the
+/// breaker would stay `HalfOpen`, and refuse every later call.
+struct ProbeGuard<'a> {
+    shared: &'a Shared,
+    phase: u64,
+    armed: bool,
+}
+impl Drop for ProbeGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.shared.record(self.phase, false);
+        }
+    }
+}
+struct CircuitBreakerLayer(Shared);
 struct CircuitBreaker<S> {
     inner: S,
-    threshold: u32,
-    cooldown: Duration,
-    clock: Arc<dyn Clock>,
-    state: Arc<Mutex<Breaker>>,
+    shared: Shared,
 }
 impl CircuitBreakerLayer {
     fn new(threshold: u32, cooldown: Duration, clock: Arc<dyn Clock>) -> Self {
-        Self {
+        let core = Core {
+            state: Breaker::Closed { failures: 0 },
+            phase: 0,
+        };
+        Self(Shared {
             threshold,
             cooldown,
             clock,
-            state: Arc::new(Mutex::new(Breaker::Closed { failures: 0 })),
-        }
+            core: Arc::new(Mutex::new(core)),
+        })
     }
-    fn state(&self) -> Breaker {
-        *self.state.lock().unwrap()
+    /// A handle that can still be read after the layer has built its service.
+    fn watch(&self) -> impl Fn() -> Breaker + use<> {
+        let core = self.0.core.clone();
+        move || core.lock().unwrap().state
     }
 }
 impl<S> Layer<S> for CircuitBreakerLayer {
@@ -384,42 +477,23 @@ impl<S> Layer<S> for CircuitBreakerLayer {
     fn layer(&self, inner: S) -> CircuitBreaker<S> {
         CircuitBreaker {
             inner,
-            threshold: self.threshold,
-            cooldown: self.cooldown,
-            clock: self.clock.clone(),
-            state: self.state.clone(),
+            shared: self.0.clone(),
         }
     }
 }
 impl<S: Service<Req>, Req: Send> Service<Req> for CircuitBreaker<S> {
     type Response = S::Response;
     async fn call(&self, req: Req) -> Result<S::Response, Error> {
-        {
-            // decide under the lock, but NEVER hold a std Mutex across an await
-            let mut st = self.state.lock().unwrap();
-            match *st {
-                Breaker::Open { until } if self.clock.now() >= until => *st = Breaker::HalfOpen, // this call is the probe
-                Breaker::Open { .. } | Breaker::HalfOpen => return Err(Error::CircuitOpen),
-                Breaker::Closed { .. } => {}
-            }
-        }
-        let r = self.inner.call(req).await;
-        let mut st = self.state.lock().unwrap();
-        *st = match (&r, *st) {
-            (Ok(_), _) => Breaker::Closed { failures: 0 },
-            (Err(_), Breaker::HalfOpen) => Breaker::Open {
-                until: self.clock.now() + self.cooldown,
-            },
-            (Err(_), Breaker::Closed { failures }) if failures + 1 >= self.threshold => {
-                Breaker::Open {
-                    until: self.clock.now() + self.cooldown,
-                }
-            }
-            (Err(_), Breaker::Closed { failures }) => Breaker::Closed {
-                failures: failures + 1,
-            },
-            (Err(_), s) => s,
+        // decide under the lock inside `admit`: a std Mutex is never held across an await
+        let (phase, probe) = self.shared.admit()?;
+        let mut guard = ProbeGuard {
+            shared: &self.shared,
+            phase,
+            armed: probe,
         };
+        let r = self.inner.call(req).await;
+        guard.armed = false;
+        self.shared.record(phase, r.is_ok());
         r
     }
 }
@@ -458,6 +532,14 @@ async fn test_retry() {
     };
     let d: Vec<_> = (1..=6).map(|a| b.delay(a).as_millis()).collect();
     assert_eq!(d, [10, 20, 40, 80, 100, 100]);
+    // edges: attempt 0, and a base so large that doubling it overflows a `Duration`
+    assert_eq!(b.delay(0), ms(10));
+    let huge = ExpBackoff {
+        max_attempts: 9,
+        base: Duration::from_secs(u64::MAX / 2),
+        cap: ms(100),
+    };
+    assert_eq!(huge.delay(3), ms(100));
 }
 async fn test_timeout() {
     let slow = Mock::new(vec![Step::SleepThenOk(ms(300))]);
@@ -465,6 +547,11 @@ async fn test_timeout() {
         .layer(TimeoutLayer(ms(20)))
         .service(slow.clone());
     assert_eq!(svc.call(1).await, Err(Error::Timeout));
+    assert_eq!(
+        slow.in_flight.load(SeqCst),
+        0,
+        "the cancelled call has left"
+    );
     assert_eq!(svc.call(2).await, Ok("ok:2".into()), "second call is fast");
 }
 async fn test_order() {
@@ -583,19 +670,43 @@ async fn test_rate_limit() {
         n += f.await.is_ok() as u32;
     }
     assert_eq!(n, 3);
+
+    // calls half a millisecond apart still earn tokens: 1 second at 2/s gives 2 (after the burst of 1)
+    let clock = Arc::new(ManualClock::default());
+    let svc = ServiceBuilder::new()
+        .layer(RateLimitLayer::new(1, 2, clock.clone()))
+        .service(Mock::new(vec![]));
+    let mut admitted = 0;
+    for i in 0..=2000 {
+        admitted += svc.call(i).await.is_ok() as u32;
+        clock.advance(Duration::from_micros(500));
+    }
+    assert_eq!(admitted, 3);
+    // a clock stepped backwards must not panic, and earns nothing
+    clock.set(ms(0));
+    assert_eq!(svc.call(0).await, Err(Error::RateLimited));
+
+    // an enormous rate: the multiplication saturates instead of wrapping round to nothing
+    let clock = Arc::new(ManualClock::default());
+    let svc = ServiceBuilder::new()
+        .layer(RateLimitLayer::new(1, 1 << 63, clock.clone()))
+        .service(Mock::new(vec![]));
+    assert!(svc.call(1).await.is_ok());
+    clock.advance(ms(2));
+    assert!(svc.call(2).await.is_ok());
 }
 async fn test_breaker() {
     let clock = Arc::new(ManualClock::default());
     let breaker = CircuitBreakerLayer::new(3, ms(1000), clock.clone());
     // 3 failures, then the service would recover (4th scripted call is Ok)
     let mock = Mock::new(vec![Step::Fail, Step::Fail, Step::Fail, Step::Ok]);
-    let state = breaker.state.clone();
+    let state = breaker.watch();
     let svc = ServiceBuilder::new().layer(breaker).service(mock.clone());
     for _ in 0..3 {
         assert!(matches!(svc.call(1).await, Err(Error::Failed(_))));
     }
     assert_eq!(
-        *state.lock().unwrap(),
+        state(),
         Breaker::Open { until: ms(1000) },
         "opened after exactly 3 failures"
     );
@@ -617,13 +728,13 @@ async fn test_breaker() {
         Ok("ok:1".into()),
         "half-open probe succeeds"
     );
-    assert_eq!(*state.lock().unwrap(), Breaker::Closed { failures: 0 });
+    assert_eq!(state(), Breaker::Closed { failures: 0 });
     assert_eq!(mock.calls(), 4);
 
     // a failing probe re-opens the breaker for another cooldown
     let breaker = CircuitBreakerLayer::new(1, ms(500), clock.clone());
     let mock = Mock::new(vec![Step::Fail, Step::Fail]);
-    let state = breaker.state.clone();
+    let state = breaker.watch();
     let svc = ServiceBuilder::new().layer(breaker).service(mock.clone());
     assert!(svc.call(1).await.is_err());
     clock.advance(ms(500));
@@ -631,12 +742,86 @@ async fn test_breaker() {
         matches!(svc.call(1).await, Err(Error::Failed(_))),
         "probe reached the dependency and failed"
     );
-    assert!(matches!(*state.lock().unwrap(), Breaker::Open { .. }));
+    assert!(matches!(state(), Breaker::Open { .. }));
     assert_eq!(svc.call(1).await, Err(Error::CircuitOpen));
     assert_eq!(mock.calls(), 2);
+
+    // a slow call from before the breaker opened succeeds while the probe is still running:
+    // only the probe may close the breaker
+    let (old, probe) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let breaker = CircuitBreakerLayer::new(1, ms(500), clock.clone());
+    let state = breaker.watch();
+    let steps = vec![
+        Step::WaitThenOk(old.clone()),
+        Step::Fail,
+        Step::WaitThenOk(probe.clone()),
+    ];
+    let svc = ServiceBuilder::new()
+        .layer(breaker)
+        .service(Mock::new(steps));
+    let mut slow = std::pin::pin!(svc.call(1));
+    assert!(poll!(&mut slow).is_pending()); // admitted while closed
+    assert!(svc.call(2).await.is_err()); // opens the breaker
+    clock.advance(ms(500));
+    let mut probing = std::pin::pin!(svc.call(3));
+    assert!(poll!(&mut probing).is_pending());
+    old.notify_one();
+    assert!(slow.await.is_ok());
+    assert_eq!(
+        state(),
+        Breaker::HalfOpen,
+        "a stale success changes nothing"
+    );
+    probe.notify_one();
+    assert!(probing.await.is_ok());
+    assert_eq!(state(), Breaker::Closed { failures: 0 });
+
+    // the probe's caller gives up: the breaker must not stay half-open for ever
+    let never = Arc::new(Notify::new());
+    let breaker = CircuitBreakerLayer::new(1, ms(500), clock.clone());
+    let state = breaker.watch();
+    let mock = Mock::new(vec![Step::Fail, Step::WaitThenOk(never)]);
+    let svc = ServiceBuilder::new().layer(breaker).service(mock);
+    assert!(svc.call(1).await.is_err());
+    clock.advance(ms(500));
+    let gave_up = tokio::time::timeout(ms(10), svc.call(2)).await;
+    assert!(gave_up.is_err());
+    assert!(matches!(state(), Breaker::Open { .. }), "{:?}", state());
+    clock.advance(ms(500));
+    assert_eq!(
+        svc.call(3).await,
+        Ok("ok:3".into()),
+        "a new probe gets through"
+    );
+}
+async fn test_breaker_and_retry_order() {
+    let clock = Arc::new(ManualClock::default());
+    // retry OUTSIDE the breaker: every attempt is counted, and the open breaker ends the retrying
+    let breaker = CircuitBreakerLayer::new(3, ms(1000), clock.clone());
+    let mock = Mock::new(vec![Step::Fail; 10]);
+    let svc = ServiceBuilder::new()
+        .layer(RetryLayer(backoff(5)))
+        .layer(breaker)
+        .service(mock.clone());
+    assert_eq!(svc.call(1).await, Err(Error::CircuitOpen));
+    assert_eq!(mock.calls(), 3);
+
+    // breaker OUTSIDE the retry: five attempts are one failure to the breaker
+    let breaker = CircuitBreakerLayer::new(3, ms(1000), clock);
+    let state = breaker.watch();
+    let mock = Mock::new(vec![Step::Fail; 10]);
+    let svc = ServiceBuilder::new()
+        .layer(breaker)
+        .layer(RetryLayer(backoff(5)))
+        .service(mock.clone());
+    assert!(matches!(svc.call(1).await, Err(Error::Failed(_))));
+    assert_eq!(
+        (mock.calls(), state()),
+        (5, Breaker::Closed { failures: 1 })
+    );
 }
 async fn test_full_stack() {
-    // A realistic client stack: trace -> timeout per attempt -> retry -> rate limit, over a flaky dependency.
+    // A realistic client stack: trace -> retry -> timeout per attempt -> rate limit, over a flaky dependency.
     let clock = Arc::new(ManualClock::default());
     let log: Log = Default::default();
     let mock = Mock::new(vec![Step::Fail, Step::SleepThenOk(ms(200)), Step::Ok]);
@@ -655,7 +840,7 @@ async fn test_full_stack() {
     );
 }
 
-/// axum handlers ARE tower services; the real `tower` crate drives them without a socket.
+/// An axum `Router` IS a tower service; the real `tower` crate drives it without a socket.
 async fn test_axum_is_a_service() {
     use axum::{Router, body::Body, http::Request, routing::get};
     use tower::ServiceExt;
@@ -687,6 +872,8 @@ fn main() {
             println!("rate limit:  burst 3, refill 2/s, capped bucket");
             test_breaker().await;
             println!("breaker:     opens after 3, half-open probe recovers / re-opens");
+            test_breaker_and_retry_order().await;
+            println!("order:       retry-outside-breaker vs breaker-outside-retry ok");
             test_full_stack().await;
             println!("stack:       trace -> retry -> timeout -> rate limit composed");
             test_axum_is_a_service().await;

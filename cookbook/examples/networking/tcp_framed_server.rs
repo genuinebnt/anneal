@@ -14,12 +14,17 @@
 //!  * EOF at a frame boundary = polite close (also what a client `shutdown(Write)` half-close looks like: we
 //!    still answer everything already sent, then close). EOF mid-frame = protocol error.
 //!  * oversized frame: reply with an error and close; the stream cannot be resynchronised after a bad length.
-//!  * timeouts: an idle or slowloris client (sends 2 header bytes, then nothing) would pin a thread forever.
-//!    Every socket has read AND write timeouts; the idle limit closes quiet peers.
+//!  * timeouts: a silent client would pin a thread forever, and so would one that drips a byte just often enough
+//!    to beat each read timeout. So the idle limit covers the quiet wait between frames, and also the time one
+//!    whole frame may take from its first byte. Every socket has a write timeout too. In the threaded server it
+//!    limits each write call, not a whole reply, so a very slow reader can still hold a thread.
+//!  * closing while the peer is still sending may reset the connection, and a reset can destroy an error reply
+//!    in flight. This server does not drain before it closes.
 //!  * limits: a connection cap (reject with a "busy" frame instead of accepting unbounded work).
 //!  * graceful shutdown: stop accepting (drop the listener), let connections finish what they have received,
-//!    then close; the accept loop joins them. Connections notice shutdown only between frames, so in-flight
-//!    requests complete (drain).
+//!    then close; the accept loop joins them. Connections notice shutdown only between frames. A quiet one closes
+//!    at its next read timeout; one that never stops sending is closed at the first frame boundary after DRAIN,
+//!    even if more frames are waiting. A frame in progress has until its own deadline.
 //!  * `TCP_NODELAY`: request/response ping-pong with Nagle on can stall ~40 ms on delayed ACKs.
 //! Everything binds 127.0.0.1:0 (ephemeral port) and never talks outside the machine.
 //!
@@ -40,10 +45,11 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tokio::time::timeout;
+use tokio::time::{timeout, timeout_at};
 
 const TICK: Duration = Duration::from_millis(20); // how often idle connections re-check the stop flag
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+const DRAIN: Duration = Duration::from_millis(200); // how long a busy connection may carry on after shutdown starts
 
 #[derive(Clone, Copy)]
 struct Cfg {
@@ -112,28 +118,31 @@ enum Rd {
 
 /// Fill `buf` completely, surviving read timeouts without losing progress.
 /// `boundary`: we are between frames (zero bytes read so far means clean EOF / may stop).
+/// `started`: when the current frame's first byte arrived; the whole frame must be in `idle` after that.
 fn read_full(
     s: &mut TcpStream,
     buf: &mut [u8],
     boundary: bool,
     idle: Duration,
     stop: &AtomicBool,
+    started: &mut Option<Instant>,
 ) -> io::Result<Rd> {
-    let (mut got, mut last) = (0, Instant::now());
+    let (mut got, waiting_since) = (0, Instant::now());
     while got < buf.len() {
+        // Checked on every turn, not only after a silent read: a client that drips bytes never goes silent.
+        if started.unwrap_or(waiting_since).elapsed() >= idle {
+            return Ok(Rd::Idle);
+        }
         match s.read(&mut buf[got..]) {
             Ok(0) if got == 0 && boundary => return Ok(Rd::Eof),
             Ok(0) => return Err(ErrorKind::UnexpectedEof.into()),
             Ok(n) => {
                 got += n;
-                last = Instant::now();
+                started.get_or_insert_with(Instant::now);
             }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                 if got == 0 && boundary && stop.load(Ordering::SeqCst) {
                     return Ok(Rd::Stop);
-                }
-                if last.elapsed() >= idle {
-                    return Ok(Rd::Idle);
                 }
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
@@ -143,14 +152,27 @@ fn read_full(
     Ok(Rd::Ok)
 }
 
+/// True once shutdown has been seen for longer than DRAIN.
+fn drained(stop: &AtomicBool, seen: &mut Option<Instant>) -> bool {
+    stop.load(Ordering::SeqCst) && seen.get_or_insert_with(Instant::now).elapsed() >= DRAIN
+}
+
 fn serve_conn_sync(mut s: TcpStream, cfg: Cfg, stop: &AtomicBool) -> io::Result<()> {
     s.set_nonblocking(false)?; // some platforms inherit O_NONBLOCK from the listener
     s.set_nodelay(true)?;
     s.set_read_timeout(Some(TICK))?;
     s.set_write_timeout(Some(IO_TIMEOUT))?;
+    let mut stop_seen: Option<Instant> = None;
     loop {
-        let mut hdr = [0u8; 4];
-        if !matches!(read_full(&mut s, &mut hdr, true, cfg.idle, stop)?, Rd::Ok) {
+        // a client that never pauses never causes a read timeout, so shutdown must be checked here as well
+        if drained(stop, &mut stop_seen) {
+            return Ok(());
+        }
+        let (mut hdr, mut started) = ([0u8; 4], None);
+        if !matches!(
+            read_full(&mut s, &mut hdr, true, cfg.idle, stop, &mut started)?,
+            Rd::Ok
+        ) {
             return Ok(()); // EOF, idle timeout or shutdown at a frame boundary
         }
         let len = match parse_len(hdr, cfg.max_frame) {
@@ -162,7 +184,7 @@ fn serve_conn_sync(mut s: TcpStream, cfg: Cfg, stop: &AtomicBool) -> io::Result<
         };
         let mut payload = vec![0u8; len];
         if !matches!(
-            read_full(&mut s, &mut payload, false, cfg.idle, stop)?,
+            read_full(&mut s, &mut payload, false, cfg.idle, stop, &mut started)?,
             Rd::Ok
         ) {
             return Ok(()); // slowloris mid-frame: drop
@@ -199,16 +221,19 @@ fn start_threaded(cfg: Cfg) -> Handle {
                     active.fetch_add(1, Ordering::SeqCst); // count BEFORE spawning: no accept race
                     let guard = CountGuard(active.clone());
                     let stop3 = stop2.clone();
-                    conns.push(thread::spawn(move || {
+                    // `thread::spawn` panics if the OS refuses a thread; Builder returns an error instead
+                    let spawned = thread::Builder::new().spawn(move || {
                         let _g = guard;
                         let _ = serve_conn_sync(s, cfg, &stop3);
-                    }));
+                    });
+                    conns.extend(spawned.ok());
                     conns.retain(|h| !h.is_finished());
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(2))
                 }
-                Err(_) => break,
+                // e.g. out of file descriptors: it passes, so wait a little and keep serving
+                Err(_) => thread::sleep(Duration::from_millis(10)),
             }
         }
         drop(listener); // stop accepting: new connects are refused
@@ -232,7 +257,11 @@ async fn serve_conn_async(
     s.set_nodelay(true)?;
     let timed_out = || io::Error::from(ErrorKind::TimedOut);
     let mut idle_since = Instant::now();
+    let mut stop_seen = None;
     loop {
+        if drained(&stop, &mut stop_seen) {
+            return Ok(());
+        }
         // single-byte `read` is cancel-safe, so we can race it against a tick without losing data
         let mut hdr = [0u8; 4];
         match timeout(TICK, s.read(&mut hdr[..1])).await {
@@ -246,7 +275,8 @@ async fn serve_conn_async(
             Ok(Ok(_)) => {}
             Ok(Err(e)) => return Err(e),
         }
-        timeout(cfg.idle, s.read_exact(&mut hdr[1..]))
+        let deadline = tokio::time::Instant::now() + cfg.idle; // for the rest of this frame
+        timeout_at(deadline, s.read_exact(&mut hdr[1..]))
             .await
             .map_err(|_| timed_out())??;
         let len = match parse_len(hdr, cfg.max_frame) {
@@ -259,7 +289,7 @@ async fn serve_conn_async(
             }
         };
         let mut payload = vec![0u8; len];
-        timeout(cfg.idle, s.read_exact(&mut payload))
+        timeout_at(deadline, s.read_exact(&mut payload))
             .await
             .map_err(|_| timed_out())??;
         timeout(IO_TIMEOUT, s.write_all(&handle_request(&payload)))
@@ -280,8 +310,13 @@ fn start_tokio(rt: &Arc<tokio::runtime::Runtime>, cfg: Cfg) -> Handle {
         let permits = Arc::new(Semaphore::new(cfg.max_conns));
         let mut set = JoinSet::new();
         while !stop2.load(Ordering::SeqCst) {
-            let Ok(Ok((mut s, _))) = timeout(TICK, listener.accept()).await else {
-                continue;
+            let mut s = match timeout(TICK, listener.accept()).await {
+                Ok(Ok((s, _))) => s,
+                Ok(Err(_)) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await; // do not spin on a failing accept
+                    continue;
+                }
+                Err(_) => continue,
             };
             match permits.clone().try_acquire_owned() {
                 Ok(permit) => {
@@ -319,7 +354,11 @@ fn connect(addr: SocketAddr) -> TcpStream {
 fn read_reply(s: &mut TcpStream) -> io::Result<(u8, Vec<u8>)> {
     let mut hdr = [0u8; 4];
     s.read_exact(&mut hdr)?; // fine on the client: a timeout is fatal anyway
-    let mut p = vec![0u8; u32::from_be_bytes(hdr) as usize];
+    let len = u32::from_be_bytes(hdr) as usize;
+    if !(1..=Cfg::DEFAULT.max_frame + 1).contains(&len) {
+        return Err(ErrorKind::InvalidData.into()); // the client does not trust lengths either
+    }
+    let mut p = vec![0u8; len];
     s.read_exact(&mut p)?;
     let status = p.remove(0);
     Ok((status, p))
@@ -444,6 +483,85 @@ fn suite(label: &str, start: &dyn Fn(Cfg) -> Handle) {
     );
 }
 
+/// A client that sends a byte every 20 ms never lets a read time out; the frame deadline must still cut it off.
+/// A client that never pauses must not keep shutdown waiting either.
+fn hostile_clients(label: &str, start: &dyn Fn(Cfg) -> Handle) {
+    let h = start(Cfg {
+        idle: Duration::from_millis(200),
+        ..Cfg::DEFAULT
+    });
+    let mut s = connect(h.addr);
+    let mut w = s.try_clone().unwrap();
+    let began = Instant::now();
+    let dripper = thread::spawn(move || {
+        let _ = w.write_all(&1024u32.to_be_bytes());
+        while began.elapsed() < Duration::from_secs(4) && w.write_all(b"a").is_ok() {
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let _ = s.read(&mut [0u8; 1]); // returns when the server closes or resets
+    let took = began.elapsed();
+    assert!(
+        took < Duration::from_secs(2),
+        "[{label}] dripper cut off only after {took:?}"
+    );
+    h.shutdown();
+    dripper.join().unwrap();
+
+    let h = start(Cfg::DEFAULT);
+    let mut s = connect(h.addr);
+    call(&mut s, 0, b"first").unwrap();
+    let busy = thread::spawn(move || {
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_secs(4) && call(&mut s, 0, b"x").is_ok() {}
+    });
+    thread::sleep(Duration::from_millis(50));
+    let began = Instant::now();
+    h.shutdown();
+    let took = began.elapsed();
+    assert!(
+        took < Duration::from_secs(2),
+        "[{label}] shutdown took {took:?} with a busy client"
+    );
+    busy.join().unwrap();
+    println!("[{label}] dripping client cut off, shutdown not held by a busy client: ok");
+}
+
+const FD_CHILD: &str = "TCP_FRAMED_FD_CHILD";
+
+/// Runs in a copy of this program with a low open-file limit. Uses up every descriptor so that the server's
+/// `accept` fails, frees them, and checks that the server still serves.
+fn out_of_descriptors_child() {
+    let h = start_threaded(Cfg::DEFAULT);
+    let mut hoard = Vec::new();
+    while let Ok(f) = std::fs::File::open("/dev/null") {
+        hoard.push(f);
+        assert!(hoard.len() < 10_000, "the open-file limit was not lowered");
+    }
+    hoard.pop(); // one free descriptor: enough for the client's socket, none for the accepted one
+    let waiting = connect(h.addr);
+    thread::sleep(Duration::from_millis(100)); // accept fails during this time
+    drop((hoard, waiting));
+    let mut s = connect(h.addr);
+    assert_eq!(call(&mut s, 0, b"still here").unwrap().1, b"still here");
+    drop(s);
+    h.shutdown();
+}
+
+fn survives_failing_accept() {
+    let status = std::process::Command::new("sh")
+        .args(["-c", "ulimit -n 64 && exec \"$0\""])
+        .arg(std::env::current_exe().unwrap())
+        .env(FD_CHILD, "1")
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "the server did not survive a failing accept: {status}"
+    );
+    println!("[threads] still serving after accept ran out of file descriptors: ok");
+}
+
 fn bench(label: &str, h: Handle) {
     let (clients, msgs) = (16, 2000);
     let t = Instant::now();
@@ -459,6 +577,9 @@ fn bench(label: &str, h: Handle) {
 }
 
 fn main() {
+    if std::env::var_os(FD_CHILD).is_some() {
+        return out_of_descriptors_child();
+    }
     // watchdog: this recipe must never hang a CI run
     thread::spawn(|| {
         thread::sleep(Duration::from_secs(90));
@@ -475,6 +596,9 @@ fn main() {
 
     suite("threads", &start_threaded);
     suite("tokio  ", &|cfg| start_tokio(&rt, cfg));
+    hostile_clients("threads", &start_threaded);
+    hostile_clients("tokio  ", &|cfg| start_tokio(&rt, cfg));
+    survives_failing_accept();
     bench("threads", start_threaded(Cfg::DEFAULT));
     bench("tokio  ", start_tokio(&rt, Cfg::DEFAULT));
     println!("all framed-server assertions passed");

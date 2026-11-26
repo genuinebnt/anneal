@@ -18,6 +18,9 @@
 //! a fixed intended rate, HdrHistogram's correction back-fills: a sample v > interval also records v-i, v-2i, ...; it is an
 //! ESTIMATE that assumes the missing requests would have waited out the same stall; it ignores the time the backlog takes to drain,
 //! so it errs low (quantified and asserted below).
+//! LIMITS: a scrape that runs during writes can show a `_sum` and a `_count` from slightly different moments. The series cap
+//! limits how many label sets exist, not how long a label value is. `increase` misses a restart if the new value already passed
+//! the old one.
 //! QUEUEING: Little's law L = lambda x W holds for any stable system and any discipline. M/M/1: W = 1/(mu - lambda). M/M/c:
 //! W = C/(c mu - lambda) + 1/mu with C the Erlang C probability of waiting. Latency explodes as utilisation -> 1.
 //! Simulations below use a VIRTUAL clock in microseconds; arrivals and service times are seeded exponential draws.
@@ -106,6 +109,9 @@ impl Histogram {
         Self::new((0..n).map(|i| start * factor.powi(i as i32)).collect())
     }
     fn observe(&self, v: f64) {
+        if v.is_nan() {
+            return; // NaN compares as neither side of a bound, and one NaN would poison the sum
+        }
         let i = self.bounds.partition_point(|&b| b < v); // first bound >= v: `le` is inclusive
         self.buckets[i].fetch_add(1, Relaxed);
         self.sum.add(v);
@@ -119,24 +125,28 @@ impl Histogram {
             })
             .collect()
     }
-    /// Like PromQL `histogram_quantile`: find the bucket by rank, interpolate linearly inside it.
+    /// PromQL's `histogram_quantile` rule for classic buckets: rank = q * count, then interpolate linearly in that bucket.
+    /// It differs at the edges: no data or a NaN `q` gives `None`, other `q` is clamped to 0..=1, and empty buckets are skipped.
     fn quantile(&self, q: f64) -> Option<f64> {
         let cum = self.cumulative();
         let total = *cum.last()?;
-        if total == 0 {
+        if total == 0 || q.is_nan() {
             return None;
         }
-        let rank = ((q * total as f64).ceil() as u64).max(1);
-        let i = cum.partition_point(|&c| c < rank);
+        let rank = q.clamp(0.0, 1.0) * total as f64; // not rounded up
+        let i = cum.partition_point(|&c| c == 0 || (c as f64) < rank);
         if i == self.bounds.len() {
             return self.bounds.last().copied(); // the answer is somewhere above the last bound: all we can say
+        }
+        if i == 0 && self.bounds[0] <= 0.0 {
+            return Some(self.bounds[0]); // nothing says how low the first bucket reaches
         }
         let (low, below) = if i == 0 {
             (0.0, 0)
         } else {
             (self.bounds[i - 1], cum[i - 1])
         };
-        Some(low + (self.bounds[i] - low) * (rank - below) as f64 / (cum[i] - below) as f64)
+        Some(low + (self.bounds[i] - low) * (rank - below as f64) / (cum[i] - below) as f64)
     }
 }
 /// Mergeable quantile sketch with a relative-error guarantee, for positive values.
@@ -148,6 +158,10 @@ struct Sketch {
 }
 impl Sketch {
     fn new(alpha: f64) -> Self {
+        assert!(
+            alpha > 0.0 && alpha < 1.0,
+            "relative error must be between 0 and 1"
+        );
         Sketch {
             gamma: (1.0 + alpha) / (1.0 - alpha),
             buckets: BTreeMap::new(),
@@ -168,6 +182,9 @@ impl Sketch {
     /// HdrHistogram's `recordValueWithExpectedInterval`.
     fn record_corrected(&mut self, v: f64, expected_interval: f64) {
         self.record(v);
+        if expected_interval <= 0.0 {
+            return;
+        }
         let mut missing = v - expected_interval;
         while missing >= expected_interval {
             self.record(missing);
@@ -255,6 +272,53 @@ fn quantile_bounds_test() {
     );
 }
 
+/// Inputs at the edges. Each block failed before the matching fix.
+fn edge_case_test() {
+    // 1. a q above 1 means "the largest"; it must not index past the buckets
+    let h = Histogram::linear(10.0, 10.0, 3);
+    h.observe(5.0);
+    assert_eq!(h.quantile(1.5), h.quantile(1.0));
+    // 2. no expected interval means no back-filling (a zero or negative one must not loop for ever)
+    for interval in [0.0, -1.0] {
+        let mut s = Sketch::new(0.01);
+        s.record_corrected(5.0, interval);
+        assert_eq!(s.count, 1);
+    }
+    // 3. NaN is not a measurement: it would sit in the lowest bucket and turn the sum into NaN for good
+    let h = Histogram::linear(10.0, 10.0, 3);
+    h.observe(f64::NAN);
+    h.observe(5.0);
+    assert_eq!((h.cumulative(), h.sum.get()), (vec![1, 1, 1, 1], 5.0));
+    // 4. a repeated label name would make a line that a Prometheus server rejects
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // this panic is expected: keep it out of the output
+    let repeated = std::panic::catch_unwind(|| {
+        Registry::new(10).counter("x_total", "x", &[("a", "1"), ("a", "2")]);
+    });
+    std::panic::set_hook(hook);
+    assert!(repeated.is_err(), "a repeated label name was accepted");
+    // 5. when the first bound is not positive, 0 is not the bottom of the first bucket
+    let h = Histogram::new(vec![-10.0, 10.0]);
+    h.observe(-20.0);
+    h.observe(-20.0);
+    assert_eq!(h.quantile(0.5), Some(-10.0));
+    // 6. rank is q * count, as in Prometheus: the median of 5 values has rank 2.5, halfway through the second bucket
+    let h = Histogram::linear(10.0, 10.0, 3);
+    [5.0, 10.0, 10.5, 29.0, 1000.0]
+        .into_iter()
+        .for_each(|v| h.observe(v));
+    assert_eq!(
+        (h.quantile(0.5), h.quantile(0.99)),
+        (Some(15.0), Some(30.0))
+    );
+    let h = Histogram::linear(10.0, 10.0, 3);
+    h.observe(15.0);
+    assert_eq!((h.quantile(0.0), h.quantile(f64::NAN)), (Some(10.0), None));
+    println!(
+        "  edge cases: q above 1, no back-fill interval, NaN, repeated labels, bounds below zero"
+    );
+}
+
 // ===========================================================================
 // 2. registry and text exposition
 // ===========================================================================
@@ -295,6 +359,10 @@ impl Registry {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         key.sort(); // {a,b} and {b,a} are the same series
+        assert!(
+            key.windows(2).all(|w| w[0].0 != w[1].0),
+            "repeated label name"
+        );
         let mut families = self.families.lock().unwrap();
         let family = families.entry(name.to_string()).or_insert_with(|| Family {
             help: help.to_string(),
@@ -921,6 +989,7 @@ fn gauge_sampling_demo() {
 fn main() {
     println!("== 1. quantiles: sketch vs fixed buckets ==");
     quantile_bounds_test();
+    edge_case_test();
     println!("== 2. registry and exposition ==");
     registry_test();
     gauge_sampling_demo();

@@ -26,9 +26,11 @@ Here we simplify to `async fn call(&self, req)` (shared `&self`, readiness folde
 
 Layer **order** is behaviour. `ServiceBuilder::new().layer(A).layer(B).service(s)` is `A(B(s))`: A is **outermost** (sees the request first, the response last). So `Retry` outside `Timeout` gives **each** attempt its own deadline; `Timeout` outside `Retry` puts **one** deadline over all attempts including backoff sleeps.
 
-A circuit breaker outside a retry counts the final outcome, inside it counts every attempt. Both orders are tested below.
+A circuit breaker outside a retry counts the final outcome, inside it counts every attempt. All of these orders are tested below.
 
-axum: every `Router`, every handler, and every `MethodRouter` is a `tower::Service<Request>`; that is why `.layer(...)` accepts anything from `tower` or `tower-http` (CORS, tracing, compression) and why `ServiceExt::oneshot` can call an app directly in tests (shown at the end, using the real `tower` crate from this cookbook's dependencies).
+axum: `Router` and `MethodRouter` are `tower::Service`s, and axum turns your handler functions into services for you.
+
+That is why `.layer(...)` accepts middleware from `tower` or `tower-http` (CORS, tracing, compression) and why `ServiceExt::oneshot` can call an app directly in tests (shown at the end, using the real `tower` crate from this cookbook's dependencies).
 """
 
 [[sections]]

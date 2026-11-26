@@ -1,0 +1,318 @@
+title = "Tower service layer"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 48
+kind = "lesson"
+level = "advanced"
+code = ["examples/patterns/tower_service_layer.rs"]
+code_spoils = ["/p/m2-rate-limiter", "/p/b2-fix-poll-ready"]
+lede = "Tower adds behaviour such as timeouts and retries by wrapping one service in another."
+summary = """A **service** turns a request into a response later. A **layer** wraps a service and returns a new one, so you can add a timeout or a retry without touching the code inside. Their order changes what the program does, and this page builds a small version of Tower to show it. In production, use the real `tower` crate, whose trait also handles backpressure."""
+
+[[sections]]
+heading = "Why wrap a service in more services?"
+body = """
+Say your program calls a payment service that is sometimes slow. You want a time limit on each call. You also want to retry failures, cap the calls in flight, and log what happened.
+
+If each caller writes that itself, the rules drift apart. Tower puts every rule in its own wrapper. A wrapper looks like a service from outside, so wrappers stack.
+
+```rust
+let service = ServiceBuilder::new()
+    .layer(RetryLayer(backoff))
+    .layer(TimeoutLayer(deadline))
+    .service(payment_client);
+```
+
+The first layer you add is the outermost. It sees the request first and the response last. These names belong to this page's small version, which copies the shape of Tower's `ServiceBuilder`.
+"""
+
+[[sections]]
+heading = "What does the real trait ask of you?"
+body = """
+Here is the core of `tower::Service`.
+
+```rust
+pub trait Service<Request> {
+    type Response;
+    type Error;
+    type Future: Future<Output = Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>>;
+    fn call(&mut self, req: Request) -> Self::Future;
+}
+```
+
+`call` starts one request and returns a future. Before that, you must see `poll_ready` return ready. This is how a busy service says "not yet", which is called **backpressure**. A service may reserve a place during `poll_ready` and use it in the next `call`.
+
+The page's version has one method, `async fn call(&self, req)`. That makes each wrapper short, but it loses the separate "are you ready?" step. A wrapper that is full waits inside `call`, and the rate limit rejects inside it.
+
+A **layer** is smaller. It has one method that takes the inner service and returns the wrapped one. The small version is generic, so a finished stack is one concrete type with no boxed services.
+
+In axum, a `Router` and a `MethodRouter` are Tower services. That is why `.layer(...)` accepts Tower middleware, and why a test can call `oneshot` on an app.
+"""
+
+[[sections]]
+heading = "What does each example layer do?"
+body = """
+| Layer | What it does | What to watch |
+|---|---|---|
+| Trace | Notes when a call goes in and comes out | The example keeps every line in memory, without limit |
+| Timeout | Gives up on the inner call after a set time | Giving up does not undo work already done elsewhere |
+| Retry | Calls again after a failure or timeout | Repeating a payment is only safe if the server can spot the repeat |
+| Concurrency limit | Waits for one of a fixed number of places | Callers waiting for a place still use memory |
+| Rate limit | Refuses calls that arrive too fast | Tower's own rate limit makes callers wait instead |
+| Circuit breaker | Stops calling a dependency that keeps failing | Its cases are subtle; see below |
+
+The retry delays double up to a cap. They have no **jitter**, a random extra delay. Without it, many clients that failed together also retry together.
+"""
+
+[[sections]]
+heading = "Why does the order of layers change the result?"
+body = """
+Take a call whose first attempt hangs and whose second would work. Where you put the time limit decides whether you ever make that second attempt. These two programs use plain Tokio.
+
+```compare
+takeaway = "A time limit inside the retry gives each attempt its own deadline. Outside the retry, it caps the whole operation. You may want both."
+[wrong]
+title = "One deadline around all attempts"
+code = '''
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
+
+/// The first try hangs; later tries answer at once.
+async fn flaky(attempt: u32) -> Result<&'static str, ()> {
+    if attempt == 1 {
+        sleep(Duration::from_secs(60)).await;
+    }
+    Ok("ok")
+}
+
+#[tokio::main]
+async fn main() {
+    // one deadline around the whole retry loop
+    let result = timeout(Duration::from_millis(100), async {
+        for attempt in 1..=3 {
+            println!("attempt {attempt}");
+            if let Ok(answer) = flaky(attempt).await {
+                return answer;
+            }
+        }
+        "gave up"
+    })
+    .await;
+    println!("{}", result.unwrap_or("timed out"));
+}
+'''
+result = "Prints `attempt 1`, then `timed out`. The retry never gets a turn."
+[fixed]
+title = "A deadline for each attempt"
+code = '''
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
+
+/// The first try hangs; later tries answer at once.
+async fn flaky(attempt: u32) -> Result<&'static str, ()> {
+    if attempt == 1 {
+        sleep(Duration::from_secs(60)).await;
+    }
+    Ok("ok")
+}
+
+async fn retry_each_with_deadline() -> &'static str {
+    for attempt in 1..=3 {
+        println!("attempt {attempt}");
+        // a new deadline for every attempt
+        if let Ok(Ok(answer)) = timeout(Duration::from_millis(100), flaky(attempt)).await {
+            return answer;
+        }
+    }
+    "gave up"
+}
+
+#[tokio::main]
+async fn main() {
+    println!("{}", retry_each_with_deadline().await);
+}
+'''
+result = "Prints `attempt 1`, `attempt 2`, then `ok`."
+```
+
+The code file makes the same point with layers. Swap `RetryLayer` and `TimeoutLayer` in the first case of `test_order`, then run it. The assertion fails with `left: Err(Timeout)` where it expected `Ok("ok:1")`.
+
+The circuit breaker depends on order too. Inside a retry, it counts every attempt. Outside, five failed attempts count as one failure. If a timeout should count as a failure, the breaker must sit outside the timeout, where it can see the error.
+"""
+
+[[sections]]
+heading = "How does a circuit breaker change state?"
+body = """
+A **circuit breaker** has three states. Closed lets calls through. Open refuses them at once. After a cooldown, half-open lets one trial call through, called the **probe**.
+
+```stepper
+caption = "A breaker that opens after three failures"
+[[frame]]
+title = "Closed"
+text = "Calls go through. A success sets the failure count back to zero."
+lanes = [ { name = "Caller", items = ["call"] }, { name = "Breaker", items = ["closed, 0 failures"] }, { name = "Dependency", items = ["working"] } ]
+[[frame]]
+title = "Failures add up"
+text = "Two calls in a row fail. The breaker still lets the next one through."
+lanes = [ { name = "Caller", items = ["call"] }, { name = "Breaker", items = ["closed, 2 failures"] }, { name = "Dependency", items = ["failing"] } ]
+[[frame]]
+title = "Open"
+text = "A third failure opens it. New calls fail at once and never reach the dependency."
+lanes = [ { name = "Caller", items = ["refused"] }, { name = "Breaker", items = ["open"] }, { name = "Dependency", items = [] } ]
+[[frame]]
+title = "Half-open"
+text = "The cooldown has passed. One probe goes through, and other calls are still refused."
+lanes = [ { name = "Caller", items = ["probe", "others refused"] }, { name = "Breaker", items = ["half-open"] }, { name = "Dependency", items = ["handling the probe"] } ]
+[[frame]]
+title = "Closed again"
+text = "The probe succeeds and the count restarts. A failed probe would open the breaker again."
+lanes = [ { name = "Caller", items = ["call"] }, { name = "Breaker", items = ["closed, 0 failures"] }, { name = "Dependency", items = ["working"] } ]
+```
+
+The picture assumes calls finish one at a time. Real calls overlap. A call that started while the breaker was closed can finish much later. Its answer says nothing about the probe, so the example ignores it.
+"""
+
+[[sections]]
+heading = "What happens when a caller gives up?"
+body = """
+In async Rust, a timeout stops a call by **dropping** its future. Work that the dependency already started may still finish.
+
+Dropping also changes what happens inside your own wrappers. This causes real bugs, and the explanation gives away part of [the Tower middleware fix](/p/b2-fix-poll-ready). So it is folded.
+
+:::deeper Show what cancellation breaks (gives away part of the middleware fix)
+A dropped future never runs the code after the `.await` it was waiting on. Bookkeeping written there is skipped.
+
+The breaker is the dangerous case. Say the probe is waiting, and its caller times out. If only the line after the `.await` updates the state, the breaker stays half-open. It then refuses every later call, for ever.
+
+The example uses a small **guard**: a value whose `Drop` runs however the future ends. If the probe is dropped before it answers, the guard records a failed probe. The test's mock service uses the same idea for its count of calls in flight.
+
+A dropped call in the closed state is not counted at all. That is why a breaker placed inside a timeout never learns that its dependency is slow.
+:::
+"""
+
+[[sections]]
+heading = "How does the example code fit together?"
+body = """
+The full file also contains a working rate limiter, so it gives away much of [the rate limiter exercise](/p/m2-rate-limiter). Its guards give away part of the middleware fix. Try those first if you plan to solve them.
+
+:::deeper Walk through the code (gives away much of the rate limiter exercise and part of the middleware fix)
+```walkthrough
+file = "examples/patterns/tower_service_layer.rs"
+[[step]]
+title = "The two small traits"
+lines = "40-47"
+text = "A service has one async `call`. A layer turns one service into another."
+[[step]]
+title = "Stack layers in order"
+lines = "65-85"
+text = "Each new layer goes inside the ones already added, so the first call to `layer` ends up outermost."
+[[step]]
+title = "Time out one call"
+lines = "212-220"
+text = "`tokio::time::timeout` drops the inner future when time runs out."
+[[step]]
+title = "Retry what is worth retrying"
+lines = "263-280"
+text = "The request is cloned for each attempt. The policy returns a delay, or `None` to stop."
+[[step]]
+title = "Fill the token bucket"
+lines = "319-337"
+text = "It adds credit for whole milliseconds only, and keeps the fraction for next time. The arithmetic saturates, and a clock that goes backwards earns nothing."
+[[step]]
+title = "Admit a call or refuse it"
+lines = "401-412"
+text = "`admit` decides under the lock. It returns the current phase number and says whether this call is the probe."
+[[step]]
+title = "Ignore answers from an earlier phase"
+lines = "413-435"
+text = "The phase number rises whenever the breaker opens, half-opens or closes. A late answer carries an old number and changes nothing."
+[[step]]
+title = "Survive a dropped probe"
+lines = "437-450"
+text = "The guard stays armed until the inner call answers."
+[[step]]
+title = "Put the breaker together"
+lines = "484-499"
+text = "No standard mutex guard is held across the `.await`."
+```
+:::
+"""
+
+[[sections]]
+heading = "When should you use Tower, and what can go wrong?"
+body = """
+Use Tower when several rules must wrap many calls, or when your library already speaks it, as axum does. For one time limit on one call, `tokio::time::timeout` is enough.
+
+| Symptom | Likely cause | What to check |
+|---|---|---|
+| Retries never happen after a slow attempt | The only time limit is outside the retry | Add a limit inside the retry |
+| One user action is charged twice | A retried request was not safe to repeat | Retry only repeatable requests, or send an idempotency key |
+| A struggling dependency gets even more traffic | Retries at several levels multiply | Retry in one place, with a cap and jitter |
+| The breaker never opens for a slow dependency | It sits inside the timeout | Move it outside |
+| Memory grows under load | Callers queue for a concurrency limit | Limit waiting too, or refuse early |
+
+These stacks are teaching code. They have no metrics, no jitter, and a simplified readiness model. The tests cover the cases named in them, not every interleaving.
+"""
+
+[[connections]]
+kind = "before"
+title = "Axum router state"
+link = "/cookbook/p/axum-router-state"
+why = "Optional. See a router, which is the Tower service you are likely to meet first."
+
+[[connections]]
+kind = "practise"
+title = "Fix: the middleware that broke backpressure"
+link = "/p/b2-fix-poll-ready"
+level = "related"
+why = "Work with the real trait and `poll_ready`. The folds on this page give away part of it."
+
+[[connections]]
+kind = "practise"
+title = "A rate limiter on a clock you control"
+link = "/p/m2-rate-limiter"
+level = "related"
+why = "Build limiters with stricter rules than this page's. Solve it before opening the code."
+
+[[connections]]
+kind = "practise"
+title = "Wrap every handler in the same steps"
+link = "/p/b7-shared-steps"
+level = "related"
+why = "The same wrapping idea with ordinary functions, no Tower and no async."
+
+[[connections]]
+kind = "returns"
+title = "A resilient HTTP client against a flaky server"
+link = "/cookbook/p/http-client-resilience"
+why = "See retries and timeouts used by a client over real HTTP."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "The series wraps handlers in shared steps without Tower, so treat this page as background."
+
+[[sources]]
+title = "Inventing the Service trait (Tokio blog)"
+url = "https://tokio.rs/blog/2021-05-14-inventing-the-service-trait"
+note = "Builds the real trait step by step, including why poll_ready exists."
+
+[[sources]]
+title = "tower::Service"
+url = "https://docs.rs/tower/latest/tower/trait.Service.html"
+note = "The contract between poll_ready and call."
+
+[[sources]]
+title = "Martin Fowler: Circuit Breaker"
+url = "https://martinfowler.com/bliki/CircuitBreaker.html"
+note = "The pattern and its three states."
+
+[[sources]]
+title = "tower on GitHub"
+url = "https://github.com/tower-rs/tower"
+note = "Read how the production layers are written."

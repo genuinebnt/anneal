@@ -34,7 +34,7 @@ the cheapest request is the one never sent, the second cheapest is a 304. Precon
 [[sections]]
 heading = "How it works"
 body = """
-`no-cache` means "store it but ask before reuse"; `no-store` means "never keep it"; `immutable` says revalidation is pointless; `private` forbids shared caches (CDNs); `public` allows them. A response that varies by a request header **must** say so in `Vary`, otherwise a shared cache serves the wrong variant.
+`no-cache` means "store it but ask before reuse"; `no-store` means "never keep it"; `immutable` says a client need not revalidate while the response is fresh; `private` forbids shared caches (CDNs); `public` allows them. A response that varies by a request header **must** say so in `Vary`, otherwise a shared cache serves the wrong variant.
 
 Multi-range (`bytes=0-9,20-29`) would be answered as `multipart/byteranges`; servers may ignore it and send 200 (we do), which is always legal. Dates are compared as parsed epoch seconds, never as strings.
 """

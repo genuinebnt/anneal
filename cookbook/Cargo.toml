@@ -621,6 +621,9 @@ path = "examples/dev_tools/testing_patterns.rs"
 name = "tracing_logs"
 path = "examples/dev_tools/tracing_logs.rs"
 [[example]]
+name = "abd_register_simulation"
+path = "examples/distributed/abd_register_simulation.rs"
+[[example]]
 name = "chandy_lamport_snapshot"
 path = "examples/distributed/chandy_lamport_snapshot.rs"
 [[example]]

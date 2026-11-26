@@ -1,0 +1,310 @@
+title = "std::net by use case"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 105
+kind = "lesson"
+level = "intermediate"
+lede = "A lookup page for addresses, TCP and UDP with the standard library."
+code = ["examples/std_tour/std_net_tcp_udp_ip_addr.rs"]
+code_spoils = ["/p/b4-length-prefixed-codec", "/p/b7-talk-over-a-connection", "/p/b7-stop-a-listening-server"]
+summary = """
+`std::net` gives you IP addresses, TCP and UDP, with calls that block the thread. Use it for tools, tests and small services, or to see what async libraries wrap. Look up your task below: the calls are short, but safe use needs time limits, size limits and a plan for ending connections. The standard library has no HTTP or encryption.
+"""
+
+[[sections]]
+heading = "Which type do you need?"
+body = """
+| You want to | Use |
+|---|---|
+| Hold an address without a port | `IpAddr`, or `Ipv4Addr` and `Ipv6Addr` |
+| Hold an address with a port | `SocketAddr` |
+| Turn a host name into addresses | `ToSocketAddrs::to_socket_addrs` |
+| Wait for incoming TCP connections | `TcpListener` |
+| Send and receive a TCP stream | `TcpStream` |
+| Send and receive single UDP packets | `UdpSocket` |
+
+**TCP** gives you an ordered stream of bytes over a connection. **UDP** sends separate packets, called **datagrams**, that may be lost, repeated or reordered.
+
+Parsing a `SocketAddr` never looks up a name, so `"localhost:80".parse::<SocketAddr>()` fails. `to_socket_addrs` does accept names. A lookup can block and can return several addresses, so be ready to try more than one. IPv6 needs brackets next to a port, as in `[::1]:80`.
+"""
+
+[[sections]]
+heading = "How do you listen and connect?"
+body = """
+A **listener** is a socket that waits for connections. `accept` gives you a new `TcpStream` for each one.
+
+```rust
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
+
+fn main() -> std::io::Result<()> {
+    // port 0: let the system pick a free one, then ask which it was
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+
+    let wait = Duration::from_secs(2);
+    let mut client = TcpStream::connect_timeout(&address, wait)?;
+    let (mut server, _) = listener.accept()?;
+    server.set_write_timeout(Some(wait))?;
+    client.set_read_timeout(Some(wait))?;
+
+    server.write_all(b"hi")?;
+    let mut reply = [0u8; 2];
+    client.read_exact(&mut reply)?;
+    assert_eq!(&reply, b"hi");
+    Ok(())
+}
+```
+
+One thread can run both ends here because the system finishes the connection before `accept` is called, and the message is tiny. With large messages, one end would wait to write while nobody reads.
+
+Binding `127.0.0.1` keeps the service reachable only from your own machine. Binding `0.0.0.0` listens on all its IPv4 interfaces, so other machines may reach it.
+"""
+
+[[sections]]
+heading = "How do you avoid waiting forever?"
+body = """
+By default a read or write can wait with no end. Set a limit on every socket whose other end you don't control.
+
+| Wait | Limit | Note |
+|---|---|---|
+| Connecting | `connect_timeout` | Takes one `SocketAddr`, and a zero duration is an error |
+| Reading | `set_read_timeout` | `Some(Duration::ZERO)` is an error, and `None` means no limit |
+| Writing | `set_write_timeout` | A write waits when the other end stops reading and buffers fill |
+
+When a read or write limit expires, the error kind differs between systems. Check for both `WouldBlock` and `TimedOut`.
+
+```rust
+use std::io::{Error, ErrorKind};
+
+fn is_timeout(e: &Error) -> bool {
+    matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
+
+fn main() {
+    assert!(is_timeout(&Error::from(ErrorKind::TimedOut)));
+}
+```
+
+These limits apply to each call, not to a whole exchange. A peer that sends one byte just in time resets the wait on every read. To limit a whole message, keep your own deadline as well.
+
+After a failed `write_all`, you can't know how many bytes went out. Don't send the next message on that stream. Close it.
+"""
+
+[[sections]]
+heading = "How do you end a connection?"
+body = """
+Dropping the last handle to a stream closes it. `shutdown` lets you end one direction first.
+
+| Call | Effect |
+|---|---|
+| `shutdown(Shutdown::Write)` | You are done sending. The peer sees the end of your data, and you can still read |
+| `shutdown(Shutdown::Read)` | You are done reading |
+| `shutdown(Shutdown::Both)` | Both directions end |
+
+Ending only the sending side is a **half-close**. It matters when one side reads until the end of the stream.
+
+The program shows what happens without it. A client sends a large message to a server that echoes it back, then reads until the end. If you delete the client's `shutdown(Shutdown::Write)`, each side waits for the other. After the 20-second safety limit, the run fails with `WouldBlock` read errors on macOS.
+
+That program also reads and writes at the same time, on two threads. `try_clone` makes a second handle to the **same** socket. A shutdown or a timeout set through one handle affects the other.
+"""
+
+[[sections]]
+heading = "How do you read one whole message?"
+body = """
+One `write` is not one `read`. A read may return part of a message, or parts of two. Your protocol needs **framing**, a rule that says where each message ends.
+
+| Rule | Suits | Always limit |
+|---|---|---|
+| A length, then that many bytes | Binary data | The announced length, before you allocate |
+| A marker such as a newline | Text commands | How much you buffer while waiting for the marker |
+| One message, then close | Single exchanges | The total bytes |
+
+`BufRead::read_line` is handy for text, but it has no limit of its own. A peer that never sends a newline makes your string grow until memory runs out. Keep one `BufReader` for each connection, too. If you drop it, any bytes it had read ahead are lost.
+
+The [TCP server lesson](/cookbook/p/tcp-framed-server) explains framing with pictures and a failing example.
+
+:::deeper A bounded line reader and a framed reader (gives away much of "Talk to clients over the network" and part of "A length-prefixed frame codec that survives partial reads")
+```walkthrough
+file = "examples/std_tour/std_net_tcp_udp_ip_addr.rs"
+[[step]]
+title = "Check the length before allocating"
+lines = "430-439"
+text = "A large announced length is refused while only four bytes have been read."
+[[step]]
+title = "Cap the line while reading it"
+lines = "444-451"
+text = "`take` stops the read after the content limit plus room for a two-byte line ending."
+[[step]]
+title = "Then check the content"
+lines = "452-465"
+text = "A missing newline means too long, or a closed connection. The limit counts content only, so both line endings get the same verdict."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do you stop a thread that is waiting?"
+body = """
+`accept` and `read` block their thread. Setting a flag does not wake a thread that is asleep inside one of them.
+
+So a program that must stop needs a way to get each waiting thread to return. It then needs to wait for those threads to end. The fold shows the standard library's tools for this.
+
+:::deeper Waking blocked threads (gives away much of "Stop a server that is waiting" and capstone step 10)
+For a read, a read timeout lets the thread wake up now and then. The program also calls `shutdown(Shutdown::Both)`, after which a read on a cloned handle returns. Its macOS check does not make sure that read was already waiting. For a listener, `set_nonblocking(true)` makes `accept` return `WouldBlock` when nobody is waiting.
+
+The program also stops an accept loop in two ways. The first sets a flag and then connects to the server itself. That connection makes `accept` return, so the loop can see the flag. If the connection fails, the loop stays asleep.
+
+The second keeps the listener non-blocking and checks between attempts. It is simple, but it wakes even when there is nothing to do.
+
+```walkthrough
+file = "examples/std_tour/std_net_tcp_udp_ip_addr.rs"
+[[step]]
+title = "Check after each accept"
+lines = "571-592"
+text = "The wake-up connection is dropped without being served. A failed accept waits briefly instead of ending the server."
+[[step]]
+title = "Wait for the handlers"
+lines = "574-595"
+text = "`thread::scope` does not return until every thread spawned in it has finished."
+[[step]]
+title = "Wake it"
+lines = "608-610"
+text = "The flag is set first, then the connection is made."
+```
+:::
+
+On macOS and other BSD systems, an accepted socket inherits the listener's non-blocking setting. On Linux it does not. Set the mode you want on each accepted stream.
+"""
+
+[[sections]]
+heading = "When do you use UDP?"
+body = """
+Use UDP when each message stands alone and your program can cope with loss. Unlike TCP, one send is one datagram, and one receive takes at most one datagram.
+
+| Call | What it does |
+|---|---|
+| `send_to`, `recv_from` | Name the other address on each send, and learn it on each receive |
+| `connect`, then `send`, `recv` | Fix one peer, and drop datagrams from other addresses |
+| `peek_from` | Look at the next datagram without removing it |
+| `set_broadcast(true)` | Allow sending to a broadcast address |
+
+UDP's `connect` sends nothing, so success does not mean a peer is there. If your receive buffer is too small, the rest of that datagram is lost. The program checks that macOS returns the shortened data without an error. Don't rely on that elsewhere.
+
+If you need a reply, your code owns time limits and retries. A late reply to the first request can also arrive after a second one. Put a request number in each message so you can tell. The program retries but has no request numbers, so don't copy it for requests that differ.
+"""
+
+[[sections]]
+heading = "How do you check an address a user gave you?"
+body = """
+Say your service fetches a web address that a user typed. The user could point it at your own machine or your private network. This is **server-side request forgery**, or SSRF.
+
+One trap is an IPv4 address written in IPv6 form. `::ffff:127.0.0.1` can reach your own machine. As an IPv6 value, though, `is_loopback` says no. Call `to_canonical` first.
+
+```compare
+takeaway = "Turn mapped addresses back into IPv4 before any rule looks at them. This one fix is not a complete filter."
+[wrong]
+title = "Check the address as given"
+code = '''
+use std::net::IpAddr;
+
+fn allowed(ip: IpAddr) -> bool {
+    !ip.is_loopback()
+}
+
+fn main() {
+    let ip: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+    println!("allowed: {}", allowed(ip));
+}
+'''
+result = "It prints `allowed: true` for an address that leads back to your own machine."
+[fixed]
+title = "Make it canonical first"
+code = '''
+use std::net::IpAddr;
+
+fn allowed(ip: IpAddr) -> bool {
+    !ip.to_canonical().is_loopback()
+}
+
+fn main() {
+    let ip: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+    println!("allowed: {}", allowed(ip));
+}
+'''
+result = "It prints `allowed: false`."
+```
+
+Loopback is only one range to refuse. Private, link-local and other special ranges matter too. Some IPv6 forms, such as **6to4**, carry an IPv4 address inside them. A rule that accepts all of `2000::/3` would let `2002:7f00:1::` through, which is the 6to4 form of `127.0.0.1`.
+
+The program's policy is an example, not a complete list. Check the address you will actually connect to, since a name can resolve differently the next time. Allowing a short list of known destinations is safer than refusing bad ones. Redirects need the same check.
+"""
+
+[[sections]]
+heading = "What does the full program cover?"
+body = """
+Run it from the `cookbook` folder. It uses only your machine's loopback addresses.
+
+```sh
+cargo run --release --example std_net_tcp_udp_ip_addr
+```
+
+It checks address parsing, ranges, socket options, time limits, half-close, framing, accept loops and UDP. The IPv6 section is skipped on a machine without IPv6 loopback.
+
+The program has been run only on macOS. That says nothing about other systems, real networks or name lookups. The example server also starts a thread for every client, with no cap.
+
+The standard library does not include encryption, HTTP or async sockets. For socket options it lacks, look at the `socket2` library.
+"""
+
+[[connections]]
+kind = "returns"
+title = "A length-prefixed TCP message server"
+link = "/cookbook/p/tcp-framed-server"
+why = "These calls put together into a server with limits and shutdown."
+
+[[connections]]
+kind = "returns"
+title = "HTTP/1.1 message parser and serializer"
+link = "/cookbook/p/http1-parser"
+why = "What framing looks like in a widely used text protocol."
+
+[[connections]]
+kind = "practise"
+title = "Talk to clients over the network"
+link = "/p/b7-talk-over-a-connection"
+level = "similar"
+why = "A line service with stricter promises. Try it before the framing fold or the full code."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its last stage puts a server on the network with these types."
+
+[[sources]]
+title = "std::net"
+url = "https://doc.rust-lang.org/std/net/index.html"
+note = "The full list of types in this module."
+
+[[sources]]
+title = "std::net::TcpStream"
+url = "https://doc.rust-lang.org/std/net/struct.TcpStream.html"
+note = "Read the notes on each timeout method and on shutdown."
+
+[[sources]]
+title = "std::net::UdpSocket"
+url = "https://doc.rust-lang.org/std/net/struct.UdpSocket.html"
+note = "What connect, recv and a short buffer do."
+
+[[sources]]
+title = "OWASP: SSRF prevention"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"
+note = "Why an address check alone is not enough."
+
+[[sources]]
+title = "IANA IPv6 special-purpose addresses"
+url = "https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml"
+note = "The list to check an address filter against."

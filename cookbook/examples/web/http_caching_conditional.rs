@@ -12,7 +12,7 @@
 //! WHY: the cheapest request is the one never sent, the second cheapest is a 304. Preconditions also give
 //! optimistic concurrency without locks.
 //! HOW: `no-cache` means "store it but ask before reuse"; `no-store` means "never keep it"; `immutable` says
-//! revalidation is pointless; `private` forbids shared caches (CDNs); `public` allows them. A response that
+//! a client need not revalidate while the response is fresh; `private` forbids shared caches (CDNs); `public` allows them. A response that
 //! varies by a request header MUST say so in `Vary`, otherwise a shared cache serves the wrong variant.
 //! Multi-range (`bytes=0-9,20-29`) would be answered as `multipart/byteranges`; servers may ignore it and send
 //! 200 (we do), which is always legal. Dates are compared as parsed epoch seconds, never as strings.
@@ -41,7 +41,7 @@ use std::{
 use tower_http::compression::CompressionLayer;
 
 // ---------------------------------------------------------------- loopback server + transcript helpers
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use bytes::Bytes;
 use reqwest::{Client, RequestBuilder};
 use std::{net::SocketAddr, time::Duration};
@@ -264,7 +264,7 @@ fn title(s: &str) {
     println!("==== {s}");
 }
 
-// ---------------------------------------------------------------- SHA-256, HMAC, base64url, hex (from scratch)
+// ---------------------------------------------------------------- SHA-256 and hex (from scratch, only to make ETags)
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -323,29 +323,6 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        k[..32].copy_from_slice(&sha256(key));
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let mut inner: Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
-    inner.extend_from_slice(msg);
-    let ih = sha256(&inner);
-    let mut outer: Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
-    outer.extend_from_slice(&ih);
-    sha256(&outer)
-}
-
-/// Constant-time equality: no early exit, so timing does not reveal the first differing byte.
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -377,16 +354,20 @@ fn parse_http_date(s: &str) -> Option<i64> {
     .iter()
     .position(|m| *m == p[2])? as i64
         + 1;
-    let hms: Vec<i64> = p[4].split(':').filter_map(|x| x.parse().ok()).collect();
-    if hms.len() != 3 {
+    // fixed widths and ranges: the client controls this text, and a huge year would overflow the arithmetic
+    let field = |s: &str, width: usize, max: i64| -> Option<i64> {
+        let digits = s.len() == width && s.bytes().all(|b| b.is_ascii_digit());
+        s.parse().ok().filter(|&n| digits && n <= max)
+    };
+    let (day, year) = (field(p[1], 2, 31)?, field(p[3], 4, 9999)?);
+    let mut time = p[4].split(':');
+    let hour = field(time.next()?, 2, 23)?;
+    let minute = field(time.next()?, 2, 59)?;
+    let second = field(time.next()?, 2, 60)?;
+    if day == 0 || time.next().is_some() {
         return None;
     }
-    Some(
-        days_from_civil(p[3].parse().ok()?, mon, p[1].parse().ok()?) * 86400
-            + hms[0] * 3600
-            + hms[1] * 60
-            + hms[2],
-    )
+    Some(days_from_civil(year, mon, day) * 86400 + hour * 3600 + minute * 60 + second)
 }
 
 /// Weak comparison (RFC 9110 8.8.3.2) for If-None-Match: ignore the `W/` prefix; `*` matches anything.
@@ -394,7 +375,7 @@ fn inm_matches(header_value: &str, etag: &str) -> bool {
     header_value
         .split(',')
         .map(str::trim)
-        .any(|t| t == "*" || t.trim_start_matches("W/") == etag)
+        .any(|t| t == "*" || t.strip_prefix("W/").unwrap_or(t) == etag)
 }
 
 /// Strong comparison for If-Match: weak tags never match.
@@ -427,6 +408,7 @@ const DOC: &str = "The quick brown fox jumps over the lazy dog. Caching makes th
 const LAST_MODIFIED: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
 const BLOB_LEN: usize = 10_000;
 const FLAKY_CHUNK: usize = 3_500;
+const MAX_NOTES: usize = 100; // axum limits one body (2 MB); nothing else limits how many we keep
 
 fn blob() -> Vec<u8> {
     (0..BLOB_LEN)
@@ -523,41 +505,55 @@ enum Rng {
 
 /// Parse a single `bytes=` range. Multi-range or malformed => ignore the header (legal: answer 200).
 fn parse_range(v: &str, total: usize) -> Rng {
-    let Some(spec) = v.trim().strip_prefix("bytes=") else {
+    let Some((a, b)) = v
+        .trim()
+        .strip_prefix("bytes=")
+        .and_then(|spec| spec.split_once('-'))
+    else {
         return Rng::Full;
     };
-    if spec.contains(',') {
-        return Rng::Full; // multi-range: we choose not to build multipart/byteranges
-    }
-    let Some((a, b)) = spec.split_once('-') else {
-        return Rng::Full;
+    // Digits only (`str::parse` also accepts "+5"). A number too big for `usize` is still a very large number.
+    // A comma (multi-range) fails this test, so we answer such a request with the whole body.
+    let number = |s: &str| {
+        let digits = !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+        digits.then(|| s.parse::<usize>().unwrap_or(usize::MAX))
     };
-    match (a.trim().parse::<usize>(), b.trim().parse::<usize>()) {
-        (Ok(a), Ok(b)) if b < a => Rng::Full,
-        (Ok(a), _) if a >= total => Rng::Unsatisfiable,
-        (Ok(a), Ok(b)) => Rng::Part(a, b.min(total - 1)),
-        (Ok(a), Err(_)) if b.is_empty() => Rng::Part(a, total - 1),
-        (Err(_), Ok(n)) if a.is_empty() => {
-            if n == 0 {
+    match (number(a), number(b)) {
+        // the last n bytes; an empty body has none, so `total - 1` below cannot underflow
+        (None, Some(n)) if a.is_empty() => {
+            if n == 0 || total == 0 {
                 Rng::Unsatisfiable
             } else {
                 Rng::Part(total.saturating_sub(n), total - 1)
+            }
+        }
+        (Some(a), Some(b)) if b < a => Rng::Full,
+        (Some(a), last) if last.is_some() || b.is_empty() => {
+            if a >= total {
+                Rng::Unsatisfiable
+            } else {
+                Rng::Part(a, last.unwrap_or(usize::MAX).min(total - 1))
             }
         }
         _ => Rng::Full,
     }
 }
 
-fn serve_blob(h: &HeaderMap, flaky: bool) -> Response {
+fn serve_blob(method: &Method, h: &HeaderMap, flaky: bool) -> Response {
     let data = blob();
     let etag = etag_of(&data);
+    // "Do you still need it at all?" comes before "which part?"
+    if not_modified(h, &etag, None) {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
     // If-Range: only honour Range when the validator still matches, else send the whole new thing.
     let range_ok = h
         .get(header::IF_RANGE)
         .and_then(|v| v.to_str().ok())
         .is_none_or(|v| v == etag);
     let rng = match h.get(header::RANGE).and_then(|v| v.to_str().ok()) {
-        Some(r) if range_ok => parse_range(r, data.len()),
+        // Range means something only for GET (axum also sends HEAD to a GET route)
+        Some(r) if range_ok && method == Method::GET => parse_range(r, data.len()),
         _ => Rng::Full,
     };
     let base = [
@@ -615,12 +611,12 @@ fn serve_blob(h: &HeaderMap, flaky: bool) -> Response {
     resp
 }
 
-async fn blob_h(h: HeaderMap) -> Response {
-    serve_blob(&h, false)
+async fn blob_h(method: Method, h: HeaderMap) -> Response {
+    serve_blob(&method, &h, false)
 }
-async fn flaky_h(State(s): St, h: HeaderMap) -> Response {
+async fn flaky_h(State(s): St, method: Method, h: HeaderMap) -> Response {
     s.hit("flaky");
-    serve_blob(&h, true)
+    serve_blob(&method, &h, true)
 }
 
 /// PUT with preconditions: missing If-Match => 428; mismatch => 412 (lost-update protection).
@@ -630,24 +626,27 @@ async fn put_note(State(s): St, Path(name): Path<String>, h: HeaderMap, body: St
     let im = h.get(header::IF_MATCH).and_then(|v| v.to_str().ok());
     let inm = h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     let created = current.is_none();
-    match (im, inm, &current) {
-        (_, Some("*"), Some(_)) => {
-            return (StatusCode::PRECONDITION_FAILED, "already exists").into_response();
-        }
-        (Some(v), _, Some(cur)) if !im_matches(v, cur) => {
-            return (
-                StatusCode::PRECONDITION_FAILED,
-                "resource changed since you read it",
-            )
-                .into_response();
-        }
-        (Some(_), _, None) => {
-            return (StatusCode::PRECONDITION_FAILED, "no such resource").into_response();
-        }
-        (None, None, Some(_)) => {
-            return (StatusCode::PRECONDITION_REQUIRED, "send If-Match").into_response();
+    let failed = |why: &'static str| (StatusCode::PRECONDITION_FAILED, why).into_response();
+    // 1. If-Match must name the version that is stored now
+    match (im, &current) {
+        (Some(_), None) => return failed("no such resource"),
+        (Some(v), Some(cur)) if !im_matches(v, cur) => {
+            return failed("resource changed since you read it");
         }
         _ => {}
+    }
+    // 2. If-None-Match must NOT match it (`*` matches any stored version)
+    if let (Some(v), Some(cur)) = (inm, &current)
+        && inm_matches(v, cur)
+    {
+        return failed("a matching version exists");
+    }
+    // 3. our own rule, checked whatever else was sent: replacing a note needs If-Match
+    if im.is_none() && !created {
+        return (StatusCode::PRECONDITION_REQUIRED, "send If-Match").into_response();
+    }
+    if created && notes.len() >= MAX_NOTES {
+        return (StatusCode::INSUFFICIENT_STORAGE, "too many notes").into_response();
     }
     let etag = etag_of(body.as_bytes());
     notes.insert(name, body);
@@ -766,8 +765,10 @@ impl HttpCache {
             e.no_cache = cc.no_cache;
             return (e.body.clone(), Src::Revalidated);
         }
+        let ok = resp.status() == 200;
         let body = resp.bytes().await.unwrap();
-        if cc.no_store {
+        // this small cache keeps only 200 responses: an error page must not become "the resource"
+        if cc.no_store || !ok {
             self.map.remove(url);
         } else {
             let max_age = cc.max_age.unwrap_or(0);
@@ -802,6 +803,52 @@ async fn main() {
     let state = Arc::new(S::default());
     let srv = Server::start(app(state.clone())).await;
     let c = plain_client();
+
+    // SHA-256 of "abc", the published test value: the ETags are only as good as the hash
+    assert_eq!(
+        hex(&sha256(b"abc")),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    // client-controlled text: bad dates are refused, not computed with
+    for bad in [
+        "Sun, 06 Nov 9223372036854775807 08:49:37 GMT",
+        "Sun, 06 Nov 1994 9223372036854775807:49:37 GMT",
+        "Sun, 00 Nov 1994 08:49:37 GMT",
+        "Sun, 06 Nov 1994 08:49:37:00 GMT",
+    ] {
+        assert_eq!(parse_http_date(bad), None, "{bad}");
+    }
+    assert!(
+        !inm_matches("W/W/\"x\"", "\"x\""),
+        "one weak prefix, not many"
+    );
+    // ranges at the edges: an empty body, a sign, numbers too big to fit
+    let range = |v: String, total| match parse_range(&v, total) {
+        Rng::Full => (200, 0, 0),
+        Rng::Part(a, b) => (206, a, b),
+        Rng::Unsatisfiable => (416, 0, 0),
+    };
+    assert_eq!(
+        range("bytes=-5".into(), 0),
+        (416, 0, 0),
+        "empty body, no underflow"
+    );
+    assert_eq!(range("bytes=0-".into(), 0), (416, 0, 0));
+    assert_eq!(
+        range("bytes=+5-9".into(), 100),
+        (200, 0, 0),
+        "a sign is not a digit"
+    );
+    assert_eq!(range("bytes= 5 - 9".into(), 100), (200, 0, 0));
+    assert_eq!(
+        range("bytes=20000-abc".into(), 100),
+        (200, 0, 0),
+        "malformed is ignored"
+    );
+    let huge = "99999999999999999999999";
+    assert_eq!(range(format!("bytes=5-{huge}"), 100), (206, 5, 99));
+    assert_eq!(range(format!("bytes={huge}-"), 100), (416, 0, 0));
+    assert_eq!(range(format!("bytes=-{huge}"), 100), (206, 0, 99));
 
     title("1. strong ETag, If-None-Match -> 304 (no body), Last-Modified / If-Modified-Since");
     let etag = etag_of(DOC.as_bytes());
@@ -965,7 +1012,9 @@ async fn main() {
         1,
         state.hits("immutable"),
     );
-    let _ = (state.hits("public"), state.hits("private"));
+    let u = srv.url("/cc/unknown");
+    cache.get(&u).await;
+    assert!(!cache.map.contains_key(&u), "a 404 is not stored");
     println!();
 
     title("4. Vary + content negotiation + gzip (tower-http CompressionLayer)");
@@ -1089,6 +1138,16 @@ async fn main() {
     );
     let r = send(&c, c.get(srv.url("/blob"))).await;
     assert_eq!(r.h("accept-ranges"), "bytes");
+    let r = send(&c, c.head(srv.url("/blob")).header("range", "bytes=0-9")).await;
+    assert_eq!(r.status.as_u16(), 200, "Range is ignored for HEAD");
+    let r = send(
+        &c,
+        c.get(srv.url("/blob"))
+            .header("if-none-match", etag_of(&full))
+            .header("range", "bytes=0-9"),
+    )
+    .await;
+    assert_eq!(r.status.as_u16(), 304, "unchanged: no part to send");
 
     title(
         "6. resumable download: connection dies mid-body, client reconnects with Range: bytes=N-",
@@ -1182,6 +1241,12 @@ async fn main() {
     assert_eq!(r.status.as_u16(), 200);
     let e2 = r.h("etag").to_string();
     assert_ne!(e1, e2);
+    // If-None-Match must not be a way round the If-Match rule
+    for (tag, want) in [("\"something-else\"", 428), (e2.as_str(), 412)] {
+        let rb = c.put(srv.url("/notes/a")).header("if-none-match", tag);
+        let r = send(&c, rb.body("sneaky overwrite")).await;
+        assert_eq!(r.status.as_u16(), want, "If-None-Match: {tag}");
+    }
     let r = send(
         &c,
         c.put(srv.url("/notes/a"))
@@ -1204,6 +1269,14 @@ async fn main() {
     )
     .await;
     assert_eq!(r.status.as_u16(), 200);
+
+    // the number of stored notes is bounded ("a" is already one of them)
+    for i in 1..=MAX_NOTES {
+        let url = srv.url(&format!("/notes/extra-{i}"));
+        let status = c.put(url).body("x").send().await.unwrap().status();
+        let want = if i < MAX_NOTES { 201 } else { 507 };
+        assert_eq!(status.as_u16(), want, "note number {}", i + 1);
+    }
 
     drop(cache);
     drop(c);

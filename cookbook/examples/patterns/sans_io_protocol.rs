@@ -10,9 +10,9 @@
 //!   handle_timeout(now)        tell the machine that time has advanced (it fires whatever is due)
 //!   poll_timeout()             ask when it next needs `handle_timeout` (the caller sleeps until then)
 //! Time is an INPUT (`Instant` values the caller passes in), so tests use a virtual clock and a seeded lossy network and finish in
-//! microseconds, deterministically, with no sockets and no `sleep`. The SAME code then runs under a blocking `TcpStream` loop
-//! and a tokio loop: only the ~25-line driver differs. This is how `h2`, `quinn-proto`, `rustls` (its `ConnectionCommon`/buffers API)
-//! and `str0m` are structured, and why they can be used from sync, tokio, async-std or io_uring code alike.
+//! without waiting, deterministically, with no sockets and no `sleep`. The SAME code then runs under a blocking `TcpStream` loop
+//! and a tokio loop: only the short driver differs. `quinn-proto` and `str0m` are built this way, and `rustls` exposes buffer
+//! methods that leave the IO to the caller.
 //!
 //! Why this beats embedding IO in the protocol: (1) tests need no network and no flaky timing; (2) fuzzing/property tests can inject
 //! loss, duplication, reordering and clock jumps; (3) one implementation serves every runtime; (4) the machine owns no tasks or locks,
@@ -22,7 +22,10 @@
 //! Protocol here (line based, `\n` terminated): client `HELLO <id>` -> server `WELCOME`; then `REQ <seq> <text>` -> `RES <seq> <TEXT>`;
 //! `PING` -> `PONG` keeps idle links alive; no input for `idle` => close. The client RETRANSMITS HELLO/REQ every `rto` until answered
 //! (max `max_retries`), the server is idempotent so duplicates and reordering are harmless.
-//! COMMON USES: QUIC/HTTP3 stacks, TLS libraries, WebRTC/SIP/DNS clients, embedded or `no_std` protocol cores, deterministic simulation
+//! A line is at most 1024 bytes. After any error from `handle_input`, drop the connection.
+//! LIMITS: the server remembers every sequence number, and the output queues grow until the caller drains them. Any bytes restart
+//! the idle timer. The drivers do not time out writes, and they return `Ok` when the peer closes, even with requests unanswered.
+//! COMMON USES: QUIC and TLS libraries, WebRTC/SIP/DNS clients, embedded or `no_std` protocol cores, deterministic simulation
 //! testing of distributed systems (the idea behind FoundationDB-style simulation).
 //! Read: https://www.firezone.dev/blog/sans-io , https://sans-io.readthedocs.io/ , https://docs.rs/quinn-proto , https://docs.rs/str0m
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -37,6 +40,7 @@ enum Error {
     LineTooLong,
     Protocol(String),
     BadPayload,
+    Closed,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -102,6 +106,8 @@ impl Framer {
     }
     fn next_line(&mut self) -> Result<Option<String>, Error> {
         match self.buf.iter().position(|&c| c == b'\n') {
+            // the limit must not depend on whether the newline came in the same read
+            Some(i) if i > Self::MAX => Err(Error::LineTooLong),
             Some(i) => {
                 let line: Vec<u8> = self.buf.drain(..=i).collect();
                 let s =
@@ -164,10 +170,14 @@ impl Client {
     }
     /// Queue a request; returns its sequence number.
     fn request(&mut self, now: Instant, body: &str) -> Result<u32, Error> {
-        if body.contains('\n') {
-            return Err(Error::BadPayload);
+        if matches!(self.state, CState::Closed) {
+            return Err(Error::Closed);
         }
         let seq = self.next_seq;
+        // the whole line must fit the peer's limit, and a newline would end it early
+        if body.contains('\n') || format!("REQ {seq} ").len() + body.len() > Framer::MAX {
+            return Err(Error::BadPayload);
+        }
         self.next_seq += 1;
         match self.state {
             CState::Ready => self.send_req(now, seq, body.to_string()),
@@ -195,6 +205,9 @@ impl Client {
 }
 impl Sans for Client {
     fn handle_input(&mut self, now: Instant, bytes: &[u8]) -> Result<(), Error> {
+        if self.is_closed() {
+            return Ok(()); // nothing may follow the Closed event
+        }
         self.last_rx = now;
         self.framer.push(bytes);
         while let Some(line) = self.framer.next_line()? {
@@ -325,6 +338,9 @@ impl Server {
 }
 impl Sans for Server {
     fn handle_input(&mut self, now: Instant, bytes: &[u8]) -> Result<(), Error> {
+        if self.closed {
+            return Ok(());
+        }
         self.last_rx = now;
         self.framer.push(bytes);
         while let Some(line) = self.framer.next_line()? {
@@ -346,8 +362,10 @@ impl Sans for Server {
                             body: body.to_string(),
                         });
                     }
-                    self.out
-                        .push_back(format!("RES {seq} {}\n", body.to_uppercase()).into_bytes());
+                    // ASCII only: Unicode uppercasing can grow the text past the line limit
+                    self.out.push_back(
+                        format!("RES {seq} {}\n", body.to_ascii_uppercase()).into_bytes(),
+                    );
                 }
                 "REQ" => {} // REQ overtook HELLO on the network: drop it, the client will retransmit
                 "PING" => self.out.push_back(b"PONG\n".to_vec()),
@@ -545,8 +563,8 @@ fn test_simulated() {
         total_rt += rt;
     }
     assert!(total_rt > 0, "loss must have forced retransmissions");
-    // determinism: same seed => identical virtual timeline
-    assert_eq!(simulate(7, 20, 10).0, simulate(7, 20, 10).0);
+    // determinism: same seed => same virtual duration, retransmission count and responses
+    assert_eq!(simulate(7, 20, 10), simulate(7, 20, 10));
     println!("sim: 20 seeds @20% loss ok, {total_rt} retransmits in total");
 
     // keep-alive: 20 virtual seconds of silence on a healthy link, nobody times out
@@ -589,7 +607,73 @@ fn test_simulated() {
         Err(Error::Protocol(_))
     ));
     assert_eq!(s.handle_input(t0, &[b'x'; 2000]), Err(Error::LineTooLong));
-    assert_eq!(c.request(t0, "a\nb"), Err(Error::BadPayload));
+    let mut fresh = Client::new(Config::default(), t0);
+    assert_eq!(fresh.request(t0, "a\nb"), Err(Error::BadPayload));
+}
+
+/// Limits and the closed state. Each block here failed before the matching fix.
+fn test_limits() {
+    let t0 = Instant::now();
+    let cfg = Config::default();
+
+    // 1. a too-long line is refused however it arrives, also when its newline comes in the same chunk
+    let mut long = vec![b'x'; Framer::MAX + 1];
+    long.push(b'\n');
+    let mut f = Framer::default();
+    f.push(&long);
+    assert_eq!(f.next_line(), Err(Error::LineTooLong), "one chunk");
+    let mut f = Framer::default();
+    f.push(&long[..Framer::MAX + 1]);
+    assert_eq!(f.next_line(), Err(Error::LineTooLong), "split");
+    let mut f = Framer::default();
+    f.push(&long[1..]); // exactly MAX bytes and a newline
+    assert!(matches!(f.next_line(), Ok(Some(line)) if line.len() == Framer::MAX));
+
+    // 2. the client refuses a body whose line the server would refuse
+    let mut c = Client::new(cfg, t0);
+    assert_eq!(
+        c.request(t0, &"x".repeat(Framer::MAX)),
+        Err(Error::BadPayload)
+    );
+    let fits = "x".repeat(Framer::MAX - "REQ 1 ".len());
+    assert_eq!(c.request(t0, &fits), Ok(1));
+
+    // 3. a reply is never longer than its request ('\u{149}' grows from 2 to 3 bytes under Unicode uppercasing)
+    let mut s = Server::new(cfg, t0);
+    s.handle_input(t0, b"HELLO c1\n").unwrap();
+    let _welcome = s.poll_transmit();
+    let request = format!("REQ 1 {}\n", "\u{149}".repeat(500));
+    s.handle_input(t0, request.as_bytes()).unwrap();
+    let reply = s.poll_transmit().unwrap();
+    assert!(
+        reply.len() <= Framer::MAX + 1,
+        "reply of {} bytes",
+        reply.len()
+    );
+
+    // 4. after close: a new request is an error, and late input changes nothing
+    let mut c = Client::new(cfg, t0);
+    c.request(t0, "hi").unwrap();
+    c.handle_input(t0, b"WELCOME\n").unwrap();
+    let later = t0 + cfg.idle;
+    c.handle_timeout(later);
+    assert!(c.is_closed());
+    assert_eq!(c.request(later, "more"), Err(Error::Closed));
+    while c.poll_event().is_some() {}
+    c.handle_input(later, b"RES 1 HI\n").unwrap();
+    assert_eq!(c.poll_event(), None, "no response after Closed");
+    let mut s = Server::new(cfg, t0);
+    s.handle_input(t0, b"HELLO c1\n").unwrap();
+    s.handle_timeout(later);
+    while s.poll_event().is_some() {}
+    while s.poll_transmit().is_some() {}
+    s.handle_input(later, b"REQ 1 hi\n").unwrap();
+    assert_eq!(
+        (s.poll_event(), s.poll_transmit()),
+        (None, None),
+        "a closed server stays silent"
+    );
+    println!("limits: line length, payload size, reply size and the closed state hold");
 }
 
 // ------------------------------------------------ (b) blocking TcpStream driver
@@ -629,7 +713,9 @@ fn drive_blocking<E: Sans>(
             Err(e)
                 if matches!(
                     e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) => {}
             Err(e) => return Err(e),
         }
@@ -732,6 +818,7 @@ async fn test_tokio(n: usize) -> Vec<(u32, String)> {
 
 fn main() {
     test_simulated();
+    test_limits();
     let blocking = test_blocking(5);
     println!("blocking TcpStream: {} responses", blocking.len());
     let rt = tokio::runtime::Builder::new_current_thread()

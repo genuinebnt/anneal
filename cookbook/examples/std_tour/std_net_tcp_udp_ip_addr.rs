@@ -16,7 +16,7 @@
 //!   std: `TcpListener`, `TcpStream`, `UdpSocket`, `ToSocketAddrs`, `Shutdown` (they need an OS). std has no TLS, HTTP or async networking.
 //! NOT COVERED (and why): `is_global`, `is_documentation` for IPv6, `is_shared`, `set_linger`, `set_quickack` (unstable or Linux only); multicast joins (needs a
 //! multicast-capable interface); DNS lookups and any non-loopback traffic (this file never leaves 127.0.0.1/::1); socket options std lacks (use `socket2`).
-//! Beyond `tcp_framed_server` (one framed server): this file is the API look-up page. Only the macOS build was run when this was written.
+//! Beyond `tcp_framed_server` (one framed server): this file is the API look-up page. Checked on macOS only.
 //!
 //! CHEAT SHEET (I want to ... -> use ...)
 //!   parse "1.2.3.4:80" / "[::1]:80"           -> `s.parse::<SocketAddr>()` (never resolves names)
@@ -192,7 +192,13 @@ impl Cidr {
 fn allowed_target(ip: IpAddr) -> bool {
     match ip.to_canonical() {
         IpAddr::V4(v) => {
-            let extra = ["0.0.0.0/8", "100.64.0.0/10", "198.18.0.0/15", "240.0.0.0/4"];
+            let extra = [
+                "0.0.0.0/8",
+                "100.64.0.0/10",
+                "192.0.0.0/24",
+                "198.18.0.0/15",
+                "240.0.0.0/4",
+            ];
             !(v.is_loopback()
                 || v.is_private()
                 || v.is_link_local()
@@ -201,7 +207,12 @@ fn allowed_target(ip: IpAddr) -> bool {
                 || v.is_unspecified())
                 && !extra.iter().any(|c| Cidr::parse(c).unwrap().contains(v))
         }
-        IpAddr::V6(v) => (v.segments()[0] & 0xe000) == 0x2000, // global unicast 2000::/3 only
+        IpAddr::V6(v) => {
+            let [first, second, ..] = v.segments();
+            // Global unicast 2000::/3 only, and not the tunnels inside it: 6to4 (2002::/16) and Teredo
+            // (in 2001::/23) carry an IPv4 address, so they can name a private one.
+            (first & 0xe000) == 0x2000 && first != 0x2002 && !(first == 0x2001 && second < 0x0200)
+        }
     }
 }
 
@@ -231,6 +242,10 @@ fn s02_cidr() {
         "::ffff:10.0.0.1",
         "fd00::1",
         "fe80::1",
+        "192.0.0.192",
+        "2002:7f00:1::",    // 6to4 form of 127.0.0.1
+        "2002:a9fe:a9fe::", // 6to4 form of 169.254.169.254
+        "2001:0:1::",       // Teredo
     ] {
         assert!(!allowed_target(bad.parse().unwrap()), "{bad}");
     }
@@ -424,22 +439,29 @@ fn read_frame<R: Read>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(body))
 }
 
-/// A line of at most `max` bytes. `read_line` alone would buffer an endless line until memory runs out.
+/// A line with at most `max` bytes of content, not counting its "\n" or "\r\n". `read_line` alone would
+/// buffer an endless line until memory runs out. An endless line is refused once `max + 2` bytes are in.
 fn read_bounded_line<R: BufRead>(r: &mut R, max: u64) -> io::Result<Option<String>> {
+    let bad = |why| io::Error::new(io::ErrorKind::InvalidData, why);
     let mut line = String::new();
-    let n = r.take(max + 1).read_line(&mut line)?;
+    // room for the content and a two-byte ending
+    let n = r.take(max.saturating_add(2)).read_line(&mut line)?;
     if n == 0 {
         return Ok(None);
     }
-    if !line.ends_with('\n') {
-        let why = if n as u64 > max {
+    let Some(text) = line.strip_suffix('\n') else {
+        return Err(bad(if n as u64 > max {
             "line too long"
         } else {
             "connection closed mid-line"
-        };
-        return Err(io::Error::new(io::ErrorKind::InvalidData, why));
+        }));
+    };
+    let text = text.strip_suffix('\r').unwrap_or(text);
+    if text.len() as u64 > max {
+        return Err(bad("line too long"));
     }
-    line.truncate(line.trim_end_matches(['\r', '\n']).len());
+    let len = text.len();
+    line.truncate(len);
     Ok(Some(line))
 }
 
@@ -482,6 +504,15 @@ fn s05_framing() {
         server.join().unwrap(),
         [0, 1, 5, 1_000, MAX_FRAME as usize, 3]
     );
+
+    // the limit counts content only, whichever line ending is used
+    for text in [&b"abcd\n"[..], b"abcd\r\n"] {
+        let line = read_bounded_line(&mut &text[..], 4).unwrap();
+        assert_eq!(line.as_deref(), Some("abcd"));
+    }
+    for text in [&b"abcde\n"[..], b"abcde\r\n", b"abcdef"] {
+        assert!(read_bounded_line(&mut &text[..], 4).is_err());
+    }
 
     // the decoder is generic, so hostile inputs are tested without sockets
     assert_eq!(
@@ -530,7 +561,7 @@ fn s05_framing() {
     for want in ["+PONG", "+hi there", "-ERR unknown"] {
         assert_eq!(replies.next().unwrap().unwrap(), want);
     }
-    c.write_all(&[b'A'; 33]).unwrap(); // one byte over the limit, no newline
+    c.write_all(&[b'A'; 34]).unwrap(); // no newline, and no room left even for "\r\n"
     assert_eq!(replies.next().unwrap().unwrap(), "-ERR protocol");
     assert_eq!(server.join().unwrap(), Err("line too long".to_string()));
     println!("5. framing ok");
@@ -545,7 +576,15 @@ fn serve_until_stopped(listener: TcpListener, stop: Arc<AtomicBool>) -> thread::
                 if stop.load(Ordering::Acquire) {
                     break; // the wake-up connection lands here
                 }
-                let mut conn = guarded(conn.unwrap());
+                // A failed accept (out of file descriptors, say) must not end the server. Nor may a client
+                // that has already reset the connection, which can make setting a timeout fail.
+                let Ok(mut conn) = conn else {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                if conn.set_write_timeout(Some(GUARD)).is_err() {
+                    continue;
+                }
                 served += 1;
                 s.spawn(move || {
                     let _ = conn.write_all(b"hello");

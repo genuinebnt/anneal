@@ -1,0 +1,286 @@
+title = "Deterministic simulation"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: distributed systems"
+chapter_order = 7
+order = 150
+kind = "lesson"
+level = "advanced"
+code = ["examples/distributed/abd_register_simulation.rs"]
+code_spoils = ["/p/y5-shrink-failing-input"]
+lede = "Run a replicated value in one thread, replay every failure from a seed and cut it down until you can read it."
+summary = """
+A deterministic simulator runs a whole distributed system in one thread, with simulated time, network and disks. The same seed gives the same run, so a rare failure can be replayed. Here it tests a register that is copied to several servers. It finds seven planted bugs and shows how a protocol mistake can survive thousands of passing seeds.
+"""
+
+[[sections]]
+heading = "What makes these failures so hard to study?"
+body = """
+A distributed system can fail only when messages, a crash and a network split happen in one particular order. Finding such an order is hard. Getting the same one again is often harder.
+
+A **deterministic simulation** makes the whole run depend only on its inputs: the code, the settings and a **seed**. When a seed fails, you can run it again, stop it halfway and look around.
+"""
+
+[[sections]]
+heading = "How does the simulator take chance away?"
+body = """
+Everything that could change between runs is simulated.
+
+- **Clock:** a number that jumps to the next event. Quiet time costs nothing.
+- **Network:** a queue of messages that can be delayed, lost, copied or blocked by a **partition**, which splits the servers into two sides.
+- **Disk:** a write finishes later. A crash loses writes that haven't finished.
+- **Crashes and restarts:** ordinary events in the same queue.
+
+Events are ordered by time, then by the order they were scheduled. So two events at the same moment can't swap places between runs. Each seed also picks its own conditions, such as how often messages are lost and how many crashes happen.
+
+In 6,000 seeds, the example simulates 2,476 seconds, about 41 minutes, in far less real time. It processes 2,398,177 events and loses 608 disk writes to crashes. It also checks that some writes are lost and some operations are abandoned. A simulator that stops causing trouble would otherwise still pass.
+"""
+
+[[sections]]
+heading = "Why record every random choice?"
+body = """
+All chance goes through one function. A new run draws each number from a seeded generator and writes it into a list called the **tape**. A replay reads the tape instead.
+
+Now you can edit a failing scenario. Change the tape, and you change what happens. Once an edited tape runs out, every later choice is zero. So zero should always mean the mildest choice: no loss, no copy and the shortest delay.
+
+This is easy to get backwards. If a message were lost when the draw was **below** the loss rate, zero would mean "lose it". A lossy replay would then lose every message after the tape ran out. So the high draws cause the fault, and `main` checks that a run of zeros drops and copies nothing.
+"""
+
+[[sections]]
+heading = "What system is being tested?"
+body = """
+An **atomic register** is one value that you can read and write, and that behaves like a single copy. Here three **replicas** each keep the value and a **timestamp**: a counter and a writer id. This is a multi-writer form of the **ABD** register. The 1995 paper by Attiya, Bar-Noy and Dolev builds one with a single writer.
+
+Each operation needs answers from a **majority**, here two of three replicas.
+
+1. A **write** asks a majority for their timestamps. It picks a larger one, then stores the value with it on a majority.
+2. A **read** asks a majority and takes the value with the newest timestamp. It stores that back on a majority before returning.
+
+Any two majorities share a replica, so a later operation hears about every finished write. A replica replaces its value only for a newer timestamp. A client resends every 30 simulated milliseconds. After 12 tries it gives up, and nobody knows whether the operation happened.
+"""
+
+[[sections]]
+heading = "How can you tell that a run was right?"
+body = """
+With no expected output to compare, each client records what it called and what came back. A **linearizability checker** then looks for one order of those operations that a single register could produce. The order must respect which operations finished before others started. An unfinished write may be placed or left out.
+
+The checker orders events by a running count, not by simulated time, because several can share a moment. It has a step limit and answers `Unknown` if it hits it. The sweep of correct runs requires a real "linearizable" for every seed, so `Unknown` can't pass as success.
+"""
+
+[[sections]]
+heading = "How can a correct-looking register fail?"
+body = """
+A natural rule picks each write's counter as "the largest I just heard, plus one". With that rule, the first 6,000 seeds all pass. Yet seed 585,801 is not linearizable.
+
+The mistake needs a write that its client gave up on.
+
+```stepper
+caption = "One timestamp, two values"
+[[frame]]
+title = "A write gets stuck"
+text = "Writer 3 hears counter 3 and picks timestamp (4, 3) for value A. Only replica 1 stores it, and the writer gives up."
+lanes = [ { name = "Replica 1", items = ["(4,3) A"] }, { name = "Replica 2", items = ["counter 3"] }, { name = "Replica 3", items = ["counter 3"] } ]
+[[frame]]
+title = "The next write misses it"
+text = "The same writer asks replicas 2 and 3. It hears counter 3 again and picks (4, 3) for value B."
+lanes = [ { name = "Replica 1", items = ["(4,3) A"] }, { name = "Replica 2", items = ["(4,3) B"] }, { name = "Replica 3", items = ["(4,3) B"] } ]
+[[frame]]
+title = "Reads disagree"
+text = "Two different values now carry the same timestamp. Neither replaces the other, so reads can switch between A and B."
+lanes = [ { name = "Reader", items = ["may get B", "then A"] }, { name = "Newest timestamp", items = ["(4,3)"] } ]
+```
+
+The writer must remember the highest counter it has used, even for writes it abandoned.
+
+```compare
+takeaway = "A writer id separates different writers. It doesn't separate two writes by the same writer. The cost of the fix is one more number to keep."
+[wrong]
+title = "Trust only the replies"
+code = '''
+fn next_ts(seen: u64, writer: u64) -> (u64, u64) {
+    (seen + 1, writer)
+}
+fn main() {
+    let first = next_ts(3, 3); // this write reaches one replica, and the writer gives up
+    let second = next_ts(3, 3); // the next query misses that replica and sees 3 again
+    println!("{first:?} {second:?} same: {}", first == second);
+}
+'''
+result = "It prints `(4, 3) (4, 3) same: true`."
+[fixed]
+title = "Also remember your own counter"
+code = '''
+struct Writer {
+    id: u64,
+    last: u64,
+}
+impl Writer {
+    fn next_ts(&mut self, seen: u64) -> (u64, u64) {
+        self.last = seen.max(self.last) + 1; // never reuse a counter of our own
+        (self.last, self.id)
+    }
+}
+fn main() {
+    let mut writer = Writer { id: 3, last: 0 };
+    let first = writer.next_ts(3);
+    let second = writer.next_ts(3);
+    println!("{first:?} {second:?} same: {}", first == second);
+}
+'''
+result = "It prints `(4, 3) (5, 3) same: false`."
+```
+
+Every run of the example replays four seeds that need this fix. To see one fail, change `seen.max(self.clients[c].last_counter) + 1` to `seen + 1`. The example stops at `regression seed 585801`.
+
+This model's clients never crash. A real writer that restarts would have to save its counter, or take a new writer id.
+
+The lesson goes beyond this register. A batch of passing seeds shows that those schedules passed, not that the protocol is right.
+"""
+
+[[sections]]
+heading = "Can the simulator find planted bugs?"
+body = """
+You can also switch on seven mistakes, one at a time. "No write-back" means a read doesn't store what it found. "Half is a majority" rounds half down. The last column counts operations before and after shrinking.
+
+| Planted bug | First seed | Fails in 2,000 | Operations |
+| --- | --- | --- | --- |
+| No write-back on read | 89 | 17 | 29 → 4 |
+| No writer id | 4 | 191 | 22 → 5 |
+| Reply before disk | 6 | 279 | 21 → 4 |
+| Half is a "majority" | 0 | 829 | 18 → 4 |
+| Old value accepted | 0 | 778 | 18 → 4 |
+| First reply wins | 5 | 379 | 27 → 3 |
+| Write returns early | 0 | 1,983 | 18 → 3 |
+
+Failure rates differ widely, from 17 seeds to 1,983. For each bug, the first failing seed replays with the same trace fingerprint, and the correct register passes that seed.
+"""
+
+[[sections]]
+heading = "What does a shrunk failure look like?"
+body = """
+**Shrinking** edits the tape and keeps a change only if the run still fails. For the first bug, seed 89, it leaves this history. The two numbers show when each operation started and ended.
+
+```text title="A read that doesn't store the value back"
+client 0 Read -> Some(Value(1001)) [1, 18]
+client 2 Write(2001) -> Some(Ack) [3, 45]
+client 1 Write(1001) -> Some(Ack) [4, 33]
+client 0 Read -> Some(Value(0)) [19, 31]
+```
+
+Client 0 reads 1001 while that write is still running. It then reads 0, the starting value. Its second read began after its first had ended, so it can't go back to an older value.
+
+The smallest run found may not be the smallest possible. The search stops after at most 300,000 replays. It can also drift to a different failure, so after a fix, run the original seed again.
+
+:::deeper Spoiler warning: Shrink a failing input, with a walkthrough of the whole simulator
+The rest of this fold covers ideas that [Shrink a failing input](/p/y5-shrink-failing-input) asks you to find. Solve it first if you want to find them yourself.
+
+The shrinker tries three kinds of edit, over and over, while any of them helps. It deletes stretches of the tape, longest first. It sets stretches to zero. Then it lowers single entries to zero, to half, or by one.
+
+```walkthrough
+file = "examples/distributed/abd_register_simulation.rs"
+[[step]]
+title = "One door for all chance"
+lines = "203-215"
+text = "A fresh run records each draw. A replay reads the recorded one, and uses zero after the end."
+[[step]]
+title = "A faulty network"
+lines = "463-491"
+text = "A message may be dropped, delayed or sent twice, and every decision comes from the tape. `chance` treats the high draws as the fault, so zero means no fault."
+[[step]]
+title = "Writes that a crash can lose"
+lines = "597-618"
+text = "Each crash starts a new **epoch** for the replica. A disk write from an old epoch is thrown away."
+[[step]]
+title = "The writer's counter"
+lines = "779-786"
+text = "The new counter is larger than both the replies and the writer's own last one."
+[[step]]
+title = "Read, then store back"
+lines = "796-809"
+text = "Unless the bug is on, the read starts a second round with the value it found."
+[[step]]
+title = "Shrink the tape"
+lines = "970-1040"
+text = "Each candidate tape is replayed. It replaces the best one only if the checker still says no order exists."
+```
+:::
+"""
+
+[[sections]]
+heading = "What can break the replay?"
+body = """
+One uncontrolled source of order is enough. When a client resends, the order of its messages decides which random draws each one gets. In the correct code, that order is replica 0, 1, 2.
+
+The example can take the order from a `HashMap` instead. Rust gives its default maps random hashing keys, so iteration order can differ between maps. In 40 runs of seed 3, the ordered version gives one trace. The version with a map gives more than one, because three replicas have six possible orders.
+
+The same risk comes from the real clock, real threads, system randomness, memory addresses used as data and state left over between runs. So make this your first test: run one seed twice and compare.
+"""
+
+[[sections]]
+heading = "How far can you trust the result?"
+body = """
+- **Faults you leave out are never tested.** This simulator doesn't corrupt a disk page, for example. Write down what you don't inject.
+- **Count your faults.** They should happen often, while most operations still finish.
+- **Test the checker too.** One that accepts too much hides bugs.
+- **A model is not your program.** This register lives inside the simulator. To test shipping code, put its clock, network, disk and randomness behind interfaces that the simulator can replace.
+
+FoundationDB's testing page describes simulating a whole cluster in one thread. TigerBeetle runs its real server code in a simulator called the VOPR. In Rust, `turmoil` offers a simulated network for Tokio programs. For testing a real running cluster from outside, see [Testing a database](/cookbook/p/testing-a-database).
+"""
+
+[[connections]]
+kind = "before"
+title = "Sans-IO protocol design"
+link = "/cookbook/p/sans-io-protocol"
+why = "How to write a protocol that a simulator can drive."
+
+[[connections]]
+kind = "practise"
+title = "Shrink a failing input"
+link = "/p/y5-shrink-failing-input"
+why = "Shrinking a list, with stricter rules and a limit on calls."
+level = "similar"
+
+[[connections]]
+kind = "practise"
+title = "Take the luck out of a test"
+link = "/p/b7-tests-without-luck"
+why = "The same wish for repeatable tests, for threads and streams. It needs different tools."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "Deterministic simulation testing"
+link = "/cookbook/p/deterministic-simulation-testing"
+why = "A larger system, a three-server Raft store, with several invariants."
+
+[[connections]]
+kind = "returns"
+title = "Testing a database"
+link = "/cookbook/p/testing-a-database"
+why = "The linearizability checker in more detail."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its last part links here from its reading list."
+
+[[sources]]
+title = "Attiya, Bar-Noy and Dolev: sharing memory robustly"
+url = "https://groups.csail.mit.edu/tds/papers/Attiya/JACM95.pdf"
+note = "The majority-based register. The paper's emulation has a single writer."
+
+[[sources]]
+title = "FoundationDB: simulation and testing"
+url = "https://apple.github.io/foundationdb/testing.html"
+note = "Single-threaded cluster simulation in a real database."
+
+[[sources]]
+title = "Will Wilson: testing distributed systems with deterministic simulation"
+url = "https://www.youtube.com/watch?v=4fFDFbi3toc"
+note = "The talk about how FoundationDB does it."
+
+[[sources]]
+title = "TigerBeetle: the VOPR"
+url = "https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/internals/vopr.md"
+note = "Seed-based simulation of production code."

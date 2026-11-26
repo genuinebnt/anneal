@@ -42,7 +42,7 @@
 //! Read: https://doc.rust-lang.org/std/panic/index.html , https://doc.rust-lang.org/std/process/index.html ,
 //!       https://doc.rust-lang.org/nomicon/unwinding.html
 //! TRY NEXT:
-//!   - [S] Remove the `drop(stdin)` in `section_pipes` and predict what happens before running it (have Ctrl-C ready).
+//!   - [S] Remove the status check from `pipe_through`, predict which assert in `section_pipes` fails, then run it.
 //!   - [S] Add `panic = "abort"` to the release profile in a scratch copy. Which asserts are never reached?
 //!   - [M] Write `run_with_timeout` using a waiter thread and a channel instead of polling try_wait; compare the designs.
 //!   - [M] Feed 10 MB to `cat` writing stdin on the SAME thread and explain the hang using pipe buffer sizes.
@@ -225,16 +225,14 @@ fn section_hooks() {
     let sink = seen.clone();
     let previous = panic::take_hook(); // take_hook also unregisters: the default hook is back until set_hook
     panic::set_hook(Box::new(move |info| {
+        // No asserts in here: a panic inside the hook aborts the process.
         let msg = info.payload_as_str().unwrap_or("?").to_string(); // since 1.91; older: payload().downcast_ref
-        assert_eq!(
-            info.payload().downcast_ref::<&str>().is_some()
-                || info.payload().downcast_ref::<String>().is_some(),
-            msg != "?"
-        );
+        let text_payload = info.payload().downcast_ref::<&str>().is_some()
+            || info.payload().downcast_ref::<String>().is_some();
         let line = info.location().map_or(0, Location::line);
         sink.lock()
-            .unwrap()
-            .push((msg, line, std::thread::panicking()));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((msg, line, std::thread::panicking() && text_payload));
     }));
     let expected_line = line!() + 1;
     let _ = panic::catch_unwind(|| panic!("captured"));
@@ -467,11 +465,20 @@ fn pipe_through(program: &str, input: Vec<u8>) -> io::Result<Vec<u8>> {
         r
     });
     let out = child.wait_with_output()?; // reads stdout to the end, then reaps the child
-    writer.join().expect("writer thread")?;
+    let written = writer.join().expect("writer thread");
+    // A program that ran and failed is still `Ok` from `wait_with_output`: check the status yourself.
+    if !out.status.success() {
+        return Err(io::Error::other(format!(
+            "{program} failed: {}",
+            out.status
+        )));
+    }
+    written?; // a child that stops reading early shows up here as a broken pipe
     Ok(out.stdout)
 }
 
-/// None means the deadline passed and the child was killed.
+/// None means the deadline passed and the child was killed. Do not give `cmd` a piped stdout or stderr: nothing
+/// here reads it, so a child that fills the pipe waits until it is killed.
 fn run_with_timeout(
     mut cmd: Command,
     limit: Duration,
@@ -495,6 +502,10 @@ fn run_with_timeout(
 fn section_pipes() -> io::Result<()> {
     let big: Vec<u8> = (0..1_000_000u32).map(|i| b'a' + (i % 26) as u8).collect();
     assert!(pipe_through("cat", big.clone())? == big); // far larger than a pipe buffer
+    assert!(
+        pipe_through("false", Vec::new()).is_err(),
+        "a failed program is not a result"
+    );
     // Streaming: read the pipe yourself, then wait.
     let mut child = sh("printf 'a\\nb\\n'")
         .stdout(Stdio::piped())
@@ -556,11 +567,17 @@ fn main() -> ExitCode {
     );
     // Silence the panics this page triggers on purpose; restore the default hook afterwards.
     panic::set_hook(Box::new(|_| {}));
-    section_payloads();
-    section_catch();
-    section_hooks(); // swaps in its own hook and puts ours back
-    section_unwinding();
+    let sections = panic::catch_unwind(|| {
+        section_payloads();
+        section_catch();
+        section_hooks(); // swaps in its own hook and puts ours back
+        section_unwinding();
+    });
     let _quiet = panic::take_hook(); // default hook again: real failures below are printed
+    if let Err(p) = sections {
+        // the silent hook also hid a real failure: say what it was
+        panic!("a section failed: {}", message(&*p));
+    }
     section_exit();
     #[cfg(unix)]
     {

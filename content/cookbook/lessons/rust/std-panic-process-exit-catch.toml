@@ -1,0 +1,326 @@
+title = "Panics"
+module = "Standard library and core"
+module_order = 2
+chapter = "Processes, signals and networking"
+chapter_order = 8
+order = 102
+kind = "lesson"
+level = "intermediate"
+lede = "What a panic does, how a program ends, and how to run another program safely."
+code = ["examples/std_tour/std_panic_process_exit_catch.rs"]
+code_spoils = ["/p/c2-thread-pool", "/p/b7-shared-steps", "/p/b8-routes-and-shared-steps"]
+summary = """
+A panic stops the current work because the program reached a state it did not expect. By default it unwinds the thread and runs cleanup on the way. Use `Result` for failures you expect, and keep panics for bugs. This page also covers ending a process and running child programs, where a skipped cleanup step or an unchecked status can lose data silently.
+"""
+
+[[sections]]
+heading = "Should this be a panic or a Result?"
+body = """
+Say a user types `400` where a percentage belongs. That will happen, so return an error the caller can handle. Say your own code passes `101` to a function that requires at most 100. That is a bug, and a panic is reasonable.
+
+| Situation | Use |
+|---|---|
+| Bad user input, a missing file, a network error | `Result` |
+| A rule your own code must keep was broken | `panic!` or `assert!` |
+| A branch you believe can never run | `unreachable!` |
+| A value must be present, and you can say why | `expect("why it is present")` |
+
+`expect` prints your sentence when it fails, so write why the value should have been there. For a function that panics on a caller's mistake, `#[track_caller]` makes the report show the caller's line.
+"""
+
+[[sections]]
+heading = "What happens when code panics?"
+body = """
+First, the **panic hook** runs. It is a function that, by default, prints the message and location. Then the thread **unwinds**: Rust leaves each function in turn and **drops** its local values, which runs their cleanup code.
+
+```stepper
+caption = "A panic two calls deep"
+[[frame]]
+title = "Three values are alive"
+text = "The outer function made `first`, then `second`. The inner function made `inner`."
+lanes = [ { name = "Still alive", items = ["first", "second", "inner"] }, { name = "Dropped, in order", items = [] } ]
+[[frame]]
+title = "The inner call is left first"
+text = "The inner function panics, so its value is dropped."
+lanes = [ { name = "Still alive", items = ["first", "second"] }, { name = "Dropped, in order", items = ["inner"] } ]
+[[frame]]
+title = "Then the caller, newest value first"
+text = "Local variables are dropped in reverse order of declaration."
+lanes = [ { name = "Still alive", items = [] }, { name = "Dropped, in order", items = ["inner", "second", "first"] } ]
+```
+
+An unwinding panic on a spawned thread ends that thread, not the whole process. If the main thread panics, the process ends, and normally with exit status 101.
+
+Don't panic inside `Drop`. If that happens while the thread is already unwinding, the process aborts.
+
+A panic while a thread holds a `Mutex` lock **poisons** the mutex. Later calls to `lock` return an error, to warn that the data may be half updated. You can still take the data out of that error. Repair it before you call `clear_poison`.
+"""
+
+[[sections]]
+heading = "Can your program survive a panic?"
+body = """
+Sometimes one bad job should not end a program that has other work. Rust lets you stop a panic at a boundary around one job or one request. The fold below shows where such a boundary can go.
+
+A boundary is not a general way to handle errors. The hook still runs, so the message is still printed. State the job was changing may be left half done.
+
+A boundary also depends on unwinding. A project can be built with `panic = "abort"`, which ends the process as soon as the hook has run. A small program that tries to catch its own panic then prints the message and stops. On macOS, a shell reports exit status 134, and no `Drop` runs.
+
+:::deeper Where to stop a panic (gives away much of "Wrap every handler in the same steps", part of "A thread pool with results and graceful shutdown", and capstone step 4)
+There are two kinds of boundary.
+
+| Boundary | What you get |
+|---|---|
+| A separate thread, then `join` | The thread ends, and `join` returns `Err` with what the panic sent |
+| `std::panic::catch_unwind` | The current thread continues, with the panic returned as `Err` |
+
+`catch_unwind` asks for a closure that is **unwind safe**. This marker warns you when a panic could leave something half changed in view. A captured `&mut` is such a case.
+
+```compare
+takeaway = "`AssertUnwindSafe` removes the compiler's warning. It does not repair anything, so you must be sure the state is still usable."
+[wrong]
+title = "Change a captured counter"
+code = '''
+use std::panic::catch_unwind;
+
+fn main() {
+    let mut done = 0;
+    for input in [5, 0, 20] {
+        let result = catch_unwind(|| {
+            let value = 100 / std::hint::black_box(input);
+            done += 1;
+            value
+        });
+        println!("{input}: ok = {}", result.is_ok());
+    }
+    println!("done: {done}");
+}
+'''
+result = "It does not compile: error[E0277]: the type `&mut i32` may not be safely transferred across an unwind boundary."
+[fixed]
+title = "State that it is safe"
+code = '''
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+fn main() {
+    let mut done = 0;
+    for input in [5, 0, 20] {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let value = 100 / std::hint::black_box(input);
+            done += 1;
+            value
+        }));
+        println!("{input}: ok = {}", result.is_ok());
+    }
+    println!("done: {done}");
+}
+'''
+result = "It prints `ok = false` for the zero, after the panic message, then `done: 2`. The counter is only raised after the work succeeds."
+```
+
+The value inside `Err` is the **payload**, whatever the panic carried. `panic!` with fixed text usually gives a `&str`, and formatted text gives a `String`. `panic_any` can send other types, so keep a fallback.
+
+```walkthrough
+file = "examples/std_tour/std_panic_process_exit_catch.rs"
+[[step]]
+title = "Read the message"
+lines = "113-119"
+text = "Try both text types, then fall back to a fixed label."
+[[step]]
+title = "One boundary per request"
+lines = "187-199"
+text = "Each request is caught on its own, so one failure does not stop the next."
+[[step]]
+title = "Pass a panic on"
+lines = "210-217"
+text = "`resume_unwind` continues with the same payload, without running the hook again."
+```
+:::
+
+The panic hook belongs to the whole process. Set it once in your application, usually to log panics. A library should leave it alone. Don't panic inside a hook either, because that aborts the process.
+"""
+
+[[sections]]
+heading = "How should your program end?"
+body = """
+| Way to end | Runs `Drop`? | Use it when |
+|---|---|---|
+| Return from `main`, for example an `ExitCode` | Yes, for its local values | This is the normal choice |
+| `std::process::exit(code)` | No, not on any thread's stack | Nothing is left that needs cleanup |
+| `std::process::abort()` | No | Continuing is unsafe |
+
+An **exit status** is the number a program leaves for whoever started it. By custom, zero means success. `ExitCode` lets `main` choose that number and still clean up.
+
+The skipped cleanup bites with buffered output. A `BufWriter` holds bytes in memory so that it can write them in larger pieces.
+
+```compare
+takeaway = "Flush important output yourself and check the result. Return from `main` so that cleanup still runs."
+[wrong]
+title = "Exit from the middle"
+code = '''
+use std::io::{BufWriter, Write};
+
+fn main() -> std::io::Result<()> {
+    let mut out = BufWriter::new(std::io::stdout());
+    write!(out, "report complete")?;
+    std::process::exit(0)
+}
+'''
+result = "The status is 0, and nothing is printed. The buffered text is lost."
+[fixed]
+title = "Flush, then return"
+code = '''
+use std::io::{BufWriter, Write};
+use std::process::ExitCode;
+
+fn main() -> std::io::Result<ExitCode> {
+    let mut out = BufWriter::new(std::io::stdout());
+    write!(out, "report complete")?;
+    out.flush()?;
+    Ok(ExitCode::SUCCESS)
+}
+'''
+result = "It prints `report complete` and the status is 0."
+```
+
+`flush` matters even when `main` returns. A `BufWriter` also tries to flush when dropped, but any error there is ignored.
+"""
+
+[[sections]]
+heading = "How do you run another program?"
+body = """
+`std::process::Command` starts a **child process**. Pick the call by what you want back.
+
+| Call | What you get |
+|---|---|
+| `output()` | Waits, and returns the status plus everything printed |
+| `status()` | Waits, returns the status, and shows output in your terminal by default |
+| `spawn()` | Returns at once with a `Child` handle for you to manage |
+
+`Ok` from these calls does not mean the program succeeded. `output` and `status` return `Err` when starting or waiting fails. A program that ran and failed is still `Ok`, so check `status.success()`.
+
+Pass each value with `arg` or `args`. Don't paste user text into a command for a shell, such as `sh -c`. The shell may treat part of that text as another command. A program you call directly still reads its own options, so a value that starts with `-` needs care.
+
+If the program is meant to read your data, set `stdin` to `Stdio::piped()`. A **pipe** is a channel between processes with limited room. If you write a lot of input before reading any output, both processes can block. Each waits for the other to empty a pipe.
+
+The full program writes input from a second thread while it collects the output. It also closes the child's input when done, which is how the child learns there is no more.
+"""
+
+[[sections]]
+heading = "How do you stop a child that takes too long?"
+body = """
+`std::process` offers no wait with a time limit. One way is to call `try_wait` in a loop, sleep briefly, and watch the clock. When time is up, call `kill`, then `wait`.
+
+The final `wait` collects the ended child. On Unix, a child that was never waited for stays in the process table as a **zombie** while its parent lives. Dropping a `Child` neither stops it nor waits for it.
+
+This method has two limits:
+
+- `kill` ends that one process. Programs the child started may keep running.
+- A polling loop reads no pipes. With piped output, a child that prints a lot can fill the pipe and wait until your limit kills it.
+
+Here both ideas are in one small program. It runs on Unix, where `cat` and `sleep` exist.
+
+```rust
+use std::io::{self, Write};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+fn main() -> io::Result<()> {
+    // feed a child from a second thread while this one collects its output
+    let mut cat = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let mut input = cat.stdin.take().expect("stdin was piped");
+    let writer = thread::spawn(move || input.write_all(&vec![b'x'; 1_000_000]));
+    // `input` is dropped when the writer ends, which tells `cat` there is no more
+    let output = cat.wait_with_output()?;
+    writer.join().expect("writer thread")?;
+    assert!(output.status.success() && output.stdout.len() == 1_000_000);
+
+    // give a slow child a time limit
+    let mut slow = Command::new("sleep").arg("30").spawn()?;
+    let started = Instant::now();
+    while slow.try_wait()?.is_none() {
+        if started.elapsed() >= Duration::from_millis(100) {
+            slow.kill()?;
+            slow.wait()?; // collect it
+            println!("stopped the slow child");
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+```
+"""
+
+[[sections]]
+heading = "How can you check these behaviours?"
+body = """
+Run the program from the `cookbook` folder:
+
+```sh
+cargo run --release --example std_panic_process_exit_catch
+```
+
+To test exit behaviour, the program starts a copy of itself and inspects the copy's status and output. That is a useful trick whenever the thing you test ends the process.
+
+Try one change. Remove the status check from `pipe_through` and run again. The run stops with `a failed program is not a result`.
+
+A quiet panic hook can also hide your test failures. This program silences the hook while it causes panics on purpose. A real failed assertion would then end the run with no message, so the program catches that failure and reports it.
+
+These checks ran on macOS. The signal and shell examples are Unix only. One build can't show both unwinding and abort, so the program does not test `panic = "abort"`.
+"""
+
+[[connections]]
+kind = "before"
+title = "OS threads"
+link = "/cookbook/p/threads-channels"
+why = "Spawning and joining threads, and what joining gives back."
+
+[[connections]]
+kind = "practise"
+title = "A thread pool with results and graceful shutdown"
+link = "/p/c2-thread-pool"
+level = "related"
+why = "A pool that has to stay useful when a job fails. Try it before the panic boundary fold."
+
+[[connections]]
+kind = "practise"
+title = "Wrap every handler in the same steps"
+link = "/p/b7-shared-steps"
+level = "related"
+why = "One of its steps is a panic boundary. Try it before the panic boundary fold or the full code."
+
+[[connections]]
+kind = "returns"
+title = "A pool with work stealing"
+link = "/cookbook/p/thread-pool-work-stealing"
+why = "How a pool of long-lived threads deals with a job that panics."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "A server has to decide what one panicking request may take down with it."
+
+[[sources]]
+title = "Rust documentation: stopping an unwinding panic"
+url = "https://doc.rust-lang.org/std/panic/fn.catch_unwind.html"
+note = "States which panics it catches, and why it is not for ordinary errors."
+
+[[sources]]
+title = "The Rustonomicon: unwinding"
+url = "https://doc.rust-lang.org/nomicon/unwinding.html"
+note = "What unwinding means for unsafe code and for calls into other languages."
+
+[[sources]]
+title = "std::process::exit"
+url = "https://doc.rust-lang.org/std/process/fn.exit.html"
+note = "Read what does and does not run before the process ends."
+
+[[sources]]
+title = "std::process::Child"
+url = "https://doc.rust-lang.org/std/process/struct.Child.html"
+note = "Its warnings cover waiting, zombies and blocked pipes."

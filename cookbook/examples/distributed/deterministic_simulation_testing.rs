@@ -26,13 +26,14 @@
 //! client history (ops that timed out are 'maybe happened'), and liveness after healing (a final probe write completes and
 //! all replicas converge).
 //! A LIVENESS CHECK NEEDS A FAULT-FREE PHASE AND NO CLIENT POLICY INSIDE IT: after T_END every injected fault (drops, fsync
-//! failures, buggify) is off, and the probe retries until T_STOP. An earlier version broke both rules and reported healthy
-//! clusters as stuck (seeds 589 and 82213, pinned in `main`). A bounded-retry probe measures the client's patience, not the
-//! cluster; the only deadline is T_STOP, and `main` prints how much of it the slowest probe used.
+//! failures, buggify) is off, and the probe retries until T_STOP. A bounded-retry probe measures the client's patience, not the
+//! cluster; the only deadline is T_STOP.
+//! LIMITS: log matching is checked every 20 ticks, not after every event. Passing seeds are evidence, not proof. Removing
+//! a plan event also shifts later random draws, because one generator drives the whole world.
 //! INJECTED BUGS: `AckBeforeFsync` (a follower acknowledges AppendEntries before its disk write is durable: a majority "commits"
 //! an entry that evaporates when the follower crashes) and `StaleLeaderRead` (a leader answers GETs from local state without
 //! going through the log, so a partitioned old leader serves stale values). The simulator must find each within a seed budget,
-//! name the smallest failing seed, replay it identically, and shrink its schedule. The correct system must pass 2000 seeds.
+//! name the smallest failing seed, replay it identically, and shrink its schedule until no single event can be removed. The correct system must pass 2000 seeds.
 //! COMMON USES: FoundationDB (the original, Will Wilson's talk), TigerBeetle VOPR, Antithesis, Dropbox Nucleus (CanopyCheck),
 //! Rust: `turmoil`, `madsim`, `shuttle` (thread schedules), loom (memory model), Jepsen for the black-box counterpart.
 //! Read: "Testing Distributed Systems w/ Deterministic Simulation" (Will Wilson, Strange Loop 2014) and the FoundationDB paper
@@ -41,7 +42,7 @@
 //!
 //! TRY NEXT:
 //!   - [S] Change `AckBeforeFsync` so the follower acks before fsync only for the FIRST entry of a batch: how many more seeds are needed to find the bug? Predict, then measure.
-//!   - [S] Raise the fsync delay buggify from +15 to +1 ticks (`persist`) and see how the detection rate of `AckBeforeFsync` drops: which ingredient (window width vs crash timing) matters more?
+//!   - [S] Lower the fsync delay buggify from +15 to +1 ticks (`persist`) and see how the detection rate of `AckBeforeFsync` drops: which ingredient (window width vs crash timing) matters more?
 //!   - [M] Add a third injected bug: do not persist `voted_for` before replying to RequestVote. Which invariant catches it and how many seeds does it need?
 //!   - [M] Make the shrinker also reduce numeric parameters (partition duration, crash `down_for`), not just drop events, and compare final plan sizes.
 //!   - [A] PROJECT: port the sim loop to run `linearizability_checker`'s model against a different system: take `raft_consensus` or `quorum_replication_dynamo` as the system under test and reuse this fault plan generator.
@@ -304,8 +305,11 @@ impl Node {
 struct HOp {
     key: u32,
     put: Option<i64>,
+    started: u64, // tick, only for reporting latency
+    /// Event numbers, not ticks: two events in one tick still happen one after the other, and the checker needs that order.
     invoke: u64,
     ret: Option<u64>,
+    done_at: u64,             // tick of the reply
     got: Option<Option<i64>>, // completed GET result
 }
 
@@ -344,6 +348,7 @@ impl Report {
 
 struct Sim {
     now: u64,
+    handled: u64, // events handled so far: the clock of the client history
     rng: Rng,
     seq: u64,
     queue: BTreeMap<(u64, u64), Ev>,
@@ -372,6 +377,7 @@ impl Sim {
     fn new(seed: u64, variant: Variant, plan: &Plan, text: bool) -> Sim {
         let mut s = Sim {
             now: 0,
+            handled: 0,
             rng: Rng::new(seed),
             seq: 0,
             queue: BTreeMap::new(),
@@ -1036,8 +1042,10 @@ impl Sim {
                     HOp {
                         key: s.key,
                         put: s.put,
-                        invoke: self.now,
+                        started: self.now,
+                        invoke: self.handled,
                         ret: None,
+                        done_at: 0,
                         got: None,
                     },
                 );
@@ -1086,7 +1094,8 @@ impl Sim {
                     Res::Ok | Res::Val(_) => {
                         c.done = true;
                         let h = self.history.get_mut(&op).unwrap();
-                        h.ret = Some(self.now);
+                        h.ret = Some(self.handled);
+                        h.done_at = self.now;
                         if let Res::Val(v) = res {
                             h.got = Some(v);
                         }
@@ -1160,6 +1169,7 @@ impl Sim {
             }
             let ev = self.queue.remove(&(t, k)).unwrap();
             self.now = t;
+            self.handled += 1;
             if self.now >= next_check {
                 next_check += 20;
                 self.check_log_matching();
@@ -1192,7 +1202,7 @@ impl Sim {
     fn probe_latency(&self) -> Option<u64> {
         self.history
             .get(&PROBE)
-            .and_then(|h| h.ret.map(|r| r - h.invoke))
+            .and_then(|h| h.ret.map(|_| h.done_at - h.started))
     }
     fn liveness(&self) -> bool {
         let probe_ok = self.probe_latency().is_some();
@@ -1288,7 +1298,8 @@ fn run(seed: u64, variant: Variant, plan: &Plan, text: bool) -> Report {
     }
 }
 
-/// Delta debugging: drop chunks of the plan while the failure persists.
+/// Delta debugging: drop chunks of the plan while the run still fails (in any way, not only the way it first failed).
+/// It ends only after a pass that removes no single event, so removing any one event from the result makes the run pass.
 fn shrink(seed: u64, variant: Variant, mut plan: Plan) -> Plan {
     let mut chunk = plan.len() / 2;
     while chunk >= 1 {
@@ -1304,7 +1315,8 @@ fn shrink(seed: u64, variant: Variant, mut plan: Plan) -> Plan {
                 i += chunk;
             }
         }
-        if !progressed || chunk == 1 {
+        // after a pass with progress, try the same size again: one removal can make another possible
+        if !progressed {
             chunk /= 2;
         }
     }
@@ -1393,16 +1405,19 @@ fn main() {
     );
     assert!(ops > 0 && buggify > 0);
 
-    // 2b. pinned regressions for two false liveness alarms. 589: an fsync failure was injected AFTER the heal, the leader died,
-    // and the probe client ran out of retries during the re-election although the write then committed on all replicas.
-    // 82213: no fault after the heal at all, only repeated split votes, which also outlasted the 14-attempt budget.
-    for seed in [589, 82213] {
-        let r = run(seed, Variant::Correct, &gen_plan(seed), false);
-        assert!(
-            !r.failed() && r.liveness_ok,
-            "regression seed {seed}: {:?}",
-            r.violation
-        );
+    // 2b. the history the checker reads must order every call and reply: many share a tick, none share an event number
+    for seed in 1..=50 {
+        let mut sim = Sim::new(seed, Variant::Correct, &gen_plan(seed), false);
+        sim.run();
+        let mut stamps = HashSet::new();
+        for h in sim.history.values() {
+            for stamp in [Some(h.invoke), h.ret].into_iter().flatten() {
+                assert!(
+                    stamps.insert(stamp),
+                    "seed {seed}: two history events share stamp {stamp}"
+                );
+            }
+        }
     }
 
     // 3. the injected bugs are found, replayed and shrunk
@@ -1418,6 +1433,14 @@ fn main() {
         let small = shrink(seed, variant, plan.clone());
         let rs = run(seed, variant, &small, false);
         assert!(rs.failed() && small.len() <= plan.len());
+        for i in 0..small.len() {
+            let mut without = small.clone();
+            without.remove(i);
+            assert!(
+                !run(seed, variant, &without, false).failed(),
+                "{variant:?} seed {seed}: the shrunk plan does not need event {i}"
+            );
+        }
         let what = r1
             .violation
             .clone()

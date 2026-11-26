@@ -8,16 +8,23 @@
 //! optional trailer headers), or "no body" for requests with neither. See RFC 9112 section 6 (message body) and 7.1 (chunked).
 //! WHY INCREMENTAL: TCP is a byte stream. `parse_request(&[u8])` returns `Ok(None)` ("need more bytes"),
 //! `Ok(Some((request, consumed)))` or `Err` (the connection is poisoned: answer 400 and close). Re-parsing from the start is
-//! simple and obviously correct, and the tests prove feeding one byte at a time equals parsing everything at once.
+//! simple and obviously correct. The checks compare feeding one byte at a time with parsing everything at once, on
+//! examples and on random inputs: the same requests come out, and both accept or both refuse.
 //! (Production code keeps resumable state or, like `httparse`, parses the head in one zero-copy pass.)
 //! PIPELINING / KEEP-ALIVE: several requests may sit back to back in one buffer. Parse, drain `consumed`, repeat. HTTP/1.1
-//! defaults to keep-alive unless `Connection: close`; HTTP/1.0 is the reverse.
+//! defaults to keep-alive unless `Connection: close`; HTTP/1.0 is the reverse. A request without keep-alive is the last
+//! one: bytes after it are not parsed (RFC 9112 section 9.6).
 //! REQUEST SMUGGLING: a front-end proxy and a back-end server that disagree about where a request ends can be tricked into
 //! treating the tail of one request as the start of the next (cache poisoning, auth bypass). The classic triggers are both
 //! `Content-Length` and `Transfer-Encoding` present (CL.TE / TE.CL), two different `Content-Length` values, obsolete line
 //! folding, and whitespace before the colon. RFC 9112 says to reject or normalize; we REJECT every one of them with a typed error.
 //! HOSTILE INPUT: every size is untrusted. `Limits` bounds line length, head bytes, header count, body bytes and the chunk
-//! size field, and nothing is allocated from a declared length before the bytes have actually arrived.
+//! size field, and nothing is allocated from a declared length before the bytes have actually arrived. A chunked body
+//! also has a limit on its ENCODED size (`max_body + max_head`): without it, long chunk extensions let a sender make
+//! the connection buffer thousands of bytes for each byte of body. Cutting the bytes differently never changes
+//! whether input is accepted or refused (checked, not proved). Which error KIND a refused input gets can differ: a part
+//! of a line can be too long before the whole line shows that it also holds a bare LF. Time is not limited here: the caller must put deadlines on reads. Re-parsing also costs CPU that grows
+//! with the square of the request size when it arrives in tiny pieces.
 //! COMMON USES: HTTP servers (hyper uses httparse), reverse proxies and load balancers, API gateways, WAF-style request
 //! validation, CDN edge parsers, and test servers. Production Rust code should use `httparse` for the head and a
 //! hardened framework for the rest; this recipe shows what they do.
@@ -103,18 +110,21 @@ impl Request {
             .header_all("connection")
             .iter()
             .flat_map(|v| v.split(','))
-            .map(|t| t.trim().to_ascii_lowercase())
+            .map(|t| trim_ows(t).to_ascii_lowercase())
             .collect();
         let has = |t: &str| tokens.iter().any(|x| x == t);
-        if self.version == (1, 0) {
-            has("keep-alive")
-        } else {
-            !has("close")
-        }
+        // `close` wins in either version (RFC 9112 section 9.3)
+        !has("close") && (self.version == (1, 1) || has("keep-alive"))
     }
 }
 
 // ---------------------------------------------------------------- lexical helpers
+
+/// Strip optional white space, which in HTTP is only space and tab. `str::trim` also strips a no-break space
+/// and others, turning "chunked\u{a0}" into "chunked" where a proxy in front may not.
+fn trim_ows(s: &str) -> &str {
+    s.trim_matches([' ', '\t'])
+}
 
 fn is_token(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
@@ -138,7 +148,10 @@ fn read_line(buf: &[u8], pos: usize, max: usize) -> Result<Option<(&[u8], usize)
             }
             Ok(Some((line, i + 1)))
         }
-        None if buf.len() - pos > max => Err(HttpError::LineTooLong),
+        // an unfinished line may end in the CR of its CRLF, so that CR does not count against the limit
+        None if buf[pos..].strip_suffix(b"\r").unwrap_or(&buf[pos..]).len() > max => {
+            Err(HttpError::LineTooLong)
+        }
         None => Ok(None),
     }
 }
@@ -258,7 +271,7 @@ fn framing(req: &Request, lim: &Limits) -> Result<Framing, HttpError> {
         let codings: Vec<String> = tes
             .iter()
             .flat_map(|v| v.split(','))
-            .map(|t| t.trim().to_ascii_lowercase())
+            .map(|t| trim_ows(t).to_ascii_lowercase())
             .collect();
         if codings.len() != 1 || codings[0] != "chunked" {
             return Err(HttpError::UnsupportedTransferEncoding); // also kills "chunked, chunked" and "xchunked" tricks
@@ -269,7 +282,7 @@ fn framing(req: &Request, lim: &Limits) -> Result<Framing, HttpError> {
         return Ok(Framing::Chunked);
     }
     let mut seen: Option<u64> = None;
-    for v in cls.iter().flat_map(|v| v.split(',')).map(str::trim) {
+    for v in cls.iter().flat_map(|v| v.split(',')).map(trim_ows) {
         // digits only: no sign, no "0x", no empty, no spaces inside
         if v.is_empty() || v.len() > 18 || !v.bytes().all(|b| b.is_ascii_digit()) {
             return Err(HttpError::BadContentLength);
@@ -295,10 +308,23 @@ fn parse_chunked(
     lim: &Limits,
 ) -> Result<Option<(Vec<u8>, Headers, usize)>, HttpError> {
     let mut body = Vec::new();
+    // The body limit counts data only. Size lines, extensions and trailers need their own bound.
+    let start = pos;
+    let max_encoded = lim.max_body.saturating_add(lim.max_head);
+    // `end` is how far the encoded body is already known to reach
+    let within = |end: usize| {
+        if end - start > max_encoded {
+            Err(HttpError::BodyTooLarge)
+        } else {
+            Ok(())
+        }
+    };
     loop {
         let Some((line, next)) = read_line(buf, pos, lim.max_line)? else {
+            within(buf.len() + 1)?; // at least one more byte must come
             return Ok(None);
         };
+        within(next)?;
         let size_part = line.split(|&b| b == b';').next().unwrap_or(&[]);
         if size_part.is_empty()
             || size_part.len() > 16
@@ -313,8 +339,10 @@ fn parse_chunked(
             let mut trailers = Vec::new();
             loop {
                 let Some((line, next)) = read_line(buf, pos, lim.max_line)? else {
+                    within(buf.len() + 1)?;
                     return Ok(None);
                 };
+                within(next)?;
                 pos = next;
                 if line.is_empty() {
                     return Ok(Some((body, trailers, pos)));
@@ -337,7 +365,8 @@ fn parse_chunked(
             return Err(HttpError::BodyTooLarge);
         }
         let size = size as usize;
-        if buf.len() < pos + size + 2 {
+        within(pos.saturating_add(size).saturating_add(2))?;
+        if buf.len() - pos < size.saturating_add(2) {
             return Ok(None);
         }
         body.extend_from_slice(&buf[pos..pos + size]);
@@ -356,7 +385,7 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Result<Option<(Request, usize)>, H
     match framing(&req, lim)? {
         Framing::None => Ok(Some((req, pos))),
         Framing::Length(n) => {
-            if buf.len() < pos + n {
+            if buf.len() - pos < n {
                 return Ok(None);
             }
             req.body = buf[pos..pos + n].to_vec();
@@ -373,15 +402,20 @@ fn parse_request(buf: &[u8], lim: &Limits) -> Result<Option<(Request, usize)>, H
     }
 }
 
-/// Pipelining: every complete request in `buf`, bytes consumed, and the error that stopped us (if any).
+/// Pipelining: every complete request in `buf` up to the first without keep-alive, bytes consumed, and the error
+/// that stopped us (if any).
 fn parse_all(buf: &[u8], lim: &Limits) -> (Vec<Request>, usize, Option<HttpError>) {
     let (mut out, mut at) = (Vec::new(), 0);
     loop {
         match parse_request(&buf[at..], lim) {
             Ok(Some((r, n))) => {
                 debug_assert!(n > 0);
-                out.push(r);
                 at += n;
+                let last = !r.keep_alive();
+                out.push(r);
+                if last {
+                    return (out, at, None); // anything after it must not be processed
+                }
             }
             Ok(None) => return (out, at, None),
             Err(e) => return (out, at, Some(e)),
@@ -394,6 +428,8 @@ struct Conn {
     buf: Vec<u8>,
     lim: Limits,
     error: Option<HttpError>,
+    /// A request without keep-alive has been handed out: it was the last one (RFC 9112 section 9.6).
+    closed: bool,
 }
 
 impl Conn {
@@ -402,11 +438,12 @@ impl Conn {
             buf: Vec::new(),
             lim,
             error: None,
+            closed: false,
         }
     }
     fn feed(&mut self, bytes: &[u8]) -> Vec<Request> {
         let mut out = Vec::new();
-        if self.error.is_some() {
+        if self.error.is_some() || self.closed {
             return out;
         }
         self.buf.extend_from_slice(bytes);
@@ -414,7 +451,12 @@ impl Conn {
             match parse_request(&self.buf, &self.lim) {
                 Ok(Some((r, n))) => {
                     self.buf.drain(..n);
+                    self.closed = !r.keep_alive();
                     out.push(r);
+                    if self.closed {
+                        self.buf.clear();
+                        return out;
+                    }
                 }
                 Ok(None) => return out,
                 Err(e) => {
@@ -656,6 +698,57 @@ fn main() {
         HttpError::BodyTooLarge
     );
 
+    // A limit gives the same answer however the bytes are cut: no prefix of a line at the limit is refused.
+    let at_limit = format!(
+        "GET /{} HTTP/1.1\r\nHost: h\r\n\r\n",
+        "a".repeat(32 - "GET / HTTP/1.1".len())
+    );
+    let line_32 = Limits {
+        max_line: 32,
+        ..Limits::default()
+    };
+    for cut in 0..=at_limit.len() {
+        let verdict = parse_request(&at_limit.as_bytes()[..cut], &line_32);
+        assert!(
+            verdict.is_ok(),
+            "line at the limit, cut at {cut}: {verdict:?}"
+        );
+    }
+    // Only space and tab are padding.
+    assert_eq!(
+        smuggle("Transfer-Encoding: chunked\u{a0}").unwrap_err(),
+        HttpError::UnsupportedTransferEncoding
+    );
+    assert_eq!(
+        smuggle("Content-Length: 3\u{a0}").unwrap_err(),
+        HttpError::BadContentLength
+    );
+    let closing = parse_request(
+        b"GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n",
+        &lim,
+    );
+    assert!(!closing.unwrap().unwrap().0.keep_alive());
+    // Chunk extensions are not body: without a limit on the encoded size, 1000 bytes of body could cost megabytes.
+    let narrow = Limits {
+        max_body: 1000,
+        max_head: 4096,
+        ..Limits::default()
+    };
+    let mut hostile = Conn::new(narrow.clone());
+    hostile.feed(b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n");
+    let padded = format!("1;{}\r\nx\r\n", "e".repeat(2000));
+    for _ in 0..3 {
+        hostile.feed(padded.as_bytes());
+    }
+    assert_eq!(hostile.error, Some(HttpError::BodyTooLarge));
+    // An endless trailer section meets the same limit.
+    let mut hostile = Conn::new(narrow);
+    hostile.feed(b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n");
+    for _ in 0..6 {
+        hostile.feed(format!("T: {}\r\n", "t".repeat(1000)).as_bytes());
+    }
+    assert_eq!(hostile.error, Some(HttpError::BodyTooLarge));
+
     // 6. Pipelining + keep-alive, and byte-at-a-time equals all-at-once.
     let mut pipe = Vec::new();
     for s in SEEDS {
@@ -669,6 +762,24 @@ fn main() {
         "pipelined 5 requests in {} bytes; byte-at-a-time identical",
         pipe.len()
     );
+
+    // After a request without keep-alive, nothing else on the connection is processed.
+    for closing in [
+        "GET /a HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n",
+        "GET /a HTTP/1.0\r\n\r\n",
+    ] {
+        let two = format!("{closing}GET /b HTTP/1.1\r\nHost: h\r\n\r\n");
+        let mut conn = Conn::new(Limits::default());
+        let first = conn.feed(two.as_bytes());
+        assert_eq!(first.len(), 1, "Conn::feed, {closing:?}");
+        assert!(conn.feed(b"GET /c HTTP/1.1\r\nHost: h\r\n\r\n").is_empty());
+        let (all, used, err) = parse_all(two.as_bytes(), &Limits::default());
+        assert_eq!(
+            (all.len(), used, err),
+            (1, closing.len(), None),
+            "parse_all"
+        );
+    }
 
     // 7. Response writer (content-length and chunked) round trip through our own chunk decoder.
     let resp =

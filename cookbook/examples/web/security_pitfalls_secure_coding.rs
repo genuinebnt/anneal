@@ -35,7 +35,7 @@ use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::os::unix::fs::{OpenOptionsExt, symlink};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -127,7 +127,11 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let p = std::env::temp_dir().join(format!("cb-security-{}-{nanos}", std::process::id()));
-        std::fs::create_dir(&p).expect("fresh directory"); // create_dir fails if it already exists
+        // fails if the name already exists; 0o700 keeps other users out
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&p)
+            .expect("fresh directory");
         TempDir(p.canonicalize().unwrap())
     }
 }
@@ -177,6 +181,8 @@ fn fixed_resolve(base: &Path, user: &str) -> Option<PathBuf> {
 }
 fn path_traversal() {
     let tmp = TempDir::new();
+    let mode = std::fs::metadata(&tmp.0).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "the scratch directory is private");
     let (base, sibling) = (tmp.0.join("public"), tmp.0.join("public-private"));
     for d in [&base, &sibling, &base.join("docs")] {
         std::fs::create_dir(d).unwrap();
@@ -240,7 +246,8 @@ fn vuln_checked_write(path: &Path, data: &str, between: impl FnOnce()) -> std::i
     between();
     std::fs::write(path, data)
 }
-/// One system call both checks and opens, so there is no gap. O_NOFOLLOW covers the LAST component only.
+/// One system call both checks and opens, so there is no gap. O_NOFOLLOW covers the LAST component only, and
+/// it does not stop a HARD link: that is the same file under a second name.
 fn fixed_open_no_follow(path: &Path, data: &str, between: impl FnOnce()) -> std::io::Result<()> {
     between();
     let mut f = std::fs::OpenOptions::new()
@@ -300,6 +307,10 @@ fn vuln_search(pattern: &str, file: &Path) -> String {
     run(Command::new("grep").arg(pattern).arg(file))
 }
 fn fixed_search(pattern: &str, file: &Path) -> String {
+    // grep reads a newline in a pattern as "another pattern", and an empty pattern matches every line
+    if pattern.is_empty() || pattern.contains('\n') {
+        return String::new();
+    }
     // -F: literal text; -e: the next argument is the pattern even if it starts with '-'; --: no options after this
     run(Command::new("grep")
         .arg("-F")
@@ -334,6 +345,17 @@ fn command_injection() {
     assert!(vuln_search("-e.", &file).contains("do not show"));
     assert_eq!(fixed_search("-e.", &file), "");
     assert_eq!(fixed_search("public", &file), "public line\n");
+    // one "literal" argument can still hold several patterns: "zzz" or the empty one, which matches everything
+    let two_patterns = "zzz\n";
+    let raw = run(Command::new("grep")
+        .args(["-F", "-e", two_patterns, "--"])
+        .arg(&file));
+    assert!(
+        raw.contains("do not show"),
+        "attack: -F -e -- is not enough"
+    );
+    assert_eq!(fixed_search(two_patterns, &file), "");
+    assert_eq!(fixed_search("", &file), "");
 }
 
 // ===========================================================================
@@ -889,6 +911,9 @@ fn fixed_reservation(input: &[u8]) -> Option<u64> {
 }
 /// Run-length decoding of (count, byte) pairs, with an output cap enforced BEFORE growing.
 fn rle_decode(input: &[u8], cap: usize) -> Option<Vec<u8>> {
+    if !input.len().is_multiple_of(2) {
+        return None; // a count without its byte: `chunks_exact` would drop it silently
+    }
     let mut out = vec![];
     for pair in input.chunks_exact(2) {
         if out.len() + usize::from(pair[0]) > cap {
@@ -929,6 +954,9 @@ impl EchoServer {
         self.buffer.get(..claimed)
     }
     fn fixed_echo(&mut self, payload: &[u8], claimed: usize) -> Option<&[u8]> {
+        if payload.len() > self.buffer.len() {
+            return None; // `receive` would panic: refuse before copying
+        }
         let received = self.receive(payload);
         self.buffer[..received].get(..claimed)
     }
@@ -976,6 +1004,11 @@ fn input_limits() {
     );
     assert_eq!(rle_decode(&bomb, 64 * 1024), None);
     assert_eq!(rle_decode(&[3, b'a', 2, b'b'], 64).unwrap(), b"aaabb");
+    assert_eq!(
+        rle_decode(&[3, b'a', 2], 64),
+        None,
+        "truncated input is refused"
+    );
     // 5000 levels is safe to run here; a few hundred thousand would overflow the stack and ABORT (not catchable)
     let deep: Vec<u8> = [vec![b'['; 5000], vec![b']'; 5000]].concat();
     assert_eq!(
@@ -999,6 +1032,11 @@ fn stale_buffer() {
         .unwrap();
     assert_eq!(s.fixed_echo(b"hi", 60), None);
     assert_eq!(s.fixed_echo(b"hi", 2), Some(&b"hi"[..]));
+    assert_eq!(
+        s.fixed_echo(&[0; 129], 1),
+        None,
+        "too long: refused, no panic"
+    );
     // what bounds checking DOES stop: reading past the allocation is None (or a panic), never neighbouring memory
     assert_eq!(s.vuln_echo(b"hi", 129), None);
 }

@@ -5,8 +5,8 @@
 //! Course: CMU 15-445 (statistics for query optimisation) for sketches; MIT 6.S081/OSDI "An Analysis of Linux Scalability to Many Cores" for sloppy counters.
 #![allow(dead_code)]
 //!
-//! THE POINT: a counter looks trivial, but on 8 cores one `AtomicU64::fetch_add` is a cache-line ping-pong; the fix is ALWAYS the same idea,
-//! trade read precision/cost for write scalability: keep the write path local and merge on read.
+//! THE POINT: a counter looks trivial, but when many cores call `fetch_add` on one `AtomicU64`, its cache line keeps moving between them.
+//! The usual fix trades read cost or precision for write speed: keep the write path local and merge on read.
 //!   1. `Shared`       : one atomic. Exact, simple, the baseline that stops scaling.
 //!   2. `Sharded`      : N cache-line-padded atomics, a thread picks `tid % N`; `read` sums them. Exact at quiescence; while running the sum lies between
 //!                       "increments FINISHED before the read started" and "increments STARTED before it ended" (we assert exactly that bracket).
@@ -23,13 +23,14 @@
 //!
 //! TRY NEXT:
 //!   - [S] Change `Sharded`'s shard count to 1, 2, 4, 8, 64 and print time for 8 threads; predict where the curve flattens and why it is not "at 8".
-//!   - [S] Predict, then measure, the effect of Morris base `a` = 1.0 (powers of two, the classic) on the mean error over 200 trials versus a = 0.01.
+//!   - [S] Predict, then measure, the effect of Morris base `a` = 1.0 (powers of two, the classic) versus a = 0.01: 200 trials of 500
+//!         increments each. (At a = 0.01 a `u8` register is full after roughly a thousand; try that too.)
 //!   - [M] Add `merge(&mut self, other: &Hll)` support for sparse sketches (store only non-zero registers in a sorted vector until 256 of them are set) and assert the estimate is unchanged by the representation switch.
 //!   - [M] Make `Histogram::quantile` run while writers are recording and state exactly which guarantee you can still assert (hint: the bracket idea from `Sharded`).
 //!   - [A] PROJECT: wire `Histogram` + `Sharded` into the registry of `metrics_prometheus_histograms_load_testing` as the lock-free write path, and add an HLL-backed "unique users" gauge; verify with the 8-thread harness from `concurrent_hashmap_designs`.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering::*};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering::*};
 use std::thread;
 use std::time::Instant;
 
@@ -64,6 +65,7 @@ struct Sharded {
 }
 impl Sharded {
     fn new(n: usize) -> Self {
+        let n = n.max(1); // `add` takes `tid % n`
         Sharded {
             shards: (0..n).map(|_| Padded(AtomicU64::new(0))).collect(),
         }
@@ -138,12 +140,14 @@ struct Morris {
 }
 impl Morris {
     fn new(a: f64) -> Self {
+        assert!(a > 0.0, "the base is 1 + a, and the estimate divides by a");
         Morris { c: 0, a }
     }
     fn inc(&mut self, rng: &mut Rng) {
         // P(increment) = (1+a)^-c ; the exponent keeps the register tiny
         if rng.unit() < (1.0 + self.a).powi(-(self.c as i32)) {
-            self.c = self.c.checked_add(1).expect("register overflow");
+            // a full register stops counting; it must not crash or restart a program from inside a statistic
+            self.c = self.c.saturating_add(1);
         }
     }
     fn estimate(&self) -> f64 {
@@ -187,21 +191,32 @@ impl Histogram {
     fn record(&self, v: u64) {
         self.buckets[bucket_of(v)].fetch_add(1, Relaxed);
         self.count.fetch_add(1, Relaxed);
-        self.sum.fetch_add(v, Relaxed);
+        // `fetch_add` would wrap past `u64::MAX` and report a tiny sum, so add with saturation in a retry loop
+        let mut old = self.sum.load(Relaxed);
+        while let Err(now) =
+            self.sum
+                .compare_exchange_weak(old, old.saturating_add(v), Relaxed, Relaxed)
+        {
+            old = now;
+        }
         self.max.fetch_max(v, Relaxed);
     }
-    /// Returns the bucket index holding the q-quantile (nearest-rank).
-    fn quantile_bucket(&self, q: f64) -> usize {
+    /// Returns the bucket index holding the q-quantile (nearest-rank), or `None` if nothing was recorded.
+    fn quantile_bucket(&self, q: f64) -> Option<usize> {
         let n = self.buckets.iter().map(|b| b.load(Relaxed)).sum::<u64>();
-        let rank = ((q * n as f64).ceil() as u64).max(1);
+        if n == 0 {
+            return None;
+        }
+        let rank = ((q.clamp(0.0, 1.0) * n as f64).ceil() as u64).max(1);
         let mut cum = 0;
         for (i, b) in self.buckets.iter().enumerate() {
             cum += b.load(Relaxed);
             if cum >= rank {
-                return i;
+                return Some(i);
             }
         }
-        NB - 1
+        // counts only grow, so the second pass always reaches a rank taken from the first
+        Some(NB - 1)
     }
 }
 
@@ -257,19 +272,20 @@ fn sharded_bracket_test() {
     let finished = AtomicU64::new(0);
     let stop = AtomicU64::new(0);
     thread::scope(|s| {
-        for t in 0..THREADS - 1 {
-            let (c, started, finished) = (&c, &started, &finished);
-            s.spawn(move || {
-                for _ in 0..100_000 {
-                    started.fetch_add(1, SeqCst);
-                    c.add(t, 1);
-                    finished.fetch_add(1, SeqCst);
-                }
-            });
-        }
         let (c, started, finished, stop) = (&c, &started, &finished, &stop);
+        let writers: Vec<_> = (0..THREADS - 1)
+            .map(|t| {
+                s.spawn(move || {
+                    for _ in 0..100_000 {
+                        started.fetch_add(1, SeqCst);
+                        c.add(t, 1);
+                        finished.fetch_add(1, SeqCst);
+                    }
+                })
+            })
+            .collect();
         s.spawn(move || {
-            while stop.load(Relaxed) == 0 {
+            while stop.load(SeqCst) == 0 {
                 let lo = finished.load(SeqCst);
                 let r = c.read();
                 let hi = started.load(SeqCst);
@@ -277,13 +293,15 @@ fn sharded_bracket_test() {
                     lo <= r && r <= hi,
                     "sharded read {r} escaped its bracket [{lo}, {hi}]"
                 );
-                if lo == 700_000 {
-                    break;
-                }
             }
         });
+        // join every writer, then stop the reader, and only then report a writer's panic. If the reader
+        // waited for the full count instead, one failed writer would turn the test into a hang.
+        let ends: Vec<_> = writers.into_iter().map(|w| w.join()).collect();
+        stop.store(1, SeqCst);
+        ends.into_iter()
+            .for_each(|end| end.expect("a writer panicked"));
     });
-    stop.store(1, Relaxed);
     assert_eq!(c.read(), 700_000);
     println!(
         "  sharded: 7 writers x 100k, concurrent reads always inside [finished, started]; final exact"
@@ -344,6 +362,25 @@ fn sloppy_test() {
     );
 }
 
+fn edge_test() {
+    let none = Sharded::new(0);
+    none.add(3, 1);
+    assert_eq!(none.read(), 1);
+
+    println!("  (the next panic message is expected: a base of zero is refused)");
+    assert!(std::panic::catch_unwind(|| Morris::new(0.0)).is_err());
+
+    let (mut small, mut rng) = (Morris::new(0.01), Rng(7));
+    for _ in 0..100_000 {
+        small.inc(&mut rng);
+    }
+    assert_eq!(small.c, u8::MAX, "full, not panicked");
+    assert!(
+        small.estimate() < 1_200.0,
+        "and from here on it under-counts"
+    );
+}
+
 fn morris_test() {
     let (a, n, trials) = (0.1, 10_000u64, 300);
     let mut rng = Rng(0xDEAD_BEEF);
@@ -394,6 +431,16 @@ fn histogram_test() {
             "bucket arithmetic wrong at {v}"
         );
     }
+    // edges: nothing recorded, a q out of range, and a sum that would not fit
+    let edge = Histogram::new();
+    assert_eq!(edge.quantile_bucket(0.5), None, "no samples, no quantile");
+    edge.record(10);
+    assert_eq!(edge.quantile_bucket(7.0), Some(bucket_of(10)));
+    edge.record(u64::MAX);
+    edge.record(u64::MAX);
+    assert_eq!(edge.sum.load(Relaxed), u64::MAX, "the sum saturates");
+    assert_eq!(bucket_of(u64::MAX), NB - 1);
+
     let h = Histogram::new();
     let all: Vec<Vec<u64>> = thread::scope(|s| {
         let hs: Vec<_> = (0..THREADS as u64)
@@ -420,7 +467,7 @@ fn histogram_test() {
     for q in [0.5, 0.9, 0.99, 0.999] {
         let rank = ((q * sorted.len() as f64).ceil() as usize).max(1);
         let truth = sorted[rank - 1];
-        let b = h.quantile_bucket(q);
+        let b = h.quantile_bucket(q).unwrap();
         assert_eq!(
             b,
             bucket_of(truth),
@@ -539,12 +586,12 @@ fn main() {
     sharded_bracket_test();
     tls_test();
     sloppy_test();
+    edge_test();
     println!("== approximate / statistical ==");
     morris_test();
     histogram_test();
     hll_test();
     println!("== cache-line effects (printed only) ==");
     false_sharing_bench();
-    let _ = AtomicUsize::new(0);
     println!("all counter/statistics checks passed");
 }

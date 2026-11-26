@@ -26,7 +26,7 @@ heading = "Design notes"
 body = """
 Pattern: `Router::new().route(path, method(handler)).with_state(state)`. Handlers are plain async fns whose arguments are &#42;extractors&#42; (`State`, `Path`, `Json`). Because a Router is a tower `Service`, tests call `router.oneshot(request)` in-process: fast, no ports, deterministic.
 
-Docs: <https://docs.rs/axum/latest/axum/>  (path params use `{id}` syntax in axum 0.8)
+**Limits** are part of the router: a body size limit per request, and a cap on how many items are stored. Docs: <https://docs.rs/axum/latest/axum/>  (path params use `{id}` syntax in axum 0.8)
 """
 
 [[sources]]

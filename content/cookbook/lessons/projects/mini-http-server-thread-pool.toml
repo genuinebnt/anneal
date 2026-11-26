@@ -1,0 +1,363 @@
+title = "A mini multithreaded HTTP/1.1 server from scratch on std::net"
+module = "Complete projects"
+module_order = 13
+chapter = "Capstones"
+chapter_order = 1
+order = 651
+kind = "lesson"
+level = "capstone"
+lede = "A small HTTP server built only on the standard library, and the decisions that hold it together."
+code = ["examples/capstones/mini_http_server_thread_pool.rs"]
+code_spoils = ["/rust/series/web-server"]
+summary = """
+This project is a small HTTP/1.1 server with no HTTP library, in which a fixed set of worker threads serves the connections and a full server refuses new ones. Read it to see how a server's parts fit together. In its simple blocking design, every open connection occupies a worker. It is a study program, not a server to put on the internet.
+"""
+
+[[sections]]
+heading = "Should you read this before building your own?"
+body = """
+All ten capstone steps of [From threads to a web server](/rust/series/web-server) link here. So do many of its smaller parts. If you're working through the series, this page can save you from a dead end or take the learning away.
+
+> [!WARNING]
+> The full code solves much of the series. It stays closed until you open it. Every fold on this page names the parts it gives away.
+
+What you see without opening anything is what the server does, why it is shaped that way, and what it can't do. Those are safe to read before any step.
+"""
+
+[[sections]]
+heading = "What does the server do?"
+body = """
+**HTTP** is a request and reply protocol. A client sends text asking for something, over a TCP connection, and the server sends text back. A **TCP connection** is a two-way stream of bytes between two programs.
+
+Libraries such as hyper normally handle this for you. Here the program does it all with `std::net`, so you can see each job a server has.
+
+| The server can | What that means for a client |
+|---|---|
+| Serve many connections at once | One slow request doesn't stop the others, while a worker is free |
+| Say it is full | A client gets status 503 and `Retry-After: 1` instead of waiting in silence |
+| Keep a connection open | The next request skips the cost of connecting again |
+| Route by method and path | `/users/7/posts/42` reaches one handler with both numbers |
+| Add shared behaviour | Request ids, logging, timing and panic handling apply to every route |
+| Serve files | A client can ask whether a file changed, or ask for one part of it |
+| Report on itself | `/metrics` lists counts and request times as plain text |
+| Stop cleanly | Requests in progress finish before the server returns |
+
+The file also holds a second server on Tokio, which reuses the same parser and routes. It is there for comparison. It has fewer defences than the threaded one, so don't read it as the safe async version.
+"""
+
+[[sections]]
+heading = "How do the parts connect?"
+body = """
+Each connection passes through two threads you should picture first. One thread, the **acceptor**, takes new connections from the operating system. One of the **workers** then serves that connection until it ends.
+
+```text
+clients
+  |
+acceptor --> full? reply 503
+  |
+waiting room (fixed size)
+  |
+workers (fixed number):
+  read, route, reply, repeat
+```
+
+Inside a worker, a request moves through four layers.
+
+The **parser** turns bytes into a request. **Middleware** is code that wraps every handler, for jobs such as logging. The **router** picks a **handler**, the function that makes the reply. A writer then turns that reply back into bytes.
+
+The parser and the writer know nothing about threads or sockets in particular. The parser reads a slice of bytes. The writer accepts any output that implements `Write`. That split lets the Tokio server use both, and lets the checks test them without a network.
+"""
+
+[[sections]]
+heading = "What happens when too many clients arrive?"
+body = """
+The program tests this with only two workers and room for two waiting connections. Its handlers are held at a **gate**: they stay busy until the test opens it. That way the test decides the timing, not luck.
+
+```stepper
+caption = "Two workers and room for two"
+[[frame]]
+title = "Both workers are busy"
+text = "Two clients ask for a route that waits at the gate."
+lanes = [ { name = "Workers", items = ["A", "B"], slots = 2 }, { name = "Waiting", items = [], slots = 2 }, { name = "Refused", items = [] } ]
+[[frame]]
+title = "The waiting room fills"
+text = "Two more clients connect. They are accepted, but no worker has taken them yet."
+lanes = [ { name = "Workers", items = ["A", "B"], slots = 2 }, { name = "Waiting", items = ["C", "D"], slots = 2 }, { name = "Refused", items = [] } ]
+[[frame]]
+title = "The next client is refused"
+text = "Client E gets status 503 at once. The test then sends one more client, which is refused too."
+lanes = [ { name = "Workers", items = ["A", "B"], slots = 2 }, { name = "Waiting", items = ["C", "D"], slots = 2 }, { name = "Refused", items = ["E"] } ]
+[[frame]]
+title = "Accepted work finishes"
+text = "The gate opens. A and B get their replies and disconnect, which frees the workers for C and D."
+lanes = [ { name = "Workers", items = ["C", "D"], slots = 2 }, { name = "Waiting", items = [], slots = 2 }, { name = "Refused", items = ["E"] } ]
+```
+
+Notice the last frame. A finished request does not free a worker if its connection stays open. The test makes A and B disconnect, and only then can C and D be served.
+"""
+
+[[sections]]
+heading = "Which decisions shape the design?"
+body = """
+Each of these choices solves one problem and creates a cost. Knowing the cost matters as much as knowing the choice.
+
+| Decision | The problem it solves | What it costs |
+|---|---|---|
+| A fixed number of workers | The number of workers does not grow with the number of clients | An open connection occupies a worker, even when quiet |
+| A waiting room of fixed size | Overload can't grow an endless backlog | Some clients are refused and must try again |
+| A parser that only looks at bytes | It can be tested at every place the network might cut | It starts again from the first byte each time more arrives |
+| A limit on each part the client controls | An endless line or a huge body can't fill memory | A client with a real need for more is refused |
+| Refuse unclear requests | Two programs can't read the same bytes as different requests | Some sloppy clients are turned away |
+| Time limits on connections | A quiet or slow client can't keep a worker forever | A client on a very slow link may be cut off |
+| Close the connection after a protocol error | After a bad request, the next one's start is unknown | The client must connect again |
+
+The first row explains many of the others. Idle timeouts and a cap on requests per connection both exist because a worker stays with its connection. A server built on **async** tasks, which share a few threads, makes a quiet connection much cheaper. It still needs time limits and a connection cap.
+"""
+
+[[sections]]
+heading = "How can you read the code without spoiling a step?"
+body = """
+Open only the fold for work you have finished. Each fold below explains one area, with its lines highlighted. A fold draws the whole file, so scrolling inside it shows other areas too.
+
+:::deeper Taking connections (gives away capstone steps 6 and 10, and the parts "Say no when you are full" and "Stop a server that is waiting")
+The waiting room is a bounded standard channel. The acceptor must never wait, so it can't use a send that waits for room.
+
+```walkthrough
+file = "examples/capstones/mini_http_server_thread_pool.rs"
+[[step]]
+title = "Wake up and leave"
+lines = "1409-1420"
+text = "`accept` blocks. To stop, the server sets a flag and connects to itself, so the loop gets a chance to see the flag."
+[[step]]
+title = "Offer, never wait"
+lines = "1424-1440"
+text = "`try_send` returns at once. A full channel hands the socket back, and the acceptor turns it into a refusal."
+[[step]]
+title = "Refuse politely"
+lines = "1471-1482"
+text = "Closing a socket with unread input can reset the connection and destroy the reply. So this ends only the sending side and passes the socket on."
+[[step]]
+title = "Close refused sockets on one thread"
+lines = "1489-1523"
+text = "One thread reads and discards from all of them, so a slow refused client holds up nobody. Time, bytes and the number held are limited."
+[[step]]
+title = "Share one receiver"
+lines = "1526-1535"
+text = "Workers share the receiving end through a mutex. The guard is dropped at the end of the `let`, before the job runs."
+[[step]]
+title = "Refuse first, then wait"
+lines = "1460-1466"
+text = "The listener is dropped before any join, so new connects are refused while old requests still run. Dropping the sender lets workers drain the queue."
+[[step]]
+title = "Stop and join"
+lines = "1374-1391"
+text = "`shutdown` sets the flag, wakes `accept`, then joins the acceptor and the workers."
+```
+:::
+
+:::deeper Reading requests (gives away capstone steps 1 and 2, and the parts "Requests that arrive in pieces", "Refuse bad and oversized requests" and "A body that arrives in chunks")
+The parser answers one of three ways: incomplete, done with a count of bytes used, or bad. It never changes the buffer.
+
+The subtle rule is that a limit must not depend on where the network cut the bytes. An unfinished line may end in the first half of its line ending, so that byte is not counted.
+
+```walkthrough
+file = "examples/capstones/mini_http_server_thread_pool.rs"
+[[step]]
+title = "Measure an unfinished line"
+lines = "224-228"
+text = "A trailing carriage return is left out of the length."
+[[step]]
+title = "Refuse before the end arrives"
+lines = "240-260"
+text = "The line and header limits apply even when the line or the header block has no end yet."
+[[step]]
+title = "Check each header"
+lines = "285-308"
+text = "A name may hold only the characters HTTP allows. A value may not hold a carriage return, line feed or zero byte. Only spaces and tabs are trimmed."
+[[step]]
+title = "Refuse two readings"
+lines = "341-357"
+text = "A repeated or unknown transfer coding, or two kinds of body length, would let two programs disagree about where the request ends."
+[[step]]
+title = "Bound the chunked form"
+lines = "403-487"
+text = "Size lines, body bytes and trailer lines each have a limit. So does the whole body as sent, or padded size lines could make it many times the body limit."
+```
+:::
+
+:::deeper Choosing and wrapping handlers (gives away capstone steps 3 and 4, and the parts "Send a complete answer", "Which route is this?" and "Wrap every handler in the same steps")
+A route is a list of segments. The router keeps looking after a path matches with the wrong method, which is how it can answer 405 instead of 404.
+
+```walkthrough
+file = "examples/capstones/mini_http_server_thread_pool.rs"
+[[step]]
+title = "Frame the reply"
+lines = "589-606"
+text = "The writer first refuses a header holding a line break. Otherwise whoever supplied that text could add headers of their own."
+[[step]]
+title = "Match one route"
+lines = "712-732"
+text = "Each segment is literal text, one named value, or the rest of the path."
+[[step]]
+title = "Three outcomes"
+lines = "764-780"
+text = "A matching handler runs. A path that matched only other methods gets 405 with `Allow`, and everything else gets 404."
+[[step]]
+title = "Build the chain"
+lines = "783-787"
+text = "Each middleware gets a closure that runs the rest of the list. That closure borrows, so nothing is allocated for the chain."
+```
+:::
+
+:::deeper One connection from start to end (gives away capstone steps 5, 7 and 10, and the parts "Talk to clients over the network", "Many requests on one connection" and "Clients that go quiet, or drip")
+This one function joins reading, handling and writing. It reads in short slices, so it can notice both time limits and shutdown.
+
+```walkthrough
+file = "examples/capstones/mini_http_server_thread_pool.rs"
+[[step]]
+title = "Short read slices"
+lines = "1568-1573"
+text = "A read gives up after 50 ms of silence. No separate timer thread is needed."
+[[step]]
+title = "Serve what is already here"
+lines = "1575-1601"
+text = "A whole request in the buffer is served before the next read. Leftover bytes are the next request."
+[[step]]
+title = "Deadline on every turn"
+lines = "1609-1625"
+text = "The request deadline is checked on every turn. A check only after silence would miss a client that sends a byte just often enough."
+[[step]]
+title = "Close when idle or stopping"
+lines = "1629-1648"
+text = "With an empty buffer, a quiet connection ends once it is idle too long or the server is stopping."
+[[step]]
+title = "Linger, with limits"
+lines = "1543-1556"
+text = "After the last reply, the worker ends its sending side and discards input for a bounded time."
+```
+:::
+
+:::deeper Files and metrics (gives away capstone steps 8 and 9, and the parts "Stay inside the folder", "Send only what the client needs" and "How long do requests take?")
+File safety has two layers. The first judges the decoded name. The second asks the file system where the name really leads, because a link inside the folder can point outside.
+
+The timing histogram uses a fixed set of buckets. Its approximate buckets can't answer the exact Prometheus bounds, so each bound also has its own exact counter.
+
+```walkthrough
+file = "examples/capstones/mini_http_server_thread_pool.rs"
+[[step]]
+title = "Judge the decoded name"
+lines = "1026-1039"
+text = "The path is decoded first, then refused if it holds a parent segment, a backslash or a zero byte."
+[[step]]
+title = "Ask where it leads"
+lines = "1040-1051"
+text = "The resolved path must still be inside the root, and must be a file."
+[[step]]
+title = "Count into fixed memory"
+lines = "114-124"
+text = "Recording updates a few atomic numbers. The sum stops at the largest value instead of wrapping to a small one."
+[[step]]
+title = "Report cumulative buckets"
+lines = "145-151"
+text = "Each reported bucket includes the ones below it."
+```
+:::
+"""
+
+[[sections]]
+heading = "How do you run it, and what do the checks show?"
+body = """
+This program does not stay up for you to visit. It starts servers on your own machine, sends them requests, checks the answers and exits. Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example mini_http_server_thread_pool
+```
+
+Port 0 asks the operating system for any free port, so a busy port can't break the run. The last line should read `ALL CHECKS PASSED`.
+
+The checks cover the parser, routing, files, keep-alive, overload, a panicking handler and shutdown. A final load test sends the same requests to three server designs. Its speeds depend on your machine and the run, so don't read them as a ranking.
+
+Passing shows that these cases behaved on that run. It does not prove the server is free of timing bugs or safe from every hostile request. Several checks use real time with generous limits. They have been run only on macOS, over the local loopback network.
+
+Treat your own passing tests with the same doubt. A parser can handle every ordinary request and still read an odd one differently from a proxy. Ask what your checks never send.
+"""
+
+[[sections]]
+heading = "What can it not do?"
+body = """
+These gaps are known. Each would matter in a real service.
+
+| Gap | What could happen |
+|---|---|
+| The write timeout covers one write call, not a whole reply | A client that reads very slowly can hold a worker and delay shutdown |
+| A served file is read into memory whole | Large files and many clients can use a lot of memory |
+| A file is checked, then opened | Someone who can change the folder in between could redirect the read |
+| Shutdown assumes the machine has resources to spare | If it has run out, `shutdown` may never return |
+| Only `shutdown` stops the threads | A server that is only dropped leaves them running |
+| Parsing starts over as bytes arrive | A request in tiny pieces costs far more processor time, up to the size limits |
+| No encryption, and it listens only on your own machine | It can't face a network as it is |
+| The Tokio comparison has no whole-request deadline or connection cap | A client that keeps dripping bytes can hold its task |
+
+For real work, use a maintained HTTP library, and put limits and time limits around it. What you learn here helps you choose those settings.
+"""
+
+[[sections]]
+heading = "Which lesson helps with each part?"
+body = """
+Start from the idea you are missing. Some of these pages also solve series parts, and they keep that code closed.
+
+| If you are stuck on | Read |
+|---|---|
+| Handing work from one thread to another | [Bounded channels and backpressure](/cookbook/p/bounded-channel) |
+| How a thread waits without spinning | [A channel from a mutex and condition variables](/cookbook/p/mutex-condvar-channel) |
+| Why one network read is not one message | [A length-prefixed TCP server](/cookbook/p/tcp-framed-server) |
+| Where an HTTP request ends | [HTTP/1.1 message parser](/cookbook/p/http1-parser) |
+| Sockets, time limits and half-closing | [std::net by use case](/cookbook/p/std-net-tcp-udp-ip-addr) |
+| What a panic does to a thread | [Panics, exits and child processes](/cookbook/p/std-panic-process-exit-catch) |
+| Counting from many threads | [Concurrent counters and statistics](/cookbook/p/concurrent-counters-and-statistics) |
+| What stopping cleanly promises | [Graceful shutdown](/cookbook/p/graceful-shutdown), which uses async code |
+"""
+
+[[connections]]
+kind = "before"
+title = "OS threads"
+link = "/cookbook/p/threads-channels"
+why = "Starting and joining threads, which every part of this server relies on."
+
+[[connections]]
+kind = "before"
+title = "Bounded channels and backpressure"
+link = "/cookbook/p/bounded-channel"
+why = "What a full queue does is the heart of how this server handles overload."
+
+[[connections]]
+kind = "returns"
+title = "A pool with work stealing"
+link = "/cookbook/p/thread-pool-work-stealing"
+why = "A different pool design, for jobs that split into smaller jobs. This server does not need it."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Build the parts yourself, then the server in ten capstone steps. This page's code gives away much of it."
+
+[[sources]]
+title = "RFC 9112: HTTP/1.1"
+url = "https://www.rfc-editor.org/rfc/rfc9112.html"
+note = "The rules for request lines, body lengths, chunks and when a connection stays open."
+
+[[sources]]
+title = "RFC 9110: HTTP semantics"
+url = "https://www.rfc-editor.org/rfc/rfc9110.html"
+note = "The meaning of methods, status codes, conditional requests and ranges."
+
+[[sources]]
+title = "The Rust Book: a multithreaded web server"
+url = "https://doc.rust-lang.org/book/ch21-02-multithreaded.html"
+note = "A smaller thread pool, built step by step. It shows pool code, so read it after your own."
+
+[[sources]]
+title = "Prometheus text format"
+url = "https://prometheus.io/docs/instrumenting/exposition_formats/"
+note = "The format of the /metrics report."

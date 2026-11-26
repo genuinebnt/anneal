@@ -24,7 +24,7 @@ body = """
 [[sections]]
 heading = "Design notes"
 body = """
-**The point**: a counter looks trivial, but on 8 cores one `AtomicU64::fetch_add` is a cache-line ping-pong; the fix is **always** the same idea, trade read precision/cost for write scalability: keep the write path local and merge on read.
+**The point**: a counter looks trivial, but when many cores call `fetch_add` on one `AtomicU64`, its cache line keeps moving between them. The usual fix trades read cost or precision for write speed: keep the write path local and merge on read.
 
 1. `Shared`       : one atomic. Exact, simple, the baseline that stops scaling.
 2. `Sharded`      : N cache-line-padded atomics, a thread picks `tid % N`; `read` sums them. Exact at quiescence; while running the sum lies between "increments **finished** before the read started" and "increments **started** before it ended" (we assert exactly that bracket).

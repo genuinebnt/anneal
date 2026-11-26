@@ -1,0 +1,156 @@
+title = "Axum router state"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 513
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/axum_router_state.rs"]
+lede = "How axum routes a request, shares state between handlers, and lets you test both without a socket."
+summary = """A quick lookup for axum, a Rust web library. You list routes, attach shared state, and write async functions whose arguments say what they need. The web server series does not use axum: you build routing yourself there. This page shows what the library does for you, and which limits you still set."""
+
+[[sections]]
+heading = "How do you wire a route to shared state?"
+body = """
+Say two requests must see the same list of items. You put the list in a state value, and give that value to the router once.
+
+```rust
+Router::new()
+    .route("/v1/workflows", post(create))
+    .route("/v1/workflows/{id}", get(get_one))
+    .layer(DefaultBodyLimit::max(MAX_BODY))
+    .with_state(state)
+```
+
+A **handler** is the async function behind a route. Each argument is an **extractor**, a type that takes one thing from the request. `State` gives you the shared value, `Path` reads `{id}`, and `Json` parses the body.
+
+State is cloned for requests, so make cloning cheap, as with an `Arc`. A standard mutex works here because no handler holds its guard across an `.await`.
+
+A router is also a **service**: it turns a request into a response. So a test can call `oneshot` on it, with no network.
+"""
+
+[[sections]]
+heading = "Why does my handler not compile?"
+body = """
+The extractor that reads the body must be the last argument. A body can only be read once, so the other extractors have to run first. The compiler's message does not mention the order.
+
+```compare
+takeaway = "Put `Json` (or any body extractor) last. Adding `#[axum::debug_handler]` gives a clearer error, but needs axum's `macros` feature."
+[wrong]
+title = "Body first"
+code = '''
+use axum::{Json, Router, extract::State, routing::post};
+
+#[derive(Clone)]
+struct AppState;
+
+#[derive(serde::Deserialize)]
+struct NewNote {
+    text: String,
+}
+
+// the body extractor comes first
+async fn create(Json(note): Json<NewNote>, State(_): State<AppState>) -> String {
+    note.text
+}
+
+fn main() {
+    let _app: Router = Router::new()
+        .route("/notes", post(create))
+        .with_state(AppState);
+}
+'''
+result = "error[E0277]: the trait bound `fn(Json<NewNote>, State<AppState>) -> impl Future<Output = String> {create}: Handler<_, _>` is not satisfied"
+[fixed]
+title = "Body last"
+code = '''
+use axum::{Json, Router, extract::State, routing::post};
+
+#[derive(Clone)]
+struct AppState;
+
+#[derive(serde::Deserialize)]
+struct NewNote {
+    text: String,
+}
+
+// the body extractor comes last
+async fn create(State(_): State<AppState>, Json(note): Json<NewNote>) -> String {
+    note.text
+}
+
+fn main() {
+    let _app: Router = Router::new()
+        .route("/notes", post(create))
+        .with_state(AppState);
+    println!("router built");
+}
+'''
+result = "It compiles and prints `router built`."
+```
+"""
+
+[[sections]]
+heading = "What does axum answer before your code runs?"
+body = """
+| Request | Status |
+|---|---|
+| Unknown path | 404 |
+| Known path, wrong method | 405, with an `Allow` header |
+| `{id}` that is not a number | 400 |
+| Body that is not valid JSON | 400 |
+| JSON with the wrong shape | 422 |
+| JSON route without a JSON content type | 415 |
+| Body over the limit | 413 |
+"""
+
+[[sections]]
+heading = "Which limits are still your job?"
+body = """
+By default, extractors such as `Json` cap the body at 2 MB. The example lowers that to 16 KB with `DefaultBodyLimit`.
+
+Nothing limits how much your state grows, so the example stops at 1,000 items. It also takes new ids with `checked_add`. A plain `+= 1` would panic or wrap around when ids ran out.
+
+It has no timeouts or rate limit, and items vanish on restart.
+"""
+
+[[connections]]
+kind = "practise"
+title = "Which route is this?"
+link = "/p/b7-route-table"
+level = "related"
+why = "Write route matching yourself."
+
+[[connections]]
+kind = "returns"
+title = "One error type for consistent HTTP errors"
+link = "/cookbook/p/axum-errors"
+why = "Give your errors one shape."
+
+[[connections]]
+kind = "returns"
+title = "Tower service layer"
+link = "/cookbook/p/tower-service-layer"
+why = "See how `.layer(...)` wraps a service."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Nothing here is required for it."
+
+[[sources]]
+title = "axum: the order of extractors"
+url = "https://docs.rs/axum/latest/axum/extract/index.html#the-order-of-extractors"
+note = "Why the body extractor goes last."
+
+[[sources]]
+title = "axum: DefaultBodyLimit"
+url = "https://docs.rs/axum/latest/axum/extract/struct.DefaultBodyLimit.html"
+note = "What the default limit covers, and how to change it."
+
+[[sources]]
+title = "axum crate documentation"
+url = "https://docs.rs/axum/latest/axum/"
+note = "Start here for routing, state and responses."

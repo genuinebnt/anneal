@@ -45,7 +45,7 @@ helpful = []
 used_again = ["c2-bounded-channel", "c2-thread-pool", "b7-tests-without-luck"]
 real_uses = "Job queues, connection pools, bounded buffers between pipeline stages."
 cookbook = [
-    { level = "related", page = "mutex-condvar-channel", note = "Builds locks, a condvar and a bounded channel. Chosen by its summary; code not read.", hidden = true },
+    { level = "related", page = "mutex-condvar-channel", note = "Includes a bounded Channel with send, recv and close, built on a Mutex and two Condvars. That is close to this task.", hidden = true },
 ]
 
 [[part]]
@@ -64,7 +64,7 @@ helpful = []
 used_again = ["c2-thread-pool", "b7-turn-work-away"]
 real_uses = "std::sync::mpsc, crossbeam channels, actor mailboxes."
 cookbook = [
-    { level = "similar", page = "mutex-condvar-channel", note = "A bounded MPMC channel from simpler pieces. Chosen by its summary; code not read.", hidden = true },
+    { level = "similar", page = "mutex-condvar-channel", note = "A bounded MPMC channel. It ends with an explicit close, not with the sender and receiver counts this task asks for.", hidden = true },
 ]
 
 [[part]]
@@ -84,8 +84,8 @@ helpful = [
 used_again = ["b7-turn-work-away", "b7-stop-a-listening-server", "b8-many-clients-and-overload"]
 real_uses = "rayon, web server worker pools, background job runners; later the FlowForge executor with a limit."
 cookbook = [
-    { level = "related", page = "thread-pool-work-stealing", note = "Chosen by title; not read.", hidden = true },
-    { level = "related", page = "worker-pool", note = "An async pool with a bounded queue, panic isolation and drain; the Pool type and its submit were read.", hidden = true },
+    { level = "related", page = "thread-pool-work-stealing", note = "A work-stealing pool beside a shared-queue pool. Jobs run under catch_unwind, and drop runs the accepted jobs and joins the workers.", hidden = true },
+    { level = "related", page = "worker-pool", note = "An async pool with a bounded job queue, a limit on running jobs, panics returned as outcomes and a finish that drains.", hidden = true },
 ]
 
 [[part]]
@@ -126,7 +126,7 @@ helpful = [
 used_again = ["b7-requests-in-pieces", "b7-bodies-in-chunks", "b8-pieces-and-limits"]
 real_uses = "tokio_util codecs, Kafka, gRPC and database wire protocols."
 cookbook = [
-    { level = "similar", page = "tcp-framed-server", note = "Length-prefixed frames over TCP. parse_len and the connection loop were read.", hidden = true },
+    { level = "similar", page = "tcp-framed-server", note = "Length-prefixed frames over TCP. read_full gathers partial reads, and parse_len refuses a large length before the payload is allocated.", hidden = true },
 ]
 
 [[part]]
@@ -146,7 +146,7 @@ helpful = [
 used_again = ["b7-bad-and-oversized-requests", "b7-many-requests-one-connection", "b8-read-one-request"]
 real_uses = "HTTP/1.1, Redis RESP, SMTP, language server protocol."
 cookbook = [
-    { level = "similar", page = "http1-parser", note = "A fuller HTTP/1.1 parser with the same three outcomes; parse_chunked and parse_request were read.", hidden = true },
+    { level = "similar", page = "http1-parser", note = "A fuller HTTP/1.1 parser with the same three outcomes. It parses nothing after a request without keep-alive.", hidden = true },
 ]
 
 [[part]]
@@ -164,8 +164,8 @@ helpful = []
 used_again = ["b7-bodies-in-chunks", "b8-pieces-and-limits"]
 real_uses = "Every internet-facing parser; request smuggling defences in proxies."
 cookbook = [
-    { level = "similar", page = "http1-parser", note = "Limits and smuggling defences; parts of its parser were read.", hidden = true },
-    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_request. It has an off-by-one at the request-line limit (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "similar", page = "http1-parser", note = "Limits and smuggling defences. Its rules and error names differ from this task.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_request. Its checks cut requests at every byte around the line limits. Its rules differ: it accepts chunked bodies and takes only token header names.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
 [[part]]
@@ -185,8 +185,8 @@ helpful = [
 used_again = ["b8-pieces-and-limits"]
 real_uses = "HTTP chunked uploads, streaming decoders."
 cookbook = [
-    { level = "similar", page = "http1-parser", note = "parse_chunked, read in full. Its limits and error cases differ.", hidden = true },
-    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_chunked. It leaves trailers unbounded (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "similar", page = "http1-parser", note = "parse_chunked. It also caps the encoded body. Its limits and error cases differ.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "parse_chunked. It bounds size lines, trailers and the whole encoded body. Its limits and error cases differ from this task.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
 [[part]]
@@ -206,8 +206,8 @@ helpful = [
 used_again = ["b8-write-responses", "b7-many-requests-one-connection", "b8-serve-one-client"]
 real_uses = "hyper and axum bodies, server-sent events, file downloads, any protocol writer."
 cookbook = [
-    { level = "similar", page = "mini-http-server-thread-pool", note = "write_response frames fixed and streamed bodies.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "http1-parser", note = "Has a serializer (Response::to_bytes); seen by signature only.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "write_response frames fixed and streamed bodies and refuses CR or LF in a header. Unlike this task, it accepts a framing header from the caller.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "http1-parser", note = "Response::to_bytes writes a body already in memory, plain or chunked. Response::header panics on CR or LF.", hidden = true },
 ]
 
 [[part]]
@@ -226,7 +226,7 @@ used_again = ["b8-routes-and-shared-steps"]
 real_uses = "axum, actix and gateway routers; command dispatch."
 cookbook = [
     { level = "similar", page = "mini-http-server-thread-pool", note = "Route::matches and Router::dispatch.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "axum-router-state", note = "Chosen by title; not read.", hidden = true },
+    { level = "related", page = "axum-router-state", note = "A lookup page for the axum library. The series does not use axum, and the page does not show how to match paths yourself.", hidden = true },
 ]
 
 [[part]]
@@ -248,8 +248,8 @@ used_again = ["b8-routes-and-shared-steps"]
 real_uses = "tower layers, axum middleware, job-runner hooks, interceptors."
 cookbook = [
     { level = "similar", page = "mini-http-server-thread-pool", note = "run_chain and the catch_panic middleware.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "tower-service-layer", note = "The same idea with traits; chosen by summary.", hidden = true },
-    { level = "related", page = "std-panic-process-exit-catch", note = "Panic payloads and catch_unwind; chosen by summary.", hidden = true },
+    { level = "related", page = "tower-service-layer", note = "Layers around a service, built with traits, and why their order matters. Its code has no catch_unwind boundary.", hidden = true },
+    { level = "related", page = "std-panic-process-exit-catch", note = "Panics, process exits and child processes. The page folds its panic boundaries and payload reading.", hidden = true },
 ]
 
 [[part]]
@@ -267,8 +267,8 @@ helpful = []
 used_again = ["b8-serve-files"]
 real_uses = "Static file servers, archive extraction, upload handling, sandboxes."
 cookbook = [
-    { level = "similar", page = "security-pitfalls-secure-coding", note = "fixed_resolve, read. It refuses any component that is not a plain name; this task has other rules and decodes percent escapes.", hidden = true },
-    { level = "similar", page = "mini-http-server-thread-pool", note = "serve_static and pct_decode (which accepts %+5, see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "similar", page = "security-pitfalls-secure-coding", note = "fixed_resolve. It refuses any component that is not a plain name; this task has other rules and decodes percent escapes.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "serve_static and pct_decode. pct_decode takes exactly two hex digits. The file is checked and then opened, which leaves a gap if the folder changes.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
 [[part]]
@@ -286,7 +286,7 @@ helpful = []
 used_again = ["b8-serve-files"]
 real_uses = "CDNs, resumable downloads, video seeking, optimistic concurrency with ETags."
 cookbook = [
-    { level = "similar", page = "http-caching-conditional", note = "parse_range, read. It trims inside the range and would underflow for an empty body.", hidden = true },
+    { level = "similar", page = "http-caching-conditional", note = "parse_range. It takes digits only, treats a huge number as very large and handles an empty body.", hidden = true },
     { level = "similar", page = "mini-http-server-thread-pool", note = "parse_range and the conditional part of serve_static.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
@@ -323,7 +323,7 @@ helpful = []
 used_again = ["b7-how-long-requests-take", "b8-report-what-is-happening"]
 real_uses = "Metrics libraries, rate counters, allocator statistics."
 cookbook = [
-    { level = "related", page = "concurrent-counters-and-statistics", note = "Chosen by title; not read.", hidden = true },
+    { level = "related", page = "concurrent-counters-and-statistics", note = "Sharded, per-thread and approximate counters, with a histogram and HyperLogLog. Wider than this task.", hidden = true },
 ]
 
 [[part]]
@@ -341,8 +341,8 @@ helpful = []
 used_again = ["b8-report-what-is-happening"]
 real_uses = "Prometheus histograms, HdrHistogram, latency SLOs; later FlowForge task timings."
 cookbook = [
-    { level = "similar", page = "metrics-prometheus-histograms-load-testing", note = "A fixed-bucket Prometheus histogram; struct and constructor read.", hidden = true },
-    { level = "similar", page = "mini-http-server-thread-pool", note = "Histogram (log-linear). Its le buckets and values above 2^40 are wrong (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "similar", page = "metrics-prometheus-histograms-load-testing", note = "A fixed-bucket Prometheus histogram with inclusive le bounds, plus a load-testing lab.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "Histogram (log-linear). It has exact counters for the le buckets, covers all of u64 and saturates its sum. Its API differs.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
 [[part]]
@@ -362,7 +362,7 @@ helpful = [
 used_again = ["b7-stop-a-listening-server", "b8-serve-one-client"]
 real_uses = "Any TCP service or client: databases, proxies, chat, line protocols."
 cookbook = [
-    { level = "related", page = "std-net-tcp-udp-ip-addr", note = "std::net by use case; chosen by summary.", hidden = true },
+    { level = "related", page = "std-net-tcp-udp-ip-addr", note = "A std::net lookup page. Its bounded line reader is folded, and it does not drain unread input before closing.", hidden = true },
     { level = "similar", page = "mini-http-server-thread-pool", note = "lingering_close and the read loop of serve_connection.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
 ]
 
@@ -384,7 +384,7 @@ used_again = ["b7-clients-that-go-quiet", "b8-keep-connections-open"]
 real_uses = "HTTP keep-alive, Redis and Postgres pipelining."
 cookbook = [
     { level = "similar", page = "mini-http-server-thread-pool", note = "serve_connection and wants_keep_alive.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "sans-io-protocol", note = "A protocol driven without sockets; chosen by summary.", hidden = true },
+    { level = "related", page = "sans-io-protocol", note = "A protocol written as a state machine without I/O, driven by a simulator, a blocking socket and Tokio.", hidden = true },
 ]
 
 [[part]]
@@ -404,8 +404,8 @@ helpful = [
 used_again = ["b8-keep-connections-open", "b8-shut-down-cleanly"]
 real_uses = "Slow-loris defence, idle connection reaping, protocol timers tested with a fake clock."
 cookbook = [
-    { level = "similar", page = "mini-http-server-thread-pool", note = "The timeout branches of serve_connection. They miss a client that keeps dripping (see README).", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "deterministic-simulation-testing", note = "Simulated time on a larger scale; chosen by summary.", hidden = true },
+    { level = "similar", page = "mini-http-server-thread-pool", note = "The timeout branches of serve_connection. The request deadline is checked on every turn, so a dripping client is cut off. It reads the real clock.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
+    { level = "related", page = "deterministic-simulation-testing", note = "Simulated time on a larger scale: a Raft key-value store with a pretend clock, network and disk.", hidden = true },
 ]
 
 [[part]]
@@ -426,8 +426,8 @@ helpful = [
 used_again = ["b8-shut-down-cleanly"]
 real_uses = "Rolling deploys, test servers, any long-running service."
 cookbook = [
-    { level = "similar", page = "tcp-framed-server", note = "Stop flag, drain and join over a framed protocol; shutdown and the connection loop were read.", hidden = true },
-    { level = "related", page = "graceful-shutdown", note = "Async version; chosen by title.", hidden = true },
+    { level = "similar", page = "tcp-framed-server", note = "Stop flag, drain and join over a framed protocol. A client that never pauses is closed after a short drain period.", hidden = true },
+    { level = "related", page = "graceful-shutdown", note = "Async: a stop signal, then close the job channel and drain it. No sockets and no time limit.", hidden = true },
 ]
 
 [[part]]
@@ -446,8 +446,8 @@ used_again = ["b8-many-clients-and-overload", "b8-shut-down-cleanly"]
 real_uses = "Testing servers, queues and protocol code; mocks for streams."
 cookbook = [
     { level = "similar", page = "mini-http-server-thread-pool", note = "Gate and wait_until.", source = "examples/capstones/mini_http_server_thread_pool.rs", hidden = true },
-    { level = "related", page = "testing-patterns", note = "Chosen by title.", hidden = true },
-    { level = "related", page = "deterministic-simulation", note = "Chosen by title.", hidden = true },
+    { level = "related", page = "testing-patterns", note = "Table tests, generated inputs, tests of failures and limits, and code that depends on time.", hidden = true },
+    { level = "related", page = "deterministic-simulation", note = "A replicated register tested in virtual time from a seed, with replay and shrinking.", hidden = true },
 ]
 
 [[revisit]]

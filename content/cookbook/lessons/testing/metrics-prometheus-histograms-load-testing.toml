@@ -1,0 +1,308 @@
+title = "Metrics, histograms and load testing"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: benchmarking and profiling"
+chapter_order = 6
+order = 149
+kind = "lesson"
+level = "advanced"
+code = ["examples/dev_tools/metrics_prometheus_histograms_load_testing.rs"]
+code_spoils = ["/p/b7-how-long-requests-take", "/p/b8-report-what-is-happening"]
+lede = "How to count what a server does, read percentiles from those counts, and spot a load test that hides the slow requests."
+summary = """
+A server can't keep every measurement, so it keeps counts. A histogram counts how many requests fall under each of a few limits. That uses little memory and adds up across servers, but a percentile read from it is an estimate. A load test can mislead too: if it waits for replies before sending more, a stall barely shows.
+"""
+
+[[sections]]
+heading = "Why isn't an average enough?"
+body = """
+Picture a server that answers in 1 ms. Once during a test, it stops for two seconds. Most requests stay fast, and a few wait a very long time.
+
+An average blends both groups into one number that describes neither. A **percentile** keeps them apart. A p99 of 200 ms means that 99 of every 100 requests took 200 ms or less.
+
+To report a percentile exactly, you would keep and sort every measurement. That memory grows with traffic, so servers keep a summary instead.
+"""
+
+[[sections]]
+heading = "What should the server count?"
+body = """
+Monitoring systems such as Prometheus work with a few kinds of metric. Your server updates them, and Prometheus reads them every so often. Each read is a **scrape**.
+
+| Metric | Holds and suits | Watch out for |
+| --- | --- | --- |
+| **Counter** | A total that only goes up, such as requests | A restart sets it to 0 |
+| **Gauge** | A value that moves both ways, such as queue depth | A scrape sees one moment |
+| **Histogram** | Counts by range, such as request durations | You pick the ranges first |
+| **Summary** | Quantiles worked out inside one server | You can't average them |
+
+The gauge warning is easy to underrate. The example simulates a burst of 300 queued jobs that drains before the next scrape. The scraped gauge reports a peak depth of 0. If peaks matter, record a maximum or a histogram as well.
+
+A restart also needs care. If a counter reads 150 and then 20, it didn't go down by 130. The example's `increase` function treats the drop as a restart and adds 20. It can't notice a restart if the new count has already passed the old one.
+"""
+
+[[sections]]
+heading = "How does a histogram give you a percentile?"
+body = """
+You pick upper limits, such as 10, 20 and 30 ms. Each limit is called `le`, for "less than or equal". In Prometheus text output, every bucket also counts everything in the buckets below it. A last bucket, `+Inf`, counts every measurement.
+
+Take five measurements: 5, 10, 10.5, 29 and 1000 ms.
+
+| `le` | Cumulative count | Which measurements |
+| --- | --- | --- |
+| 10 | 2 | 5 and 10, because the limit is included |
+| 20 | 3 | adds 10.5 |
+| 30 | 4 | adds 29 |
+| +Inf | 5 | adds 1000 |
+
+Prometheus estimates the median with a **rank** of 0.5 × 5, which is 2.5. Two values are at most 10, and the count reaches 3 at 20. So rank 2.5 falls in the bucket from 10 to 20.
+
+That bucket holds one value, and the rank is 0.5 past its start. The histogram has forgotten where the value sits, so it assumes an even spread. Half of the way from 10 to 20 gives **15**, while the real median is **10.5**.
+
+For p99, the rank is 4.95. It falls in `+Inf`, so the best answer left is the last limit, **30**. The real value is 1000.
+
+The example follows this rule of PromQL's `histogram_quantile` for classic buckets, when `q` is from 0 to 1. It differs at the edges:
+
+- With no data, or a `q` that is NaN (not a number), it returns no answer. Prometheus returns NaN.
+- A `q` below 0 or above 1 is moved to 0 or 1. Prometheus returns minus or plus infinity.
+- It skips empty buckets, so `q = 0` gives the lower edge of the first bucket that holds data.
+
+So a fixed-bucket histogram tells you the right bucket, not the right value. In the example's 60 datasets, with each limit double the last, the estimate always landed in the right bucket. Its worst error was still 71%. Put limits close together around the values you care about.
+
+Buckets have one large advantage: you can add them. Sum each bucket across ten servers, then compute one percentile from the total. You can't get that by averaging ten p99 values.
+
+:::deeper Spoiler warning: How long do requests take? How this code records, estimates and keeps a bounded error
+The rest of this fold covers ideas that [How long do requests take?](/p/b7-how-long-requests-take) asks you to find. A walkthrough also shows the whole file. Solve that exercise first if you want to find them yourself.
+
+```walkthrough
+file = "examples/dev_tools/metrics_prometheus_histograms_load_testing.rs"
+[[step]]
+title = "Record one value"
+lines = "111-118"
+text = "A binary search finds the first limit that is not below the value. Only that one counter changes. NaN is ignored, because it would turn the sum into NaN for good."
+[[step]]
+title = "Add up for the report"
+lines = "119-127"
+text = "The running total is built only when someone reads. The count and the sum are read separately, so a read during writes can see slightly different moments."
+[[step]]
+title = "Estimate a quantile"
+lines = "128-150"
+text = "The rank is `q` times the count, not rounded. Find its bucket, then place it evenly between the two limits."
+[[step]]
+title = "Let bucket width grow with the value"
+lines = "152-170"
+text = "The `Sketch` makes each bucket a fixed factor wider than the one before. That factor comes from the error you accept."
+[[step]]
+title = "Find the bucket by logarithm"
+lines = "171-178"
+text = "The logarithm of the value picks its bucket. Only buckets that were hit are stored."
+[[step]]
+title = "Answer from inside the bucket"
+lines = "205-216"
+text = "The returned number is close to every value in its bucket. In the 60 datasets, the worst error was 0.999% against a bound of 1%."
+```
+
+A bounded error in the **value** is the idea behind DDSketch. Two sketches with the same factor merge by adding their buckets. Memory grows with the logarithm of the value range, not with the number of measurements.
+:::
+"""
+
+[[sections]]
+heading = "Why can labels fill up your memory?"
+body = """
+A **label** splits one metric into several series, such as `method="GET"` and `method="POST"`. Each different set of label values is a new series with its own memory.
+
+A few methods are harmless. A user id as a label creates one series for every user, both in your server and in your monitoring system. Keep label values to a small, known set.
+
+The example's registry, which stores its counters, caps the series per metric. In its test, 10,000 user ids end up as 50 series plus one `__overflow__` series. No increment is lost. The cap limits the number of series, not the length of a label value, so check outside input before you use it.
+"""
+
+[[sections]]
+heading = "How can a load test hide a two-second stall?"
+body = """
+Say your tester wants to send one request every 10 ms. A simple tester sends, waits for the reply, and only then sends the next one. This is a **closed loop**.
+
+When the server stalls, that tester stops sending. The requests it should have sent during the stall never exist. Only the one request caught in the stall looks slow. This is called **coordinated omission**: the tester waits along with the server and leaves out the bad samples.
+
+An **open loop** sends on schedule, whether or not replies have arrived.
+
+```stepper
+caption = "A stall, seen by two testers"
+[[frame]]
+title = "All is well"
+text = "Both testers send a request every 10 ms, and replies come back at once."
+lanes = [ { name = "Closed-loop tester", items = ["send 1", "send 2"] }, { name = "Open-loop tester", items = ["send 1", "send 2"] }, { name = "Server", items = ["answering"] } ]
+[[frame]]
+title = "The server stalls"
+text = "Request 3 gets no reply. The closed-loop tester waits for it. The open-loop tester keeps to its schedule."
+lanes = [ { name = "Closed-loop tester", items = ["waiting for 3"] }, { name = "Open-loop tester", items = ["send 3", "send 4", "send 5", "and more"] }, { name = "Server", items = ["stalled"] } ]
+[[frame]]
+title = "The server comes back"
+text = "The closed loop has one slow sample. The open loop has one for every request that waited, including those behind the backlog."
+lanes = [ { name = "Closed-loop tester", items = ["slow: 3"] }, { name = "Open-loop tester", items = ["slow: 3", "slow: 4", "slow: 5", "and more"] }, { name = "Server", items = ["answering"] } ]
+```
+
+The important change is where the clock starts. Time each request from when it **should** have left. The two small programs below simulate 1,000 requests with one stall of 2 seconds.
+
+```compare
+takeaway = "Same server and same stall. Timing from the planned send counts the waiting that users would feel. A real open-loop tester must also keep sending while earlier requests wait."
+[wrong]
+title = "Time from the real send"
+code = '''
+fn latencies(service_ms: impl Fn(u64) -> u64) -> Vec<u64> {
+    let mut now = 0;
+    (0..1000u64)
+        .map(|i| {
+            now = now.max(i * 10); // due every 10 ms, but wait for the last reply
+            let sent = now;
+            now += service_ms(sent);
+            now - sent // timed from when it really left
+        })
+        .collect()
+}
+fn main() {
+    let l = latencies(|sent| if sent == 5000 { 2000 } else { 1 });
+    println!("over 100 ms: {}", l.iter().filter(|&&l| l > 100).count());
+}
+'''
+result = "It prints `over 100 ms: 1`."
+[fixed]
+title = "Time from the planned send"
+code = '''
+fn latencies(service_ms: impl Fn(u64) -> u64) -> Vec<u64> {
+    let mut now = 0;
+    (0..1000u64)
+        .map(|i| {
+            now = now.max(i * 10); // due every 10 ms, but wait for the last reply
+            let sent = now;
+            now += service_ms(sent);
+            now - i * 10 // timed from when it should have left
+        })
+        .collect()
+}
+fn main() {
+    let l = latencies(|sent| if sent == 5000 { 2000 } else { 1 });
+    println!("over 100 ms: {}", l.iter().filter(|&&l| l > 100).count());
+}
+'''
+result = "It prints `over 100 ms: 212`."
+```
+
+The full example runs 10,000 requests with a 2-second stall and a normal service time of 1 ms.
+
+| How latency was recorded | p98 | p99 | p99.9 |
+| --- | --- | --- | --- |
+| Open loop | 200.9 ms | 1099.6 ms | 1925.0 ms |
+| Closed loop, as measured | 1.0 ms | 1.0 ms | 1.0 ms |
+| Closed loop, corrected | 1.0 ms | 994.9 ms | 1886.9 ms |
+"""
+
+[[sections]]
+heading = "Can you repair closed-loop results?"
+body = """
+Partly. HdrHistogram can fill in the missing samples if you know the planned interval. With a 10 ms interval, one reply that took 50 ms also records 40, 30, 20 and 10 ms.
+
+This is an estimate. It assumes the missing requests would only have waited for that same stall. It ignores the extra time needed to work through the backlog, so it came out low in this test.
+
+Look at the p98 column in the table. The open loop shows 200.9 ms, while the corrected figure shows 1.0 ms. The correction did better far into the tail. Prefer a tester that keeps a fixed arrival rate, such as wrk2 or k6's arrival-rate executors.
+
+If `expected_interval` is zero or less, the example skips the back-fill. Without that check, its loop would never end.
+"""
+
+[[sections]]
+heading = "How much load can the server take?"
+body = """
+**Little's law** links three averages in a stable system. The number of requests inside equals the arrival rate times the time each one spends inside. At 80 requests per second and 50 ms each, about 4 are inside.
+
+Latency also climbs much faster than load. The example simulates one worker that takes 10 ms on average, so it can handle about 100 requests per second. Arrivals and service times are random.
+
+| Requests per second | Measured p99 |
+| --- | --- |
+| 50 | 92 ms |
+| 80 | 218 ms |
+| 90 | 456 ms |
+| 95 | 995 ms |
+
+You may want to find the "knee", where the curve turns upward. A common way to compute it gave 80 requests per second on the full sweep. On a sweep that stopped at 80, it gave 60. The answer depended on which points were tested.
+
+A target is easier to defend. Decide what users need, such as a p99 of at most 200 ms. Among the loads this sweep tested, that target held up to 70 requests per second.
+"""
+
+[[sections]]
+heading = "When does this go wrong?"
+body = """
+| Symptom | Likely cause | What to do |
+| --- | --- | --- |
+| p99 sits exactly on your top limit | Real values are above it | Add higher limits |
+| A percentile jumps when you change limits | You were reading the interpolation | Put limits near your target |
+| The load test is calm, but users complain | A closed-loop tester | Keep a fixed arrival rate |
+| Memory grows with the number of users | Unbounded label values | Use a small, fixed set |
+| The whole scrape fails | Bad text output, such as a repeated label name | Check names and escape values |
+
+Test the text output with awkward label values: quotes, backslashes and line breaks. The example sends 500 random label sets through its writer and its own parser. That shows the two agree, not that every Prometheus version accepts the text.
+"""
+
+[[connections]]
+kind = "before"
+title = "Concurrent counters and statistics"
+link = "/cookbook/p/concurrent-counters-and-statistics"
+why = "How many threads can update a count without losing any."
+
+[[connections]]
+kind = "practise"
+title = "How long do requests take?"
+link = "/p/b7-how-long-requests-take"
+why = "Percentiles and a report from fixed memory. This page covers part of what it needs."
+level = "similar"
+
+[[connections]]
+kind = "practise"
+title = "Report what is happening"
+link = "/p/b8-report-what-is-happening"
+why = "The capstone step of From threads to a web server where the server reports its own numbers."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "HTTP server with a thread pool"
+link = "/cookbook/p/mini-http-server-thread-pool"
+why = "A server that keeps its own latency histogram."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Part 16 measures request times, and a capstone step reports them."
+
+[[sources]]
+title = "Prometheus: metric types"
+url = "https://prometheus.io/docs/concepts/metric_types/"
+note = "The official meaning of counter, gauge, histogram and summary."
+
+[[sources]]
+title = "Prometheus: histograms and summaries"
+url = "https://prometheus.io/docs/practices/histograms/"
+note = "Why precomputed quantiles can't be combined, and how bucket choice affects error."
+
+[[sources]]
+title = "Prometheus: exposition formats"
+url = "https://prometheus.io/docs/instrumenting/exposition_formats/"
+note = "The text format, including escaping and histogram lines."
+
+[[sources]]
+title = "HdrHistogram"
+url = "https://github.com/HdrHistogram/HdrHistogram"
+note = "Its README explains the correction for samples that a waiting tester never takes."
+
+[[sources]]
+title = "DDSketch paper"
+url = "https://arxiv.org/abs/1908.10693"
+note = "A mergeable quantile sketch with a bounded relative error. It discusses the idea in the spoiler fold."
+
+[[sources]]
+title = "wrk2"
+url = "https://github.com/giltene/wrk2"
+note = "A load tester with a constant request rate. Its README discusses coordinated omission."
+
+[[sources]]
+title = "k6: open and closed models"
+url = "https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/"
+note = "How the two kinds of tester differ, and which k6 executors use each."

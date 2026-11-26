@@ -1,0 +1,302 @@
+title = "A length-prefixed TCP message server, built twice"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 539
+kind = "lesson"
+level = "advanced"
+lede = "How to send whole messages over TCP, and how to serve clients that don't behave."
+code = ["examples/networking/tcp_framed_server.rs"]
+code_spoils = ["/p/b4-length-prefixed-codec", "/p/b7-talk-over-a-connection", "/p/b7-clients-that-go-quiet", "/p/b7-stop-a-listening-server"]
+summary = """
+TCP delivers bytes, not messages, so your protocol must mark where each message ends. Here each message's length comes first. The code serves the protocol twice: with a thread per connection, and with a Tokio task per connection. Framing is simple, and most of the work is limits, time limits and shutting down while clients are still connected.
+"""
+
+[[sections]]
+heading = "Why is one read not one message?"
+body = """
+Say your client sends the 12 bytes `hello, world` with one write. The server calls `read` once. It may get all 12 bytes, or only `hel`.
+
+TCP promises that bytes arrive in order, or that you get an error. It does not keep the edges of your writes. Three small writes may also arrive in one read.
+
+```stepper
+caption = "One possible delivery of two writes"
+[[frame]]
+title = "The client writes twice"
+text = "The client sends `hello` and then `bye`."
+lanes = [ { name = "Client wrote", items = ["hello", "bye"] }, { name = "In transit", items = [] }, { name = "Server read", items = [] } ]
+[[frame]]
+title = "The first read gets part of one"
+text = "Only `hel` has reached the server when it reads."
+lanes = [ { name = "Client wrote", items = ["hello", "bye"] }, { name = "In transit", items = ["lo", "bye"] }, { name = "Server read", items = ["hel"] } ]
+[[frame]]
+title = "The second read crosses the edge"
+text = "The rest arrives together. Nothing in the bytes says where `hello` ended."
+lanes = [ { name = "Client wrote", items = ["hello", "bye"] }, { name = "In transit", items = [] }, { name = "Server read", items = ["hel", "lobye"] } ]
+```
+
+Tests on your own machine often hide this, because a small write usually arrives whole. You can force the problem with a reader that hands out three bytes at a time.
+
+```compare
+takeaway = "`read` may return fewer bytes than you asked for. `read_exact` keeps reading until the buffer is full, and reports an error if the stream ends first."
+[wrong]
+title = "Read once"
+code = '''
+use std::io::{self, Read};
+
+/// Hands out at most 3 bytes per call, as a network is allowed to.
+struct Pieces<'a>(&'a [u8]);
+
+impl Read for Pieces<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = out.len().min(3).min(self.0.len());
+        out[..n].copy_from_slice(&self.0[..n]);
+        self.0 = &self.0[n..];
+        Ok(n)
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut wire = Pieces(b"hello, world");
+    let mut message = [0u8; 12];
+    let n = wire.read(&mut message)?;
+    println!("{:?}", String::from_utf8_lossy(&message[..n]));
+    Ok(())
+}
+'''
+result = 'It prints `"hel"`. No error tells you the rest is missing.'
+[fixed]
+title = "Read until full"
+code = '''
+use std::io::{self, Read};
+
+/// Hands out at most 3 bytes per call, as a network is allowed to.
+struct Pieces<'a>(&'a [u8]);
+
+impl Read for Pieces<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = out.len().min(3).min(self.0.len());
+        out[..n].copy_from_slice(&self.0[..n]);
+        self.0 = &self.0[n..];
+        Ok(n)
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut wire = Pieces(b"hello, world");
+    let mut message = [0u8; 12];
+    wire.read_exact(&mut message)?; // loops until all 12 bytes are in
+    println!("{:?}", String::from_utf8_lossy(&message));
+    Ok(())
+}
+'''
+result = 'It prints `"hello, world"`.'
+```
+
+`read_exact` only helps when you know how many bytes to expect. That is what the protocol has to tell you.
+"""
+
+[[sections]]
+heading = "How does a length prefix solve it?"
+body = """
+Marking where each message starts and ends is called **framing**, and one marked message is a **frame**. This protocol puts a four-byte length in front of every payload. The length is **big-endian**, which means its most significant byte comes first.
+
+```text
+[ length: 4 bytes ][ payload ]
+  00 00 00 06        00 h e l l o
+```
+
+The reader takes exactly four bytes, learns the length, then takes exactly that many more. The payload may hold any bytes at all, including line breaks.
+
+On top of frames sits a tiny protocol. A request starts with one operation byte: 0 echoes the data, 1 makes it upper case, and 2 returns its length. A reply starts with a status byte, 0 for success or 1 for an error with a message.
+"""
+
+[[sections]]
+heading = "What can the other side do to you?"
+body = """
+The length comes from someone you can't trust. Four bytes can announce almost 4 GiB. If you allocate that much because you were told to, a few clients can exhaust your memory.
+
+So the server checks the length against a maximum, 64 KiB by default, **before** it allocates or reads the payload. After a bad length it replies with an error and closes. It can't find the start of the next frame, because it never read the refused one.
+
+| What the client does | What must happen |
+|---|---|
+| Closes between two frames | A normal end. The server closes too |
+| Closes in the middle of a frame | An error: the message is incomplete |
+| Announces too large a frame | Error reply, then close |
+| Sends an unknown operation | Error reply, and the connection stays open |
+| Ends only its sending side | The server answers what it already received, then closes |
+| Connects and says nothing | Closed after the time limit |
+| Sends part of a frame, very slowly | Closed after the time limit |
+| Connects when the server is full | Told `busy`, then closed |
+
+The fifth row is a **half-close**. A client calls `shutdown(Shutdown::Write)` to say it has finished sending, while it still reads replies.
+
+A time limit on each read is not enough for the seventh row. A client that sends one byte just before each limit expires never trips it. This is often called **slowloris**. You need a limit on how long a whole message may take.
+"""
+
+[[sections]]
+heading = "Thread per connection or task per connection?"
+body = """
+The file serves the same protocol twice. The threaded version gives each connection its own thread and uses ordinary blocking code. The Tokio version gives each connection a **task**, a unit of work that Tokio runs on a few shared threads.
+
+| Question | Thread per connection | Tokio task per connection |
+|---|---|---|
+| What does a waiting connection occupy? | A whole thread and its stack | A much smaller task |
+| What does the code look like? | Reads and writes in order | The same order, with `.await` at each wait |
+| How is the connection count capped? | A shared counter | A semaphore, one permit per connection |
+| What must you watch for? | Threads run out as connections grow | One task that blocks delays others on its thread |
+| When is it a reasonable choice? | Modest numbers of connections | Many connections that mostly wait |
+
+Both need the same limits. Async code changes what a quiet connection costs. It does not make a hostile one harmless.
+
+One async trap is specific to time limits. A **cancel-safe** operation can be dropped before it finishes without losing data.
+
+Tokio documents a single `read` as cancel-safe, but not `read_exact`, which may already have taken some bytes. So the server repeats a time limit only around a one-byte read. Around `read_exact`, an expired limit closes the connection.
+"""
+
+[[sections]]
+heading = "How does the code keep its promises?"
+body = """
+The code goes further than the framing above. Its reading loop and shutdown solve several series exercises, so they are folded.
+
+:::deeper The read loop and time limits (gives away much of "A length-prefixed frame codec that survives partial reads", "Talk to clients over the network" and "Clients that go quiet, or drip")
+The threaded server can't use `read_exact` with a short read timeout. When `read_exact` fails, it does not tell you how much it already took. So the code keeps its own count.
+
+```walkthrough
+file = "examples/networking/tcp_framed_server.rs"
+[[step]]
+title = "Check the length first"
+lines = "75-82"
+text = "The announced length is compared with the maximum before any payload buffer exists."
+[[step]]
+title = "Check the clock on every turn"
+lines = "130-135"
+text = "Before a frame starts, this limits the quiet wait. After its first byte, it limits the whole frame, however the bytes arrive."
+[[step]]
+title = "Keep the progress"
+lines = "136-150"
+text = "A timeout leaves `got` unchanged, so the next turn continues where it stopped. The end of the stream is normal only between frames."
+[[step]]
+title = "Share one frame clock"
+lines = "171-192"
+text = "Header and payload use the same `started` value. A client can't earn a new deadline by finishing the header."
+[[step]]
+title = "The same deadline in async code"
+lines = "278-294"
+text = "`timeout_at` gives the rest of the header and the payload one shared end time."
+```
+:::
+
+:::deeper Accepting and shutting down (gives away much of "Stop a server that is waiting")
+Here the listener never blocks, so the accept loop can check the stop flag between attempts.
+
+```walkthrough
+file = "examples/networking/tcp_framed_server.rs"
+[[step]]
+title = "Cap the connections"
+lines = "215-230"
+text = "The count goes up before the thread starts, so two quick accepts can't both take the last place. A guard lowers it however the thread ends."
+[[step]]
+title = "Survive a failed accept"
+lines = "232-237"
+text = "Running out of file descriptors makes `accept` fail for a while. The loop waits briefly and carries on."
+[[step]]
+title = "Quiet connections see the flag"
+lines = "143-147"
+text = "A read that times out between frames checks whether to stop."
+[[step]]
+title = "Busy connections must too"
+lines = "155-170"
+text = "A client that never pauses never causes a timeout. The loop therefore also checks between frames, after a short drain period."
+[[step]]
+title = "Close, then wait"
+lines = "239-242"
+text = "The listener is dropped first. Then the accept thread joins every connection thread."
+```
+:::
+
+`TCP_NODELAY` is also set. By default TCP may hold back a small write while earlier data is unconfirmed, which is called **Nagle's algorithm**. For short requests and replies, that wait can add delay.
+"""
+
+[[sections]]
+heading = "How do you test it, and where does it stop?"
+body = """
+Run the program from the `cookbook` folder. It runs the same checks against both servers, then prints a speed measurement that depends on your machine.
+
+```sh
+cargo run --release --example tcp_framed_server
+```
+
+The checks send 100 messages from each of 50 clients. They also test an oversized frame, a half-close, quiet clients, the connection cap and shutdown. Two hostile clients matter most: one drips a byte every 20 ms, and one sends requests without pausing.
+
+Both test promises that polite clients never would. One more check makes `accept` fail by running out of file descriptors. It then confirms that the threaded server still serves.
+
+These limits remain:
+
+- The threaded write timeout covers each write call, not a whole reply. A client that reads very slowly can hold its thread and delay shutdown.
+- The server does not read leftover input before closing. If the client is still sending, the connection may be reset and the error reply lost. Whether that happens depends on the system and the timing, and no check here covers it.
+- Nothing is encrypted or authenticated.
+- The checks run over the local loopback network. They say nothing about slow or lossy networks.
+- The Tokio server's handling of a failing `accept` has no check.
+
+In a real service, consider `LengthDelimitedCodec` from the `tokio-util` library for the framing. You still choose its maximum length, and you still write the time limits and shutdown.
+"""
+
+[[connections]]
+kind = "before"
+title = "std::net by use case"
+link = "/cookbook/p/std-net-tcp-udp-ip-addr"
+why = "The socket calls this server uses, including time limits and half-close."
+
+[[connections]]
+kind = "practise"
+title = "A length-prefixed frame codec that survives partial reads"
+link = "/p/b4-length-prefixed-codec"
+level = "similar"
+why = "The same frame format, with bytes pushed to you in pieces. Try it before the first fold."
+
+[[connections]]
+kind = "practise"
+title = "Stop a server that is waiting"
+link = "/p/b7-stop-a-listening-server"
+level = "similar"
+why = "Shut down a server for text lines. Try it before the second fold."
+
+[[connections]]
+kind = "returns"
+title = "HTTP/1.1 message parser and serializer"
+link = "/cookbook/p/http1-parser"
+why = "A text protocol that marks message edges in a more involved way."
+
+[[connections]]
+kind = "returns"
+title = "Graceful shutdown"
+link = "/cookbook/p/graceful-shutdown"
+why = "What stopping should promise to work that was already accepted."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its reading parts and network parts use these ideas on the way to a server."
+
+[[sources]]
+title = "Tokio tutorial: framing"
+url = "https://tokio.rs/tokio/tutorial/framing"
+note = "Builds buffered framing over a Tokio stream."
+
+[[sources]]
+title = "std::io::Read"
+url = "https://doc.rust-lang.org/std/io/trait.Read.html"
+note = "Check what read promises, and what read_exact leaves behind when it fails."
+
+[[sources]]
+title = "Tokio: AsyncReadExt"
+url = "https://docs.rs/tokio/latest/tokio/io/trait.AsyncReadExt.html"
+note = "Each method says whether it is cancel safe."
+
+[[sources]]
+title = "tokio-util: LengthDelimitedCodec"
+url = "https://docs.rs/tokio-util/latest/tokio_util/codec/length_delimited/index.html"
+note = "A ready-made length-prefixed codec with a configurable maximum."

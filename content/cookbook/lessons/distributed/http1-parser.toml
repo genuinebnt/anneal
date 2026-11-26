@@ -1,0 +1,280 @@
+title = "HTTP/1.1 message parser and serializer"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Networking and protocols"
+chapter_order = 3
+order = 532
+kind = "lesson"
+level = "advanced"
+lede = "How a server finds where each HTTP request ends, and why a wrong guess is a security hole."
+code = ["examples/networking/http1_parser.rs"]
+code_spoils = ["/p/b7-requests-in-pieces", "/p/b7-bad-and-oversized-requests", "/p/b7-bodies-in-chunks", "/p/b4-http1-request-parser", "/p/b8-read-one-request", "/p/b8-pieces-and-limits"]
+summary = """
+An HTTP/1.1 parser turns a stream of bytes into requests. It must say whether it needs more, has a whole request, or must refuse. It must also limit everything the sender controls, and refuse a request that could be read two ways. Study this to understand HTTP and request smuggling, but use a maintained HTTP library in a real service.
+"""
+
+[[sections]]
+heading = "What does a request look like on the wire?"
+body = """
+A request is mostly text. Here a client sends five bytes to `/notes`:
+
+```http
+POST /notes HTTP/1.1
+Host: example.com
+Content-Length: 5
+
+hello
+```
+
+The first line is the **request line**: a method, a target and a version. Each **header** line after it is a name, a colon and a value. An empty line ends this part, called the **head**. The bytes after it are the **body**.
+
+Every line ends in two bytes, a carriage return and a line feed. This pair is written **CRLF**, or `\\r\\n` in Rust.
+"""
+
+[[sections]]
+heading = "How does the server know where the body ends?"
+body = """
+TCP delivers a stream with no message edges, so the request has to describe its own length. It is not allowed to be guesswork.
+
+| What the head says | Where the body ends |
+|---|---|
+| `Content-Length: 5` | After exactly 5 more bytes |
+| `Transfer-Encoding: chunked` | After a final chunk of size zero and its closing lines |
+| Neither, in a request | At once: the body is empty |
+
+A **chunked** body is for a sender that doesn't know the total in advance. Each chunk states its own size, in hexadecimal, then sends that many bytes.
+
+```http
+4
+Wiki
+5
+pedia
+0
+
+```
+
+This body is the nine bytes `Wikipedia`. A size line may carry extra text after a `;`, called a **chunk extension**. Extra header lines after the zero chunk are called **trailers**.
+"""
+
+[[sections]]
+heading = "What can a parser answer?"
+body = """
+A server runs its parser whenever bytes arrive. At that moment, only three answers make sense.
+
+```stepper
+caption = "One connection, three reads"
+[[frame]]
+title = "Not enough yet"
+text = "Half a request has arrived. The parser asks for more and uses nothing."
+lanes = [ { name = "Buffer", items = ["half of request 1"] }, { name = "Parser says", items = ["need more"] } ]
+[[frame]]
+title = "A whole request, and some extra"
+text = "The parser returns request 1 and how many bytes it used. The rest stays."
+lanes = [ { name = "Buffer", items = ["request 1", "start of request 2"] }, { name = "Parser says", items = ["one request, N bytes used"] } ]
+[[frame]]
+title = "Bytes that can never be right"
+text = "Request 2 turns out to be broken. More bytes can't fix it, so the server replies with an error and closes."
+lanes = [ { name = "Buffer", items = ["broken request 2"] }, { name = "Parser says", items = ["refuse"] } ]
+```
+
+The second answer is why the count matters. Clients may send the next request before the first reply, which is called **pipelining**. If the parser threw the extra bytes away, request 2 would be lost.
+
+Whether the connection stays open afterwards is called **keep-alive**. In HTTP/1.1 it stays open unless a `Connection` header says `close`. In HTTP/1.0 it closes unless the header says `keep-alive`. If both words appear, `close` wins.
+
+A request without keep-alive is the last one on its connection. A server must not process anything sent after it, so this parser stops there.
+"""
+
+[[sections]]
+heading = "What is request smuggling?"
+body = """
+Many sites put a **proxy** in front of the server: a program that receives requests and passes them on. Both read the same bytes. If they disagree about where a request ends, trouble starts.
+
+Say one request carries both `Content-Length` and `Transfer-Encoding: chunked`. The proxy believes the length, and the server believes the chunks. The server finishes early, and treats the leftover bytes as the start of a new request.
+
+That leftover sits in front of the next request on the same connection, which may belong to another user. This attack is **request smuggling**. The safe answer is to refuse anything with two possible readings.
+
+| This parser refuses | Why two programs could disagree |
+|---|---|
+| Both kinds of body length | Each may pick a different one |
+| Two different `Content-Length` values | First or last? |
+| A transfer coding other than one `chunked` | One may ignore what the other applies |
+| A transfer coding on HTTP/1.0 | That version has no chunked coding |
+| A line feed without a carriage return | One may treat it as a line end |
+| A header line that continues the one before | One may join them, one may not |
+| A space between a header name and the colon | One may strip the space and accept the name |
+| Two `Host` headers | Each may route to a different site |
+
+Some of these refusals go further than the standard requires. RFC 9112 lets a recipient accept a bare line feed as a line end, for example. This parser is stricter.
+
+:::deeper A trap that looks like tidy code (gives away part of "Refuse bad and oversized requests" and capstone step 2)
+HTTP allows only spaces and tabs as padding around a value. Rust's `str::trim` removes much more, including the no-break space.
+
+```compare
+takeaway = "Trim exactly what the protocol calls padding. A library function with a friendly name may follow other rules."
+[wrong]
+title = "Trim all white space"
+code = '''
+fn main() {
+    // the value ends in a no-break space, U+00A0
+    let value = " chunked\\u{a0}";
+    println!("{}", value.trim() == "chunked");
+}
+'''
+result = "It prints `true`. A proxy that keeps the extra character sees an unknown coding, so the two disagree."
+[fixed]
+title = "Trim spaces and tabs"
+code = '''
+fn main() {
+    // the value ends in a no-break space, U+00A0
+    let value = " chunked\\u{a0}";
+    println!("{}", value.trim_matches([' ', '\\t']) == "chunked");
+}
+'''
+result = "It prints `false`, so the parser refuses the request."
+```
+
+The same applies to `Content-Length`, where a padded number must be refused too.
+:::
+"""
+
+[[sections]]
+heading = "What must be limited?"
+body = """
+Every size in a request is chosen by the sender. A limit has to act **before** the thing it limits is complete. A server that waits for the end of an endless line runs out of memory.
+
+| The sender controls | The parser limits |
+|---|---|
+| The length of a line | Bytes per line |
+| The size of the head | Total bytes before the body |
+| The number of headers | A header count |
+| The size of the body | Body bytes, checked as soon as a size is announced |
+| Everything around chunked data | The encoded size of the whole body |
+
+The last row is easy to miss. A limit on body bytes does not count size lines, extensions or trailers. With only a body limit, long extensions on tiny chunks can make a server hold thousands of bytes for each byte of body.
+
+The fix limits the encoded body to the body limit plus the head limit. The cost is that a sender using very many tiny chunks gets less room for data. This particular rule is a choice made by this parser, not by the HTTP standard.
+
+There is also a rule that connects limits to the three answers. A limit must accept or refuse the same way however the network cuts the bytes. Test it by feeding every prefix of a request that sits exactly on it.
+
+This parser may still name a different error for the same bad input, depending on the cuts. For example, a line can be too long before its bad ending has arrived.
+"""
+
+[[sections]]
+heading = "How does the code do it?"
+body = """
+The parser works from the front of a buffer each time it is called. That is simple to reason about and to test. It also repeats work when a request arrives in tiny pieces.
+
+:::deeper The code, step by step (gives away much of parts 6 to 8 of the series, capstone steps 1 and 2, and the side exercise "A strict, incremental HTTP/1.1 request parser")
+```walkthrough
+file = "examples/networking/http1_parser.rs"
+[[step]]
+title = "Read one line"
+lines = "135-157"
+text = "A line feed must follow a carriage return. For an unfinished line, a final carriage return is not counted, because it may be half of the line ending."
+[[step]]
+title = "Check one header"
+lines = "159-186"
+text = "The name may hold only the characters HTTP allows. Only spaces and tabs are stripped from the value, and control bytes are refused."
+[[step]]
+title = "Collect the head"
+lines = "217-236"
+text = "The loop reads header lines until the empty one. The head limit applies while the head is still unfinished."
+[[step]]
+title = "Decide how the body is framed"
+lines = "264-301"
+text = "Both kinds of length are refused first. The result is one of three values, so later code can't mix them."
+[[step]]
+title = "Limit the encoded body"
+lines = "311-327"
+text = "The closure refuses once the encoded body is known to reach past the limit, even before the missing bytes arrive."
+[[step]]
+title = "Refuse a large chunk early"
+lines = "364-376"
+text = "The announced size is checked before waiting for the data. The data must then be followed by CRLF."
+[[step]]
+title = "Drain what was used"
+lines = "444-468"
+text = "Each complete request is removed from the buffer. After an error, or after a request without keep-alive, the connection accepts nothing more."
+```
+:::
+"""
+
+[[sections]]
+heading = "How can you trust a parser?"
+body = """
+Run it from the `cookbook` folder:
+
+```sh
+cargo run --release --example http1_parser
+```
+
+Examples prove the cases you thought of. The program also compares two ways of reading the same input: all at once, and one byte at a time. Both must give the same requests, and both must accept or both refuse.
+
+It does this for 20,000 inputs. Most are valid requests with a few random changes, and the rest are random bytes. The random numbers use a fixed start value, so every run tests the same inputs. This is a small form of **fuzzing**.
+
+The comparison has limits. The two readings may name a different error for the same bad input. It also can't catch a fault that both readings share. For that, you need examples of what must be refused.
+
+| Still true of this code | What it means for you |
+|---|---|
+| It sets no time limits | Your server must stop quiet and slow senders |
+| It starts over on each feed | Large requests in tiny pieces cost much processor time |
+| It copies the body and headers | It is not built for speed |
+| It converts non-UTF-8 header bytes | The original bytes of such a value are lost |
+| The reply writer is minimal | It has no special handling for replies without a body |
+
+For real services, use hyper or a framework built on it. If you only need to parse a head, `httparse` is a widely used choice. You still own the body framing and the limits around it.
+"""
+
+[[connections]]
+kind = "before"
+title = "A length-prefixed TCP message server"
+link = "/cookbook/p/tcp-framed-server"
+why = "The simpler form of the same problem: finding message edges in a stream."
+
+[[connections]]
+kind = "practise"
+title = "Requests that arrive in pieces"
+link = "/p/b7-requests-in-pieces"
+level = "similar"
+why = "A smaller text protocol with the same three answers. Try it before the code fold."
+
+[[connections]]
+kind = "practise"
+title = "Refuse bad and oversized requests"
+link = "/p/b7-bad-and-oversized-requests"
+level = "similar"
+why = "Limits and refusals for a request head. Its rules differ in places from this parser."
+
+[[connections]]
+kind = "practise"
+title = "A body that arrives in chunks"
+link = "/p/b7-bodies-in-chunks"
+level = "similar"
+why = "Decode the chunked form with its own limits. Its errors and bounds differ."
+
+[[connections]]
+kind = "returns"
+title = "A protocol you can drive without sockets"
+link = "/cookbook/p/sans-io-protocol"
+why = "The same split between reading rules and network code, taken further."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its reading parts lead to a request parser of your own, then a whole server."
+
+[[sources]]
+title = "RFC 9112: HTTP/1.1"
+url = "https://www.rfc-editor.org/rfc/rfc9112.html"
+note = "Sections 6 and 7 cover body length and chunks. Section 11.2 covers request smuggling."
+
+[[sources]]
+title = "RFC 9110: HTTP semantics"
+url = "https://www.rfc-editor.org/rfc/rfc9110.html"
+note = "Section 5.5 says which bytes make a header value dangerous."
+
+[[sources]]
+title = "httparse"
+url = "https://docs.rs/httparse/latest/httparse/"
+note = "A widely used head parser. See how it reports a request that is not complete yet."

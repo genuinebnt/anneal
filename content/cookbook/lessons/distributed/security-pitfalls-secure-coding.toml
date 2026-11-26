@@ -1,0 +1,294 @@
+title = "Security pitfalls as testable vulnerable/fixed pairs"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Authentication and web security"
+chapter_order = 2
+order = 530
+kind = "lesson"
+level = "intermediate"
+code = ["examples/web/security_pitfalls_secure_coding.rs"]
+code_spoils = ["/p/b7-stay-inside-the-folder", "/p/b8-serve-files"]
+lede = "Sixteen ways input from outside goes wrong, each with an attack that works and a fix that stops it."
+summary = """Most of these bugs happen when data from outside is read as code or structure: a query, a command, a path, a page. Others come from trusting a sender's sizes, or from secrets that leak. The code pairs a broken function with a repaired one and tests both. Use it to review your own handlers, not as a security library."""
+
+[[sections]]
+heading = "What goes wrong when input becomes structure?"
+body = """
+Say your login code builds a query by pasting a name and a password hash into a string. A visitor types `' OR '1'='1` where the hash goes. The database cannot tell which characters you wrote and which the visitor wrote. In the example, that query returns every user.
+
+The best fix keeps data and structure apart. A **query parameter** sends the value separately from the SQL text. A command's argument list does the same for a program you start.
+
+Sometimes you cannot keep them apart. Then parse the input strictly, check the parsed value, and use that same value. Checking one form and then using another leaves a gap.
+
+Rust does not do this for you. Safe Rust stops out-of-bounds reads, use-after-free and data races. It does not stop injection, logic errors, huge allocations or recursion that overflows the stack.
+"""
+
+[[sections]]
+heading = "How do you know a fix works?"
+body = """
+A test that only shows the fixed code refusing an attack proves little. Perhaps the attack never worked. So each pair in the file is built to show these things:
+
+1. The attack works on the broken version.
+2. The same attack fails on the fixed one.
+3. Ordinary input still works, where the pair has an ordinary case. A fix that refuses everything is useless.
+
+The broken functions have names that start with `vuln_`, or the test builds the unsafe string itself. Never copy them. The attacks run inside the program or in a private temporary folder. Nothing goes over the network.
+
+Passing these tests shows that the listed attacks fail. It does not show that no other attack works.
+"""
+
+[[sections]]
+heading = "Is avoiding the shell enough?"
+body = """
+Building a shell command from user input is a well-known mistake. Passing arguments straight to a program fixes it. It does not control how the program reads each argument.
+
+`grep` is a good example. The `-F` flag takes the pattern as plain text, and `-e` stops it being read as an option. Yet `grep` reads each line of a pattern as a separate pattern. An empty one matches every line.
+
+A pattern that ends in a newline holds a second, empty pattern. So a search that stops at `-F -e` can still return the whole input.
+
+```compare
+takeaway = "No shell means no shell injection. You still have to know how the program you start reads its arguments."
+[wrong]
+title = "One argument, no shell"
+code = '''
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+/// Search `text` for `pattern`, taken literally. No shell is involved.
+fn search(pattern: &str, text: &str) -> String {
+    let mut child = Command::new("grep")
+        .args(["-F", "-e", pattern])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+    String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+}
+
+fn main() {
+    let text = "public line\\ninternal line\\n";
+    print!("{}", search("nothing-has-this\\n", text));
+}
+'''
+result = "Prints both lines, `public line` and `internal line`, although neither contains the search text."
+[fixed]
+title = "Refuse patterns grep would split"
+code = '''
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+/// Search `text` for `pattern`, taken literally. No shell is involved.
+fn search(pattern: &str, text: &str) -> Option<String> {
+    // grep reads each line of a pattern as another pattern, and an empty one matches everything
+    if pattern.is_empty() || pattern.contains('\\n') {
+        return None;
+    }
+    let mut child = Command::new("grep")
+        .args(["-F", "-e", pattern])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+    Some(String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap())
+}
+
+fn main() {
+    let text = "public line\\ninternal line\\n";
+    println!("{:?}", search("nothing-has-this\\n", text));
+}
+'''
+result = "Prints `None`: the search is refused."
+```
+
+A plain-text search can also be done in your own process. Then no second program has rules of its own.
+"""
+
+[[sections]]
+heading = "Which pitfalls does the code cover?"
+body = """
+The middle column is the shortcut that looks like enough.
+
+### Input read as code or structure
+
+| Pitfall | Tempting shortcut | What to do instead |
+|---|---|---|
+| SQL injection | Quoting the value by hand | Bind values; pick column names from a fixed list |
+| Command and argument injection | Only avoiding the shell | Pass separate arguments, and block values the program would read specially |
+| Cross-site scripting (XSS): input runs as script in a page | One escape function everywhere | Encode for the exact place: HTML text, URL or script string. For links, allow known schemes |
+| Server-side request forgery (SSRF): your server fetches an address it should not | Blocking strings such as `localhost` | Allow known hosts, check every resolved address, connect to the checked one, and recheck redirects |
+| Open redirect: your site sends visitors elsewhere | Checking that the target starts with `/` | Also refuse `//`, backslashes and control characters |
+| Log injection: input forges log lines | Logging the raw value | Escape control characters and quotes |
+| Mass assignment: a client sets fields you never offered | Reading the request into the stored type | Use a request type that lists only allowed fields |
+
+### Files
+
+| Pitfall | What to know |
+|---|---|
+| Path traversal: a file name escapes its folder | The code shows several tempting fixes that fail. Details are in the fold below |
+| Check, then use (TOCTOU) | A file can change between your check and your open. Let one system call do both |
+
+For the second row, the example uses `O_NOFOLLOW`. It refuses a symbolic link only as the last part of a path. It does not guard parent folders, or a **hard link**, a second name for the same file.
+
+### Resources and secrets
+
+| Pitfall | Tempting shortcut | What to do instead |
+|---|---|---|
+| ReDoS: a pattern takes exponential time | A time or length limit alone | Use a linear-time matcher, such as the Rust `regex` crate, and still limit sizes |
+| Integer overflow and truncation | Casting, then comparing | Use checked arithmetic and checked conversion |
+| Sizes, expansion and depth | Believing a length in the input | Cap sizes, output and nesting before you allocate or recurse |
+| Stale bytes in a reused buffer | Relying on bounds checks | Read only the bytes this request wrote |
+| Timing side channel | Comparing secrets with an early exit | Use a constant-time comparison from a maintained crate |
+| Predictable tokens | A fast random generator seeded by the clock | Use the operating system's secure random bytes |
+| Cross-site request forgery (CSRF): another site acts as your user | Trusting the session cookie alone | Check the `Origin` header and a per-session token; set `SameSite` too |
+"""
+
+[[sections]]
+heading = "How does the code show each attack?"
+body = """
+The file is long, with one section per topic and a `main` that runs them in turn. Its path code gives away much of [Stay inside the folder](/p/b7-stay-inside-the-folder) and the path part of [Serve files](/p/b8-serve-files). Its token comparison also shows one requirement of [the webhook fix](/p/b5-fix-webhook-verify).
+
+:::deeper Walk through selected pairs (gives away much of the two folder exercises, and shows one part of the webhook fix)
+```walkthrough
+file = "examples/web/security_pitfalls_secure_coding.rs"
+[[step]]
+title = "Paste or bind"
+lines = "68-76"
+text = "The first function builds SQL from text. The second sends the values separately."
+[[step]]
+title = "Four path fixes that fail"
+lines = "143-165"
+text = "Each has a matching attack in the test below it."
+[[step]]
+title = "Check the text, then the real place"
+lines = "166-181"
+text = "It accepts ordinary names only, then follows links and checks containment by whole components. Delete that last check and the run fails with `\\\"shortcut\\\" must be refused`. The folder can still change between this check and your open."
+[[step]]
+title = "One call checks and opens"
+lines = "249-261"
+text = "The flag acts on the final path component only. This function does not stop a hard link."
+[[step]]
+title = "Guard what grep will read"
+lines = "309-321"
+text = "It refuses an empty pattern or one with a newline before starting the program."
+[[step]]
+title = "Check the resolved address"
+lines = "555-568"
+text = "The function returns an address. The caller must connect to that one, because resolving the name again could give another."
+[[step]]
+title = "Refuse truncated input and cap output"
+lines = "912-925"
+text = "An odd number of bytes is malformed. The cap is checked before the output grows."
+[[step]]
+title = "Read only what arrived"
+lines = "942-963"
+text = "The fixed method refuses a payload larger than the buffer, then limits the reply to this request's bytes."
+[[step]]
+title = "Compare without an early exit"
+lines = "1057-1067"
+text = "This shows the idea and counts work. It cannot promise constant time after compiler optimisation."
+```
+:::
+"""
+
+[[sections]]
+heading = "What does this example not prove?"
+body = """
+The pairs are small models. The address check knows the special ranges it lists, and address rules change. The redirect test uses a simplified model of a browser. The timing test counts comparisons instead of measuring time.
+
+The code uses Unix features for links and permissions, so it does not build as it is on Windows.
+
+In production, use maintained libraries: a URL parser, a template engine that escapes for you, `regex`, `subtle` for constant-time comparison, and `getrandom` for secrets. Then have someone review how you use them.
+
+When you add your own pair, run the broken version first. If the attack does not work there, your test is not testing the bug.
+"""
+
+[[connections]]
+kind = "practise"
+title = "Stay inside the folder"
+link = "/p/b7-stay-inside-the-folder"
+level = "similar"
+why = "Solve it before opening the code. Its rules differ, including how it treats encoded names."
+
+[[connections]]
+kind = "practise"
+title = "Refuse bad and oversized requests"
+link = "/p/b7-bad-and-oversized-requests"
+level = "related"
+why = "Apply limits to input that arrives piece by piece."
+
+[[connections]]
+kind = "practise"
+title = "Fix: webhook verification"
+link = "/p/b5-fix-webhook-verify"
+level = "related"
+why = "Find the flaws in a signature check. The code on this page shows one of the ideas."
+
+[[connections]]
+kind = "returns"
+title = "Cookies sessions csrf"
+link = "/cookbook/p/cookies-sessions-csrf"
+why = "See sessions and CSRF defence in a running web server."
+
+[[connections]]
+kind = "returns"
+title = "Webhooks end to end"
+link = "/cookbook/p/webhooks-signatures"
+why = "Follow signed requests between two services. It also overlaps the webhook fix."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Your server reads names, sizes and bytes chosen by strangers."
+
+[[sources]]
+title = "OWASP Cheat Sheet Series"
+url = "https://cheatsheetseries.owasp.org/"
+note = "Fuller defences for each web attack here."
+
+[[sources]]
+title = "OWASP: SSRF prevention"
+url = "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"
+note = "Why checking the URL text is not enough."
+
+[[sources]]
+title = "POSIX grep"
+url = "https://pubs.opengroup.org/onlinepubs/9699919799/utilities/grep.html"
+note = "States that a pattern list is split at newlines."
+
+[[sources]]
+title = "std::process::Command"
+url = "https://doc.rust-lang.org/std/process/struct.Command.html"
+note = "How arguments reach the program you start."
+
+[[sources]]
+title = "open(2): O_NOFOLLOW"
+url = "https://man7.org/linux/man-pages/man2/open.2.html"
+note = "Exactly which part of a path the flag covers (Linux manual)."
+
+[[sources]]
+title = "regex crate: untrusted input"
+url = "https://docs.rs/regex/latest/regex/#untrusted-input"
+note = "What the linear-time promise covers."
+
+[[sources]]
+title = "Russ Cox: Regular expression matching can be simple and fast"
+url = "https://swtch.com/~rsc/regexp/regexp1.html"
+note = "Why backtracking can take exponential time."
+
+[[sources]]
+title = "subtle crate"
+url = "https://docs.rs/subtle/latest/subtle/"
+note = "Constant-time operations, and the limits of that promise."

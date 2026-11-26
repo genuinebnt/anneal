@@ -1,0 +1,258 @@
+title = "Sans-IO protocol design"
+module = "Rust language"
+module_order = 1
+chapter = "Design patterns"
+chapter_order = 5
+order = 49
+kind = "lesson"
+level = "advanced"
+code = ["examples/patterns/sans_io_protocol.rs"]
+lede = "Keep sockets and clocks outside your protocol, so a test can choose every byte and every moment."
+summary = """
+In a sans-IO design, the protocol is a plain struct that never reads a socket or a clock. You pass in bytes and the current time, then collect what it wants to send. Tests can lose messages and skip ahead in time without waiting. The cost is that someone must write a small loop that does the real input and output.
+"""
+
+[[sections]]
+heading = "Why is protocol code so hard to test?"
+body = """
+Suppose a client sends a request again if no reply arrives within 200 ms. After 20 retries, it gives up.
+
+Now test that. If the code reads from a socket and checks the clock itself, you need a real server that stays silent. You also have to wait more than four seconds. Testing a lost or repeated reply is harder still, because you don't control the network.
+
+**Sans-IO** means "without input and output". The protocol still decides what to read and write, but other code moves the bytes.
+"""
+
+[[sections]]
+heading = "What does the protocol look like without IO?"
+body = """
+It is a **state machine**: a struct that holds the current state and changes it when you give it an input. The example's client and server share six methods.
+
+| Method | What it is for |
+| --- | --- |
+| `handle_input(now, bytes)` | Give it bytes that arrived |
+| `poll_transmit()` | Take bytes it wants to send |
+| `poll_event()` | Take news for your program, such as a reply |
+| `handle_timeout(now)` | Tell it what time it is, so due timers can run |
+| `poll_timeout()` | Ask when it next needs to hear the time |
+| `is_closed()` | Ask whether it has finished |
+
+The protocol is small. A client says `HELLO c1`, and the server answers `WELCOME`. Then `REQ 1 hi` gets the reply `RES 1 HI`. Each message is one line.
+
+```walkthrough
+file = "examples/patterns/sans_io_protocol.rs"
+[[step]]
+title = "The whole surface"
+lines = "87-95"
+text = "No method takes a socket, and no method waits. Time arrives as an argument."
+[[step]]
+title = "Turn bytes into lines"
+lines = "107-120"
+text = "Bytes may arrive in pieces, so the `Framer` keeps them until a newline. A line over 1024 bytes is refused, whether or not its newline has arrived."
+[[step]]
+title = "React to input"
+lines = "207-240"
+text = "The client handles every complete line. Replies go into queues. A repeated `RES` is ignored, and a closed client ignores all input."
+[[step]]
+title = "React to time"
+lines = "247-292"
+text = "Given `now`, the client resends what is overdue or gives up. It also sends `PING` on a quiet link."
+[[step]]
+title = "Say when to call again"
+lines = "293-308"
+text = "The earliest of its deadlines is the longest the caller may wait before calling `handle_timeout`."
+```
+"""
+
+[[sections]]
+heading = "What does moving time outside buy you?"
+body = """
+The smallest version of the idea is one timer.
+
+```compare
+takeaway = "Passing `now` in lets a test choose the moment. The caller now has to read the clock and pass it on."
+[wrong]
+title = "The timer reads the clock"
+code = '''
+use std::time::{Duration, Instant};
+struct Retry {
+    deadline: Instant,
+}
+impl Retry {
+    fn new() -> Retry {
+        Retry { deadline: Instant::now() + Duration::from_secs(30) }
+    }
+    fn due(&self) -> bool {
+        Instant::now() >= self.deadline
+    }
+}
+fn main() {
+    let retry = Retry::new();
+    println!("due: {}", retry.due()); // to see `true`, a test must wait 30 real seconds
+}
+'''
+result = "It prints `due: false`, and nothing but waiting can change that."
+[fixed]
+title = "The caller passes the time"
+code = '''
+use std::time::{Duration, Instant};
+struct Retry {
+    deadline: Instant,
+}
+impl Retry {
+    fn new(now: Instant) -> Retry {
+        Retry { deadline: now + Duration::from_secs(30) }
+    }
+    fn due(&self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+}
+fn main() {
+    let start = Instant::now();
+    let retry = Retry::new(start);
+    assert!(!retry.due(start + Duration::from_secs(29)));
+    assert!(retry.due(start + Duration::from_secs(30))); // no waiting
+    println!("ok");
+}
+'''
+result = "It prints `ok` at once, having checked both sides of the 30-second line."
+```
+
+The test still calls `Instant::now()` once, to get a starting point. Every later moment is that point plus a chosen `Duration`.
+
+The example's simulated network goes further. Each message may be lost or sent twice, and a random delay lets messages overtake each other. All those choices come from a seeded random generator, so one seed gives the same run.
+
+At 20% loss and 5% duplication, 20 seeds each finish 10 requests with the right replies. A separate test takes a client with a dead server through all 20 retries, more than four simulated seconds, without sleeping.
+
+```walkthrough
+file = "examples/patterns/sans_io_protocol.rs"
+[[step]]
+title = "Jump to the next moment"
+lines = "474-489"
+text = "The next moment is the earliest packet arrival or timer. The simulator sets its clock to that moment and skips the empty time."
+[[step]]
+title = "Deliver, then run timers"
+lines = "490-507"
+text = "Due packets go to their endpoints in a fixed order. Then both endpoints hear the new time, and their output goes back into the network."
+```
+"""
+
+[[sections]]
+heading = "Who does the real input and output?"
+body = """
+A **driver** does. It is a loop that connects the state machine to a real socket. One turn goes like this.
+
+1. Send everything `poll_transmit` returns.
+2. Hand every event to the program.
+3. Wait for bytes, but no longer than `poll_timeout` allows.
+4. Pass any bytes to `handle_input`, then call `handle_timeout`.
+
+The order matters. The other side may be waiting for your reply before it sends anything. So send what you owe before you wait to read.
+
+The example has a blocking driver and a Tokio driver. Both run the same client and server code. The blocking one turns the next deadline into a socket read timeout. The Tokio one waits for bytes or a sleep, whichever finishes first.
+
+```walkthrough
+file = "examples/patterns/sans_io_protocol.rs"
+[[step]]
+title = "Empty the queues"
+lines = "689-696"
+text = "Output goes to the socket first. The callback returns `true` when the program has what it needs."
+[[step]]
+title = "Set how long to wait"
+lines = "697-707"
+text = "The wait ends at the next protocol deadline or the driver's own deadline. The standard library rejects a zero timeout, so it waits at least 1 ms."
+[[step]]
+title = "Read, then tell the time"
+lines = "708-722"
+text = "A timeout or an interrupted call is not a failure. Then the endpoint hears the new time."
+```
+"""
+
+[[sections]]
+heading = "What can still go wrong?"
+body = """
+Taking the IO out doesn't make a protocol correct. A simulator and two real sessions can all pass while a fault remains, because none of them sends the awkward input. Test these cases directly:
+
+- A line over the limit, with and without its newline in the same chunk.
+- A request too long for the server to read.
+- Text that grows when changed. Unicode uppercasing can make a legal request into a reply over the limit.
+- A new request after the client has closed.
+- Late input to a closed client or server.
+
+The example's `test_limits` covers each one. To see a check fail, change `to_ascii_uppercase` to `to_uppercase` and run the example. It stops with `reply of 1507 bytes`.
+
+Some limits remain. The server remembers every sequence number, so a long session keeps using more memory. The output queues grow if the driver never empties them. After an error from `handle_input`, the caller must drop the connection.
+
+The idle timer restarts whenever any bytes arrive. It limits silence, not how long one line may take. The drivers set no write timeout, so a peer that stops reading can block them. They also return `Ok` if the peer closes early, so your program must check that every reply arrived.
+
+The simulator covers loss, copies and reordering of whole messages. It never corrupts bytes or splits a line. Passing 20 seeds doesn't prove that every order of events works.
+"""
+
+[[sections]]
+heading = "When is sans-IO worth it?"
+body = """
+| Your situation | Sans-IO? | Why |
+| --- | --- | --- |
+| Retries, timers and several states | Usually | Tests can choose time and message order |
+| One library for blocking and async programs | Yes | Only the driver depends on the runtime |
+| One request, one reply, no timers | Often not | A function over bytes may be enough |
+| A single program that already uses Tokio | It depends | `async` code reads more directly |
+
+Several Rust libraries use this shape. The documentation of `quinn-proto` says it contains no networking code and takes no timestamps from the operating system. `str0m` calls itself sans-IO. `rustls` does no network IO itself: you move TLS bytes with `read_tls` and `write_tls`.
+"""
+
+[[connections]]
+kind = "before"
+title = "A generic state machine"
+link = "/cookbook/p/generic-state-machine"
+why = "How states and allowed changes can be written down in Rust."
+
+[[connections]]
+kind = "practise"
+title = "Many requests on one connection"
+link = "/p/b7-many-requests-one-connection"
+why = "A loop that serves one connection through any readable and writable stream. The protocol and rules differ."
+level = "related"
+
+[[connections]]
+kind = "practise"
+title = "Clients that go quiet, or drip"
+link = "/p/b7-clients-that-go-quiet"
+why = "Time is passed into a connection loop. Its time limits are different from this page's."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "Deterministic simulation testing"
+link = "/cookbook/p/deterministic-simulation-testing"
+why = "The same control of time and messages, for a cluster of three servers."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its later parts run protocol loops against scripted streams."
+
+[[sources]]
+title = "Firezone: sans-IO"
+url = "https://www.firezone.dev/blog/sans-io"
+note = "A step-by-step account that arrives at the same handle and poll methods."
+
+[[sources]]
+title = "sans-io.readthedocs.io"
+url = "https://sans-io.readthedocs.io/"
+note = "The Python community's statement of the idea and its reasons."
+
+[[sources]]
+title = "quinn-proto"
+url = "https://docs.rs/quinn-proto"
+note = "A QUIC protocol core with no networking code."
+
+[[sources]]
+title = "str0m"
+url = "https://docs.rs/str0m/latest/str0m/"
+note = "Its front page shows a full driver loop for a sans-IO WebRTC library."
+
+[[sources]]
+title = "rustls"
+url = "https://docs.rs/rustls/latest/rustls/"
+note = "Explains which TLS bytes you move yourself."

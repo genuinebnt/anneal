@@ -1,0 +1,307 @@
+title = "Concurrent counters and statistics"
+module = "Concurrency and async"
+module_order = 6
+chapter = "Concurrent data structures"
+chapter_order = 3
+order = 255
+kind = "lesson"
+level = "advanced"
+code = ["examples/concurrency/concurrent_counters_and_statistics.rs"]
+code_spoils = ["/p/c3-atomic-stats", "/p/b7-how-long-requests-take", "/p/b8-report-what-is-happening"]
+lede = "When many threads count the same events, you can trade fresh or exact reads for cheaper writes."
+summary = """Start with one atomic counter: simple and exact, though busy cores slow each other down on it. You can split the count into several slots, or let each thread keep a private batch and add it later. Writes get cheaper, while reads cost more or lag behind. When an estimate is enough, some counters use a tiny, fixed amount of memory."""
+
+[[sections]]
+heading = "Why can one counter be slow?"
+body = """
+Say eight threads serve requests, and each adds to a shared total. An **atomic** is a value that threads can safely update without a lock. The simplest design is one atomic that everybody writes.
+
+Safe does not mean cheap. Memory moves between cores in blocks called **cache lines**. To write one, a core needs it to itself. When every core writes the same line, the line keeps moving between them.
+
+Measure before you change anything. A counter that is updated a few thousand times a second needs nothing more than one atomic.
+"""
+
+[[sections]]
+heading = "Can you split the counter?"
+body = """
+A **sharded** counter has several slots, or shards. Each thread adds to one slot, and a read adds up all of them.
+
+```rust
+fn add(&self, tid: usize, d: u64) {
+    self.shards[tid % self.shards.len()].0.fetch_add(d, Release);
+}
+fn read(&self) -> u64 {
+    self.shards.iter().map(|s| s.0.load(Acquire)).sum()
+}
+```
+
+When threads use different slots, they stop competing, provided the slots are on different cache lines. Neighbouring numbers usually share a line. Cores then compete although each writes its own number. This is **false sharing**.
+
+The example gives every slot 128 bytes with `#[repr(align(128))]`. Try changing it to `align(8)` and run in release mode. Compare the last of the three timings before and after. On a machine with several cores, expect it to rise sharply, but the numbers depend on your CPU.
+
+A read is no longer one instant. It visits the slots one by one while writers continue.
+
+For this counter, which only grows, the sum includes every add that finished before the read began. It includes none that started after the read ended. Once writers stop, it is exact.
+
+The example uses the stronger `Release` and `Acquire` orderings so that its test of this rule is valid.
+"""
+
+[[sections]]
+heading = "What if each thread batches its increments?"
+body = """
+A thread can count in a private variable and touch the shared total only once in a while. A **sloppy counter** adds its batch when it reaches a threshold.
+
+```stepper
+caption = "Two threads, threshold 100"
+[[frame]]
+title = "Both count privately"
+text = "Neither has reached 100, so the shared total is still zero."
+lanes = [ { name = "Thread A", items = ["99 pending"] }, { name = "Shared total", items = ["0"] }, { name = "Thread B", items = ["99 pending"] } ]
+[[frame]]
+title = "A reaches the threshold"
+text = "A adds its 100 events. B's events are still hidden."
+lanes = [ { name = "Thread A", items = ["0 pending"] }, { name = "Shared total", items = ["100"] }, { name = "Thread B", items = ["99 pending"] } ]
+[[frame]]
+title = "Handles go away"
+text = "Each handle adds what is left when it is dropped. Now the total is complete."
+lanes = [ { name = "Thread A", items = ["dropped"] }, { name = "Shared total", items = ["199"] }, { name = "Thread B", items = ["dropped"] } ]
+```
+
+Each handle hides at most `threshold - 1` events. So the amount not yet added is at most the number of live handles times that. `Relaxed` also promises nothing about how soon a reader sees another thread's add. The test checks the bound after the writers have been joined.
+
+The leftover is easy to lose.
+
+```compare
+takeaway = "A final flush in `Drop` runs when a handle goes away normally or during unwinding. It does not run if the process exits or aborts."
+[wrong]
+title = "Add only full batches"
+code = '''
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::thread;
+
+struct Handle<'a> {
+    total: &'a AtomicU64,
+    local: u64,
+}
+
+impl Handle<'_> {
+    fn inc(&mut self) {
+        self.local += 1;
+        if self.local == 100 {
+            self.total.fetch_add(self.local, Relaxed);
+            self.local = 0;
+        }
+    }
+}
+
+fn main() {
+    let total = AtomicU64::new(0);
+    thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                let mut h = Handle {
+                    total: &total,
+                    local: 0,
+                };
+                for _ in 0..1_050 {
+                    h.inc();
+                }
+            });
+        }
+    });
+    println!("{}", total.load(Relaxed));
+}
+'''
+result = "Prints `4000`, although the four threads counted 4,200 events."
+[fixed]
+title = "Add the rest in Drop"
+code = '''
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::thread;
+
+struct Handle<'a> {
+    total: &'a AtomicU64,
+    local: u64,
+}
+
+impl Handle<'_> {
+    fn inc(&mut self) {
+        self.local += 1;
+        if self.local == 100 {
+            self.total.fetch_add(self.local, Relaxed);
+            self.local = 0;
+        }
+    }
+}
+
+/// Whatever is left over is added when the handle goes away.
+impl Drop for Handle<'_> {
+    fn drop(&mut self) {
+        self.total.fetch_add(self.local, Relaxed);
+    }
+}
+
+fn main() {
+    let total = AtomicU64::new(0);
+    thread::scope(|s| {
+        for _ in 0..4 {
+            s.spawn(|| {
+                let mut h = Handle {
+                    total: &total,
+                    local: 0,
+                };
+                for _ in 0..1_050 {
+                    h.inc();
+                }
+            });
+        }
+    });
+    println!("{}", total.load(Relaxed));
+}
+'''
+result = "Prints `4200`."
+```
+
+Thread-local storage can hold the private batch instead. Be careful about when it is flushed. `std::thread::scope` may return while a thread's thread-local destructors are still running. The example uses `spawn` and `join`, which waits for the whole thread.
+"""
+
+[[sections]]
+heading = "What if an estimate is enough?"
+body = """
+A **Morris counter** counts in a single byte. It does not add on every event. The larger the stored value, the less likely it is to grow. A formula turns the value back into an estimate.
+
+The setting `a` trades range for accuracy. The typical relative error is about the square root of `a / 2`. With `a = 0.1` that is about 22%.
+
+A smaller `a` is more precise, but the byte fills sooner. With `a = 0.01`, it is full at an estimate near 1,160. The example then stops counting instead of crashing, so it reads too low.
+
+The example's Morris counter is for one thread. It saves memory, not contention.
+
+**HyperLogLog** answers a different question: how many *different* items have you seen? It hashes each item and keeps small maximum values in an array. Here that array has 4,096 bytes, however many items arrive. The expected typical error at this size is about 1.6%.
+
+Two sketches merge by taking the larger value in each position. So each thread can build its own and merge later, or all can share one sketch. The test shows both ways produce the same bytes as one thread working alone. The example's hash has no secret key, so do not trust it with items chosen to fool it.
+"""
+
+[[sections]]
+heading = "What about latencies?"
+body = """
+A total cannot tell you how slow your slowest requests are. For that you need a **histogram**, which sorts measurements into groups.
+
+How to choose the groups is the main question of [How long do requests take?](/p/b7-how-long-requests-take). The example contains a histogram that gives away much of it. Its counter updates also give away much of [Lock-free statistics counters](/p/c3-atomic-stats). Solve those before you open the code.
+
+:::deeper Walk through the code (gives away much of both exercises and of the reporting capstone step)
+```walkthrough
+file = "examples/concurrency/concurrent_counters_and_statistics.rs"
+[[step]]
+title = "Separate the slots"
+lines = "61-80"
+text = "Each shard is aligned to 128 bytes. A count of zero shards becomes one, so `add` never divides by zero."
+[[step]]
+title = "Flush on the way out"
+lines = "121-134"
+text = "`inc` adds a full batch, and `Drop` adds the rest."
+[[step]]
+title = "Count in one byte"
+lines = "137-156"
+text = "The chance of growing falls as the byte rises. A full byte stays full."
+[[step]]
+title = "Choose a bucket"
+lines = "167-174"
+text = "Small values get their own bucket. Above that, each power of two is cut into eight, so a bucket stays narrow compared with its values."
+[[step]]
+title = "Record from many threads"
+lines = "191-203"
+text = "Bucket, count and maximum are single updates. The sum retries a compare-and-swap so that it stops at `u64::MAX` instead of wrapping. The four are not updated together."
+[[step]]
+title = "Find a percentile"
+lines = "204-221"
+text = "It returns a bucket, not an exact value, and `None` for an empty histogram. The test compares it with sorted data after all writers finish."
+[[step]]
+title = "Update and merge a sketch"
+lines = "235-246"
+text = "Both operations take the larger value, so the order of updates does not matter."
+[[step]]
+title = "Test reads during writes"
+lines = "269-305"
+text = "The writers are joined first. Only then is the reader told to stop, so a failed writer fails the test instead of hanging it."
+```
+:::
+"""
+
+[[sections]]
+heading = "Which counter should you choose, and what breaks?"
+body = """
+| You need | A reasonable choice | What you give up |
+|---|---|---|
+| A simple exact total | One atomic | Speed when many cores write at once |
+| A hot counter, read now and then | Shards on separate lines | Memory, slower reads, no single instant |
+| Very cheap writes | Private batches | Reads lag behind, and leftovers need a flush |
+| A rough count in a byte | Morris | Accuracy and, eventually, range |
+| A count of different items | HyperLogLog | Exactness, and you cannot list the items |
+
+| Symptom | Likely cause |
+|---|---|
+| Sharding did not help | Threads pick the same slot, slots share a line, or the counter was never the problem |
+| Totals are short after shutdown | A private batch was not flushed |
+| Two related numbers disagree | Each was updated and read on its own |
+
+Several atomics do not form a consistent **snapshot**. If numbers must agree with each other, protect them with a lock, or design a way to swap them out together.
+
+The tests use fixed random seeds for the estimates. The concurrent tests check one scheduling per run. Passing them does not prove every interleaving, and timings are printed, never checked.
+"""
+
+[[connections]]
+kind = "practise"
+title = "Lock-free statistics counters"
+link = "/p/c3-atomic-stats"
+level = "related"
+why = "Solve it before opening the code."
+
+[[connections]]
+kind = "practise"
+title = "How long do requests take?"
+link = "/p/b7-how-long-requests-take"
+level = "similar"
+why = "The page's histogram solves a close relative. Your report and guarantees differ."
+
+[[connections]]
+kind = "returns"
+title = "False sharing"
+link = "/cookbook/p/false-sharing"
+why = "Look closer at the effect of cache lines."
+
+[[connections]]
+kind = "returns"
+title = "Metrics prometheus histograms load testing"
+link = "/cookbook/p/metrics-prometheus-histograms-load-testing"
+why = "Turn counts into metrics that another system collects. It also covers histograms."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Near the end, your server counts and times its requests."
+
+[[sources]]
+title = "std::sync::atomic::Ordering"
+url = "https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html"
+note = "What each memory ordering promises."
+
+[[sources]]
+title = "std::thread::scope"
+url = "https://doc.rust-lang.org/std/thread/fn.scope.html"
+note = "States that thread-local destructors may still be running when it returns."
+
+[[sources]]
+title = "crossbeam CachePadded"
+url = "https://docs.rs/crossbeam-utils/latest/crossbeam_utils/struct.CachePadded.html"
+note = "A ready-made padded type, with the sizes it picks for each processor."
+
+[[sources]]
+title = "An Analysis of Linux Scalability to Many Cores"
+url = "https://pdos.csail.mit.edu/papers/linux:osdi10.pdf"
+note = "Introduces sloppy counters as a fix for contended counts in the Linux kernel."
+
+[[sources]]
+title = "Flajolet and others: HyperLogLog"
+url = "https://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf"
+note = "The algorithm and its error analysis."

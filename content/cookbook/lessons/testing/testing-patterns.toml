@@ -1,0 +1,221 @@
+title = "Unit-test patterns"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Methods: test design and TDD"
+chapter_order = 1
+order = 140
+kind = "lesson"
+level = "intermediate"
+code = ["examples/dev_tools/testing_patterns.rs"]
+lede = "A few habits that make Rust unit tests easy to read, repeatable and able to catch real mistakes."
+summary = """
+A good unit test checks one behaviour, gives the same result every time and says which input failed. Use a table for known cases, a property for many generated inputs, and a fake for anything you can't control. A passing test proves little by itself. Break the code on purpose to check that the test notices.
+"""
+
+[[sections]]
+heading = "What makes a test worth having?"
+body = """
+Say you write `slugify`, which turns the title `Hello World` into `hello-world` for a web address. You try it once and it looks right. Next month, someone changes it. Your tests are what will tell them whether it still works.
+
+In Rust, unit tests usually sit in the same file, in a module marked `#[cfg(test)]`. That module is compiled only for tests. It can use the file's private items. Tests that use your crate from outside go in the `tests/` folder.
+
+To run this page's tests, use `cargo test --example testing_patterns` in the `cookbook` folder.
+"""
+
+[[sections]]
+heading = "How do you check many cases without repeating yourself?"
+body = """
+Put the inputs and expected outputs in a table, then loop over it. Adding a case is now one line.
+
+```walkthrough
+file = "examples/dev_tools/testing_patterns.rs"
+[[step]]
+title = "The function under test"
+lines = "12-22"
+text = "It keeps ASCII letters and digits, and turns each run of other characters into one hyphen, except at the ends."
+[[step]]
+title = "A table of cases"
+lines = "54-68"
+text = "Include the dull-looking cases: empty input and input with nothing to keep. The last argument of `assert_eq!` prints the input that failed."
+```
+
+The loop stops at the first failing case. If you need a separate result for each case, write separate tests, perhaps with a macro.
+"""
+
+[[sections]]
+heading = "What if you can't list every input?"
+body = """
+Check a **property**, which is a rule that must hold for every input. Then generate many inputs and check the rule on each.
+
+One rule for `slugify` is that running it twice gives the same result as running it once. That sounds strong. But what would a broken version do?
+
+```compare
+takeaway = "A property rules out only some mistakes. Ask which broken function would still pass, then add a rule that it breaks."
+[wrong]
+title = "One weak property"
+code = '''
+fn slugify(_: &str) -> String {
+    String::new() // broken on purpose
+}
+#[test]
+fn a_second_run_changes_nothing() {
+    for s in ["Hello World", "  a_b  ", "!!!"] {
+        let once = slugify(&s);
+        assert_eq!(slugify(&once), once, "input: {s:?}");
+    }
+}
+'''
+result = "The test passes, although the function throws everything away."
+[fixed]
+title = "A rule about the content"
+code = '''
+fn slugify(_: &str) -> String {
+    String::new() // the same broken function
+}
+#[test]
+fn letters_and_digits_survive() {
+    let kept = |s: &str| -> String {
+        s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+    };
+    for s in ["Hello World", "  a_b  ", "!!!"] {
+        assert_eq!(kept(&slugify(s)), kept(s), "input: {s:?}");
+    }
+}
+'''
+result = "The test fails with `input: \\"Hello World\\"`, `left: \\"\\"` and `right: \\"helloworld\\"`."
+```
+
+The second rule isn't enough on its own either. A `slugify` that returned its input unchanged would pass it. Together with the table, the properties cover far more.
+
+```walkthrough
+file = "examples/dev_tools/testing_patterns.rs"
+[[step]]
+title = "Generate awkward inputs"
+lines = "70-84"
+text = "A tiny generator builds 500 strings from characters likely to cause trouble. The fixed seed gives the same strings on every run."
+[[step]]
+title = "Check the first rule"
+lines = "86-93"
+text = "The message names the input, so you can copy it into a table case."
+[[step]]
+title = "Check the second rule"
+lines = "95-107"
+text = "It compares only the ASCII letters and digits, before and after. It never rewrites `slugify` inside the test."
+```
+
+When a generated input is long, finding the part that matters is slow. Libraries such as `proptest` generate inputs and then **shrink** a failing one to a smaller one.
+"""
+
+[[sections]]
+heading = "How do you test failures and limits?"
+body = """
+Test both sides of every limit. `Percent::new` must accept 100 and refuse 101. With only the refusing test, a check written as `v < 100` would pass.
+
+`#[should_panic]` says that a test passes only if it panics. Add `expected = "..."` so an unrelated panic doesn't count: the panic message must contain that text.
+
+```walkthrough
+file = "examples/dev_tools/testing_patterns.rs"
+[[step]]
+title = "Both sides of the limit"
+lines = "109-119"
+text = "One test passes by returning, the other by panicking with the right message."
+[[step]]
+title = "Results and errors"
+lines = "121-131"
+text = "A test may return `Result`, so you can use `?`. For the error case, check something about the error, not only that there is one."
+```
+
+Try it both ways. Change `v <= 100` to `v < 100` and run the tests: `percent_accepts_100` fails. Then restore it and add `#[should_panic]` above `parse_pair_ok`. The compiler says ``functions using `#[should_panic]` must return `()` ``.
+
+For enums, `matches!` checks the shape of a value. It helps when a type, such as a boxed error, can't be compared with `==`.
+"""
+
+[[sections]]
+heading = "How do you test code that depends on time?"
+body = """
+A test that waits for real time is slow. One that guesses how long to sleep can fail on a busy machine. Let the test supply the time instead.
+
+Here the code asks a `Clock` **trait** for the time. Your program would pass in a clock that reads the system time. The test passes a **fake**, a small stand-in that returns whatever number you give it.
+
+```walkthrough
+file = "examples/dev_tools/testing_patterns.rs"
+[[step]]
+title = "Name what you need"
+lines = "37-43"
+text = "The function depends on one method, not on the system clock."
+[[step]]
+title = "Fake it"
+lines = "133-143"
+text = "The test checks the moment before the deadline and the deadline itself, with no waiting."
+```
+
+The same move works for random numbers, where you pass in a seed, and for streams, where you accept any `Read` or `Write`. When another thread is involved, don't sleep and hope. Wait for a signal that the thread sends, and add a time limit so a broken test still ends.
+
+`cargo test` runs tests on several threads at once by default. Tests that share a file, a port or a global value can disturb each other, so give each test its own.
+"""
+
+[[sections]]
+heading = "Which kind of test should you write?"
+body = """
+| You want to check | Write | Limit |
+| --- | --- | --- |
+| Cases you can name | A table | Only the cases you thought of |
+| A rule for all inputs | A property with seeded inputs | A weak rule lets bugs through |
+| A refusal | An error check, or `should_panic` | Check which failure it was |
+| Time or an outside service | A fake behind a trait | The real one may behave differently |
+| The program as users run it | A test in `tests/` | Slower, and failures are less precise |
+
+To learn whether your tests can fail, plant a bug. Return an empty string from `slugify` and run them. The table and the letters-and-digits property fail, while the run-it-twice property still passes.
+"""
+
+[[connections]]
+kind = "returns"
+title = "Property testing with shrinking"
+link = "/cookbook/p/shrinking"
+why = "How a failing generated input is made smaller."
+
+[[connections]]
+kind = "returns"
+title = "Deterministic simulation"
+link = "/cookbook/p/deterministic-simulation"
+why = "Seeded inputs and fake clocks, taken as far as a whole cluster."
+
+[[connections]]
+kind = "practise"
+title = "Write the test that catches every broken queue"
+link = "/p/y5-catch-the-broken-queue"
+why = "Write a check that rejects several broken versions. The technique it needs goes beyond this page."
+level = "related"
+
+[[connections]]
+kind = "practise"
+title = "Take the luck out of a test"
+link = "/p/b7-tests-without-luck"
+why = "Build test tools that control timing and input. This page doesn't show how to build them."
+level = "related"
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "Its last part is about tests that give the same result every time."
+
+[[sources]]
+title = "The Rust Book: writing automated tests"
+url = "https://doc.rust-lang.org/book/ch11-00-testing.html"
+note = "Assertions, `should_panic`, tests that return `Result`, running in parallel and the `tests/` folder."
+
+[[sources]]
+title = "The Rust Reference: testing attributes"
+url = "https://doc.rust-lang.org/reference/attributes/testing.html"
+note = "The exact rules for `test`, `ignore` and `should_panic`."
+
+[[sources]]
+title = "proptest"
+url = "https://docs.rs/proptest/latest/proptest/"
+note = "Property tests with generated inputs and shrinking."
+
+[[sources]]
+title = "insta"
+url = "https://insta.rs/"
+note = "Snapshot tests, which compare output with a saved, reviewed copy."

@@ -1,0 +1,252 @@
+title = "HTTP caching and conditional requests"
+module = "Web, networking and security"
+module_order = 11
+chapter = "Web services"
+chapter_order = 1
+order = 520
+kind = "lesson"
+level = "advanced"
+code = ["examples/web/http_caching_conditional.rs"]
+code_spoils = ["/p/b7-only-what-the-client-needs", "/p/b8-serve-files"]
+lede = "How a client reuses a response, asks whether it changed, resumes a download and avoids overwriting someone else's edit."
+summary = """HTTP lets a client keep a response and reuse it while it is **fresh**. Afterwards it can ask "has this changed?" and get a short answer with no body. The same version tags stop one update overwriting another. Caching saves traffic, but a wrong header can serve old data, or one reader's data to another."""
+
+[[sections]]
+heading = "Why download the same thing twice?"
+body = """
+Your app asks for a list of settings every few seconds. The settings change once a week. Almost every reply carries bytes the app already has.
+
+HTTP can help in two ways. While a stored response is **fresh**, the client uses it and sends nothing. After that, it can send a **conditional request**: "send it only if it differs from my copy".
+
+For the second step, the server labels each version. An **ETag** is such a label, a quoted string. `Last-Modified` is a date that serves a similar purpose, with only one-second precision.
+"""
+
+[[sections]]
+heading = "How does a stored copy get checked?"
+body = """
+Suppose the server answers with `ETag: "v1"` and `Cache-Control: max-age=60`. Here is what the client can do next.
+
+```stepper
+caption = "One stored response over time"
+[[frame]]
+title = "First request"
+text = "The cache is empty. The server sends 200 with the body and a tag."
+lanes = [ { name = "Client sends", items = ["GET"] }, { name = "Cache", items = ["v1, age 0"] }, { name = "Server replies", items = ["200 + body"] } ]
+[[frame]]
+title = "Ten seconds later"
+text = "The copy is younger than 60 seconds. The client uses it without asking."
+lanes = [ { name = "Client sends", items = [] }, { name = "Cache", items = ["v1, fresh"] }, { name = "Server replies", items = [] } ]
+[[frame]]
+title = "After 61 seconds"
+text = "The copy is stale. The client asks again and sends the tag in If-None-Match."
+lanes = [ { name = "Client sends", items = ["GET, If-None-Match: v1"] }, { name = "Cache", items = ["v1, stale"] }, { name = "Server replies", items = ["304, no body"] } ]
+[[frame]]
+title = "Fresh again"
+text = "304 means the copy still holds. The client keeps the body and restarts its age."
+lanes = [ { name = "Client sends", items = [] }, { name = "Cache", items = ["v1, fresh"] }, { name = "Server replies", items = [] } ]
+```
+
+If the content had changed, the server would send 200 with the new body and tag. A 304 saves the body, but not the round trip.
+
+The example makes a **strong ETag** by hashing the body. The same bytes give the same tag. A weak tag, written `W/"..."`, only says that two versions mean the same thing.
+"""
+
+[[sections]]
+heading = "What does Cache-Control allow?"
+body = """
+| Directive | What it tells a cache |
+|---|---|
+| `max-age=60` | The response is fresh for 60 seconds |
+| `no-cache` | You may store it, but check with the server before each reuse |
+| `no-store` | Do not keep it |
+| `private` | A shared cache, such as a CDN, must not store it |
+| `public` | A shared cache may store it |
+| `must-revalidate` | Once stale, do not use it without a successful check |
+| `immutable` | While it is fresh, there is no need to recheck, even on reload |
+
+Use `private` or `no-store` deliberately for anything about one user. `public` on such a response invites a shared cache to keep it.
+
+One address can have several forms, such as JSON and plain text. The `Vary` header names the request headers that chose the form. Without `Vary: Accept`, a cache could hand JSON to a client that asked for text.
+
+Compression creates different bytes too. So a compressed and an uncompressed form must not share one strong ETag. The example compresses only a route that has no ETag.
+"""
+
+[[sections]]
+heading = "How do tags stop a lost update?"
+body = """
+Alice and Bob both read version 1 of a note. Alice saves her change. Bob then saves his, which was based on version 1. Without a check, Alice's change disappears.
+
+With `If-Match`, Bob sends the tag he read. The stored tag has changed, so the server answers **412 Precondition Failed** and keeps Alice's text. Bob must read again and merge.
+
+The server in this example also refuses to replace a note without `If-Match`. It answers **428 Precondition Required**. To create a note only if none exists, a client sends `If-None-Match: *`.
+
+The check and the write must happen as one step. The example holds one lock across both. A database would use a transaction, or an update that matches the old version.
+
+Each header needs its own test. It is tempting to choose the answer from all of them in one `match`. Then a request with an unrelated `If-None-Match` can slip past every rule.
+
+```compare
+takeaway = "Check each precondition on its own, then apply your own rule. A single `match` over every header can leave a gap that falls through to success."
+[wrong]
+title = "One match for everything"
+code = '''
+/// The status for a PUT. `current` is the stored version's tag, if there is one.
+fn check_put(if_match: Option<&str>, if_none_match: Option<&str>, current: Option<&str>) -> u16 {
+    match (if_match, if_none_match, current) {
+        (_, Some("*"), Some(_)) => 412,                 // create only
+        (Some(tag), _, Some(now)) if tag != now => 412, // stale
+        (Some(_), _, None) => 412,                      // nothing to replace
+        (None, None, Some(_)) => 428,                   // say which version you read
+        _ => 200,
+    }
+}
+
+fn main() {
+    println!("{}", check_put(None, Some("\\"anything\\""), Some("\\"v2\\"")));
+}
+'''
+result = "Prints `200`: a client that never read the note may overwrite it."
+[fixed]
+title = "One check after another"
+code = '''
+/// The status for a PUT. `current` is the stored version's tag, if there is one.
+fn check_put(if_match: Option<&str>, if_none_match: Option<&str>, current: Option<&str>) -> u16 {
+    if if_match.is_some() && if_match != current {
+        return 412; // stale, or nothing to replace
+    }
+    if current.is_some() && if_none_match.is_some_and(|t| t == "*" || Some(t) == current) {
+        return 412; // the client asked us not to replace this version
+    }
+    // our own rule gets its own test, whatever other headers arrived
+    if if_match.is_none() && current.is_some() {
+        return 428; // say which version you read
+    }
+    200
+}
+
+fn main() {
+    println!("{}", check_put(None, Some("\\"anything\\""), Some("\\"v2\\"")));
+}
+'''
+result = "Prints `428`: the client must say which version it read."
+```
+
+These small functions compare strong tags as whole strings and accept one tag per header. The server in the code file also accepts a list of tags.
+"""
+
+[[sections]]
+heading = "How can a download continue after a break?"
+body = """
+A **range request** asks for some of the bytes, for example `Range: bytes=3500-`. The server answers **206 Partial Content** and names the slice in `Content-Range`. If no requested byte exists, it answers **416**. A server may also ignore a range and send the whole body.
+
+Resuming has a risk. The file may change between the two requests, and you would join halves of different versions. `If-Range` carries the ETag of the first part. If it no longer matches, the server sends the whole new body with 200.
+
+The demo server deliberately cuts the connection during a download. The client resumes twice, then compares a checksum. Its client stops if a resumed request is not answered with 206. A real client would discard its bytes and start over.
+"""
+
+[[sections]]
+heading = "How does the example code do it?"
+body = """
+The server decides what to send for a file. That decision, with its edge cases, is much of [Send only what the client needs](/p/b7-only-what-the-client-needs) and part of [Serve files](/p/b8-serve-files). So the walkthrough is folded.
+
+:::deeper Walk through the server and cache (gives away much of both file-serving exercises)
+```walkthrough
+file = "examples/web/http_caching_conditional.rs"
+[[step]]
+title = "Read a date strictly"
+lines = "357-370"
+text = "The client controls this text. Fixed widths and ranges stop huge numbers reaching the arithmetic. It does not check the weekday, or whether a month has that day."
+[[step]]
+title = "Decide whether anything changed"
+lines = "389-404"
+text = "When `If-None-Match` is present, it decides alone. Otherwise the date is compared. Only the first line of a repeated header is read."
+[[step]]
+title = "Read one range"
+lines = "506-540"
+text = "Only digits count as a number, and huge ones saturate. An empty body has no last byte, so a suffix range cannot subtract from zero."
+[[step]]
+title = "Apply the checks in order"
+lines = "542-558"
+text = "An unchanged file gets 304 before any range is considered. A range counts only for `GET`, and only while `If-Range` still matches."
+[[step]]
+title = "Guard a write"
+lines = "622-652"
+text = "One lock covers reading the tag and replacing the note. The three checks run in turn, and the number of notes is capped."
+[[step]]
+title = "Use a fresh copy"
+lines = "738-749"
+text = "A fresh entry returns with no request. Otherwise the cache sends the stored tag."
+[[step]]
+title = "Update what is stored"
+lines = "761-786"
+text = "A 304 keeps the old body and restarts its age. Only a 200 response is stored, so an error page cannot replace the resource."
+```
+:::
+"""
+
+[[sections]]
+heading = "What can go wrong, and what is missing?"
+body = """
+| Symptom | Likely cause | What to test |
+|---|---|---|
+| Users see old data | A long `max-age` on an address whose content changes | Change the content and request it again |
+| A user sees someone else's page | A personal response was stored by a shared cache | Check `Cache-Control` through your real proxy |
+| A client gets the wrong format | Missing `Vary` | Ask for each form through one cache |
+| An edit vanishes | A write without a version check | Send two writes based on one version |
+| A resumed file is corrupt | A range without `If-Range` | Change the file halfway through |
+
+The example cache is small and private. It keys entries by address only, ignores `Vary` and the `Age` header, and has no size limit. It always asks again once a copy is stale, so it never serves stale data. Its `Accept` handling ignores preference weights.
+
+The server answers one range at a time, and sends the whole body for several. It keeps at most 100 notes, in memory. Use a maintained HTTP cache and file server in production, and test them through your real proxy.
+"""
+
+[[connections]]
+kind = "before"
+title = "Axum router state"
+link = "/cookbook/p/axum-router-state"
+why = "Optional. The example server is written with axum."
+
+[[connections]]
+kind = "practise"
+title = "Send only what the client needs"
+link = "/p/b7-only-what-the-client-needs"
+level = "similar"
+why = "Solve it before opening the code. Its rules differ in places."
+
+[[connections]]
+kind = "practise"
+title = "Serve files"
+link = "/p/b8-serve-files"
+level = "related"
+why = "A capstone step that combines these rules with safe file access."
+
+[[connections]]
+kind = "returns"
+title = "A resilient HTTP client against a flaky server"
+link = "/cookbook/p/http-client-resilience"
+why = "See what else a client needs when connections fail."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "The series serves files, then adds unchanged and partial responses."
+
+[[sources]]
+title = "RFC 9110: HTTP Semantics, conditional requests"
+url = "https://www.rfc-editor.org/rfc/rfc9110.html#name-conditional-requests"
+note = "The rules for ETags and preconditions. Range requests follow later in the same document. It gives away the rules of the file-serving exercises."
+
+[[sources]]
+title = "RFC 9111: HTTP Caching"
+url = "https://www.rfc-editor.org/rfc/rfc9111.html"
+note = "When a cache may store, reuse or revalidate."
+
+[[sources]]
+title = "RFC 6585: 428 Precondition Required"
+url = "https://www.rfc-editor.org/rfc/rfc6585.html#section-3"
+note = "Why a server may demand a condition."
+
+[[sources]]
+title = "MDN: HTTP caching"
+url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching"
+note = "A readable guide to the headers."

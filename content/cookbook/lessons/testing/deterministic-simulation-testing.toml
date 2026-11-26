@@ -1,0 +1,226 @@
+title = "Deterministic simulation testing"
+module = "Testing and benchmarking"
+module_order = 4
+chapter = "Systems: distributed systems"
+chapter_order = 7
+order = 151
+kind = "lesson"
+level = "advanced"
+code = ["examples/distributed/deterministic_simulation_testing.rs"]
+code_spoils = ["/p/y7-raft-vote-rules", "/p/y7-raft-append-entries", "/p/y7-raft-leader-commit", "/p/y5-shrink-failing-input"]
+lede = "A guide to a program that runs a three-server Raft store in one thread, breaks it on purpose and replays every failure."
+summary = """
+Deterministic simulation runs a whole cluster inside one thread, with a pretend clock, network and disk. All chance comes from one seed, so a failing run can be repeated exactly. You can try thousands of fault patterns quickly. The price is building the pretend world, and it only tests the faults that you thought to include.
+"""
+
+[[sections]]
+heading = "Why are some bugs so hard to catch?"
+body = """
+This example is a small key-value store on three servers. It uses **Raft**, a protocol in which one server, the leader, copies a log of changes to the others. Once most servers hold a change, it is **committed**, which means it must never be lost.
+
+Now plant one bug. A follower says "I have it" before its disk has finished saving.
+
+```stepper
+caption = "A reply that comes too early"
+[[frame]]
+title = "A change arrives"
+text = "The leader sends a new change to a follower."
+lanes = [ { name = "Leader", items = ["sends x=1"] }, { name = "Follower", items = ["writing x=1"] }, { name = "Follower's disk", items = ["not saved yet"] } ]
+[[frame]]
+title = "The follower replies early"
+text = "The leader counts that reply. With its own copy, two of three servers seem to hold the change."
+lanes = [ { name = "Leader", items = ["x=1 committed"] }, { name = "Follower", items = ["replied"] }, { name = "Follower's disk", items = ["not saved yet"] } ]
+[[frame]]
+title = "The follower crashes"
+text = "It loses what its disk had not saved. Now fewer than two servers may hold a committed change."
+lanes = [ { name = "Leader", items = ["x=1 committed"] }, { name = "Follower", items = ["crashed"] }, { name = "Follower's disk", items = ["x=1 gone"] } ]
+```
+
+Real harm needs more bad luck, such as a new leader that never got the change. On real machines, that timing is rare. When it does happen, you may not be able to repeat it.
+"""
+
+[[sections]]
+heading = "What does the simulator replace?"
+body = """
+Anything that could differ between two runs is replaced by something the program controls.
+
+| Real thing | In the simulator |
+| --- | --- |
+| Clock | A tick counter that jumps to the next event |
+| Network | A queue of messages, delayed 1 to 4 ticks, sometimes lost or copied, and cut by partitions |
+| Disk | Writes that finish later, may fail, and may be half saved after a crash |
+| Randomness | One generator, started from the seed |
+| Clients, crashes and partitions | A **plan**: a list of events made from the seed |
+
+The loop takes the earliest event, sets the clock to its time and handles it. Events with the same tick run in the order they were added. There are no threads, so no operating system scheduler can change that order.
+
+The code also makes rare cases common on purpose, an idea FoundationDB calls **buggify**. Now and then it delays a message much longer, slows a disk write or crashes a server just after a reply.
+"""
+
+[[sections]]
+heading = "How does it know that something went wrong?"
+body = """
+A random run has no expected output. Instead, the program checks rules that must hold in every correct run.
+
+| Check | What it asks |
+| --- | --- |
+| One leader per term | Did two servers lead in the same term, Raft's numbered period? |
+| One value per position | Were two different changes committed at the same place in the log? |
+| Nothing committed is lost | Does each new leader hold every committed change? |
+| Logs agree | Where two logs match at a position, do they match before it too? |
+| Linearizable history | Could one single copy of the data have given these replies in a legal order? |
+| Recovery | After faults stop, does a new write finish and do all servers agree? |
+
+The log check runs every 20 ticks, so it can miss a state that lasts only briefly.
+
+The **linearizability** check uses only what clients saw. If one request finished before another began, they must keep that order. A write that timed out may or may not have happened.
+
+This makes "before" important. Many events happen in the same tick, yet one still runs before the other. A checker given tick numbers would treat such requests as overlapping. It could then accept orders it should refuse.
+
+So the program numbers each handled event, and `main` checks that no two history entries share a number.
+"""
+
+[[sections]]
+heading = "How do you check that the system recovers?"
+body = """
+Recovery needs a fair test. At tick 600, the program heals the network, restarts servers and stops injecting faults. Then a test client writes once more and keeps retrying until the run ends.
+
+Both rules matter. A new fault could stop the write for a good reason. A client that gives up measures its own patience, not the cluster.
+"""
+
+[[sections]]
+heading = "Does it find real mistakes?"
+body = """
+The program has two bugs you can switch on. One is the early reply above. The other lets a leader answer a read from its own memory, without first confirming that it still leads.
+
+| Version | Failing seeds out of 2,000 | First failing seed |
+| --- | --- | --- |
+| Correct | 0 | none |
+| Early reply | 927 | 1 |
+| Local read | 270 | 12 |
+
+A failing seed runs again with the same trace. The program compares both traces line by line for each bug it reports.
+
+Passing 2,000 seeds is evidence, not proof. It says nothing about faults the simulator never creates, such as a disk that returns wrong bytes.
+"""
+
+[[sections]]
+heading = "How do you make a failure small enough to read?"
+body = """
+A failing plan has dozens of events, and most don't matter. A **shrinker** removes some, runs again and keeps the smaller plan if the run still fails.
+
+For the early reply, the plan shrank from 38 events to 5. For the local read, it shrank from 50 to 9.
+
+Read a shrunk failure with care. This shrinker accepts any failure, not only the first one. In the early-reply case, the reported term and log position changed.
+
+Removing an event also changes which random numbers later parts of the run get, because they share one generator. A smaller plan can therefore take a quite different path.
+
+:::deeper Spoiler warning: Shrink a failing input and the three Raft exercises
+The rest of this fold covers ideas that [Shrink a failing input](/p/y5-shrink-failing-input) asks you to find. The walkthrough also shows the whole file, with vote, log and commit rules for [Who may become leader](/p/y7-raft-vote-rules), [AppendEntries](/p/y7-raft-append-entries) and [When a leader may commit](/p/y7-raft-leader-commit). Solve those first if you want to find the rules yourself.
+
+The shrinker removes large chunks first, then smaller ones. It halves the chunk size only after a full pass removes nothing. So at the end, removing any single event makes the run pass.
+
+Repeating a size matters, because one removal can make another possible. To see this, change `if !progressed` to `if !progressed || chunk == 1` and run the example. The shrinker then stops too early, and `main` fails with `the shrunk plan does not need event 9`.
+
+```walkthrough
+file = "examples/distributed/deterministic_simulation_testing.rs"
+[[step]]
+title = "Order the events"
+lines = "424-430"
+text = "The queue key is the tick, then a sequence number. Ties never depend on chance."
+[[step]]
+title = "Save before you speak"
+lines = "481-514"
+text = "A write gets a numbered ticket. A message that depends on it waits until that write is durable."
+[[step]]
+title = "Finish or fail a write"
+lines = "515-551"
+text = "A failed disk sync crashes the server, which restarts from what was saved. A good one releases the waiting messages."
+[[step]]
+title = "The planted early reply"
+lines = "961-970"
+text = "The buggy branch sends at once, then sometimes crashes. The correct branch waits for the ticket."
+[[step]]
+title = "Shrink the plan"
+lines = "1301-1324"
+text = "A candidate plan is kept only if the replay still fails."
+```
+:::
+"""
+
+[[sections]]
+heading = "How could you use this in your own system?"
+body = """
+Put the clock, network, disk and random numbers behind interfaces early. Then the code you ship can also run in the simulator. This example doesn't go that far: its protocol is written inside the simulator.
+
+1. Replay one seed twice and compare the traces. Do this first.
+2. Count how often each fault happens. A fault that never happens tests nothing.
+3. Plant a bug and check that some seed finds it.
+4. Save each failing seed together with the code version, because a code change can alter what a seed does.
+
+FoundationDB's testing page says it can simulate a whole cluster deterministically in one thread. TigerBeetle runs its real server code in a simulator called the VOPR. For Tokio programs, the `turmoil` crate offers simulated hosts and a faulty network.
+"""
+
+[[connections]]
+kind = "before"
+title = "Sans-IO protocol design"
+link = "/cookbook/p/sans-io-protocol"
+why = "The smaller version: one protocol whose time and bytes the test controls."
+
+[[connections]]
+kind = "practise"
+title = "Shrink a failing input"
+link = "/p/y5-shrink-failing-input"
+why = "A shrinker with a stricter contract and a limit on calls."
+level = "similar"
+
+[[connections]]
+kind = "practise"
+title = "AppendEntries: the follower's side"
+link = "/p/y7-raft-append-entries"
+why = "One of the Raft rules this program needs, on its own."
+level = "similar"
+
+[[connections]]
+kind = "practise"
+title = "Clients that go quiet, or drip"
+link = "/p/b7-clients-that-go-quiet"
+why = "A much smaller use of controlled time, in one connection loop."
+level = "related"
+
+[[connections]]
+kind = "returns"
+title = "Deterministic simulation"
+link = "/cookbook/p/deterministic-simulation"
+why = "Another simulator, which records every random choice and shrinks that record."
+
+[[connections]]
+kind = "project"
+title = "From threads to a web server"
+link = "/rust/series/web-server"
+why = "The series points here for simulated time."
+
+[[sources]]
+title = "FoundationDB: simulation and testing"
+url = "https://apple.github.io/foundationdb/testing.html"
+note = "How FoundationDB simulates clusters and injects faults."
+
+[[sources]]
+title = "TigerBeetle: the VOPR"
+url = "https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/internals/vopr.md"
+note = "A seed-based simulator that runs the production code."
+
+[[sources]]
+title = "Will Wilson: testing distributed systems with deterministic simulation"
+url = "https://www.youtube.com/watch?v=4fFDFbi3toc"
+note = "The Strange Loop talk about FoundationDB's approach."
+
+[[sources]]
+title = "The Raft paper"
+url = "https://raft.github.io/raft.pdf"
+note = "The protocol and the safety properties that the checks come from."
+
+[[sources]]
+title = "turmoil"
+url = "https://github.com/tokio-rs/turmoil"
+note = "Deterministic simulation for distributed programs built on Tokio."
