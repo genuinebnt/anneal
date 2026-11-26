@@ -93,12 +93,28 @@ export function SdHome() {
                 </section>
             )}
             <div className="sd-grid">
-                {groups.map((g) => (
-                    <Link key={g.id} to="/sd/learn" hash={g.id} className={`ly-pn sd-sec${g.pages ? "" : " soon"}`} style={{ "--c": g.color } as CSSProperties}>
-                        <span className="ly-bigring" style={{ "--p": g.total ? Math.round((g.done / g.total) * 100) : 0, "--c": g.color } as CSSProperties}><b>{g.pages}</b></span>
-                        <div><h3>{g.name}</h3><p>{g.blurb}</p><small>{g.pages ? `${g.pages} page${g.pages === 1 ? "" : "s"} · ${g.done}/${g.total} checks` : "being written"}</small></div>
-                    </Link>
-                ))}
+                {groups.map((g, i) => {
+                    const list = o.concepts.filter((c) => c.group === g.id).sort((a, b) => a.order - b.order);
+                    return (
+                        <section key={g.id} className="bk-book" style={{ "--c": g.color } as CSSProperties}>
+                            <span className="bk-ghost" aria-hidden="true" data-code={String(i + 1).padStart(2, "0")} />
+                            <Link to="/sd/learn" hash={g.id} className={`ly-pn sd-sec${g.pages ? "" : " soon"}`} style={{ "--c": g.color } as CSSProperties}>
+                                <span className="ly-bigring" style={{ "--p": g.total ? Math.round((g.done / g.total) * 100) : 0, "--c": g.color } as CSSProperties}><b>{g.pages}</b></span>
+                                <div><h3>{g.name}</h3><p>{g.blurb}</p><small>{g.pages ? `${g.pages} page${g.pages === 1 ? "" : "s"} · ${g.done}/${g.total} checks` : "being written"}</small></div>
+                            </Link>
+                            {list.length > 0 && (
+                                <ol className="bk-list">
+                                    {list.slice(0, 5).map((c) => (
+                                        <li key={c.id}>
+                                            <Link to="/sd/learn/$id" params={{ id: c.id }}><span>{c.title}</span><small>{Math.min(c.checked, c.checks)}/{c.checks}</small></Link>
+                                        </li>
+                                    ))}
+                                    {list.length > 5 && <li className="more">and {list.length - 5} more</li>}
+                                </ol>
+                            )}
+                        </section>
+                    );
+                })}
             </div>
             <Panel title="Problems">
                 <div className="ly-cards">
@@ -124,7 +140,7 @@ export function SdHome() {
     );
     return (
         <SdFrame>
-            <Page3 crumb={["SYSTEM DESIGN", "HOME"]} title={<>System design, <span className="sd-acc">practised.</span></>} sub="Learn it, design it against the clock, compare with a rubric, and review what you missed." tiles={tiles} left={left} center={center} right={right} label="Sections" />
+            <Page3 className="bk bk-sd" crumb={["SYSTEM DESIGN", "HOME"]} title={<>System design, <span className="sd-acc">practised.</span></>} sub="Learn it, design it against the clock, compare with a rubric, and review what you missed." tiles={tiles} left={left} center={center} right={right} label="Sections" />
         </SdFrame>
     );
 }

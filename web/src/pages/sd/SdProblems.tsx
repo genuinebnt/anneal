@@ -42,7 +42,7 @@ export function SdProblems() {
     const right = <HowFound title="How a drill works" text="One problem through the delivery framework, each step on its own clock. The rubric and the reference stay hidden until you finish; then you compare step by step and mark each point. Every marked point becomes a review card." rows={[["Problems", o.problems.length], ["Drilled", drilled]]} />;
     return (
         <SdFrame>
-            <Page3 crumb={["SYSTEM DESIGN", "PROBLEMS"]} title="Problems" sub="Design them against the clock, then compare with a rubric written for each step." tiles={<Tile em="Drilled" strong={`${drilled}/${o.problems.length}`} small="at least once" />} left={left} center={center} right={right} label="Kind" />
+            <Page3 className="bk bk-sd-problems" crumb={["SYSTEM DESIGN", "PROBLEMS"]} title="Problems" sub="Design them against the clock, then compare with a rubric written for each step." tiles={<Tile em="Drilled" strong={`${drilled}/${o.problems.length}`} small="at least once" />} left={left} center={center} right={right} label="Kind" />
         </SdFrame>
     );
 }

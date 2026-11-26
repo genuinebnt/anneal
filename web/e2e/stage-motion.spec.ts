@@ -124,7 +124,7 @@ test("the pages are centred and have no grid behind them", async ({ page }) => {
     // the DSA home is in the full-width three-panel frame now, centred the same way
     for (const path of ["/rust", "/courses", "/dsa"]) {
         await page.goto(path);
-        const wrap = page.locator(".s-wrap, .k-wrap, .ly-page").first();
+        const wrap = page.locator(".rs-home, .s-wrap, .k-wrap, .ly-page").first();
         await expect(wrap).toBeVisible();
         const box = (await wrap.boundingBox())!;
         expect(Math.abs(box.x + box.width / 2 - 720)).toBeLessThan(8);

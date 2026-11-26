@@ -49,7 +49,7 @@
 .s-root .s-grid{margin-top:6px}
 .s-root .s-grid.s-list{display:grid}
 .s-root .s-trk p{min-height:0}
-.s-root.s-dsa h1 em{background-image:linear-gradient(100deg,var(--s-ac),oklch(0.86 0.12 85) 55%,var(--s-ac))}
+.s-root.s-dsa h1 em{background-image:linear-gradient(100deg,var(--s-ac),var(--warn) 55%,var(--s-ac))}
 .s-root.s-dsa .s-meter i{background:linear-gradient(90deg,var(--s-ac),oklch(0.86 0.12 85))}
 .s-root .s-sk .s-trk h4,.s-root .s-sk .s-trk .s-no{color:transparent}
 /* the app's body sets tabular figures, which widens the 0 that `ch` measures; the mockups do not */

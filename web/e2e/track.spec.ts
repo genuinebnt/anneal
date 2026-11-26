@@ -72,10 +72,13 @@ test("keys are ignored while typing in the filter box", async ({ page }) => {
     await expect(page.locator(`${rows}.kb`)).toHaveCount(0);
 });
 
-test("the Learn tab shows the phases and a brief with follow-up questions for each written problem", async ({ page }) => {
+test("the Learn tab shows the phases and one simple card for each problem", async ({ page }) => {
     await page.goto("/t/c3-atomics-lock-free");
     await expect(page.locator(".rt-phases")).toBeVisible();
-    await expect(page.locator(".rt-brief").first()).toBeVisible();
-    await page.locator(".rt-fold > button", { hasText: "Follow-up questions" }).first().click();
-    await expect(page.locator(".rt-fu li").first()).toBeVisible();
+    const card = page.locator(".rt-brief").first();
+    await expect(card.locator(".h")).toBeVisible();
+    await expect(card.locator(".d")).not.toBeEmpty();
+    // a card is its name, a line about it, its tags and where it stands: the rest is on the problem's own page
+    await expect(card.locator(".rp-tags code").first()).toBeVisible();
+    await expect(page.locator(".rt-brief .rt-fold, .rt-brief .rt-rel")).toHaveCount(0);
 });

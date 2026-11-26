@@ -248,7 +248,7 @@ export function DsaPage() {
     <>
       <Header area="dsa" />
       <MockRoot prefix="s-" className="s-dsa s-3" style={{ "--s-ac": "var(--acc)", "--s-acb": "var(--acc-bg)", "--ca": "var(--acc)", "--cab": "var(--acc-bg)" } as CSSProperties}>
-        <Page3 crumb={["DSA", "PROBLEMS"]} title={<>Solve, review, <em className="d-acc">remember.</em></>} tiles={tiles} left={left} center={center} right={right} label="Today and filters" />
+        <Page3 className="bk bk-dsa" crumb={["DSA", "PROBLEMS"]} title={<>Solve, review, <em className="d-acc">remember.</em></>} tiles={tiles} left={left} center={center} right={right} label="Today and filters" />
       </MockRoot>
       {toast}
     </>

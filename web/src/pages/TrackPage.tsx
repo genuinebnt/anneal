@@ -12,6 +12,7 @@ import { Page3, Panel, ReadingPath, RingTile, Tile, type PathStep } from "../com
 import { MockRoot } from "../components/mock";
 import { FollowUps, Fold, PhaseBar, PhaseTag, Teaches, TestResults } from "../components/trackBits";
 import { BLURB, PLANNED, SECTION_NAMES, sectionOf } from "../curriculum";
+import "../styles/cookbook.css";
 
 const TIER = { core: "CORE", light: "LIGHT", sde3: "SDE-3" } as const;
 const MINUTES: Record<Band, number> = { easy: 12, medium: 25, hard: 45 };
@@ -55,6 +56,66 @@ function count<T>(items: ProblemSummary[], key: (p: ProblemSummary) => T | T[]):
   const m = new Map<T, number>();
   for (const p of items) for (const v of ([] as T[]).concat(key(p))) m.set(v, (m.get(v) ?? 0) + 1);
   return m;
+}
+
+/** A page title with its last word in the accent gradient. The text itself is unchanged. */
+function Accented({ text }: { text: string }) {
+  const at = text.lastIndexOf(" ");
+  return at < 0 ? <em className="bk-rgb">{text}</em> : <>{text.slice(0, at + 1)}<em className="bk-rgb">{text.slice(at + 1)}</em></>;
+}
+
+/** The first sentence of a statement, for a card. */
+function firstSentence(statement: string): string {
+  const para = (statement.split(/\n\s*\n/)[0] ?? "").replace(/\s+/g, " ").trim();
+  const first = /^.{20,}?[.!?](?=\s|$)/.exec(para)?.[0] ?? para;
+  return first.length > 220 ? `${first.slice(0, 220).replace(/\s+\S*$/, "")}…` : first;
+}
+
+const AREA_COLOR: Record<string, string> = { L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)" };
+
+/** Every written track as a card, grouped by section; the open one lists its stages. */
+function TrackRail({ tracks, slug, here, onStage }: { tracks: TrackSummary[]; slug: string; here: { slug: string; name: string; solved: number; total: number }[]; onStage: (stage: string) => void }) {
+  const [q, setQ] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const list = box.current;
+    const on = list?.querySelector<HTMLElement>(".sr-card.on");
+    if (list && on) list.scrollTop += on.getBoundingClientRect().top - list.getBoundingClientRect().top - 40;
+  }, [slug, tracks.length]);
+  const found = tracks.filter((c) => `${c.code} ${c.name}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const sections = [...new Set(found.map((c) => c.section))];
+  return (
+    <nav className="sr-rail" aria-label="All tracks">
+      <input type="search" className="sr-filter" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter tracks…" aria-label="Filter tracks" />
+      <div className="sr-list" ref={box}>
+        {found.length === 0 && <p className="cb-dim">No track matches.</p>}
+        {sections.map((section) => (
+          <div key={section} className="sr-group">
+            <h6><span>{SECTION_NAMES[section]}</span><small>{found.filter((c) => c.section === section).length}</small></h6>
+            {found.filter((c) => c.section === section).map((c) => {
+              const on = c.slug === slug;
+              return (
+                <div key={c.code} className={`sr-card${on ? " on" : ""}`} style={{ "--c": AREA_COLOR[c.section] ?? "var(--vio)" } as CSSProperties}>
+                  <Link to="/t/$track" params={{ track: c.slug }} aria-current={on ? "page" : undefined}>
+                    <span className="sr-card-h"><strong>{c.name}</strong><small>{c.solved}/{c.total}</small></span>
+                    <span className="sr-bar" aria-hidden="true"><i style={{ width: `${c.total ? (c.solved / c.total) * 100 : 0}%` }} /></span>
+                    <span className="sr-card-f"><em>{c.code}</em><small>{c.stages.length} stage{c.stages.length === 1 ? "" : "s"}</small></span>
+                  </Link>
+                  {on && (
+                    <div className="sr-stages">
+                      {here.map((x) => (
+                        <button key={x.slug} type="button" onClick={() => onStage(x.slug)}><span>{x.name}</span><small>{x.solved}/{x.total}</small></button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </nav>
+  );
 }
 
 export function TrackPage({ slug }: { slug: string }) {
@@ -337,6 +398,7 @@ export function TrackPage({ slug }: { slug: string }) {
                     <small>{p.status === "draft" ? "not written" : progressLabel(p.progress)}</small>
                   </div>
                   {loading && <div className="rt-ph" aria-hidden="true" />}
+                  {d && <p className="bk-dek" dangerouslySetInnerHTML={{ __html: marked.parseInline(firstSentence(d.statement), { async: false }) as string }} />}
                   {d && d.teaches.length > 0 && <Teaches items={d.teaches} />}
                   {d?.follow_up && (
                     <Fold title="Follow-up questions" n={d.follow_up.split(/(?:^|\s)\d+\)\s/).filter(Boolean).length}>
@@ -437,6 +499,35 @@ export function TrackPage({ slug }: { slug: string }) {
     ["learn", "Learn", `${t.stages.length} stage${t.stages.length === 1 ? "" : "s"}`],
     ["problems", "Problems", `${t.solved}/${t.total}`],
   ];
+  const bar = (
+    <div className="ps-bar">
+      <div className="ps-tabs" role="tablist">
+        {tabs.map(([k, label, n], i) => (
+          <button key={k} role="tab" aria-selected={k === tab} className={k === tab ? "on" : ""} onClick={() => setTab(k)}>
+            {label}<small>{n}</small><kbd>{i + 1}</kbd>
+          </button>
+        ))}
+      </div>
+      <div className="ps-acts">
+        {nextUp && (
+          <Link className="ps-next" to="/p/$id" params={{ id: nextUp.id }} title={`Next unsolved problem in ${t.name}`}>
+            <em>{nextUp.progress === "started" ? "Resume" : "Next"}</em> {nextUp.title}
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" /></svg>
+          </Link>
+        )}
+        <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this track">
+          Reset progress
+        </button>
+        {written.length > 1 && (
+          <span className="hintkeys">
+            {prevTrack && <Link {...linkTo(prevTrack)} aria-label="Previous track" title="Previous track ([)">‹</Link>}
+            <em><kbd>[</kbd> <kbd>]</kbd></em>
+            {nextTrack && <Link {...linkTo(nextTrack)} aria-label="Next track" title="Next track (])">›</Link>}
+          </span>
+        )}
+      </div>
+    </div>
+  );
   const center = (
     <>
       {written.length > 1 && (
@@ -451,33 +542,7 @@ export function TrackPage({ slug }: { slug: string }) {
           {nextTrack && <Link className="arr" {...linkTo(nextTrack)} title="Next track" aria-label="Next track">›</Link>}
         </div>
       )}
-      <div className="ps-bar">
-        <div className="ps-tabs" role="tablist">
-          {tabs.map(([k, label, n], i) => (
-            <button key={k} role="tab" aria-selected={k === tab} className={k === tab ? "on" : ""} onClick={() => setTab(k)}>
-              {label}<small>{n}</small><kbd>{i + 1}</kbd>
-            </button>
-          ))}
-        </div>
-        <div className="ps-acts">
-          {nextUp && (
-            <Link className="ps-next" to="/p/$id" params={{ id: nextUp.id }} title={`Next unsolved problem in ${t.name}`}>
-              <em>{nextUp.progress === "started" ? "Resume" : "Next"}</em> {nextUp.title}
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" /></svg>
-            </Link>
-          )}
-          <button className="ps-reset" aria-expanded={resetOpen} onClick={() => setResetOpen(!resetOpen)} title="Forget your progress on this track">
-            Reset progress
-          </button>
-          {written.length > 1 && (
-            <span className="hintkeys">
-              {prevTrack && <Link {...linkTo(prevTrack)} aria-label="Previous track" title="Previous track ([)">‹</Link>}
-              <em><kbd>[</kbd> <kbd>]</kbd></em>
-              {nextTrack && <Link {...linkTo(nextTrack)} aria-label="Next track" title="Next track (])">›</Link>}
-            </span>
-          )}
-        </div>
-      </div>
+      {bar}
       {resetOpen && <ResetTrack slug={slug} name={t.name} onDone={() => setResetOpen(false)} />}
       {tab === "learn" ? learn : list}
     </>
@@ -544,14 +609,147 @@ export function TrackPage({ slug }: { slug: string }) {
     </div>
   );
 
+  if (area === "rust") {
+    const ready = t.problems.filter((p) => p.status === "ready");
+    const color = AREA_COLOR[sectionOf(t.code)] ?? "var(--vio)";
+    const kind = (m: string) => ready.filter((p) => p.mode === m).length;
+    let n = 0;
+    const parts = (
+      <div className="rt-learn">
+        <div className="sr-path">
+          <PhaseBar stages={t.stages} />
+          <details>
+            <summary>The path, stage by stage</summary>
+            <ReadingPath steps={steps} />
+          </details>
+        </div>
+        {t.stages.map((stage) => {
+          const ps = t.problems.filter((p) => p.stage === stage.slug);
+          if (!ps.length) return null;
+          return (
+            <section key={stage.slug} className="sr-stage" id={`sr-${stage.slug}`}>
+              <h3>
+                <span>{stage.name}</span>
+                <PhaseTag stage={stage} />
+                <Level level={stage.band} />
+                <small>{stage.solved} of {stage.total} solved</small>
+                <button type="button" className="sr-list-btn" onClick={() => toProblems(stage.slug)}>list ›</button>
+              </h3>
+              <div className="sr-parts">
+                {ps.map((p) => {
+                  n += 1;
+                  const d = brief.get(p.id);
+                  const done = p.progress === "solved" || p.progress === "assisted";
+                  const next = p.id === nextUp?.id;
+                  const card = (
+                    <>
+                      <span className="no">{pad2(n)}</span>
+                      <span className="body">
+                        <span className="h">{p.title}</span>
+                        {d && <span className="d" dangerouslySetInnerHTML={{ __html: marked.parseInline(firstSentence(d.statement), { async: false }) as string }} />}
+                        <span className="rp-tags">{p.tags.slice(0, 5).map((x) => <code key={x}>{x}</code>)}</span>
+                      </span>
+                      <span className="state">
+                        {/* "not started" is what a card is until it says otherwise */}
+                        {(p.status === "draft" || next || p.progress !== "not_started") && (
+                          <span className="box">{p.status === "draft" ? "Not written" : next && !done ? (p.progress === "started" ? "Resume" : "Start here") : progressLabel(p.progress)}</span>
+                        )}
+                        <span className="what"><ModeTag mode={p.mode} /><Level level={p.level} /></span>
+                      </span>
+                    </>
+                  );
+                  const cls = `sr-part${next ? " cur" : ""}${done ? " done" : ""}`;
+                  return (
+                    <article key={p.id} className="rt-brief sr-item">
+                      {p.status === "ready" ? <Link className={cls} to="/p/$id" params={{ id: p.id }}>{card}</Link> : <div className={cls}>{card}</div>}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    );
+    return (
+      <>
+        <Header area={area} />
+        <MockRoot prefix="s-" className="s-rust s-3" style={{ "--s-ac": "var(--vio)", "--s-acb": "var(--vio-bg)", "--ca": "var(--vio)", "--cab": "var(--vio-bg)" } as CSSProperties}>
+          <main className="page cb-page cb-sub bk-track rs-track" style={{ "--c": color } as CSSProperties}>
+            <aside className="cb-side">
+              <TrackRail tracks={written} slug={slug} here={t.stages} onStage={(x) => (tab === "learn" ? document.getElementById(`sr-${x}`)?.scrollIntoView({ block: "start" }) : toProblems(x))} />
+            </aside>
+            <div className="cb-main">
+              <header className="cb-banner sr-hero">
+                <div className="cb-dotline">
+                  <b>Track {t.code}</b>
+                  <Link to="/rust">{SECTION_NAMES[t.section]}</Link>
+                  <span>{TIER[t.tier]}</span>
+                  <span>{kind("write")} to write</span>
+                  <span>{kind("fix")} to fix</span>
+                </div>
+                <h1 className="ly-h1"><Accented text={t.name} /></h1>
+                {t.summary && <p dangerouslySetInnerHTML={{ __html: marked.parseInline(t.summary, { async: false }) as string }} />}
+                <div className="sr-foot">
+                  <div>
+                    <div className="sr-phase"><span>{t.stages.length} stages</span><span>{t.solved} of {t.total} solved</span></div>
+                    <span className="bk-segs" role="img" aria-label={`${t.solved} of ${t.total} solved`}>
+                      {t.problems.map((p) => <b key={p.id} className={p.progress} />)}
+                    </span>
+                  </div>
+                  <div className="sr-acts">
+                    {nextUp && <Link className="cb-btn" to="/p/$id" params={{ id: nextUp.id }}>{t.solved || nextUp.progress === "started" ? "Continue" : "Start problem 1"}</Link>}
+                    <Link className="sr-ghost" to="/cookbook">Cookbook</Link>
+                  </div>
+                </div>
+              </header>
+              {written.length > 1 && (
+                <div className="ps-strip sr-strip" ref={strip} role="navigation" aria-label="Tracks">
+                  {written.map((c, i) => (
+                    <Link key={c.code} className={`pchip${i === at ? " on" : ""}`} {...linkTo(c)} aria-current={i === at ? "page" : undefined}>
+                      <span className="ringm" style={{ "--p": `${progress(c)}%` } as CSSProperties}><span>{c.code.slice(1)}</span></span>
+                      {c.name}
+                    </Link>
+                  ))}
+                </div>
+              )}
+              {bar}
+              {resetOpen && <ResetTrack slug={slug} name={t.name} onDone={() => setResetOpen(false)} />}
+              {tab === "learn" ? parts : (
+                <>
+                  <details className="sr-filters" open={active > 0 || undefined}>
+                    <summary>Filters{active > 0 ? ` · ${active} on` : ""}</summary>
+                    <div className="sr-filter-grid">{left}</div>
+                  </details>
+                  {list}
+                </>
+              )}
+              <div className="ly-tiles sr-tiles">{tiles}</div>
+              <div className="sr-after">{right}</div>
+            </div>
+          </main>
+        </MockRoot>
+      </>
+    );
+  }
+
   return (
     <>
       <Header area={area} />
       <MockRoot prefix="s-" className={`s-${area} s-3`} style={{ "--s-ac": "var(--vio)", "--s-acb": "var(--vio-bg)", "--ca": "var(--vio)", "--cab": "var(--vio-bg)" } as CSSProperties}>
         <Page3
           crumb={[<Link to="/rust">{area === "dsa" ? "DSA" : "Rust"}</Link>, <Link to="/rust">{SECTION_NAMES[t.section]}</Link>, `${t.code} · ${TIER[t.tier]}`]}
-          title={t.name}
-          sub={t.summary || undefined}
+          className="bk bk-track"
+          title={<Accented text={t.name} />}
+          sub={
+            <>
+              {t.summary && <span dangerouslySetInnerHTML={{ __html: marked.parseInline(t.summary, { async: false }) as string }} />}
+              {/* one segment a problem: the colour is its real state */}
+              <span className="bk-segs" role="img" aria-label={`${t.solved} of ${t.total} solved`}>
+                {t.problems.map((p) => <b key={p.id} className={p.progress} />)}
+              </span>
+            </>
+          }
           tiles={tiles}
           left={left}
           center={center}

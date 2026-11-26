@@ -21,6 +21,11 @@ export function SdLearn() {
                         <i style={{ background: g.color }} />
                         {g.name}
                         <em>{g.items.length || "soon"}</em>
+                        {g.items.length > 0 && (
+                            <span className="bk-segs" aria-hidden="true">
+                                {g.items.map((c) => <b key={c.id} className={c.checks && c.checked >= c.checks ? "solved" : c.checked ? "started" : ""} />)}
+                            </span>
+                        )}
                     </a>
                 ))}
             </div>
@@ -43,7 +48,7 @@ export function SdLearn() {
     const right = <HowFound title="How the pages work" text="Each page says what the thing is, when to reach for it, how it works inside, what it costs, and one sentence to say in an interview; animated drawings show it moving. It ends with open checks: write your answer, compare, and mark yourself. Every mark becomes a review card." rows={[["Pages", o.concepts.length], ["Reading", `${Math.round(minutes / 6) / 10} h`]]} />;
     return (
         <SdFrame>
-            <Page3 crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" sub="Concepts, patterns, technologies and how they work inside, each with open checks." tiles={<Tile em="Pages" strong={o.concepts.length} small={`about ${Math.round(minutes / 60)} hours of reading`} />} left={left} center={center} right={right} label="Groups" />
+            <Page3 className="bk bk-sd-learn" crumb={["SYSTEM DESIGN", "LEARN"]} title="Learn" sub="Concepts, patterns, technologies and how they work inside, each with open checks." tiles={<Tile em="Pages" strong={o.concepts.length} small={`about ${Math.round(minutes / 60)} hours of reading`} />} left={left} center={center} right={right} label="Groups" />
         </SdFrame>
     );
 }

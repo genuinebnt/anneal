@@ -51,12 +51,19 @@ const probe = () => {
         if (!visible(el)) continue;
         const own = [...el.childNodes].some((n) => n.nodeType === 3 && (n.textContent || "").trim().length > 1);
         if (!own) continue;
+        // large background letters that screen readers skip are decoration, not text to read
+        if (el.matches('.cb-ghost[aria-hidden="true"]')) continue;
         const s = getComputedStyle(el);
-        const fg = rgba(s.color);
         const bg = bgOf(el);
-        const f: [number, number, number] = [0, 1, 2].map((i) => fg[i]! * fg[3] + bg[i]! * (1 - fg[3])) as [number, number, number];
-        const [a, b] = [lum(f), lum(bg)];
-        const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        const against = (colour: string) => {
+            const fg = rgba(colour);
+            const f: [number, number, number] = [0, 1, 2].map((i) => fg[i]! * fg[3] + bg[i]! * (1 - fg[3])) as [number, number, number];
+            const [a, b] = [lum(f), lum(bg)];
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        };
+        // text painted with a gradient has a see-through colour: judge it by the weakest colour in the gradient
+        const stops = s.backgroundClip === "text" ? (s.backgroundImage.match(/(?:oklch|oklab|rgba?|color)\((?:[^()]|\([^()]*\))*\)/g) ?? []) : [];
+        const ratio = stops.length ? Math.min(...stops.map(against)) : against(s.color);
         const size = parseFloat(s.fontSize);
         const large = size >= 24 || (size >= 18.66 && Number(s.fontWeight) >= 700);
         if (ratio < (large ? 3 : 4.5)) {

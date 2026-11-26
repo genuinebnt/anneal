@@ -79,6 +79,8 @@ import "./styles/palette.css";
 import "./styles/sd.css";
 import "./styles/plan.css";
 import "./styles/rust.css";
+// after the page styles it finishes
+import "./styles/restyle.css";
 
 const rootRoute = createRootRoute({
   component: () => (

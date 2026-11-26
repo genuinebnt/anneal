@@ -1,13 +1,13 @@
+import { pctColor, LEVEL_COLOR } from "../components/bits";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { marked } from "marked";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { api, type Activity, type Band, type NextUp, type ReviewItem, type Section, type Tier, type TrackSummary } from "../api";
+import { api, type Band, type Section, type Tier, type TrackSummary, type Activity, type NextUp, type ReviewItem } from "../api";
 import { Header } from "../components/Header";
-import { LEVEL_COLOR, pad2, pctColor } from "../components/bits";
 import { MockRoot, SlidingSeg, rise, useReady } from "../components/mock";
-import { Opt } from "../components/filterBits";
-import { Page3, Panel, Tile } from "../components/layout";
+import { Tile } from "../components/layout";
+import "../styles/cookbook.css";
 import { BLURB, DSA_ORDER, NAV_SECTIONS, PLANNED, SECTION_NAMES, type NavArea, sectionOf } from "../curriculum";
 import { CountUp } from "../components/kit";
 
@@ -26,15 +26,14 @@ const COPY: Record<NavArea, { eyebrow: string; color: string; title: [string, st
   rust: {
     eyebrow: "RUST",
     color: "vio",
-    title: ["The Rust interviewers ", "actually probe."],
+    title: ["Close the reference. ", "Write the code."],
     lead: "Language, standard library, concurrency and systems. Each track climbs from using the API, to understanding why it behaves that way, to building a small version yourself.",
   },
 };
 
-const TIER: Record<Tier, string> = { core: "CORE", light: "LIGHT", sde3: "SDE-3" };
 /** Rough minutes per problem, for "to finish" and next-up estimates. */
 const MINUTES: Record<Band, number> = { easy: 12, medium: 25, hard: 45 };
-const BAND_COLOR: Record<Band, string> = LEVEL_COLOR;
+
 const MODE_LABEL = { write: ["write it", "var(--acc)"], fix: ["fix this", "var(--vio)"], stage: ["stage", "var(--grn)"] } as const;
 
 type State = "cur" | "open" | "ahead" | "done" | "planned";
@@ -66,11 +65,6 @@ function stateOf(live: TrackSummary | undefined, current: string | undefined): S
   return live.solved > 0 ? "open" : "ahead";
 }
 
-function minutesTotal(r: Row) {
-  if (!r.live) return r.planned * MINUTES.medium;
-  return r.live.stages.reduce((n, s) => n + s.total * MINUTES[s.band], 0);
-}
-
 function minutesLeft(r: Row) {
   if (!r.live) return r.planned * MINUTES.medium;
   return r.live.stages.reduce((n, s) => n + (s.total - s.solved) * MINUTES[s.band], 0);
@@ -99,135 +93,57 @@ function useStored<T extends string>(key: string, initial: T): [T, (v: T) => voi
   ];
 }
 
-const TIER_LABEL: Record<Tier, string> = TIER;
-const BANDS_ORDER: Band[] = ["easy", "medium", "hard"];
 
-function Tag({ row }: { row: Row }) {
-  if (row.state === "cur") return <span className="s-tag s-now">NOW ON</span>;
-  if (row.state === "done") return <span className="s-tag" style={{ color: "var(--grn)", background: "var(--grn-bg)", borderColor: "transparent" }}>DONE</span>;
-  if (row.state === "planned") return <span className="s-tag">PLANNED</span>;
-  if (row.tier === "sde3") return <span className="s-tag" style={{ color: "var(--vio)", background: "var(--vio-bg)", borderColor: "transparent" }}>SDE-3</span>;
-  return null;
-}
 
-function Foot({ row }: { row: Row }) {
+const AREA_COLOR: Record<Section, string> = { D: "var(--acc)", L: "var(--vio)", S: "var(--acc)", C: "var(--fn)", Y: "var(--grn)", F: "var(--warn)", P: "var(--acc)" };
+
+/** A track as a book on the shelf: its code, its stages and how far you are. */
+function BookCard({ row, i, gone, color }: { row: Row; i: number; gone: boolean; color: string }) {
   const live = row.live;
-  if (row.state === "planned" || !live) return <span>not written yet · {row.planned} planned</span>;
-  if (row.state === "done")
-    return (
-      <>
-        <span>all {live.solved} solved · re-solves keep it fresh</span>
-        <span className="s-ghost">review <span className="s-ar">›</span></span>
-      </>
-    );
-  if (row.state === "ahead")
-    return (
-      <>
-        <span>start fresh · {live.stages[0]?.name}</span>
-        <span className="s-ghost">start <span className="s-ar">›</span></span>
-      </>
-    );
-  const stage = live.stages.find((s) => s.solved < s.ready);
-  return (
+  const open = live && row.state !== "planned";
+  const cls = `cb-book s-trk s-rv${open ? "" : " s-plan"}${row.state === "cur" ? " s-cur" : ""}${gone ? " s-gone" : ""}`;
+  const style = { ...rise(Math.min(7 + i, 16)).style, "--c": color } as CSSProperties;
+  const stages = live?.stages ?? [];
+  const body = (
     <>
-      <span>resume · {stage?.name}</span>
-      <span className="s-ghost s-solid">resume <span className="s-ar">›</span></span>
+      <span className="cb-ghost" aria-hidden="true">{row.code}</span>
+      <span className="rs-bh">
+        <span className="rs-name">{live?.name ?? row.name}</span>
+        <span className="rs-rule" aria-hidden="true"><i style={{ width: `${live && live.total ? (live.solved / live.total) * 100 : 0}%` }} /></span>
+      </span>
+      <span className="rs-stages">
+        {stages.slice(0, 6).map((x) => <span key={x.slug}><span>{x.name}</span><small>{x.solved ? `${x.solved}/${x.total}` : x.total}</small></span>)}
+      </span>
+      <span className="cb-book-foot">
+        <span>{live ? `${live.solved} of ${live.total} solved` : "not written yet"}</span>
+        <span>{stages.length > 6 ? `all ${stages.length} stages` : "open the track"}</span>
+      </span>
     </>
   );
-}
-
-const BAND_NAME: Record<Band, string> = { easy: "easy", medium: "medium", hard: "hard" };
-
-/** One bar per stage, as wide as the stage is long and filled as far as you have solved, so the climb easy to hard reads at a glance. */
-function Stages({ live }: { live: TrackSummary }) {
-  const stages = live.stages.filter((s) => s.total > 0);
-  const mix = BANDS_ORDER.map((b) => [b, stages.filter((s) => s.band === b).reduce((n, s) => n + s.total, 0)] as const).filter(([, n]) => n > 0);
-  return (
-    <div className="s-stg">
-      <div className="s-sbars">
-        {stages.map((st) => (
-          <div key={st.slug} className="s-sb" style={{ flexGrow: st.total }} title={`${st.name} · ${BAND_NAME[st.band]} · ${st.solved} of ${st.total} solved`}>
-            <span className="s-sbt">
-              <i style={{ width: `${(st.solved / st.total) * 100}%`, background: BAND_COLOR[st.band] }} />
-            </span>
-            <small>
-              {st.name}
-              <b>
-                {st.solved}/{st.total}
-              </b>
-            </small>
-          </div>
-        ))}
-      </div>
-      <div className="s-mix">
-        {mix.map(([b, n]) => (
-          <span key={b} style={{ color: BAND_COLOR[b] }}>
-            {n} {BAND_NAME[b]}
-          </span>
-        ))}
-      </div>
-    </div>
+  return open ? (
+    <Link className={cls} style={style} to="/t/$track" params={{ track: live.slug }}>{body}</Link>
+  ) : (
+    <article className={cls} style={style} aria-disabled="true">{body}</article>
   );
 }
 
-function Topics({ code }: { code: string }) {
-  const chips = (BLURB[code] ?? "").split(" \u00b7 ").map((t) => t.trim()).filter(Boolean).slice(0, 4);
-  // some blurbs are a sentence, not a list of ideas: no chips for those
-  if (chips.length < 2) return null;
-  return (
-    <div className="s-chips">
-      {chips.map((c) => (
-        <code key={c}>{c}</code>
-      ))}
-    </div>
-  );
+/** The soft light that follows the pointer over a track card: its position is passed to the stylesheet. */
+function pointerLight(e: React.PointerEvent<HTMLElement>) {
+  const card = (e.target as HTMLElement).closest<HTMLElement>(".s-trk");
+  if (!card) return;
+  const r = card.getBoundingClientRect();
+  card.style.setProperty("--mx", `${e.clientX - r.left}px`);
+  card.style.setProperty("--my", `${e.clientY - r.top}px`);
 }
 
-/** The percent solved as a ring, the same one the DSA pattern cards wear. */
-function Ring({ live, done }: { live: TrackSummary; done: boolean }) {
-  const pct = Math.round((live.solved / live.total) * 100);
-  return (
-    <span className="pt-ring s-tring" role="img" aria-label={`${live.solved} of ${live.total} solved`} style={{ "--p": pct, "--cs": done ? "var(--grn)" : "var(--s-ac)", "--c-track": "var(--line2)", "--c-bg": "var(--panel)" } as CSSProperties}>
-      <b>{done ? "✓" : `${pct}%`}</b>
-    </span>
-  );
-}
+const REASON: Record<NextUp["reason"], string> = {
+  resume: "You started this one and haven't solved it yet.",
+  current: "It's the next unsolved problem in the track you're working on.",
+  start: "It's the first unsolved problem in the recommended order.",
+};
 
-/** Three goal cards, the DSA page's: how many problems of the core tracks, the SDE-3 tracks and all of them are solved. Each one picks its filter. */
-function Goals({ rows, filter, setFilter }: { rows: Row[]; filter: string; setFilter: (f: string) => void }) {
-  const defs: [string, string, string, (r: Row) => boolean][] = [
-    ["core", "GOAL · CORE TRACKS", "var(--acc)", (r) => r.tier === "core"],
-    ["sde3", "SDE-3 TRACKS", "var(--vio)", (r) => r.tier === "sde3"],
-    ["all", "ALL RUST", "var(--grn)", () => true],
-  ];
-  return (
-    <section className="d-goals s-rv" style={rise(5).style} aria-label="Goals">
-      {defs.map(([k, label, color, test]) => {
-        const rs = rows.filter((r) => r.live && r.live.ready > 0 && test(r));
-        const done = rs.reduce((n, r) => n + r.live!.solved, 0);
-        const total = rs.reduce((n, r) => n + r.live!.ready, 0);
-        const finished = rs.filter((r) => r.state === "done").length;
-        return (
-          <button key={k} className={`d-goal${filter === k ? " on" : ""}`} style={{ "--gc": color } as CSSProperties} aria-pressed={filter === k} onClick={() => setFilter(filter === k && k !== "all" ? "all" : k)}>
-            <span>{label}</span>
-            <b>
-              {done}
-              <small>/ {total}</small>
-            </b>
-            <div className="bar">
-              <i style={{ width: `${total ? (done / total) * 100 : 0}%`, background: color }} />
-            </div>
-            <em>
-              <b>{finished}</b> of {rs.length} tracks done
-            </em>
-          </button>
-        );
-      })}
-    </section>
-  );
-}
+const OUTCOME_COLOR = { solved: "var(--grn)", assisted: "var(--acc)", failing: "var(--bad)", started: "var(--dim)" } as const;
 
-/** Today as three steps, the DSA page's: the re-solves due, the next problem, and done. The first one not finished is marked. */
 function Today({ due, next, doneToday }: { due: number; next?: NextUp | null; doneToday: number }) {
   const solved = doneToday > 0;
   const dueDone = due === 0;
@@ -262,161 +178,8 @@ function Today({ due, next, doneToday }: { due: number; next?: NextUp | null; do
   );
 }
 
-function TrackCard({ row, i, gone, blank }: { row: Row; i: number; gone: boolean; blank: boolean }) {
-  const live = row.live;
-  const total = live?.total ?? row.planned;
-  const cls = `s-trk s-rv${row.state === "planned" ? " s-plan" : ""}${row.state === "cur" ? " s-cur" : ""}${gone ? " s-gone" : ""}`;
-  const rv = rise(Math.min(7 + i, 16));
-  const body = (
-    <>
-      <div className="s-th">
-        <span className="s-no">{pad2(row.n)}</span>
-        <span className="s-tk">
-          TRACK / {TIER_LABEL[row.tier]} · {row.code}
-        </span>
-        <Tag row={row} />
-        {live && row.state !== "planned" && live.total > 0 ? <Ring live={live} done={row.state === "done"} /> : null}
-      </div>
-      <h4>{live?.name ?? row.name}</h4>
-      <p dangerouslySetInnerHTML={{ __html: blank ? "" : marked.parseInline(live?.summary || BLURB[row.code] || "", { async: false }) }} />
-      <Topics code={row.code} />
-      <div className="s-meta s-x">
-        <b>{total}</b> problems · {row.state === "done" ? hours(minutesTotal(row)) : `${hours(minutesLeft(row))} left`}
-        {live && row.state !== "planned" && live.total > 0 ? <> · <b>{Math.round((live.solved / live.total) * 100)}%</b> solved</> : <> · easy → hard</>}
-      </div>
-      {live && row.state !== "planned" ? <Stages live={live} /> : null}
-      <div className="s-foot">
-        <Foot row={row} />
-      </div>
-    </>
-  );
-  return live && row.state !== "planned" ? (
-    <Link className={cls} style={rise(Math.min(7 + i, 16)).style} to="/t/$track" params={{ track: live.slug }}>
-      {body}
-    </Link>
-  ) : (
-    <article className={cls} style={rv.style} aria-disabled="true">
-      {body}
-    </article>
-  );
-}
-
-/** Where you are, grouped by area: a chip per track in the recommended order, coloured by state, each a link to its page. */
-function Roadmap({ rows, sections }: { rows: Row[]; sections: readonly Section[] }) {
-  const done = rows.filter((r) => r.state === "done").length;
-  const written = rows.filter((r) => r.state !== "planned").length;
-  const pct = written ? Math.round((done / written) * 100) : 0;
-  return (
-    <section className="s-road s-rv" style={rise(5).style} aria-label="Roadmap">
-      <div className="s-flab">ROADMAP · {done} OF {written} WRITTEN TRACKS DONE · {pct}%</div>
-      <div className="s-rgroups">
-        {(sections.length > 1 ? sections : [null]).map((sec) => {
-          const rs = rows.filter((r) => !sec || sectionOf(r.code) === sec);
-          if (!rs.length) return null;
-          return (
-            <div key={sec ?? "all"} className="s-rg">
-              {sec && <span className="s-rn">{SECTION_NAMES[sec]}</span>}
-              <ol>
-                {rs.map((r) => {
-                  const live = r.live;
-                  const p = live && live.total ? Math.round((live.solved / live.total) * 100) : 0;
-                  const inner = (
-                    <>
-                      <i className={`s-dot s-d-${r.state}`} style={{ "--p": `${p}%` } as CSSProperties} />
-                      <span className="s-rc">{r.code}</span>
-                    </>
-                  );
-                  const tip = `${live?.name ?? r.name}${live && r.state !== "planned" ? ` · ${live.solved}/${live.total} solved` : " · not written yet"}`;
-                  return (
-                    <li key={r.code}>
-                      {live && r.state !== "planned" ? (
-                        <Link to="/t/$track" params={{ track: live.slug }} title={tip}>
-                          {inner}
-                        </Link>
-                      ) : (
-                        <span className="s-nolink" title={tip}>
-                          {inner}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-const REASON: Record<NextUp["reason"], string> = {
-  resume: "You started this one and haven't solved it yet.",
-  current: "It's the next unsolved problem in the track you're working on.",
-  start: "It's the first unsolved problem in the recommended order.",
-};
-
-function NextUpCard({ next, streak, ready }: { next: NextUp; streak: number; ready: boolean }) {
-  const [mode] = MODE_LABEL[next.mode];
-  const readiness = Math.round(next.readiness);
-  return (
-    <article className="s-card s-next s-rv" style={rise(4).style} aria-label="Next up">
-      <div className="s-nrow">
-        <div className="s-ring">
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <circle className="s-t" cx="32" cy="32" r="28" />
-            <circle className="s-v" cx="32" cy="32" r="28" style={{ strokeDashoffset: ready ? 176 * (1 - Math.min(1, streak / 7)) : 176 }} />
-          </svg>
-          <span>{streak}</span>
-        </div>
-        <div>
-          <div className="s-kick">
-            <span className="s-pulse" />
-            NEXT UP · {next.track_code} · {next.stage_name.toUpperCase()}
-          </div>
-          <div style={{ marginTop: 4, color: "var(--mut)", fontSize: 14 }}>
-            {streak > 0 ? (
-              <>
-                <b style={{ color: "var(--fg)" }}>{streak}-day streak</b>, keep it going.
-              </>
-            ) : (
-              <>
-                <b style={{ color: "var(--fg)" }}>No streak yet.</b> Solve one today to start it.
-              </>
-            )}{" "}
-            {REASON[next.reason]}
-          </div>
-        </div>
-      </div>
-      <h3>{next.title}</h3>
-      {next.excerpt && <p dangerouslySetInnerHTML={{ __html: marked.parseInline(next.excerpt, { async: false }) }} />}
-      <div className="s-pills">
-        <span className={`s-pill${next.level === "easy" ? " s-g" : ""}`} style={next.level === "easy" ? undefined : { color: BAND_COLOR[next.level] }}>
-          {next.level}
-        </span>
-        <span className="s-pill">{mode}</span>
-        <span className="s-pill">{next.track_name}</span>
-        <span className="s-pill">~{MINUTES[next.level]}m</span>
-      </div>
-      <div className="s-ml">
-        <span>
-          {next.track_code} READINESS · {readiness}%
-        </span>
-        <b>+{next.gain}% IF UNASSISTED</b>
-      </div>
-      <div className="s-meter">
-        <i style={{ width: ready ? `${readiness}%` : 0 }} />
-      </div>
-      <Link className="s-cta" to="/p/$id" params={{ id: next.problem_id }}>
-        Solve in the workspace <span className="s-ar">→</span>
-      </Link>
-    </article>
-  );
-}
-
-const OUTCOME_COLOR = { solved: "var(--grn)", assisted: "var(--acc)", failing: "var(--bad)", started: "var(--dim)" } as const;
-
-function Side({ activity, sections, live, due, ready }: { activity?: Activity; sections: readonly Section[]; live: TrackSummary[]; due: ReviewItem[]; ready: boolean }) {
+/** Your week, what you did last and how ready each area is: beside the next problem. */
+function Pulse({ activity, sections, live, due, ready }: { activity?: Activity; sections: readonly Section[]; live: TrackSummary[]; due: ReviewItem[]; ready: boolean }) {
   const shade = (n: number) => (n === 0 ? "var(--raise)" : `color-mix(in oklab, var(--grn) ${Math.min(100, 25 + n * 20)}%, var(--raise))`);
   const readiness = sections.map((s) => {
     const ts = live.filter((t) => t.section === s && t.ready > 0);
@@ -425,87 +188,57 @@ function Side({ activity, sections, live, due, ready }: { activity?: Activity; s
     return { s, pct: total ? Math.round(ts.reduce((n, t) => n + t.readiness * w(t), 0) / total) : null };
   });
   return (
-    <div className="s-side" aria-label="Activity">
-      <div className="s-card s-rv" style={rise(5).style}>
-        <h5>THIS WEEK</h5>
-        <div className="s-week">
-          {(activity?.week ?? []).map((d) => (
-            <i key={d.date} style={d.solved ? { background: shade(d.solved) } : undefined} title={`${d.date}: ${d.solved} solved`} />
-          ))}
+    <div className="rs-pulse" aria-label="Activity">
+      <section className="rs-box">
+        <h2>This week<small>{activity?.week_unassisted ?? 0} of {activity?.week_solved ?? 0} unassisted</small></h2>
+        <div className="rs-week">
+          {(activity?.week ?? []).map((d) => <i key={d.date} style={d.solved ? { background: shade(d.solved) } : undefined} title={`${d.date}: ${d.solved} solved`} />)}
         </div>
-        <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", font: "500 12px var(--mono)", color: "var(--dim)" }}>
-          <span>unassisted</span>
-          <b style={{ color: "var(--fg)" }}>
-            {activity?.week_unassisted ?? 0} of {activity?.week_solved ?? 0}
-          </b>
-        </div>
-      </div>
-      <div className="s-card s-rv" style={rise(6).style}>
-        <h5>RECENT</h5>
-        {activity?.recent.length ? (
-          <div className="s-list">
-            {activity.recent.map((r) => (
-              <Link key={r.problem_id + r.at} className="s-item" to="/p/$id" params={{ id: r.problem_id }}>
-                <i style={{ background: OUTCOME_COLOR[r.outcome] }} />
-                <span>{r.title}</span>
-                <small>
-                  {r.track} · {r.detail}
-                </small>
-              </Link>
-            ))}
-          </div>
-        ) : (
-          <p className="s-none">Nothing yet. Your attempts show up here.</p>
-        )}
-      </div>
+      </section>
       {due.length > 0 && (
-        <div className="s-card s-rv" style={rise(6).style}>
-          <h5>
-            RE-SOLVE DUE
-            <Link to="/progress" hash="reviews" style={{ color: "var(--vio)", float: "right" }}>
-              {due.length} →
+        <section className="rs-box">
+          <h2>Re-solve due<Link to="/progress" hash="reviews">all {due.length}</Link></h2>
+          {due.slice(0, 3).map((r) => (
+            <Link key={r.problem_id} className="rs-line" to="/progress" hash="reviews">
+              <i style={{ background: "var(--vio)" }} />
+              <span>{r.title}</span>
+              <small>{r.track} · {r.days_overdue > 0 ? `${r.days_overdue}d late` : "today"}</small>
             </Link>
-          </h5>
-          <div className="s-list">
-            {due.slice(0, 4).map((r) => (
-              <Link key={r.problem_id} className="s-item" to="/progress" hash="reviews">
-                <i style={{ background: "var(--vio)" }} />
-                <span>{r.title}</span>
-                <small>
-                  {r.track} · {r.days_overdue > 0 ? `${r.days_overdue}d late` : "today"}
-                </small>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="s-card s-rv" style={rise(7).style}>
-        <h5>READINESS</h5>
-        <div className="s-rd">
-          {readiness.map(({ s, pct }) => (
-            <div key={s}>
-              <div className="s-l">
-                <span>{SECTION_NAMES[s]}</span>
-                <b style={{ color: pct === null ? "var(--dim)" : pctColor(pct) }}>{pct === null ? "—" : `${pct}%`}</b>
-              </div>
-              <div className="s-meter" style={{ margin: 0 }}>
-                <i style={{ width: ready ? `${pct ?? 0}%` : 0, background: pct === null ? "transparent" : pctColor(pct) }} />
-              </div>
-            </div>
           ))}
-        </div>
-      </div>
+        </section>
+      )}
+      <section className="rs-box">
+        <h2>Recent</h2>
+        {activity?.recent.length ? (
+          activity.recent.slice(0, 4).map((r) => (
+            <Link key={r.problem_id + r.at} className="rs-line" to="/p/$id" params={{ id: r.problem_id }}>
+              <i style={{ background: OUTCOME_COLOR[r.outcome] }} />
+              <span>{r.title}</span>
+              <small>{r.track} · {r.detail}</small>
+            </Link>
+          ))
+        ) : (
+          <p>Nothing yet. Your attempts show up here.</p>
+        )}
+      </section>
+      <section className="rs-box">
+        <h2>Readiness</h2>
+        {readiness.map(({ s, pct }) => (
+          <div key={s} className="rs-ready">
+            <span>{SECTION_NAMES[s]}</span>
+            <b style={{ color: pct === null ? "var(--dim)" : pctColor(pct) }}>{pct === null ? "—" : `${pct}%`}</b>
+            <div className="s-meter"><i style={{ width: ready ? `${pct ?? 0}%` : 0, background: pct === null ? "transparent" : pctColor(pct) }} /></div>
+          </div>
+        ))}
+      </section>
     </div>
   );
 }
 
-/** The soft light that follows the pointer over a track card: its position is passed to the stylesheet. */
-function pointerLight(e: React.PointerEvent<HTMLElement>) {
-  const card = (e.target as HTMLElement).closest<HTMLElement>(".s-trk");
-  if (!card) return;
-  const r = card.getBoundingClientRect();
-  card.style.setProperty("--mx", `${e.clientX - r.left}px`);
-  card.style.setProperty("--my", `${e.clientY - r.top}px`);
+/** Solved and written problems of some tracks: the goal a filter stands for. */
+function goalOf(rows: Row[]) {
+  const written = rows.filter((r) => r.live && r.live.ready > 0);
+  return { solved: written.reduce((n, r) => n + r.live!.solved, 0), total: written.reduce((n, r) => n + r.live!.ready, 0) };
 }
 
 export function SectionPage({ area }: { area: NavArea }) {
@@ -565,128 +298,122 @@ export function SectionPage({ area }: { area: NavArea }) {
   const problems = rows.reduce((n, r) => n + Math.max(r.planned, r.live?.total ?? 0), 0);
   const left = rows.reduce((n, r) => n + (r.state === "done" ? 0 : minutesLeft(r)), 0);
   const visible = rows.filter(shown).length;
-  let index = 0;
-
-  const groups = (sections.length > 1 ? sections : [null]).map((s) => {
-    const all = rows.filter((r) => !s || sectionOf(r.code) === s);
-    const count = all.filter(shown).length;
-    if (!all.length) return null;
-    return (
-      <div key={s ?? "all"} style={{ display: count ? undefined : "none" }}>
-        <div className="s-flab" style={{ marginTop: 28 }}>
-          {s ? `${SECTION_NAMES[s].toUpperCase()} · ${count}` : `ALL TRACKS · IN RECOMMENDED ORDER · ${count}`}
-        </div>
-        <div className={`s-grid${view === "list" ? " s-list" : ""}`} onPointerMove={pointerLight}>
-          {all.map((r) => (
-            <TrackCard key={r.code} row={r} i={index++} gone={!shown(r)} blank={false} />
-          ))}
-        </div>
-      </div>
-    );
-  });
-
-  const sectionRows = (sections.length > 1 ? sections : []).map((sec) => [sec, rows.filter((r) => sectionOf(r.code) === sec)] as const);
-  const tiles = (
-    <>
-      <Tile em="Tracks" strong={<CountUp value={rows.length} />} small={`${rows.filter((r) => r.live && r.live.ready > 0).length} written`} />
-      <Tile em="Problems" strong={<CountUp value={problems} />} small={`${rows.reduce((n, r) => n + (r.live?.ready ?? 0), 0)} ready to solve`} />
-      <Tile em="To finish" strong={<CountUp value={left} format={hours} />} small="at your pace" hint="An estimate of the time left: 12 minutes for each unsolved easy problem, 25 for a medium, 45 for a hard." />
-      <Tile em="Re-solves due" strong={due.length} hot={due.length > 0} color="var(--vio)" to={{ to: "/progress", hash: "reviews" }} small={due.length > 0 ? <><span className="ly-dotp" aria-hidden="true" />Re-solve now →</> : "nothing due"} />
-    </>
-  );
+  const solved = rows.reduce((n, r) => n + (r.live?.solved ?? 0), 0);
   const clear = () => {
     setQ("");
     setFilter("all");
     setSec("all");
   };
-  const active = (filter !== "all" ? 1 : 0) + (sec !== "all" ? 1 : 0);
-  const leftPanel = (
-    <>
-      <Panel title="Today">
-        <Today due={due.length} next={activity.data?.next} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
-      </Panel>
-      <Panel title="Status" aside={active > 0 ? <button className="d-clearall" onClick={clear}>clear {active}</button> : undefined}>
-        <div className="d-rail-in">
-          <div className="rbox">
-            {FILTERS.map(([key, label, fn]) => {
-              const n = rows.filter(fn).length;
-              if (!n && key !== "all") return null;
-              return <Opt key={key} label={label} n={n} on={filter === key} onClick={() => setFilter(key)} />;
-            })}
-          </div>
-        </div>
-      </Panel>
-      {sectionRows.length > 0 && (
-        <Panel title="Area">
-          <div className="d-rail-in">
-            <div className="rbox">
-              <Opt label="All areas" n={rows.length} on={sec === "all"} onClick={() => setSec("all")} />
-              {sectionRows.map(([s, rs]) => (
-                <Opt key={s} label={SECTION_NAMES[s]} n={rs.length} on={sec === s} onClick={() => setSec(sec === s ? "all" : s)} />
-              ))}
-            </div>
-          </div>
-        </Panel>
-      )}
-      <Panel title="Keys">
-        <p className="s-none"><kbd>/</kbd> search the tracks. Open a track, then <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> switch its tabs and <kbd>[</kbd> <kbd>]</kbd> step through the tracks.</p>
-      </Panel>
-    </>
-  );
-  const center = (
-    <>
-      {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
-      {activity.data?.next && <NextUpCard next={activity.data.next} streak={activity.data.streak} ready={ready} />}
-      {!loading && rows.length > 0 && <Goals rows={rows} filter={filter} setFilter={setFilter} />}
-      {!loading && rows.length > 0 && <Roadmap rows={rows} sections={sections} />}
-      <div className="s-tools">
-        <label className="s-search">
-          <span>⌕</span>
-          <input ref={search} type="search" placeholder="search tracks, stages, topics…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tracks" autoComplete="off" spellCheck={false} />
-          <kbd>/</kbd>
-        </label>
-        <SlidingSeg
-          label="View"
-          value={view}
-          onChange={setView}
-          options={(["grid", "list"] as const).map((v) => ({ key: v, label: v === "grid" ? "▦ grid" : "≡ list" }))}
-        />
-      </div>
-      {loading ? (
-        <div className="s-grid" style={{ marginTop: 28 }}>
-          {Array.from({ length: 6 }, (_, i) => (
-            <article key={i} className="s-trk" style={{ minHeight: 220 }} aria-hidden="true">
-              <div className="s-th">
-                <span className="s-no">··</span>
-              </div>
-              <h4>Loading</h4>
-            </article>
-          ))}
-        </div>
-      ) : (
-        groups
-      )}
-      <div className={`s-empty${visible === 0 && !loading ? " s-show" : ""}`}>
-        No track matches that.{" "}
-        <button className="s-ghost" style={{ marginLeft: 8 }} onClick={clear}>
-          Clear filters
-        </button>
-      </div>
-    </>
-  );
+  const lead = activity.data?.next;
+  let index = 0;
   return (
     <>
       <Header area={area} />
       <MockRoot prefix="s-" className={`s-${area} s-3`} style={{ "--s-ac": `var(--${copy.color})`, "--s-acb": `var(--${copy.color}-bg)`, "--ca": `var(--${copy.color})`, "--cab": `var(--${copy.color}-bg)` } as CSSProperties}>
-        <Page3
-          crumb={[copy.eyebrow, "TRACKS"]}
-          title={<>{copy.title[0]}<em className="d-acc">{copy.title[1]}</em></>}
-          tiles={tiles}
-          left={leftPanel}
-          center={center}
-          right={<Side activity={activity.data} sections={sections} live={tracks.data ?? []} due={due} ready={ready} />}
-          label="Filters"
-        />
+        <main className="page cb-page cb-home rs-home" style={{ "--c": "var(--vio)" } as CSSProperties}>
+          <div className="cb-intro">
+            <div>
+              <h1>
+                {copy.title[0]}
+                <em className="cb-rgb">{copy.title[1]}</em>
+              </h1>
+              <p>Solve it yourself first. When you are stuck, look it up in the Cookbook.</p>
+            </div>
+            <div className="ly-tiles">
+              <Tile em="Tracks" strong={<CountUp value={rows.length} />} small={`${rows.filter((r) => r.live && r.live.ready > 0).length} written`} />
+              <Tile em="Problems" strong={<CountUp value={problems} />} small={`${solved} solved`} />
+              <Tile em="To finish" strong={<CountUp value={left} format={hours} />} small="at your pace" hint="An estimate of the time left: 12 minutes for each unsolved easy problem, 25 for a medium, 45 for a hard." />
+              <Tile em="Re-solves due" strong={due.length} hot={due.length > 0} color="var(--vio)" to={{ to: "/progress", hash: "reviews" }} small={due.length > 0 ? "re-solve now" : "nothing due"} />
+            </div>
+          </div>
+          {tracks.isError && <p className="notice bad">Couldn't reach the API. Is `cargo run -p anneal-api` running?</p>}
+          <Today due={due.length} next={lead} doneToday={activity.data?.week[activity.data.week.length - 1]?.solved ?? 0} />
+          <section className="cb-feature rs-feature" aria-label="Next up">
+            {lead ? (
+              <article className="cb-lead">
+                <div className="cb-dotline">
+                  <b>Next up</b>
+                  <span>{lead.track_code} {lead.track_name}</span>
+                  <span>{lead.stage_name}</span>
+                </div>
+                <div className="rs-streak">
+                  <strong>{activity.data!.streak > 0 ? `${activity.data!.streak}-day streak` : "No streak yet"}</strong>
+                  <span>{activity.data!.streak > 0 ? "Keep it going." : "Solve one today to start it."} {REASON[lead.reason]}</span>
+                </div>
+                <div>
+                  <h2 className="cb-lead-t">{lead.title}</h2>
+                  {lead.excerpt && <p className="cb-lead-d" dangerouslySetInnerHTML={{ __html: marked.parseInline(lead.excerpt, { async: false }) as string }} />}
+                  <div className="rs-pills">
+                    <span style={{ color: LEVEL_COLOR[lead.level] }}>{lead.level}</span>
+                    <span>{MODE_LABEL[lead.mode][0]}</span>
+                    <span>~{MINUTES[lead.level]}m</span>
+                  </div>
+                  <div className="rs-ml">
+                    <span>{lead.track_code} readiness {Math.round(lead.readiness)}%</span>
+                    <b>+{lead.gain}% if unassisted</b>
+                  </div>
+                  <div className="s-meter"><i style={{ width: ready ? `${Math.round(lead.readiness)}%` : 0 }} /></div>
+                  <div className="rs-acts">
+                    <Link to="/p/$id" params={{ id: lead.problem_id }} className="cb-btn">Solve it</Link>
+                    <Link to="/cookbook" className="sr-ghost">Cookbook</Link>
+                  </div>
+                </div>
+              </article>
+            ) : (
+              <article className="cb-lead"><p className="cb-lead-d">{activity.isPending ? "Loading your next problem…" : "Nothing is waiting: every written problem is solved."}</p></article>
+            )}
+            <Pulse activity={activity.data} sections={sections} live={tracks.data ?? []} due={due} ready={ready} />
+          </section>
+          <div className="cb-kbar">
+            <label className="cb-search">
+              <span aria-hidden="true">⌕</span>
+              <input ref={search} type="search" placeholder="Find a track, a stage or a topic…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tracks" autoComplete="off" spellCheck={false} />
+              <kbd>/</kbd>
+            </label>
+            <SlidingSeg label="View" value={view} onChange={setView} options={(["grid", "list"] as const).map((v) => ({ key: v, label: v === "grid" ? "▦ grid" : "≡ list" }))} />
+            <div className="cb-chips rs-areas" role="group" aria-label="Area">
+              <button type="button" className={sec === "all" ? "on" : ""} aria-pressed={sec === "all"} onClick={() => setSec("all")}>All areas<small>{rows.length}</small></button>
+              {sections.map((x) => (
+                <button key={x} type="button" className={sec === x ? "on" : ""} aria-pressed={sec === x} onClick={() => setSec(sec === x ? "all" : x)} style={{ "--c": AREA_COLOR[x] } as CSSProperties}>
+                  {SECTION_NAMES[x]}<small>{rows.filter((r) => sectionOf(r.code) === x).length}</small>
+                </button>
+              ))}
+            </div>
+            <div className="cb-chips rs-status" role="group" aria-label="Status">
+              {FILTERS.map(([key, label, fn]) => {
+                const n = rows.filter(fn).length;
+                if (!n && key !== "all") return null;
+                const goal = key === "all" || key === "core" || key === "sde3" ? goalOf(rows.filter(fn)) : undefined;
+                return (
+                  <button key={key} type="button" className={filter === key ? "on" : ""} aria-pressed={filter === key} onClick={() => setFilter(key)}>
+                    {label}
+                    <small>{goal ? `${goal.solved}/${goal.total} solved` : n}</small>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {loading && <div className="cb-skel" aria-label="Loading"><i /><i /><i /></div>}
+          {sections.map((x) => {
+            const all = rows.filter((r) => sectionOf(r.code) === x);
+            const count = all.filter(shown).length;
+            if (!all.length) return null;
+            return (
+              <div key={x} style={{ display: count ? undefined : "none" }}>
+                <h2 className="cb-secth">{SECTION_NAMES[x]}<small>{count} track{count === 1 ? "" : "s"}</small></h2>
+                <div className={`cb-books s-grid${view === "list" ? " s-list" : ""}`} onPointerMove={pointerLight}>
+                  {all.map((r) => <BookCard key={r.code} row={r} i={index++} gone={!shown(r)} color={AREA_COLOR[x]} />)}
+                </div>
+              </div>
+            );
+          })}
+          <div className={`s-empty${visible === 0 && !loading ? " s-show" : ""}`}>
+            No track matches that.{" "}
+            <button className="s-ghost" style={{ marginLeft: 8 }} onClick={clear}>
+              Clear filters
+            </button>
+          </div>
+        </main>
       </MockRoot>
     </>
   );
