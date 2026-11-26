@@ -21,7 +21,7 @@ RUN cd /opt/anneal-deps \
 
 ENV CARGO_HOME=/tmp/cargo-home \
     CARGO_TERM_COLOR=never \
-    CARGO_INCREMENTAL=1 \
+    CARGO_INCREMENTAL=0 \
     RUSTC_BOOTSTRAP=1
 
 WORKDIR /work

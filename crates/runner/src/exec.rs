@@ -61,6 +61,9 @@ pub(crate) async fn run(
                 .current_dir(work)
                 .env("CARGO_TARGET_DIR", target)
                 .env("CARGO_TERM_COLOR", "never")
+                // No incremental compilation: rustc's copies from its incremental directory have failed ("unable to
+                // copy …/incremental/…: No such file or directory"), failing a run for nothing the learner wrote.
+                .env("CARGO_INCREMENTAL", "0")
                 .env("RUSTC_BOOTSTRAP", "1")
                 // Own process group, so a timeout can kill the test binary cargo started too.
                 .process_group(0);
@@ -108,6 +111,9 @@ pub(crate) async fn run(
                 .args([
                     "-e",
                     "CARGO_TARGET_DIR=/target",
+                    "-e",
+                    // as for host runs; overrides the image's setting
+                    "CARGO_INCREMENTAL=0",
                     "-e",
                     "PYTHONDONTWRITEBYTECODE=1",
                     "-e",
