@@ -190,7 +190,11 @@ RING = """
             /// Panics if `capacity` is 0.
             pub fn with_capacity(capacity: usize) -> Self {
                 assert!(capacity > 0, "capacity must be at least 1");
-                Ring { buf: (0..capacity).map(|_| None).collect(), head: 0, len: 0 }
+                Ring {
+                    buf: (0..capacity).map(|_| None).collect(),
+                    head: 0,
+                    len: 0,
+                }
             }
 
             /// Adds `value`, returning the evicted oldest value if the ring was full.
@@ -1029,8 +1033,10 @@ P.append(dict(
     teaches=["Pre-sizing a `String` or `Vec` avoids reallocating as it grows.", "Computing the exact final length up front."],
     statement="""
         Join `parts` with `sep` between them. The result must be allocated exactly once:
-        its capacity must equal its length.
+        its capacity must equal its length. The tests count heap allocations, so building the string
+        in several steps and calling `shrink_to_fit` at the end doesn't pass.
     """,
+    perf=dict(allocs=True),
     examples=[("parts = [\"a\", \"bb\", \"ccc\"], sep = \", \"", "\"a, bb, ccc\"")],
     starter="""
         pub fn join_with(parts: &[&str], sep: &str) -> String {
@@ -1039,7 +1045,8 @@ P.append(dict(
     """,
     solution="""
         pub fn join_with(parts: &[&str], sep: &str) -> String {
-            let total = parts.iter().map(|p| p.len()).sum::<usize>() + sep.len() * parts.len().saturating_sub(1);
+            let total =
+                parts.iter().map(|p| p.len()).sum::<usize>() + sep.len() * parts.len().saturating_sub(1);
             let mut out = String::with_capacity(total);
             for (i, p) in parts.iter().enumerate() {
                 if i > 0 {
@@ -1056,6 +1063,7 @@ P.append(dict(
         T("empty_sep", "parts = [\"a\", \"b\"], sep = \"\"", '{ let s = join_with(&["a", "b"], ""); (s.clone(), s.capacity() == s.len()) }', '("ab".to_string(), true)'),
         T("no_parts", "parts = [], sep = \",\"", 'join_with(&[], ",")', "String::new()"),
         T("empty_parts_keep_seps", "parts = [\"\", \"\"], sep = \",\"", '{ let s = join_with(&["", ""], ","); (s.clone(), s.capacity() == s.len()) }', '(",".to_string(), true)'),
+        T("allocates_once", "parts = [\"a\", \"bb\", \"ccc\"], sep = \", \": heap allocations", 'anneal_prelude::allocs(|| join_with(&["a", "bb", "ccc"], ", ")).1.count', "1"),
     ],
     hidden=[
         T("none", "parts = [], sep = \",\"", 'join_with(&[], ",")', '""'),
@@ -1063,7 +1071,7 @@ P.append(dict(
         T("single_empty_part", "parts = [\"\"], sep = \"-\"", 'join_with(&[""], "-")', "String::new()"),
         T("unicode", "parts = [\"日本\", \"é\"], sep = \" → \"", '{ let s = join_with(&["日本", "é"], " → "); (s.clone(), s.capacity()) }', '("日本 → é".to_string(), 13)'),
         T("long_sep", "parts = [\"a\", \"b\", \"c\"], sep = \"<->\"", 'join_with(&["a", "b", "c"], "<->")', '"a<->b<->c".to_string()'),
-        T("capacity_ten_parts", "10 parts of \"abc\", sep = \", \"", '{ let s = join_with(&["abc"; 10], ", "); (s.len(), s.capacity()) }', "(48, 48)"),
+        T("capacity_ten_parts", "10 parts of \"abc\", sep = \", \": (length, capacity, heap allocations)", '{ let (s, seen) = anneal_prelude::allocs(|| join_with(&["abc"; 10], ", ")); (s.len(), s.capacity(), seen.count) }', "(48, 48, 1)"),
         T("no_trailing_sep", "parts = [\"x\", \"y\"], sep = \";\"", 'join_with(&["x", "y"], ";")', '"x;y".to_string()'),
         """
         #[test]
@@ -2289,6 +2297,9 @@ P.append(dict(
     statement="""
         `Ring<T>` holds up to `capacity` items. `push` adds to the newest end and, when full, evicts
         and returns the oldest. `iter` yields oldest to newest.
+
+        A value stays in the slot it was written to until it's evicted: `push` writes one slot and moves
+        no other value. The tests check this through the addresses of the references `iter` yields.
     """,
     starter="""
         pub struct Ring<T> {
@@ -2334,6 +2345,24 @@ P.append(dict(
         T("big", "capacity 1000, push 0..2500", "{ let mut r = Ring::with_capacity(1000); let evicted = (0..2500).filter_map(|i| r.push(i)).count(); let v: Vec<i32> = r.iter().copied().collect(); (evicted, v.len(), v[0], v[999]) }", "(1500, 1000, 1500, 2499)"),
         T("iter_twice", "capacity 3, push 1..=4, iterate twice", "{ let mut r = Ring::with_capacity(3); for i in 1..=4 { r.push(i); } (r.iter().copied().collect::<Vec<_>>(), r.iter().copied().collect::<Vec<_>>()) }", "(vec![2, 3, 4], vec![2, 3, 4])"),
         """
+        #[test]
+        fn push_moves_no_other_value() {
+            for cap in [2usize, 3, 8] {
+                let mut r = Ring::with_capacity(cap);
+                let mut before: Vec<(u32, *const u32)> = Vec::new();
+                for x in 0..4 * cap as u32 {
+                    r.push(x);
+                    let now: Vec<(u32, *const u32)> = r.iter().map(|v| (*v, v as *const u32)).collect();
+                    for &(value, slot) in &before {
+                        if let Some(&(_, new_slot)) = now.iter().find(|&&(v, _)| v == value) {
+                            check!(format!("capacity {cap}: after push({x}), is {value} still in the same slot?"), new_slot == slot, true);
+                        }
+                    }
+                    before = now;
+                }
+            }
+        }
+
         #[test]
         fn random_vs_model() {
             let mut rng = anneal_prelude::Rng::new(2318);

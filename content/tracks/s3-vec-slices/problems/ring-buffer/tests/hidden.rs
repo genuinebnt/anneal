@@ -36,6 +36,24 @@ fn iter_twice() {
 }
 
 #[test]
+fn push_moves_no_other_value() {
+    for cap in [2usize, 3, 8] {
+        let mut r = Ring::with_capacity(cap);
+        let mut before: Vec<(u32, *const u32)> = Vec::new();
+        for x in 0..4 * cap as u32 {
+            r.push(x);
+            let now: Vec<(u32, *const u32)> = r.iter().map(|v| (*v, v as *const u32)).collect();
+            for &(value, slot) in &before {
+                if let Some(&(_, new_slot)) = now.iter().find(|&&(v, _)| v == value) {
+                    check!(format!("capacity {cap}: after push({x}), is {value} still in the same slot?"), new_slot == slot, true);
+                }
+            }
+            before = now;
+        }
+    }
+}
+
+#[test]
 fn random_vs_model() {
     let mut rng = anneal_prelude::Rng::new(2318);
     for _ in 0..300 {

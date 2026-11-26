@@ -28,3 +28,6 @@ text = "`saturating_sub(1)` keeps the separator count at 0 for an empty slice."
 explanation = "Lengths are in bytes, which is what `String` capacity counts, so Unicode separators need no special case. One allocation, then only copies."
 time = "O(total length)"
 space = "O(total length)"
+
+[perf]
+count_allocs = true

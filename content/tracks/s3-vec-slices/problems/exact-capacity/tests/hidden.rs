@@ -27,7 +27,7 @@ fn long_sep() {
 
 #[test]
 fn capacity_ten_parts() {
-    check!(r#"10 parts of "abc", sep = ", ""#, { let s = join_with(&["abc"; 10], ", "); (s.len(), s.capacity()) }, (48, 48));
+    check!(r#"10 parts of "abc", sep = ", ": (length, capacity, heap allocations)"#, { let (s, seen) = anneal_prelude::allocs(|| join_with(&["abc"; 10], ", ")); (s.len(), s.capacity(), seen.count) }, (48, 48, 1));
 }
 
 #[test]

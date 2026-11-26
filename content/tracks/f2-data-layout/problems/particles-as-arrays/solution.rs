@@ -100,19 +100,20 @@ impl Particles {
         }
     }
 
-    /// One explicit Euler step: `vel.z -= G * dt`, then `pos += vel * dt` (with the new velocity), in one
-    /// pass over six dense arrays, which the compiler vectorizes.
+    /// One explicit Euler step: `vel.z -= G * dt`, then `pos += vel * dt` (with the new velocity).
     pub fn step(&mut self, dt: f32) {
         let g = G * dt;
-        // Re-slicing every array to the same length lets LLVM drop the bounds checks and vectorize.
-        let n = self.x.len();
-        let (x, y, z) = (&mut self.x[..n], &mut self.y[..n], &mut self.z[..n]);
-        let (vx, vy, vz) = (&self.vx[..n], &self.vy[..n], &mut self.vz[..n]);
-        for i in 0..n {
-            vz[i] -= g;
-            x[i] += vx[i] * dt;
-            y[i] += vy[i] * dt;
-            z[i] += vz[i] * dt;
+        // One short loop per axis. Zipped slices need no bounds checks, so each loop vectorizes.
+        for (x, v) in self.x.iter_mut().zip(&self.vx) {
+            *x += v * dt;
+        }
+        for (y, v) in self.y.iter_mut().zip(&self.vy) {
+            *y += v * dt;
+        }
+        // Gravity first, so the position uses the new velocity.
+        for (z, v) in self.z.iter_mut().zip(&mut self.vz) {
+            *v -= g;
+            *z += *v * dt;
         }
     }
 

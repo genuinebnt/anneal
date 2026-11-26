@@ -24,3 +24,8 @@ fn no_trailing_sep() {
 fn empty_words_keep_seps() {
     check!(r#"words = ["", "", ""], sep = "-""#, join_words(&["", "", ""], "-"), "--".to_string());
 }
+
+#[test]
+fn allocates_once() {
+    check!(r#"words = ["a", "bc", "d"], sep = ", ": heap allocations"#, anneal_prelude::allocs(|| join_words(&["a", "bc", "d"], ", ")).1.count, 1);
+}

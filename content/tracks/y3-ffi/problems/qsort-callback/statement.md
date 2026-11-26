@@ -5,5 +5,8 @@ closure as the comparison, like `slice::sort_by` but powered by C.
 context. Write a generic trampoline that recovers the closure from the context, calls it on the two elements and returns
 `-1 / 0 / 1`.
 
+The signature above is glibc's (Linux, where your code runs). macOS orders the arguments differently, so the
+starter includes a small adapter that gives it the same shape there.
+
 If the closure **panics**, the panic must not cross the C boundary. Catch it, do not call the closure again for the rest of
 the sort, let `qsort_r` return, and then re-raise the same panic payload in the caller.

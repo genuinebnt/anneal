@@ -3877,7 +3877,9 @@ pub struct Particles {
 
 impl Particles {
     pub fn with_capacity(n: usize) -> Particles {
-        Particles { items: Vec::with_capacity(n) }
+        Particles {
+            items: Vec::with_capacity(n),
+        }
     }
 
     pub fn push(&mut self, p: Particle) {
@@ -3914,22 +3916,27 @@ impl Particles {
 
     /// The total kinetic energy, Σ ½·m·|v|², summed in `f64`.
     pub fn kinetic_energy(&self) -> f64 {
-        self.items.iter().map(|p| 0.5 * p.mass as f64 * p.vel.iter().map(|&v| v as f64 * v as f64).sum::<f64>()).sum()
+        self.items
+            .iter()
+            .map(|p| 0.5 * p.mass as f64 * p.vel.iter().map(|&v| v as f64 * v as f64).sum::<f64>())
+            .sum()
     }
 }
 """
 
 
 def particles_soa(step_body="""        let g = G * dt;
-        // Re-slicing every array to the same length lets LLVM drop the bounds checks and vectorize.
-        let n = self.x.len();
-        let (x, y, z) = (&mut self.x[..n], &mut self.y[..n], &mut self.z[..n]);
-        let (vx, vy, vz) = (&self.vx[..n], &self.vy[..n], &mut self.vz[..n]);
-        for i in 0..n {
-            vz[i] -= g;
-            x[i] += vx[i] * dt;
-            y[i] += vy[i] * dt;
-            z[i] += vz[i] * dt;
+        // One short loop per axis. Zipped slices need no bounds checks, so each loop vectorizes.
+        for (x, v) in self.x.iter_mut().zip(&self.vx) {
+            *x += v * dt;
+        }
+        for (y, v) in self.y.iter_mut().zip(&self.vy) {
+            *y += v * dt;
+        }
+        // Gravity first, so the position uses the new velocity.
+        for (z, v) in self.z.iter_mut().zip(&mut self.vz) {
+            *v -= g;
+            *z += *v * dt;
         }"""):
     return PARTICLE + """
 /// What only I/O and diagnostics read.
@@ -3960,7 +3967,16 @@ pub struct Particles {
 impl Particles {
     pub fn with_capacity(n: usize) -> Particles {
         let v = || Vec::with_capacity(n);
-        Particles { x: v(), y: v(), z: v(), vx: v(), vy: v(), vz: v(), mass: v(), cold: Vec::with_capacity(n) }
+        Particles {
+            x: v(),
+            y: v(),
+            z: v(),
+            vx: v(),
+            vy: v(),
+            vz: v(),
+            mass: v(),
+            cold: Vec::with_capacity(n),
+        }
     }
 
     pub fn push(&mut self, p: Particle) {
@@ -3971,7 +3987,15 @@ impl Particles {
         self.vy.push(p.vel[1]);
         self.vz.push(p.vel[2]);
         self.mass.push(p.mass);
-        self.cold.push(Cold { id: p.id, charge: p.charge, radius: p.radius, temperature: p.temperature, species: p.species, flags: p.flags, tag: p.tag });
+        self.cold.push(Cold {
+            id: p.id,
+            charge: p.charge,
+            radius: p.radius,
+            temperature: p.temperature,
+            species: p.species,
+            flags: p.flags,
+            tag: p.tag,
+        });
     }
 
     pub fn len(&self) -> usize {
@@ -3999,8 +4023,7 @@ impl Particles {
         }
     }
 
-    /// One explicit Euler step: `vel.z -= G * dt`, then `pos += vel * dt` (with the new velocity), in one
-    /// pass over six dense arrays, which the compiler vectorizes.
+    /// One explicit Euler step: `vel.z -= G * dt`, then `pos += vel * dt` (with the new velocity).
     pub fn step(&mut self, dt: f32) {
 STEP
     }
@@ -4013,7 +4036,13 @@ STEP
     /// The total kinetic energy, Σ ½·m·|v|², summed in `f64`.
     pub fn kinetic_energy(&self) -> f64 {
         (0..self.len())
-            .map(|i| 0.5 * self.mass[i] as f64 * [self.vx[i], self.vy[i], self.vz[i]].iter().map(|&v| v as f64 * v as f64).sum::<f64>())
+            .map(|i| {
+                0.5 * self.mass[i] as f64
+                    * [self.vx[i], self.vy[i], self.vz[i]]
+                        .iter()
+                        .map(|&v| v as f64 * v as f64)
+                        .sum::<f64>()
+            })
             .sum()
     }
 }
@@ -4228,9 +4257,9 @@ P.append(dict(
         PARTICLE_RANDOM,
     ],
     hints=[("approach", "Replace `Vec<Particle>` with one `Vec<f32>` per hot field (x, y, z, vx, vy, vz, mass) and one `Vec` of everything else. `push` scatters a `Particle` into them; `get` gathers it back."),
-           ("rust", "Write each kernel over slices LLVM can prove are the same length: zipped iterators (`self.z.iter_mut().zip(&self.vz)`) or re-sliced arrays (`let vz = &mut self.vz[..n];`). No bounds checks means the loop vectorizes. Update `vz` before `z`, so positions use the new velocity."),
+           ("rust", "Write each kernel over slices LLVM can prove are the same length: zipped iterators (`self.z.iter_mut().zip(&self.vz)`) or re-sliced arrays (`let vz = &mut self.vz[..n];`). No bounds checks means the loop vectorizes. Update `vz` before `z`, so positions use the new velocity. Keep each loop to a few arrays (one loop per axis): one loop over all six can run slowly even though it vectorizes."),
            ("edge case", "Splitting only hot from cold (`Vec<{ pos, vel, mass }>`) helps the step, but `count_below` still reads 28 bytes to use 4. Keep the arithmetic exactly `v -= G * dt` and `p += v * dt` in `f32`, or results drift from the AoS version.")],
-    notes=("""The integrator touches 24 of each particle's 88 bytes, but memory moves in 64-byte cache lines, so an array of structs reads (and writes back) most of each struct anyway; `count_below` uses 4 bytes and still pulls ~64. A structure of arrays keeps each hot field in its own dense array: `step` streams six `f32` arrays and nothing else, `count_below` streams one, and the loops are plain zipped slices that LLVM vectorizes, 4 or 8 particles per instruction. Measured in the tests on the x86_64 runner (baseline and yours interleaved, so neither keeps the cache warm), `step` is 4.7–6× faster at 262 144 particles in one fused pass (3.6–3.9× as four separate loops) and `count_below` 10.6–12.9× at a million; the tests ask for 2.5× and 6×. A hot/cold split of whole structs gets only 2.2–2.6× on `count_below`, which the test rejects: it still reads `pos.x`, `pos.y`, the velocity and the mass to use one float.
+    notes=("""The integrator touches 24 of each particle's 88 bytes, but memory moves in 64-byte cache lines, so an array of structs reads (and writes back) most of each struct anyway; `count_below` uses 4 bytes and still pulls ~64. A structure of arrays keeps each hot field in its own dense array: `step` streams six `f32` arrays and nothing else, `count_below` streams one, and the loops are plain zipped slices that LLVM vectorizes, 4 or 8 particles per instruction. The solution uses one loop per axis. A single fused loop over all six arrays can be fine or very slow depending on where the allocator puts them: on an Apple Silicon Mac, where all six started at the same offset within 16 KiB, it ran slower than the array of structs, and staggering the starts by 256 bytes made it fast again. Measured in the tests on one Apple Silicon machine (baseline and yours interleaved, so neither keeps the cache warm), the solution's `step` is about 3.7–4× faster at 262 144 particles, and `count_below` at a million is about 7–8× faster on macOS and 10–13× in the Linux container; the tests ask for 2.5× and 6×. A hot/cold split of whole structs gets only about 3× on `count_below`, which the test rejects: it still reads `pos.x`, `pos.y`, the velocity and the mass to use one float.
 
 The API keeps the AoS type: `push` scatters and `get` gathers, which costs a little per call and nothing per frame. This is how HPC codes (LAMMPS, GROMACS) and ECS engines (Bevy's table storage) lay out components, and what "SoA" means in GPU and SIMD code. AoSoA (blocks of 8 or 16 particles, SoA inside a block) is the next step when kernels touch many fields at once.""", "O(n) per step, streaming 24 bytes a particle", "the same 88 bytes a particle, split into dense arrays"),
     follow_up="A collision kernel reads pos, vel, radius and mass of pairs of nearby particles. Does SoA still win, and where would AoSoA (blocks of 8) help?",

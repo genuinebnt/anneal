@@ -30,3 +30,6 @@ text = "`String::with_capacity(n)`, then `push_str`."
 explanation = "One allocation of the exact size. std's `[&str]::join` computes the same total internally."
 time = "O(total length)"
 space = "O(total length)"
+
+[perf]
+count_allocs = true

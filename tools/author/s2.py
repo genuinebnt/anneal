@@ -555,8 +555,9 @@ P.append(dict(
     teaches=["`String::with_capacity` when you know the final size.", "`push_str` into one buffer instead of repeated `+`."],
     statement="""
         Join `words` with `sep` between them, without `join` or `concat`. Compute the final length first and
-        allocate once.
+        allocate once. The tests count heap allocations: a non-empty result takes exactly one.
     """,
+    perf=dict(allocs=True),
     examples=[('words = ["a", "bc", "d"], sep = ", "', '"a, bc, d"')],
     starter="""
         pub fn join_words(words: &[&str], sep: &str) -> String {
@@ -565,7 +566,8 @@ P.append(dict(
     """,
     solution="""
         pub fn join_words(words: &[&str], sep: &str) -> String {
-            let len = words.iter().map(|w| w.len()).sum::<usize>() + sep.len() * words.len().saturating_sub(1);
+            let len =
+                words.iter().map(|w| w.len()).sum::<usize>() + sep.len() * words.len().saturating_sub(1);
             let mut out = String::with_capacity(len);
             for (i, w) in words.iter().enumerate() {
                 if i > 0 {
@@ -582,6 +584,7 @@ P.append(dict(
         T("no_words", 'words = [], sep = ", "', 'join_words(&[], ", ")', "String::new()"),
         T("no_trailing_sep", 'words = ["a", "b"], sep = "+"', 'join_words(&["a", "b"], "+")', rs("a+b")),
         T("empty_words_keep_seps", 'words = ["", "", ""], sep = "-"', 'join_words(&["", "", ""], "-")', rs("--")),
+        T("allocates_once", 'words = ["a", "bc", "d"], sep = ", ": heap allocations', 'anneal_prelude::allocs(|| join_words(&["a", "bc", "d"], ", ")).1.count', "1"),
     ],
     hidden=[
         T("none", "words = [], sep = \"-\"", 'join_words(&[], "-")', "String::new()"),
@@ -590,7 +593,7 @@ P.append(dict(
         T("single_empty_word", 'words = [""], sep = "-"', 'join_words(&[""], "-")', "String::new()"),
         T("unicode_words", 'words = ["日本", "é"], sep = "/"', 'join_words(&["日本", "é"], "/")', '"日本/é".to_string()'),
         T("long_sep", 'words = ["a", "b", "c"], sep = "<->"', 'join_words(&["a", "b", "c"], "<->")', rs("a<->b<->c")),
-        T("one_allocation", 'words = ["abc"; 10], sep = ", ": capacity is exactly the length', '{ let s = join_words(&["abc"; 10], ", "); (s.len(), s.capacity()) }', "(48, 48)"),
+        T("one_allocation", 'words = ["abc"; 10], sep = ", ": (length, capacity, heap allocations)', '{ let (s, seen) = anneal_prelude::allocs(|| join_words(&["abc"; 10], ", ")); (s.len(), s.capacity(), seen.count) }', "(48, 48, 1)"),
         T("exact_capacity_unicode", 'words = ["é", "日"], sep = " → ": capacity is exactly the length', '{ let s = join_words(&["é", "日"], " → "); (s.len(), s.capacity()) }', "(10, 10)"),
         """
         #[test]

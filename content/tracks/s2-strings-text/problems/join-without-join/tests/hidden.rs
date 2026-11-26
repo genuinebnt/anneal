@@ -32,7 +32,7 @@ fn long_sep() {
 
 #[test]
 fn one_allocation() {
-    check!(r#"words = ["abc"; 10], sep = ", ": capacity is exactly the length"#, { let s = join_words(&["abc"; 10], ", "); (s.len(), s.capacity()) }, (48, 48));
+    check!(r#"words = ["abc"; 10], sep = ", ": (length, capacity, heap allocations)"#, { let (s, seen) = anneal_prelude::allocs(|| join_words(&["abc"; 10], ", ")); (s.len(), s.capacity(), seen.count) }, (48, 48, 1));
 }
 
 #[test]

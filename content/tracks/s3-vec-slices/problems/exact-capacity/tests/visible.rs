@@ -24,3 +24,8 @@ fn no_parts() {
 fn empty_parts_keep_seps() {
     check!(r#"parts = ["", ""], sep = ",""#, { let s = join_with(&["", ""], ","); (s.clone(), s.capacity() == s.len()) }, (",".to_string(), true));
 }
+
+#[test]
+fn allocates_once() {
+    check!(r#"parts = ["a", "bb", "ccc"], sep = ", ": heap allocations"#, anneal_prelude::allocs(|| join_with(&["a", "bb", "ccc"], ", ")).1.count, 1);
+}
